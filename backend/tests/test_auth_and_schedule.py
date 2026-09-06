@@ -54,6 +54,23 @@ class AuthTests(unittest.TestCase):
             self.assertTrue(store.has_refresh_token())
             self.assertEqual(store.load()["refresh_token"], "refresh")
 
+    def test_roles_are_additive_and_preview_is_actor_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            admin = database.get_or_create_user(700, "student")
+            database.ensure_bootstrap_roles(700, ("teacher", "admin"))
+            self.assertEqual(set(database.list_user_roles(admin["id"])), {"teacher", "admin"})
+            with database.connection() as connection:
+                identity = connection.execute("INSERT INTO identities(kind, display_name, class_name) VALUES ('student', 'Preview Student', '9-Д') RETURNING id").fetchone()[0]
+                student = connection.execute("INSERT INTO users(telegram_user_id, role, identity_id) VALUES (701, 'student', ?) RETURNING id", (identity,)).fetchone()[0]
+            database.ensure_bootstrap_roles(701, ("student",))
+            preview = database.create_student_preview(admin["id"], student, "2099-01-01 10:00:00", "2099-01-01 11:00:00")
+            self.assertIsNotNone(database.get_active_student_preview(preview["id"], admin["id"]))
+            self.assertIsNone(database.get_active_student_preview(preview["id"], student))
+            self.assertTrue(database.end_student_preview(preview["id"], admin["id"]))
+            self.assertIsNone(database.get_active_student_preview(preview["id"], admin["id"]))
+
 
 class ScheduleTests(unittest.TestCase):
     def test_sheet_headers_are_normalized_deterministically(self):

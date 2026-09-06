@@ -82,6 +82,24 @@ CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   exam_track TEXT NOT NULL DEFAULT '',
   UNIQUE(group_id, audience, subject, subject_subgroup, exam_track)
 );
+CREATE TABLE IF NOT EXISTS user_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('student', 'teacher', 'admin')),
+  source TEXT NOT NULL DEFAULT 'legacy_user_role',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, role)
+);
+CREATE TABLE IF NOT EXISTS student_preview_sessions (
+  id TEXT PRIMARY KEY,
+  actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  ended_at TEXT
+);
+CREATE INDEX IF NOT EXISTS user_roles_user_idx ON user_roles(user_id);
+CREATE INDEX IF NOT EXISTS student_preview_actor_active_idx ON student_preview_sessions(actor_user_id, expires_at);
 CREATE TABLE IF NOT EXISTS schedule_syncs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   status TEXT NOT NULL,
@@ -224,6 +242,9 @@ class Database:
             return
         with self.connection() as connection:
             connection.executescript(SCHEMA)
+            connection.execute(
+                "INSERT OR IGNORE INTO user_roles(user_id, role, source) SELECT id, role, 'legacy_user_role' FROM users"
+            )
 
     def execute(self, connection: Any, query: str, params: tuple[Any, ...] = ()) -> Any:
         if self.database_url:
@@ -239,9 +260,103 @@ class Database:
             inserted = self.execute(connection, "INSERT INTO users(telegram_user_id, role) VALUES (?, ?) RETURNING id", (telegram_user_id, role)).fetchone()
             return self.execute(connection, "SELECT * FROM users WHERE id = ?", (inserted["id"],)).fetchone()
 
+    def ensure_bootstrap_roles(self, telegram_user_id: int, roles: tuple[str, ...]) -> Any | None:
+        if not roles:
+            return self.find_user(telegram_user_id)
+        with self.connection() as connection:
+            user = self.execute(connection, "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,)).fetchone()
+            if not user:
+                return None
+            for role in roles:
+                self.execute(
+                    connection,
+                    "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'telegram_bootstrap') ON CONFLICT(user_id, role) DO NOTHING",
+                    (user["id"], role),
+                )
+            primary_role = "teacher" if "teacher" in roles else roles[0]
+            self.execute(connection, "UPDATE users SET role = ? WHERE id = ?", (primary_role, user["id"]))
+            return self.execute(connection, "SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+
+    def list_user_roles(self, user_id: Any) -> list[str]:
+        with self.connection() as connection:
+            rows = self.execute(connection, "SELECT role FROM user_roles WHERE user_id = ? ORDER BY role", (user_id,)).fetchall()
+            if rows:
+                return [str(row["role"]) for row in rows]
+            row = self.execute(connection, "SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+            return [str(row["role"])] if row else []
+
+    def user_has_role(self, user_id: Any, role: str) -> bool:
+        return role in self.list_user_roles(user_id)
+
+    def count_users_with_role(self, role: str) -> int:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT COUNT(*) AS count FROM user_roles WHERE role = ?", (role,)).fetchone()
+            return int(row["count"]) if row else 0
+
+    def set_user_roles(self, user_id: Any, roles: list[str], primary_role: str) -> list[str]:
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT role FROM user_roles WHERE user_id = ?", (user_id,)).fetchall()
+            if not current:
+                self.execute(connection, "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'legacy_user_role') ON CONFLICT(user_id, role) DO NOTHING", (user_id, primary_role))
+            placeholders = ",".join("?" for _ in roles)
+            self.execute(connection, f"DELETE FROM user_roles WHERE user_id = ? AND role NOT IN ({placeholders})", (user_id, *roles))
+            for role in roles:
+                self.execute(
+                    connection,
+                    "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'admin_override') ON CONFLICT(user_id, role) DO UPDATE SET source = excluded.source",
+                    (user_id, role),
+                )
+            self.execute(connection, "UPDATE users SET role = ? WHERE id = ?", (primary_role, user_id))
+            return [str(row["role"]) for row in self.execute(connection, "SELECT role FROM user_roles WHERE user_id = ? ORDER BY role", (user_id,)).fetchall()]
+
+    def create_student_preview(self, actor_user_id: Any, target_user_id: Any, created_at: str, expires_at: str) -> Any:
+        import json
+        import uuid
+        preview_id = str(uuid.uuid4())
+        with self.connection() as connection:
+            self.execute(
+                connection,
+                "INSERT INTO student_preview_sessions(id, actor_user_id, target_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+                (preview_id, actor_user_id, target_user_id, created_at, expires_at),
+            )
+            self.execute(
+                connection,
+                "INSERT INTO audit_log(actor_user_id, action, entity_type, details) VALUES (?, ?, ?, ?)",
+                (actor_user_id, "student_preview.started", "student_preview", json.dumps({"preview_id": preview_id})),
+            )
+            return self.execute(connection, "SELECT * FROM student_preview_sessions WHERE id = ?", (preview_id,)).fetchone()
+
+    def get_active_student_preview(self, preview_id: str, actor_user_id: Any) -> Any | None:
+        with self.connection() as connection:
+            return self.execute(
+                connection,
+                "SELECT * FROM student_preview_sessions WHERE id = ? AND actor_user_id = ? AND ended_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+                (preview_id, actor_user_id),
+            ).fetchone()
+
+    def end_student_preview(self, preview_id: str, actor_user_id: Any) -> bool:
+        import json
+        with self.connection() as connection:
+            result = self.execute(
+                connection,
+                "UPDATE student_preview_sessions SET ended_at = CURRENT_TIMESTAMP WHERE id = ? AND actor_user_id = ? AND ended_at IS NULL",
+                (preview_id, actor_user_id),
+            )
+            if result.rowcount:
+                self.execute(
+                    connection,
+                    "INSERT INTO audit_log(actor_user_id, action, entity_type, details) VALUES (?, ?, ?, ?)",
+                    (actor_user_id, "student_preview.ended", "student_preview", json.dumps({"preview_id": preview_id})),
+                )
+            return bool(result.rowcount)
+
     def find_user(self, telegram_user_id: int) -> Any | None:
         with self.connection() as connection:
             return self.execute(connection, "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,)).fetchone()
+
+    def get_user_by_id(self, user_id: Any) -> Any | None:
+        with self.connection() as connection:
+            return self.execute(connection, "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
     def create_claim(self, user_id: Any, identity_id: Any, requested_role: str) -> Any:
         with self.connection() as connection:
@@ -270,6 +385,11 @@ class Database:
                     status = "identity_conflict"
                 else:
                     self.execute(connection, "UPDATE users SET identity_id = ?, role = ? WHERE id = ?", (claim["identity_id"], claim["requested_role"], claim["user_id"]))
+                    self.execute(
+                        connection,
+                        "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'identity_claim') ON CONFLICT(user_id, role) DO NOTHING",
+                        (claim["user_id"], claim["requested_role"]),
+                    )
             self.execute(connection, "UPDATE identity_claims SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (status, reviewer_id, claim_id))
             self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id) VALUES (?, ?, ?, ?)", (reviewer_id, f"identity_claim.{status}", "identity_claim", claim_id))
             return self.execute(connection, "SELECT * FROM identity_claims WHERE id = ?", (claim_id,)).fetchone()
@@ -313,7 +433,8 @@ class Database:
                 connection,
                 """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name, i.kind
                      FROM users u LEFT JOIN identities i ON i.id = u.identity_id
-                    WHERE u.id = ? AND u.role = 'student' AND u.identity_id IS NOT NULL""",
+                    WHERE u.id = ? AND u.identity_id IS NOT NULL
+                      AND (u.role = 'student' OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role = 'student'))""",
                 (user_id,),
             ).fetchone()
             if not user:
@@ -361,10 +482,15 @@ class Database:
         with self.connection() as connection:
             users = self.execute(
                 connection,
-                """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name
+                """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name,
+                              (SELECT c.status FROM identity_claims c WHERE c.user_id = u.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS claim_status
                      FROM users u LEFT JOIN identities i ON i.id = u.identity_id
                     ORDER BY u.created_at""",
             ).fetchall()
+            role_rows = self.execute(connection, "SELECT user_id, role FROM user_roles ORDER BY role").fetchall()
+            roles_by_user: dict[Any, list[str]] = {}
+            for row in role_rows:
+                roles_by_user.setdefault(row["user_id"], []).append(str(row["role"]))
             result = []
             for user in users:
                 groups = self.execute(
@@ -375,8 +501,59 @@ class Database:
                         ORDER BY g.name""",
                     (user["identity_id"],),
                 ).fetchall() if user["identity_id"] else []
-                result.append({**dict(user), "groups": [dict(group) for group in groups]})
+                roles = roles_by_user.get(user["id"], [str(user["role"])])
+                result.append({**dict(user), "roles": roles, "groups": [dict(group) for group in groups]})
             return result
+
+    def list_schedule_explanations_for_user(self, user_id: Any, lesson_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
+        entries = [dict(row) for row in self.list_schedule_entries_for_user(user_id, lesson_date, end_date)]
+        with self.connection() as connection:
+            memberships = [
+                dict(row)
+                for row in self.execute(
+                    connection,
+                    """SELECT g.name AS group_name, m.source, ga.audience, ga.subject,
+                                      ga.subject_subgroup, ga.exam_track
+                                 FROM memberships m
+                                 JOIN groups g ON g.id = m.group_id
+                                 JOIN group_schedule_audiences ga ON ga.group_id = m.group_id
+                                 JOIN users u ON u.identity_id = m.identity_id
+                                WHERE u.id = ? AND m.active IS TRUE
+                                ORDER BY g.name, ga.subject, ga.subject_subgroup, ga.exam_track""",
+                    (user_id,),
+                ).fetchall()
+            ]
+        explained: list[dict[str, Any]] = []
+        for entry in entries:
+            matched: list[dict[str, Any]] = []
+            for membership in memberships:
+                if membership["audience"] != entry.get("audience"):
+                    continue
+                entry_subgroup = entry.get("subject_subgroup") or ""
+                entry_track = entry.get("exam_track") or ""
+                scope_subject = membership.get("subject") or ""
+                if membership.get("subject_subgroup"):
+                    if entry_subgroup != membership["subject_subgroup"] or (scope_subject and scope_subject != entry.get("subject")):
+                        continue
+                elif membership.get("exam_track"):
+                    if entry_track != membership["exam_track"] or (scope_subject and scope_subject != entry.get("subject")):
+                        continue
+                elif entry_subgroup or entry_track:
+                    continue
+                matched.append({
+                    "group_name": membership["group_name"],
+                    "source": membership["source"],
+                    "audience": membership["audience"],
+                    "subject": scope_subject,
+                    "subject_subgroup": membership.get("subject_subgroup") or "",
+                    "exam_track": membership.get("exam_track") or "",
+                })
+            entry["matched_memberships"] = matched
+            entry["inclusion_reason"] = "; ".join(
+                f"{item['group_name']} ({item['source']})" for item in matched
+            ) or "Нет совпавшей активной membership"
+            explained.append(entry)
+        return explained
 
     def list_schedule_parse_issues(self, audience: str | None = None) -> list[Any]:
         with self.connection() as connection:
