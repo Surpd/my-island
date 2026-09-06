@@ -14,9 +14,13 @@ Google boundaries are split into OAuth URL preparation, deterministic Sheets mat
 
 The intended sequence is `Telegram user → role → canonical identity → identity_claim(pending) → admin review → app_user.identity_id`. Before approval, personal endpoints must return no school-personal data. A second account claiming an already-linked canonical identity becomes `identity_conflict` instead of being silently linked.
 
+Journal roster is deliberately outside that approval sequence. `journal_students` is the normalized source roster and can represent a student with no Telegram/app account; `identity_id` is an optional link used only when a unique canonical match or later admin action is available. Journal results point to `journal_student_id`, so missing app identity never removes a student from teacher journal/history/analytics views.
+
 ## Groups and schedule
 
 `groups` is the common audience object for students, teachers, schedule, Classroom courses, announcements, and journals. Imported memberships remain immutable provenance; explicit include/exclude overrides are evaluated above them. Teacher subject assignments and homeroom assignments are independent records, so `teacher`, `admin`, and homeroom capability do not collapse into one role.
+
+Journal source markers are mapped independently across `base_class_name`, `subject_subgroup`, `classroom_course_id`, and `exam_track`. An optional `group_id` is only an explicit internal app link; it must not be used to encode all of those dimensions in one group name. Current Grade 9 Mathematics mapping is `9-1 → A`, `9-2 → B`, `9-3 → C`; base class, Classroom course, and exam track remain unset until their own authoritative assignments are known.
 
 The schedule importer deterministically establishes a class block before parsing lesson cells. A non-class header terminates the block; uncertain ownership stays unresolved, and adjacent-class cells never enter parser context or diagnostics. Validation finishes before transactional replacement, so a failed parse leaves the last valid snapshot intact. Semantic LLM enrichment, when added, belongs only in background sync and must receive the already-bounded block.
 
@@ -24,5 +28,5 @@ The schedule importer deterministically establishes a class block before parsing
 
 - Google Sheets: server-side read boundary and deterministic parser are ready; the first local grant is still required before live reads.
 - Google Classroom: course/courseWork/studentSubmission reads use the same OAuth token and no service-account impersonation.
-- Supabase: migrations `001`–`005` are the schema contract; RLS plus revoked `anon`/`authenticated` grants form a deny-by-default Data API boundary, while application authorization and cross-student isolation are enforced in the backend repository layer.
+- Supabase: migrations `001`–`007` are the schema contract; RLS plus revoked `anon`/`authenticated` grants form a deny-by-default Data API boundary, while application authorization and cross-student isolation are enforced in the backend repository layer.
 - Render: `render.yaml` is the API Blueprint. Schema migrations remain an explicit operator step before deploying code that uses them.

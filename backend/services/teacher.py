@@ -16,11 +16,18 @@ def journal_view(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "weight": row.get("weight"), "max_score": row.get("max_score"), "results": [],
         })
         result = {
+            "journal_student_id": row.get("journal_student_id"),
             "identity_id": row.get("identity_id"), "student_name": row["student_name"],
             "score": row.get("numeric_score"), "status": row.get("status"),
         }
         assessment["results"].append(result)
-        student = students.setdefault(row["student_name"], {"identity_id": row.get("identity_id"), "name": row["student_name"], "history": []})
+        student = students.setdefault(row["student_name"], {
+            "journal_student_id": row.get("journal_student_id"),
+            "identity_id": row.get("identity_id"),
+            "name": row["student_name"],
+            "linked_to_app": row.get("identity_id") is not None,
+            "history": [],
+        })
         student["history"].append({
             "assessment_id": row["assessment_id"], "title": row["title"], "date": row.get("assessed_on"),
             "score": row.get("numeric_score"), "status": row.get("status"), "weight": row.get("weight"), "max_score": row.get("max_score"),

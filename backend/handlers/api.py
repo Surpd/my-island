@@ -79,6 +79,10 @@ class TeacherAssignmentPayload(BaseModel):
     group_id: str
     subject: str = ""
     active: bool = True
+    base_class_name: str | None = None
+    subject_subgroup: str | None = None
+    classroom_course_id: str | None = None
+    exam_track: str | None = None
 
 
 class HomeroomAssignmentPayload(BaseModel):
@@ -102,7 +106,11 @@ class InformationPayload(BaseModel):
 class JournalMappingPayload(BaseModel):
     source_id: str
     group_marker: str
-    group_id: str
+    group_id: str | None = None
+    base_class_name: str | None = None
+    subject_subgroup: str | None = None
+    classroom_course_id: str | None = None
+    exam_track: str | None = None
 
 
 def create_router(database: Database) -> APIRouter:
@@ -279,10 +287,20 @@ def create_router(database: Database) -> APIRouter:
         marker = payload.group_marker.strip()
         if not marker or not database.journal_group_marker_exists(payload.source_id, marker):
             raise HTTPException(status_code=400, detail="Journal group marker was not found in this source")
-        if not database.get_group(payload.group_id):
+        dimensions = {
+            "base_class_name": (payload.base_class_name or "").strip() or None,
+            "subject_subgroup": (payload.subject_subgroup or "").strip() or None,
+            "classroom_course_id": (payload.classroom_course_id or "").strip() or None,
+            "exam_track": (payload.exam_track or "").strip() or None,
+        }
+        if not payload.group_id and not any(dimensions.values()):
+            raise HTTPException(status_code=400, detail="Journal mapping needs an internal group or at least one explicit dimension")
+        if payload.group_id and not database.get_group(payload.group_id):
             raise HTTPException(status_code=400, detail="Journal target group was not found")
-        item = database.map_journal_group(payload.source_id, marker, payload.group_id, actor["id"])
-        database.record_audit_event("journal_group_mapping.updated", "journal_group_mapping", {"source_id": payload.source_id, "group_marker": payload.group_marker, "group_id": payload.group_id}, actor["id"])
+        if dimensions["classroom_course_id"] and not database.get_classroom_course(dimensions["classroom_course_id"]):
+            raise HTTPException(status_code=400, detail="Classroom course was not found")
+        item = database.map_journal_group(payload.source_id, marker, payload.group_id, actor["id"], **dimensions)
+        database.record_audit_event("journal_group_mapping.updated", "journal_group_mapping", {"source_id": payload.source_id, "group_marker": payload.group_marker, "group_id": payload.group_id, **dimensions}, actor["id"])
         return {"id": item["id"]}
 
     @router.get("/admin/schedule/parses")
@@ -367,10 +385,21 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
         try:
-            item = assign_teacher(database, payload.teacher_identity_id, payload.group_id, payload.subject, payload.active, actor["id"])
+            item = assign_teacher(
+                database,
+                payload.teacher_identity_id,
+                payload.group_id,
+                payload.subject,
+                payload.active,
+                actor["id"],
+                base_class_name=payload.base_class_name,
+                subject_subgroup=payload.subject_subgroup,
+                classroom_course_id=payload.classroom_course_id,
+                exam_track=payload.exam_track,
+            )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        database.record_audit_event("teacher_assignment.updated", "teacher_assignment", {"teacher_identity_id": payload.teacher_identity_id, "group_id": payload.group_id, "subject": payload.subject, "active": payload.active}, actor["id"])
+        database.record_audit_event("teacher_assignment.updated", "teacher_assignment", {"teacher_identity_id": payload.teacher_identity_id, "group_id": payload.group_id, "subject": payload.subject, "active": payload.active, "base_class_name": payload.base_class_name, "subject_subgroup": payload.subject_subgroup, "classroom_course_id": payload.classroom_course_id, "exam_track": payload.exam_track}, actor["id"])
         return {"id": item["id"], "active": item["active"]}
 
     @router.post("/admin/homeroom-assignments")
@@ -495,7 +524,28 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this group")
         journal = journal_view(database.list_group_journal(group_id))
         grade_histories = journal.pop("students")
-        return {"students": database.list_group_students(group_id), "grade_histories": grade_histories, **journal}
+        students = database.list_group_students(group_id)
+        if not students:
+            students = [
+                {
+                    "id": item.get("journal_student_id") or f"journal:{item['name']}",
+                    "display_name": item["name"],
+                    "class_name": None,
+                    "source": "journal_snapshot",
+                    "identity_id": item.get("identity_id"),
+                }
+                for item in grade_histories
+            ]
+        return {"students": students, "grade_histories": grade_histories, **journal}
+
+    @router.get("/teacher/journals/{source_id}/{group_marker}")
+    def teacher_journal_marker(source_id: str, group_marker: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        marker = group_marker.strip()
+        if not database.teacher_can_access_journal_marker(user["id"], source_id, marker):
+            raise HTTPException(status_code=403, detail="Teacher is not assigned to this journal subgroup")
+        return {"source_id": source_id, "group_marker": marker, **journal_view(database.list_journal_marker(source_id, marker))}
 
     @router.get("/teacher/information")
     def teacher_information(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

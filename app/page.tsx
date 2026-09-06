@@ -1870,7 +1870,9 @@ function AdminApp({
                   <small>
                     {displayValue(journal.sheet_title)} ·{' '}
                     {displayValue(journal.assessment_count, '0')} работ ·{' '}
-                    {displayValue(journal.unmapped_count, '0')} результатов без
+                    {displayValue(journal.roster_student_count, '0')} учеников в
+                    источнике ·{' '}
+                    {displayValue(journal.account_unlinked_count, '0')} без app
                     identity
                   </small>
                 </div>
@@ -1895,16 +1897,23 @@ function AdminApp({
                             source_id: journal.id,
                             group_marker: marker,
                             group_id: form.get('group_id'),
+                            base_class_name: form.get('base_class_name'),
+                            subject_subgroup: form.get('subject_subgroup'),
+                            classroom_course_id: form.get(
+                              'classroom_course_id',
+                            ),
+                            exam_track: form.get('exam_track'),
                           });
                         }}
                       >
                         <strong>{displayValue(marker)}</strong>
                         <select
                           name="group_id"
-                          required
                           defaultValue={displayValue(mapping?.group_id)}
                         >
-                          <option value="">Выберите внутреннюю группу</option>
+                          <option value="">
+                            Внутренняя группа (опционально)
+                          </option>
                           {data.groups.map((group) => (
                             <option
                               key={displayValue(group.id)}
@@ -1915,6 +1924,28 @@ function AdminApp({
                             </option>
                           ))}
                         </select>
+                        <input
+                          name="base_class_name"
+                          placeholder="Базовый класс"
+                          defaultValue={displayValue(mapping?.base_class_name)}
+                        />
+                        <input
+                          name="subject_subgroup"
+                          placeholder="Подгруппа"
+                          defaultValue={displayValue(mapping?.subject_subgroup)}
+                        />
+                        <input
+                          name="classroom_course_id"
+                          placeholder="Classroom course ID"
+                          defaultValue={displayValue(
+                            mapping?.classroom_course_id,
+                          )}
+                        />
+                        <input
+                          name="exam_track"
+                          placeholder="Exam track"
+                          defaultValue={displayValue(mapping?.exam_track)}
+                        />
                         <button className="outline-button" type="submit">
                           {mapping ? 'Изменить' : 'Сопоставить'}
                         </button>

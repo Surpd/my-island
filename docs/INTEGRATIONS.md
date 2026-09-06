@@ -17,6 +17,8 @@ The first read-only consent request should use only:
 
 The Classroom scopes are for the teacher account’s courses, coursework and student submissions. `openid` and `email` are included only to verify the authorized technical account. Do not replace this with a service account. Run `python -m backend.scripts.google_oauth_smoke` for a fresh consent flow, or add `--reuse` to use the ignored local refresh token. Google calls remain outside Student/Teacher request handlers; schedule, Classroom, and journal importers normalize a complete snapshot before transactional database replacement. No Google writes are implemented.
 
+Current journal sync uses the separate 2026/27 grade spreadsheets recorded in the project context. Grade 9 Mathematics is normalized into `journal_sources`, `journal_assessments`, `journal_students`, and `journal_results`; the roster is usable even when `identity_id` is null. `9-1`, `9-2`, and `9-3` are stored as Mathematics subgroups A/B/C, while base class, Classroom course, and exam track are separate optional mapping fields.
+
 ## Runtime env checklist
 
 Fill now for local Telegram verification: `DEV_AUTH_ENABLED=true` is safe only with `APP_ENV=development`; `TELEGRAM_BOT_TOKEN` is needed for signed Telegram `initData` tests and stays server-only.

@@ -56,7 +56,8 @@ def parse_journal_values(values: Sequence[Sequence[object]], *, grade: int, subj
     """Parse the current deterministic Date/Assignment/Weight/Grade journal layout.
 
     The parser intentionally does not infer memberships. It preserves the explicit source
-    group marker and links students later only by a unique canonical-name match.
+    group marker and emits a stable source student key. An optional app identity link is
+    resolved later; an absent Telegram/app account never drops the journal student.
     """
     if not values:
         raise ValueError(f"{sheet_title}: journal sheet is empty")
@@ -103,6 +104,8 @@ def parse_journal_values(values: Sequence[Sequence[object]], *, grade: int, subj
 
     data_start = max(labels.values()) + 1
     group_marker = ""
+    students: list[dict[str, Any]] = []
+    seen_students: set[tuple[str, str]] = set()
     results: list[dict[str, Any]] = []
     for row_index in range(data_start, len(values)):
         row = values[row_index]
@@ -114,6 +117,16 @@ def parse_journal_values(values: Sequence[Sequence[object]], *, grade: int, subj
             continue
         if not group_marker or _normalized(first) in SUMMARY_HEADERS:
             continue
+        student_key = f"{_normalized(first)}|{group_marker}"
+        if (group_marker, student_key) not in seen_students:
+            seen_students.add((group_marker, student_key))
+            students.append({
+                "student_name": first,
+                "student_key": student_key,
+                "group_marker": group_marker,
+                "source_row": row_index + 1,
+                "raw_source": {"student_row": row_index + 1, "group_marker": group_marker},
+            })
         for assessment, column in zip(assessments, assessment_columns):
             raw = row[column] if column < len(row) else ""
             text = str(raw or "").strip()
@@ -123,15 +136,16 @@ def parse_journal_values(values: Sequence[Sequence[object]], *, grade: int, subj
             results.append({
                 "assessment_key": assessment["external_key"],
                 "student_name": first,
+                "student_key": student_key,
                 "group_marker": group_marker,
                 "numeric_score": numeric,
                 "status": None if numeric is not None else text.casefold(),
                 "source_coordinate": f"{column_name(column)}{row_index + 1}",
                 "raw_source": {"value": raw, "student_row": row_index + 1, "group_marker": group_marker},
             })
-    if not results:
-        raise ValueError(f"{sheet_title}: no student results found")
-    payload = {"grade": grade, "subject": subject, "assessments": assessments, "results": results}
+    if not students:
+        raise ValueError(f"{sheet_title}: no student rows found")
+    payload = {"grade": grade, "subject": subject, "assessments": assessments, "students": students, "results": results}
     payload["source_hash"] = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
     return payload
 
@@ -146,4 +160,4 @@ def sync_journal_values(database: Database, values: Sequence[Sequence[object]], 
         "sheet_title": sheet_title,
         "source_hash": parsed["source_hash"],
     }
-    return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"])
+    return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"], parsed["students"])

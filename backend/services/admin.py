@@ -68,13 +68,37 @@ def override_membership(database: Database, identity_id: Any, group_id: Any, mem
     return database.set_membership_override(identity_id, group_id, member_role, action, actor_user_id, reason.strip())
 
 
-def assign_teacher(database: Database, teacher_identity_id: Any, group_id: Any, subject: str, active: bool, actor_user_id: Any) -> Any:
+def assign_teacher(
+    database: Database,
+    teacher_identity_id: Any,
+    group_id: Any,
+    subject: str,
+    active: bool,
+    actor_user_id: Any,
+    *,
+    base_class_name: str | None = None,
+    subject_subgroup: str | None = None,
+    classroom_course_id: Any | None = None,
+    exam_track: str | None = None,
+) -> Any:
     identity = database.get_identity(teacher_identity_id)
     if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
         raise ValueError("Teacher assignment requires an active teacher identity")
     if not database.get_group(group_id):
         raise ValueError("Teacher assignment group was not found")
-    return database.set_teacher_assignment(teacher_identity_id, group_id, subject.strip(), active, actor_user_id)
+    if classroom_course_id and not database.get_classroom_course(classroom_course_id):
+        raise ValueError("Teacher assignment Classroom course was not found")
+    return database.set_teacher_assignment(
+        teacher_identity_id,
+        group_id,
+        subject.strip(),
+        active,
+        actor_user_id,
+        base_class_name=base_class_name.strip() if base_class_name else None,
+        subject_subgroup=subject_subgroup.strip() if subject_subgroup else None,
+        classroom_course_id=classroom_course_id,
+        exam_track=exam_track.strip() if exam_track else None,
+    )
 
 
 def assign_homeroom(database: Database, teacher_identity_id: Any, group_id: Any, active: bool, actor_user_id: Any) -> Any:
