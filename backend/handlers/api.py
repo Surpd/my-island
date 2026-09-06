@@ -102,7 +102,8 @@ def create_router(database: Database) -> APIRouter:
             selected_role = telegram_user["role"]
         user = database.get_or_create_user(telegram_user["id"], selected_role)
         settings = get_settings()
-        user = database.ensure_bootstrap_roles(telegram_user["id"], settings.telegram_bootstrap_user_ids) or user
+        bootstrap_roles = ("teacher", "admin") if telegram_user["id"] in settings.telegram_bootstrap_user_ids else ()
+        user = database.ensure_bootstrap_roles(telegram_user["id"], bootstrap_roles) or user
         roles = database.list_user_roles(user["id"])
         if selected_role not in roles:
             selected_role = "teacher" if "teacher" in roles else ("admin" if "admin" in roles else roles[0] if roles else user["role"])
