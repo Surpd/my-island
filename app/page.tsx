@@ -291,6 +291,10 @@ const displayValue = (value: unknown, fallback = '') =>
   typeof value === 'string' || typeof value === 'number'
     ? String(value)
     : fallback;
+const humanRole = (role: unknown) =>
+  ({ student: 'Ученик', teacher: 'Учитель', admin: 'Администратор' })[
+    displayValue(role)
+  ] || displayValue(role, 'Роль не указана');
 const scopeMarker = (lesson: Lesson) =>
   lesson.exam_track ||
   (lesson.subject_subgroup ? `группа ${lesson.subject_subgroup}` : '');
@@ -598,8 +602,8 @@ function ProfilePanel({
       <div className="verified-card">
         <ShieldCheck size={19} />
         <div>
-          <strong>Личность подтверждена</strong>
-          <span>Доступ рассчитывается на backend по ролям и назначениям.</span>
+          <strong>Профиль подтверждён</strong>
+          <span>Вам доступны разделы и группы, назначенные школой.</span>
         </div>
         <Check size={18} />
       </div>
@@ -614,8 +618,8 @@ function ProfilePanel({
                 <strong>{group.name}</strong>
                 <span>
                   {group.source === 'admin_override'
-                    ? 'Admin override'
-                    : 'Источник школы'}
+                    ? 'Добавлено школой'
+                    : 'Школьная группа'}
                 </span>
               </div>
             </div>
@@ -665,7 +669,7 @@ function GradesPanel({
         <EmptyState
           icon={BarChart3}
           title="Оценок пока нет"
-          detail="Результаты появятся после journal sync и identity mapping."
+          detail="Результаты появятся после публикации школьного журнала."
         />
       )}
     </div>
@@ -697,7 +701,7 @@ function SpatialSheet({
   full: React.ReactNode;
   className?: string;
 }) {
-  const [stage, setStage] = useState<'peek' | 'full'>('peek');
+  const [stage, setStage] = useState<'partial' | 'full'>('partial');
   const [drag, setDrag] = useState(0);
   const startY = useRef<number | null>(null);
   const moved = useRef(false);
@@ -716,7 +720,9 @@ function SpatialSheet({
     if (startY.current === null) return;
     const delta = event.clientY - startY.current;
     if (delta < -52) setStage('full');
-    if (delta > 52) setStage('peek');
+    else if (delta > 52) setStage('partial');
+    else if (!moved.current)
+      setStage((value) => (value === 'partial' ? 'full' : 'partial'));
     setDrag(0);
     startY.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
@@ -724,13 +730,13 @@ function SpatialSheet({
       moved.current = false;
     }, 0);
   };
-  const offset = stage === 'full' ? '0px' : 'calc(100% - 184px)';
+  const offset = stage === 'full' ? '0px' : 'calc(100% - 182px)';
   const sheetStyle = {
     '--sheet-offset': `calc(${offset} + ${drag}px)`,
   } as React.CSSProperties;
   return (
     <section
-      className={`spatial-sheet ${stage === 'full' ? 'is-full' : 'is-peek'} ${className}`}
+      className={`spatial-sheet ${stage === 'full' ? 'is-full' : 'is-partial'} ${className}`}
       style={sheetStyle}
     >
       <div
@@ -740,26 +746,21 @@ function SpatialSheet({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
       >
+        <span className="sheet-grabber" aria-hidden="true" />
         <button
-          className="sheet-grabber"
-          aria-label={stage === 'full' ? 'Свернуть лист' : 'Развернуть лист'}
-          onClick={() => {
-            if (!moved.current)
-              setStage((value) => (value === 'peek' ? 'full' : 'peek'));
-          }}
-        />
-        <header className="sheet-heading">
+          className="sheet-heading"
+          aria-label={
+            stage === 'full' ? 'Свернуть раздел' : 'Развернуть раздел'
+          }
+          onClick={(event) => event.preventDefault()}
+        >
           <IslandMark name={icon} size={28} />
-          <div>
+          <span className="sheet-heading__copy">
             <span className="eyebrow">{kicker}</span>
-            <h2>{title}</h2>
-          </div>
-          {stage === 'peek' && (
-            <button className="sheet-open" onClick={() => setStage('full')}>
-              Открыть <ChevronRight size={15} />
-            </button>
-          )}
-        </header>
+            <strong>{title}</strong>
+          </span>
+          <ChevronDown className="sheet-heading__chevron" size={19} />
+        </button>
       </div>
       <div className="sheet-peek">{peek}</div>
       <div className="sheet-full">{full}</div>
@@ -795,7 +796,7 @@ function TodaySheet({
     (a.due_at || '9999').localeCompare(b.due_at || '9999'),
   )[0];
   const peek = (
-    <div className="today-peek-row">
+    <div className={`today-peek-row ${!next ? 'is-quiet' : ''}`}>
       <button
         className="today-card today-card--primary"
         onClick={() => onOpen('schedule')}
@@ -816,27 +817,21 @@ function TodaySheet({
           </em>
         </span>
       </button>
-      <button
-        className="today-card today-card--secondary"
-        onClick={() => onOpen(teacher ? 'groups' : 'homework')}
-      >
-        <IslandIcon name={teacher ? 'groups' : 'homework'} size={19} />
-        <span>
-          <small>{teacher ? 'Рабочий контур' : 'На контроле'}</small>
-          <strong>
-            {teacher
-              ? `${sorted.length} занятий`
-              : task?.title || 'Заданий нет'}
-          </strong>
-          <em>
-            {teacher
-              ? 'Мои группы'
-              : task
-                ? formatDue(task.due_at)
-                : 'Всё спокойно'}
-          </em>
-        </span>
-      </button>
+      {(next || task) && (
+        <button
+          className="today-card today-card--secondary"
+          onClick={() => onOpen(teacher ? 'groups' : 'homework')}
+        >
+          <IslandIcon name={teacher ? 'groups' : 'homework'} size={19} />
+          <span>
+            <small>{teacher ? 'Рабочий контур' : 'На контроле'}</small>
+            <strong>
+              {teacher ? `${sorted.length} занятий` : task?.title || 'Задание'}
+            </strong>
+            <em>{teacher ? 'Мои группы' : formatDue(task?.due_at)}</em>
+          </span>
+        </button>
+      )}
     </div>
   );
   const full = (
@@ -884,11 +879,13 @@ function ContextualSheet({
   title,
   icon,
   kicker,
+  peek,
   children,
 }: {
   title: string;
   icon: IslandIconName;
   kicker: string;
+  peek: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -897,16 +894,33 @@ function ContextualSheet({
       kicker={kicker}
       icon={icon}
       className="context-sheet"
-      peek={
-        <div className="context-peek">
-          <p>Вы на месте. Потяните лист вверх, чтобы открыть раздел.</p>
-          <span>
-            <IslandIcon name={icon} size={17} /> Функциональный интерфейс здесь
-          </span>
-        </div>
-      }
+      peek={<div className="context-peek">{peek}</div>}
       full={children}
     />
+  );
+}
+
+function SheetSummary({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: IslandIconName;
+  label: string;
+  value: string;
+  detail?: string;
+}) {
+  return (
+    <div className="sheet-summary">
+      <IslandIcon name={icon} size={19} />
+      <span>
+        <small>{label}</small>
+        <strong>{value}</strong>
+        {detail && <em>{detail}</em>}
+      </span>
+      <ChevronRight size={17} />
+    </div>
   );
 }
 
@@ -939,13 +953,23 @@ function SceneFrame({
       const contentSafe = webApp?.contentSafeAreaInset;
       if (safe) {
         root.style.setProperty('--tg-safe-top', `${safe.top}px`);
+        root.style.setProperty('--tg-safe-right', `${safe.right}px`);
         root.style.setProperty('--tg-safe-bottom', `${safe.bottom}px`);
+        root.style.setProperty('--tg-safe-left', `${safe.left}px`);
       }
       if (contentSafe) {
         root.style.setProperty('--tg-content-safe-top', `${contentSafe.top}px`);
         root.style.setProperty(
+          '--tg-content-safe-right',
+          `${contentSafe.right}px`,
+        );
+        root.style.setProperty(
           '--tg-content-safe-bottom',
           `${contentSafe.bottom}px`,
+        );
+        root.style.setProperty(
+          '--tg-content-safe-left',
+          `${contentSafe.left}px`,
         );
       }
     };
@@ -988,7 +1012,7 @@ function SceneFrame({
     const timer = window.setTimeout(() => {
       zoomStarted = true;
       reveal();
-    }, 170);
+    }, 260);
     return () => {
       disposed = true;
       window.clearTimeout(timer);
@@ -1069,6 +1093,58 @@ function StudentApp({
     ...location,
     icon: location.id,
   }));
+  const nextLesson = [...data.schedule]
+    .filter((lesson) => lesson.lesson_date >= isoDate(new Date()))
+    .sort((a, b) =>
+      `${a.lesson_date}${a.start_time}`.localeCompare(
+        `${b.lesson_date}${b.start_time}`,
+      ),
+    )[0];
+  const nextHomework = [...data.homework].sort((a, b) =>
+    (a.due_at || '9999').localeCompare(b.due_at || '9999'),
+  )[0];
+  const latestInfo = data.today.announcements[0];
+  const contextualPeek =
+    selectedId === 'schedule' ? (
+      <SheetSummary
+        icon="schedule"
+        label={
+          nextLesson ? formatDate(nextLesson.lesson_date, true) : 'Расписание'
+        }
+        value={
+          nextLesson
+            ? `${nextLesson.start_time} · ${nextLesson.subject}`
+            : 'Ближайших занятий нет'
+        }
+        detail={nextLesson?.room || undefined}
+      />
+    ) : selectedId === 'homework' ? (
+      <SheetSummary
+        icon="homework"
+        label={nextHomework ? formatDue(nextHomework.due_at) : 'Домашка'}
+        value={nextHomework?.title || 'Новых заданий нет'}
+        detail={nextHomework?.course_title || undefined}
+      />
+    ) : selectedId === 'information' ? (
+      <SheetSummary
+        icon="information"
+        label="Последнее сообщение"
+        value={latestInfo?.title || 'Новых сообщений нет'}
+        detail={latestInfo?.author_name}
+      />
+    ) : (
+      <SheetSummary
+        icon="grades"
+        label="Журнал"
+        value={
+          gradesLoading
+            ? 'Загружаем оценки…'
+            : grades?.length
+              ? `${grades.length} записей`
+              : 'Оценок пока нет'
+        }
+      />
+    );
   const contextual = selectedId ? (
     <ContextualSheet
       title={
@@ -1077,6 +1153,7 @@ function StudentApp({
       }
       icon={selectedId}
       kicker="Место на острове"
+      peek={contextualPeek}
     >
       {selectedId === 'schedule' ? (
         <SchedulePanel schedule={data.schedule} />
@@ -1265,7 +1342,7 @@ function TeacherGroups({
               <EmptyState
                 icon={BarChart3}
                 title="Журнал не сопоставлен"
-                detail="Нужен explicit mapping source group → internal group в Admin."
+                detail="Журнал для этой группы пока не подключён."
               />
             )}
           </div>
@@ -1383,7 +1460,7 @@ function TeacherGroups({
         <EmptyState
           icon={Users}
           title="Нет назначенных групп"
-          detail="Teacher assignments настраиваются явно, а не выводятся из названий."
+          detail="Группы появятся после назначения школой."
         />
       )}
     </div>
@@ -1406,6 +1483,60 @@ function TeacherApp({
     .filter((location) => location.id !== 'homeroom' || Boolean(homeroom))
     .map((location) => ({ ...location, icon: location.id }));
   const selectedId = view && view !== 'profile' ? view : null;
+  const nextTeacherLesson = [...data.schedule]
+    .filter((lesson) => lesson.lesson_date >= isoDate(new Date()))
+    .sort((a, b) =>
+      `${a.lesson_date}${a.start_time}`.localeCompare(
+        `${b.lesson_date}${b.start_time}`,
+      ),
+    )[0];
+  const subjectGroups = data.groups.filter((group) => !group.is_homeroom);
+  const teacherPeek =
+    selectedId === 'schedule' ? (
+      <SheetSummary
+        icon="schedule"
+        label={
+          nextTeacherLesson
+            ? formatDate(nextTeacherLesson.lesson_date, true)
+            : 'Расписание'
+        }
+        value={
+          nextTeacherLesson
+            ? `${nextTeacherLesson.start_time} · ${nextTeacherLesson.subject}`
+            : 'Ближайших занятий нет'
+        }
+        detail={nextTeacherLesson?.audience || undefined}
+      />
+    ) : selectedId === 'groups' ? (
+      <SheetSummary
+        icon="groups"
+        label="Предметные группы"
+        value={
+          subjectGroups.length
+            ? `${subjectGroups.length} групп`
+            : 'Назначенных групп нет'
+        }
+        detail={subjectGroups[0]?.name}
+      />
+    ) : selectedId === 'homeroom' ? (
+      <SheetSummary
+        icon="homeroom"
+        label="Классное руководство"
+        value={homeroom?.name || 'Класс не назначен'}
+        detail={
+          homeroom?.student_count
+            ? `${homeroom.student_count} учеников`
+            : undefined
+        }
+      />
+    ) : (
+      <SheetSummary
+        icon="information"
+        label="Для сотрудников"
+        value={data.information[0]?.title || 'Новых сообщений нет'}
+        detail={data.information[0]?.author_name}
+      />
+    );
   const contextual = selectedId ? (
     <ContextualSheet
       title={
@@ -1414,6 +1545,7 @@ function TeacherApp({
       }
       icon={selectedId}
       kicker="Рабочая зона кампуса"
+      peek={teacherPeek}
     >
       {selectedId === 'schedule' ? (
         <SchedulePanel schedule={data.schedule} />
@@ -1541,6 +1673,14 @@ function SyncSummary({
   const status = displayValue(item.status, displayValue(item.action, 'unknown'))
     .split('.')
     .pop();
+  const statusLabel =
+    status === 'success'
+      ? 'Синхронизировано'
+      : status === 'running'
+        ? 'Синхронизация идёт'
+        : status === 'pending'
+          ? 'Ожидает запуска'
+          : 'Нужна проверка';
   return (
     <div className="sync-summary">
       <span
@@ -1551,7 +1691,7 @@ function SyncSummary({
         }
       />
       <div>
-        <strong>{status}</strong>
+        <strong>{statusLabel}</strong>
         <small>
           {displayValue(item.created_at, displayValue(item.last_synced_at))}
         </small>
@@ -1783,7 +1923,7 @@ function AdminApp({
                 </span>
                 <div>
                   <strong>{claim.display_name}</strong>
-                  <small>Заявка на роль {claim.requested_role}</small>
+                  <small>Заявка: {humanRole(claim.requested_role)}</small>
                 </div>
                 <button
                   className="success-button"
@@ -1849,8 +1989,8 @@ function AdminApp({
                     </strong>
                     <small>
                       {Array.isArray(user.roles)
-                        ? user.roles.join(' · ')
-                        : displayValue(user.role)}{' '}
+                        ? user.roles.map(humanRole).join(' · ')
+                        : humanRole(user.role)}{' '}
                       · {displayValue(user.class_name, 'без класса')}
                     </small>
                   </div>
@@ -2049,7 +2189,7 @@ function AdminApp({
                 className="primary-button primary-button--compact"
                 onClick={() => void mutate('/api/admin/schedule/refresh')}
               >
-                <RefreshCw size={16} /> Sync now
+                <RefreshCw size={16} /> Синхронизировать
               </button>
             }
           />
@@ -2222,6 +2362,19 @@ function AdminApp({
             detail="Информация школы и реальные управляемые возможности."
           />
           <section className="work-card">
+            <div className="admin-preference-row">
+              <div>
+                <span className="eyebrow">Внешний вид</span>
+                <strong>Системная тема</strong>
+                <small>
+                  Интерфейс следует настройкам устройства; островные сцены
+                  сохраняют авторскую палитру.
+                </small>
+              </div>
+              <span className="health-badge">Активно</span>
+            </div>
+          </section>
+          <section className="work-card">
             <div className="work-card__heading">
               <h2>Информация и объявления</h2>
               <span className="count-badge">{data.information.length}</span>
@@ -2335,7 +2488,7 @@ function AdminApp({
         <div className="sidebar-footer">
           {onBackToTeacher && (
             <button onClick={onBackToTeacher}>
-              <BookOpen size={17} /> Teacher
+              <BookOpen size={17} /> Режим учителя
             </button>
           )}
           <button onClick={onLogout}>

@@ -1,40 +1,39 @@
-# Design QA — Student and Teacher Campus
+# Design QA
 
-Source visual targets:
+- Source visual truth path: `C:\Users\mitya\.codex\codex-remote-attachments\01a07727-cd3a-7de2-b6a4-096bea0bdbcd\3018D251-CE0C-4884-AE50-99CFAD39D38A\1-Фото-1.jpg`
+- Implementation: `http://localhost:4173/` captured in the Codex in-app browser (the CUA screenshot is an inline artifact; this browser surface does not expose a filesystem path).
+- Viewports: Student/Teacher `390 × 844` CSS px; Admin `1280 × 800` CSS px; device density normalized by the browser surface.
+- States: Teacher Campus, Schedule Focus/Partial/Full; Student Campus, Homework Focus/Partial, Today Full, Profile; Admin Overview desktop/mobile.
 
-- Student master: `3-Фото-3.jpg` (592×1280), with landmark close-ups from `1-Фото-1.jpg`.
-- Teacher master: `4-Фото-4.jpg` (592×1280), with placement/state direction from `5-Фото-5.jpg` and `6-Фото-6.jpg`.
-- Implementation: Codex in-app browser captures at 390×844 CSS px, device scale factor 1.
-- States checked: Student Campus, Student Information Focus, Teacher Campus, Teacher Schedule Focus, Teacher Schedule Full.
+## Full-view comparison evidence
 
-## Findings and iterations
+The implementation keeps the approved scene-first composition, warm ivory/glass surfaces, navy/coastal palette, architectural landmark anchors, and small attached labels. The reference is a wide concept board rather than a matching phone state, so comparison focused on its label/icon hierarchy and visual language rather than pixel coordinates.
 
-- [Resolved P1] Student Information Focus initially exposed a solid-color right edge because its pan exceeded the enlarged raster bounds. Camera transforms now zoom from the landmark-specific origin and use only a small bounded pan. The repeated 390×844 capture keeps artwork across the whole viewport and the pavilion in view.
-- [Resolved P2] The previous Student scene used a landscape master and could not preserve the reference geography in a phone crop. It now uses the clean vertical Student master.
-- [Resolved P2] Primary destinations used generic line SVG glyphs. They now use six dedicated raster landmark assets derived from the supplied icon/close-up references.
-- [Resolved P2] The top overlay repeated My Island branding and added a large welcome heading. Campus now keeps only the compact profile/admin actions.
-- No remaining P0/P1/P2 visual findings in the checked states.
+## Focused-region comparison evidence
 
-## Fidelity surfaces
+The landmark labels and sheet headers were inspected at `390 × 844`. Labels use 32 px architectural assets with a compact attached text plate; contextual sheet headers use the larger landmark state. Focus close-ups remain sharp and the master scene now completes more of its zoom before the longer crossfade.
 
-- Fonts and typography: compact system text is used for readable controls; Georgia remains limited to sheet display headings, matching the editorial/premium reference tone. No large hero copy competes with the scene.
-- Spacing and layout rhythm: both scenes fill 390×844; Today occupies about 184 px (22%) when collapsed; all persistent landmarks stay above it; hotspot capsules do not overlap or overflow.
-- Colors and tokens: ivory, deep navy, warm terracotta/gold, and low-opacity shadows match the supplied world. Teacher treatment is calmer, while Student preserves the larger adventure scale.
-- Image quality and assets: both master scenes are vertical 592×1280 JPEGs at roughly 300 KB; six 128×128 raster landmark icons replace generic destination glyphs. No primary destination uses Lucide.
-- Copy and content: Student exposes exactly Schedule/Homework/Grades/Information. Teacher exposes Schedule/My Groups/Information plus conditional Homeroom. Today uses the real runtime date/time and existing API data.
+## Required fidelity surfaces
 
-## Interaction checks
+- Typography: Georgia display headings remain consistent; compact UI labels retain readable optical weight and truncate safely.
+- Spacing/layout: Campus maintains a roughly 22% Today partial sheet; full sheets respect Telegram content-safe top/bottom insets.
+- Colors/tokens: ivory, navy, teal, gold, and restrained coral states match the approved concept.
+- Image quality: existing Campus and dedicated Focus rasters are preserved; no new or substitute artwork was introduced.
+- Copy/content: prototype instructions and backend/admin jargon were removed from user-facing Student/Teacher states.
 
-- Today and contextual sheets respond continuously to pointer/touch drag; upward drag opens Full and downward drag returns to Peek.
-- Focus hides all map labels, uses a landmark-specific camera target, replaces Today with a contextual sheet, and provides the correct “К острову” / “К кампусу” control.
-- Student Information and Teacher Schedule Focus crops contain no blank raster edges.
-- Teacher Schedule Full exposes the working day picker and real lesson rows.
-- No horizontal overflow was visible at 390×844.
+## Comparison history
 
-## Follow-up (P3)
+1. Earlier P1: contextual partial sheet contained prototype instructions instead of product data. Fixed with destination-specific live summaries; post-fix Student Homework and Teacher Schedule captures show real empty/next-item states.
+2. Earlier P1: sheet header tap competed with pointer drag and did not reliably reach Full. Fixed by resolving tap/drag in the shared pointer-up state machine; post-fix Teacher Schedule and Student Today reached `is-full` by tap and drag.
+3. Earlier P2: quiet Today rendered redundant cards. Fixed by collapsing to one summary when there is no lesson/task.
+4. Earlier P2: Telegram-safe positioning only consumed vertical insets. Fixed by plumbing all safe/content-safe inset sides into scene controls, back controls, Profile, sheets, and Preview banner.
 
-- Add aligned day/night and event-plaza artwork variants when final assets exist.
-- Consider dedicated high-resolution close-up rasters for the most data-heavy Focus destinations in the next UX pass.
-- Re-check inside the final Telegram iOS shell after deployment to validate the host header’s exact safe-area contribution.
+## Findings
+
+No actionable P0/P1/P2 visual mismatch remains in the representative states. Real Telegram chrome geometry still requires the production-device smoke check because the local browser cannot synthesize Telegram's native overlay.
+
+## Follow-up polish
+
+- P3: additional long-name combinations can be checked during the user's manual production walkthrough.
 
 final result: passed
