@@ -71,12 +71,12 @@ button {
   transform: scale(1.01);
 }
 .student-scene {
-  background-image: url('/island/grade-9-master.png');
-  background-position: 50% 48%;
+  background-image: url('/island/student-campus-grade9.jpg');
+  background-position: center;
 }
 .teacher-scene {
-  background-image: url('/island/teacher-campus-v1.png');
-  background-position: center 58%;
+  background-image: url('/island/teacher-campus-v2.jpg');
+  background-position: center;
 }
 .scene-shade {
   position: absolute;
@@ -99,7 +99,7 @@ button {
   right: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
   padding: max(14px, env(safe-area-inset-top)) 18px 10px;
   color: white;
@@ -1686,5 +1686,409 @@ button {
   }
   .status-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Mobile spatial interaction pass: island canvas → landmark → sheet. */
+:root {
+  --telegram-height: 100svh;
+  --ivory: #fffaf0;
+  --navy: #173042;
+}
+.scene-app {
+  height: var(--telegram-height, 100svh);
+  min-height: 0;
+  background: #276c8e;
+  touch-action: manipulation;
+}
+.scene-canvas {
+  background-size: cover;
+  transition:
+    transform 280ms cubic-bezier(0.2, 0.78, 0.2, 1),
+    filter 280ms ease;
+  will-change: transform;
+}
+.scene-shade {
+  transition: background 280ms ease;
+}
+.scene-app.has-focus .scene-shade {
+  background: linear-gradient(
+    180deg,
+    rgb(8 31 45/32%),
+    transparent 38%,
+    rgb(8 31 40/32%)
+  );
+}
+.scene-topbar {
+  padding-top: max(10px, env(safe-area-inset-top));
+  padding-right: max(14px, env(safe-area-inset-right));
+  padding-left: max(14px, env(safe-area-inset-left));
+}
+.profile-button {
+  min-height: 38px;
+  padding: 3px;
+}
+.profile-avatar {
+  width: 31px;
+  height: 31px;
+}
+.profile-name {
+  display: none;
+}
+.top-action {
+  min-height: 38px;
+  padding: 8px;
+}
+.scene-welcome {
+  top: max(68px, calc(env(safe-area-inset-top) + 50px));
+  left: max(16px, env(safe-area-inset-left));
+}
+.scene-welcome h1 {
+  font-size: clamp(27px, 8vw, 36px);
+  line-height: 1;
+}
+.scene-welcome p {
+  font-size: 10px;
+}
+.teacher-welcome {
+  top: max(72px, calc(env(safe-area-inset-top) + 54px));
+}
+.scene-hotspots {
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  transition: opacity 240ms ease;
+}
+.scene-hotspots.is-focused {
+  pointer-events: none;
+}
+.scene-hotspot {
+  flex-direction: row;
+  gap: 6px;
+  min-height: 40px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid rgb(255 242 201/92%);
+  border-radius: 999px;
+  background: rgb(255 249 235/90%);
+  color: var(--navy);
+  box-shadow:
+    0 7px 22px rgb(4 28 43/30%),
+    inset 0 1px rgb(255 255 255/68%);
+  backdrop-filter: blur(12px);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease,
+    background 220ms ease;
+}
+.scene-hotspot span {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #102f48;
+  transform: none;
+  box-shadow: none;
+}
+.landmark-icon {
+  display: block;
+  width: var(--landmark-size);
+  height: var(--landmark-size);
+  object-fit: cover;
+  user-select: none;
+}
+.scene-hotspot .landmark-icon {
+  width: 30px;
+  height: 30px;
+}
+.scene-hotspot strong {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--navy);
+  font-size: 11px;
+  font-weight: 800;
+  text-shadow: none;
+  backdrop-filter: none;
+}
+.scene-hotspot:hover span,
+.scene-hotspot:focus-visible span {
+  transform: scale(1.04);
+}
+.scene-hotspot:focus-visible {
+  outline: 2px solid #ffd77a;
+  outline-offset: 3px;
+}
+.scene-hotspot:active,
+.scene-hotspot.is-selected {
+  transform: translate(-50%, -50%) scale(0.94);
+  background: #173b55;
+  color: #fff9e9;
+}
+.scene-hotspots.is-focused .scene-hotspot,
+.scene-hotspots.is-focused .scene-hotspot.is-selected {
+  opacity: 0;
+}
+.scene-focus-back {
+  position: absolute;
+  z-index: 12;
+  top: max(58px, calc(env(safe-area-inset-top) + 42px));
+  left: max(14px, env(safe-area-inset-left));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 7px 11px 7px 8px;
+  border: 1px solid rgb(255 255 255/65%);
+  border-radius: 999px;
+  background: rgb(11 44 58/46%);
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  backdrop-filter: blur(13px);
+}
+.spatial-sheet {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: min(680px, calc(100% - 10px));
+  height: min(760px, calc(100% - 50px));
+  margin: auto;
+  padding: 8px 14px max(14px, env(safe-area-inset-bottom));
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255/78%);
+  border-bottom: 0;
+  border-radius: 26px 26px 0 0;
+  background: rgb(255 252 244/97%);
+  box-shadow: 0 -18px 48px rgb(12 43 51/28%);
+  backdrop-filter: blur(22px);
+  transform: translateY(var(--sheet-offset));
+  transition: transform 260ms cubic-bezier(0.2, 0.78, 0.2, 1);
+  will-change: transform;
+  touch-action: none;
+}
+.spatial-sheet:active {
+  transition-duration: 0ms;
+}
+.sheet-grabber {
+  display: block;
+  width: 42px;
+  height: 5px;
+  margin: 0 auto 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 99px;
+  background: #b8c8c5;
+  cursor: grab;
+  touch-action: none;
+}
+.sheet-drag-region {
+  touch-action: none;
+}
+.sheet-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  margin-bottom: 11px;
+}
+.island-mark {
+  display: grid;
+  width: 39px;
+  height: 39px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 13px;
+  overflow: hidden;
+  background: #15384f;
+}
+.island-mark .landmark-icon {
+  width: 100%;
+  height: 100%;
+}
+.sheet-heading h2 {
+  margin: 1px 0 0;
+  font-family: Georgia, serif;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+.sheet-heading .eyebrow {
+  font-size: 9px;
+}
+.sheet-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 36px;
+  margin-left: auto;
+  padding: 7px 9px;
+  border: 1px solid #d8e5df;
+  border-radius: 999px;
+  background: white;
+  color: #55716c;
+  font-size: 10px;
+  font-weight: 800;
+}
+.sheet-peek {
+  min-height: 86px;
+}
+.sheet-full {
+  height: calc(100% - 64px);
+  overflow: auto;
+  padding: 2px 0 20px;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.sheet-full::-webkit-scrollbar {
+  display: none;
+}
+.spatial-sheet.is-peek .sheet-full {
+  display: none;
+}
+.spatial-sheet.is-full .sheet-peek {
+  display: none;
+}
+.spatial-sheet .section-panel {
+  min-height: 0;
+}
+.spatial-sheet .section-panel > .panel-intro {
+  display: none;
+}
+.today-peek-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 8px;
+}
+.today-card {
+  min-width: 0;
+  min-height: 83px;
+  padding: 10px;
+  border: 1px solid #e0ebe6;
+  border-radius: 15px;
+  background: #f7fbf8;
+}
+.today-card--primary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+}
+.today-card--primary > svg,
+.today-card--secondary > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #9c5436;
+}
+.today-card span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.today-card small {
+  font-size: 9px;
+}
+.today-card strong {
+  font-size: 11px;
+  line-height: 1.2;
+}
+.today-card em {
+  font-size: 9px;
+}
+.today-card--secondary {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  text-align: left;
+}
+.today-expanded {
+  display: grid;
+  gap: 7px;
+  margin-top: 0;
+}
+.today-empty-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 13px;
+  border-radius: 13px;
+  background: #f7fbf8;
+  color: #58736f;
+  font-size: 12px;
+  font-weight: 750;
+}
+.today-notice {
+  border-radius: 13px;
+}
+.context-peek {
+  display: grid;
+  gap: 9px;
+  padding: 1px 2px;
+  color: #5d746f;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.context-peek p {
+  margin: 0;
+}
+.context-peek span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9c5436;
+  font-size: 11px;
+  font-weight: 800;
+}
+.context-sheet .sheet-heading .island-mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 15px;
+}
+.context-sheet .sheet-heading h2 {
+  font-size: 28px;
+}
+.context-sheet .sheet-full .panel-refresh {
+  margin-top: 10px;
+}
+.panel-intro h2 {
+  font-size: 25px;
+}
+
+@media (max-width: 420px) {
+  .scene-hotspots {
+    inset: 0;
+  }
+  .scene-hotspot {
+    min-height: 38px;
+    padding-right: 8px;
+  }
+  .scene-hotspot strong {
+    font-size: 10px;
+  }
+  .spatial-sheet {
+    width: calc(100% - 8px);
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+  .today-peek-row {
+    gap: 6px;
+  }
+  .today-card {
+    padding: 9px;
+  }
+  .today-card strong {
+    font-size: 10px;
+  }
+}
+@media (max-width: 340px) {
+  .today-peek-row {
+    grid-template-columns: 1fr;
+  }
+  .today-card--secondary {
+    min-height: 56px;
   }
 }

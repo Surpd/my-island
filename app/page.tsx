@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   BookOpen,
@@ -25,13 +25,17 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  Sparkles,
   UserRound,
   Users,
   Wrench,
   X,
 } from 'lucide-react';
-import { islandLocations, type IslandLocationId } from './island-config';
+import {
+  islandLocations,
+  teacherCampusLocations,
+  type IslandLocationId,
+} from './island-config';
+import { IslandIcon, IslandMark, type IslandIconName } from './island-icons';
 
 type LoadState =
   | 'loading'
@@ -164,7 +168,9 @@ const isLocalBuild =
   runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
 const API_BASE = String(
   runtimeEnv.VITE_API_BASE_URL ||
-    (isLocalBuild ? 'http://localhost:8000' : 'https://my-island-api.onrender.com'),
+    (isLocalBuild
+      ? 'http://localhost:8000'
+      : 'https://my-island-api.onrender.com'),
 ).replace(/\/$/, '');
 let activeTelegramInitData = '';
 let activeStudentPreviewId = '';
@@ -352,25 +358,16 @@ function PanelShell({
   );
 }
 function Topbar({
-  label,
   name,
   onProfile,
   right,
 }: {
-  label: string;
   name: string;
   onProfile: () => void;
   right?: React.ReactNode;
 }) {
   return (
     <header className="scene-topbar">
-      <div className="brand-lockup">
-        <span className="brand-mark">✦</span>
-        <div>
-          <p className="brand-title">Мой Остров</p>
-          <p className="brand-subtitle">{label}</p>
-        </div>
-      </div>
       <div className="topbar-actions">
         {right}
         <button className="profile-button" onClick={onProfile}>
@@ -383,8 +380,21 @@ function Topbar({
   );
 }
 
+function scheduleStartingDay(schedule: Lesson[]) {
+  const today = isoDate(new Date());
+  const relevant = schedule
+    .map((lesson) => lesson.lesson_date)
+    .filter((day) => day >= today)
+    .sort();
+  return (
+    relevant[0] ||
+    schedule.map((lesson) => lesson.lesson_date).sort()[0] ||
+    today
+  );
+}
+
 function SchedulePanel({ schedule }: { schedule: Lesson[] }) {
-  const initial = schedule[0]?.lesson_date || isoDate(new Date());
+  const initial = scheduleStartingDay(schedule);
   const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
   const days = Array.from({ length: 5 }, (_, index) =>
@@ -646,6 +656,97 @@ function GradesPanel({
   );
 }
 
+type SceneHotspot = {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  camera?: { x: number; y: number; scale: number };
+  icon: IslandIconName;
+};
+
+function SpatialSheet({
+  title,
+  kicker,
+  icon,
+  peek,
+  full,
+  className = '',
+}: {
+  title: string;
+  kicker: string;
+  icon: IslandIconName;
+  peek: React.ReactNode;
+  full: React.ReactNode;
+  className?: string;
+}) {
+  const [stage, setStage] = useState<'peek' | 'full'>('peek');
+  const [drag, setDrag] = useState(0);
+  const startY = useRef<number | null>(null);
+  const moved = useRef(false);
+  const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    startY.current = event.clientY;
+    moved.current = false;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const onPointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    if (startY.current === null) return;
+    const delta = event.clientY - startY.current;
+    moved.current = Math.abs(delta) > 6;
+    setDrag(Math.max(-320, Math.min(260, delta)));
+  };
+  const onPointerUp = (event: React.PointerEvent<HTMLElement>) => {
+    if (startY.current === null) return;
+    const delta = event.clientY - startY.current;
+    if (delta < -52) setStage('full');
+    if (delta > 52) setStage('peek');
+    setDrag(0);
+    startY.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  };
+  const offset = stage === 'full' ? '0px' : 'calc(100% - 184px)';
+  const sheetStyle = {
+    '--sheet-offset': `calc(${offset} + ${drag}px)`,
+  } as React.CSSProperties;
+  return (
+    <section
+      className={`spatial-sheet ${stage === 'full' ? 'is-full' : 'is-peek'} ${className}`}
+      style={sheetStyle}
+    >
+      <div
+        className="sheet-drag-region"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      >
+        <button
+          className="sheet-grabber"
+          aria-label={stage === 'full' ? 'Свернуть лист' : 'Развернуть лист'}
+          onClick={() => {
+            if (!moved.current)
+              setStage((value) => (value === 'peek' ? 'full' : 'peek'));
+          }}
+        />
+        <header className="sheet-heading">
+          <IslandMark name={icon} size={28} />
+          <div>
+            <span className="eyebrow">{kicker}</span>
+            <h2>{title}</h2>
+          </div>
+          {stage === 'peek' && (
+            <button className="sheet-open" onClick={() => setStage('full')}>
+              Открыть <ChevronRight size={15} />
+            </button>
+          )}
+        </header>
+      </div>
+      <div className="sheet-peek">{peek}</div>
+      <div className="sheet-full">{full}</div>
+    </section>
+  );
+}
+
 function TodaySheet({
   lessons,
   homework = [],
@@ -659,94 +760,201 @@ function TodaySheet({
   teacher?: boolean;
   onOpen: (view: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const sorted = [...lessons].sort((a, b) =>
     a.start_time.localeCompare(b.start_time),
   );
-  const next = sorted[0];
-  const task = homework[0];
-  return (
-    <section className={`today-sheet ${expanded ? 'is-expanded' : ''}`}>
+  const next =
+    sorted.find((lesson) => {
+      const [hours, minutes] = lesson.start_time.split(':').map(Number);
+      return (
+        hours * 60 + minutes >=
+        new Date().getHours() * 60 + new Date().getMinutes()
+      );
+    }) || sorted[0];
+  const task = [...homework].sort((a, b) =>
+    (a.due_at || '9999').localeCompare(b.due_at || '9999'),
+  )[0];
+  const peek = (
+    <div className="today-peek-row">
       <button
-        className="today-grabber"
-        onClick={() => setExpanded((value) => !value)}
-        aria-label={expanded ? 'Свернуть' : 'Развернуть'}
-      />
-      <div className="today-heading">
-        <div>
-          <span className="eyebrow">
-            {formatDate(isoDate(new Date()), true)}
-          </span>
-          <h2>Сегодня</h2>
-        </div>
-        <button
-          className="outline-button"
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded ? 'Свернуть' : 'Подробнее'} <ChevronDown size={15} />
-        </button>
-      </div>
-      <div className="today-grid">
-        <button className="today-card" onClick={() => onOpen('schedule')}>
-          <CalendarDays size={18} />
-          <span>
-            <small>
-              {next
-                ? `${next.start_time} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
-                : 'Расписание'}
-            </small>
-            <strong>{next?.subject || 'Занятий нет'}</strong>
-            <em>
-              {[next?.room, next && scopeMarker(next)]
-                .filter(Boolean)
-                .join(' · ') || 'Свободное время'}
-            </em>
-          </span>
-        </button>
-        {teacher ? (
-          <button className="today-card" onClick={() => onOpen('groups')}>
-            <Users size={18} />
-            <span>
-              <small>Рабочий контур</small>
-              <strong>{sorted.length} занятий сегодня</strong>
-              <em>Открыть мои группы</em>
-            </span>
-          </button>
-        ) : (
-          <button className="today-card" onClick={() => onOpen('homework')}>
-            <BookOpen size={18} />
-            <span>
-              <small>На контроле</small>
-              <strong>{task?.title || 'Заданий нет'}</strong>
-              <em>{task ? formatDue(task.due_at) : 'Всё спокойно'}</em>
-            </span>
-          </button>
-        )}
-      </div>
-      {expanded && (
-        <div className="today-expanded">
-          {sorted.slice(0, 5).map((lesson) => (
+        className="today-card today-card--primary"
+        onClick={() => onOpen('schedule')}
+      >
+        <IslandIcon name="schedule" size={20} />
+        <span>
+          <small>
+            {next
+              ? `${next.start_time} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
+              : 'Учебный день'}
+          </small>
+          <strong>{next?.subject || 'Сегодня без занятий'}</strong>
+          <em>
+            {next
+              ? [next.room, scopeMarker(next)].filter(Boolean).join(' · ') ||
+                'Детали уточняются'
+              : 'Можно заглянуть в расписание'}
+          </em>
+        </span>
+      </button>
+      <button
+        className="today-card today-card--secondary"
+        onClick={() => onOpen(teacher ? 'groups' : 'homework')}
+      >
+        <IslandIcon name={teacher ? 'groups' : 'homework'} size={19} />
+        <span>
+          <small>{teacher ? 'Рабочий контур' : 'На контроле'}</small>
+          <strong>
+            {teacher
+              ? `${sorted.length} занятий`
+              : task?.title || 'Заданий нет'}
+          </strong>
+          <em>
+            {teacher
+              ? 'Мои группы'
+              : task
+                ? formatDue(task.due_at)
+                : 'Всё спокойно'}
+          </em>
+        </span>
+      </button>
+    </div>
+  );
+  const full = (
+    <div className="today-expanded">
+      {sorted.length ? (
+        sorted
+          .slice(0, 5)
+          .map((lesson) => (
             <LessonRow
               key={`${lesson.start_time}-${lesson.subject}`}
               lesson={lesson}
             />
-          ))}
-          {information[0] && (
-            <button
-              className="today-notice"
-              onClick={() => onOpen('information')}
-            >
-              <Megaphone size={16} />
-              <span>
-                <strong>{information[0].title}</strong>
-                <small>Открыть сообщение</small>
-              </span>
-              <ChevronRight size={16} />
-            </button>
-          )}
+          ))
+      ) : (
+        <div className="today-empty-line">
+          <IslandIcon name="schedule" size={18} />
+          <span>Сегодня без занятий</span>
         </div>
       )}
-    </section>
+      {information[0] && (
+        <button className="today-notice" onClick={() => onOpen('information')}>
+          <IslandIcon name="information" size={17} />
+          <span>
+            <strong>{information[0].title}</strong>
+            <small>Открыть сообщение</small>
+          </span>
+          <ChevronRight size={16} />
+        </button>
+      )}
+    </div>
+  );
+  return (
+    <SpatialSheet
+      title="Сегодня"
+      kicker={formatDate(isoDate(new Date()), true)}
+      icon="schedule"
+      peek={peek}
+      full={full}
+      className="today-sheet"
+    />
+  );
+}
+
+function ContextualSheet({
+  title,
+  icon,
+  kicker,
+  children,
+}: {
+  title: string;
+  icon: IslandIconName;
+  kicker: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <SpatialSheet
+      title={title}
+      kicker={kicker}
+      icon={icon}
+      className="context-sheet"
+      peek={
+        <div className="context-peek">
+          <p>Вы на месте. Потяните лист вверх, чтобы открыть раздел.</p>
+          <span>
+            <IslandIcon name={icon} size={17} /> Функциональный интерфейс здесь
+          </span>
+        </div>
+      }
+      full={children}
+    />
+  );
+}
+
+function SceneFrame({
+  variant,
+  locations,
+  selectedId,
+  onSelect,
+  onBack,
+  sheet,
+  children,
+}: {
+  variant: 'student' | 'teacher';
+  locations: SceneHotspot[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onBack: () => void;
+  sheet?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const selected = locations.find((item) => item.id === selectedId);
+  useEffect(() => {
+    const root = document.documentElement;
+    const webApp = window.Telegram?.WebApp;
+    const update = () => {
+      const height = webApp?.viewportStableHeight || webApp?.viewportHeight;
+      if (height) root.style.setProperty('--telegram-height', `${height}px`);
+    };
+    update();
+    webApp?.onEvent?.('viewportChanged', update);
+    return () => webApp?.offEvent?.('viewportChanged', update);
+  }, []);
+  const camera = selected?.camera || { x: 50, y: 50, scale: 1.18 };
+  const focusStyle = selected
+    ? ({
+        transform: `translate(${(50 - camera.x) * 0.14}%, ${(38 - camera.y) * 0.14}%) scale(${camera.scale})`,
+        transformOrigin: `${camera.x}% ${camera.y}%`,
+      } as React.CSSProperties)
+    : undefined;
+  return (
+    <main className={`scene-app ${variant}-app ${selected ? 'has-focus' : ''}`}>
+      <div className={`scene-canvas ${variant}-scene`} style={focusStyle} />
+      <div className="scene-shade" />
+      {children}
+      <div className={`scene-hotspots ${selected ? 'is-focused' : ''}`}>
+        {locations.map((location) => (
+          <button
+            key={location.id}
+            className={`scene-hotspot hotspot--${location.id} ${selectedId === location.id ? 'is-selected' : ''}`}
+            style={{ left: `${location.x}%`, top: `${location.y}%` }}
+            onClick={() => onSelect(location.id)}
+            aria-label={location.label}
+          >
+            <span>
+              <IslandIcon name={location.icon} size={19} />
+            </span>
+            <strong>{location.label}</strong>
+          </button>
+        ))}
+      </div>
+      {selected && (
+        <button className="scene-focus-back" onClick={onBack}>
+          <ChevronLeft size={18} />{' '}
+          {variant === 'student' ? 'К острову' : 'К кампусу'}
+        </button>
+      )}
+      {sheet}
+    </main>
   );
 }
 
@@ -773,77 +981,68 @@ function StudentApp({
     }
   };
   const name = data.profile.user.display_name;
+  const selectedId = view && view !== 'profile' ? view : null;
+  const studentLocations: SceneHotspot[] = islandLocations.map((location) => ({
+    ...location,
+    icon: location.id,
+  }));
+  const contextual = selectedId ? (
+    <ContextualSheet
+      title={
+        islandLocations.find((item) => item.id === selectedId)?.label ||
+        'Остров'
+      }
+      icon={selectedId}
+      kicker="Место на острове"
+    >
+      {selectedId === 'schedule' ? (
+        <SchedulePanel schedule={data.schedule} />
+      ) : selectedId === 'homework' ? (
+        <HomeworkPanel homework={data.homework} />
+      ) : selectedId === 'information' ? (
+        <InfoPanel items={data.today.announcements} />
+      ) : (
+        <GradesPanel items={grades} loading={gradesLoading} />
+      )}
+      <button className="panel-refresh" onClick={onReload}>
+        <RefreshCw size={15} /> Обновить данные
+      </button>
+    </ContextualSheet>
+  ) : undefined;
   return (
-    <main className="scene-app student-app">
-      <div className="scene-canvas student-scene" />
-      <div className="scene-shade" />
-      <Topbar
-        label={`${data.profile.user.class_name || 'ученик'} · личный кабинет`}
-        name={name}
-        onProfile={() => open('profile')}
-      />
-      <div className="scene-welcome">
-        <p>
-          <Sparkles size={14} /> {formatDate(isoDate(new Date()), true)}
-        </p>
-        <h1>
-          Добро пожаловать,
-          <br />
-          {name.split(' ')[0]}
-        </h1>
-      </div>
-      <div className="scene-hotspots">
-        {islandLocations.map((location) => {
-          const Icon = {
-            schedule: CalendarDays,
-            homework: BookOpen,
-            grades: BarChart3,
-            information: Megaphone,
-          }[location.id];
-          return (
-            <button
-              key={location.id}
-              className={`scene-hotspot hotspot--${location.id}`}
-              style={{ left: `${location.x}%`, top: `${location.y}%` }}
-              onClick={() => open(location.id)}
-            >
-              <span>
-                <Icon size={18} />
-              </span>
-              <strong>{location.label}</strong>
-            </button>
-          );
-        })}
-      </div>
-      <TodaySheet
-        lessons={data.today.schedule}
-        homework={data.today.homework}
-        information={data.today.announcements}
-        onOpen={(next) => open(next as StudentView)}
-      />
-      {view && (
+    <>
+      <SceneFrame
+        variant="student"
+        locations={studentLocations}
+        selectedId={selectedId}
+        onSelect={(id) => open(id as StudentView)}
+        onBack={() => setView(null)}
+        sheet={
+          contextual || (
+            <TodaySheet
+              lessons={data.today.schedule}
+              homework={data.today.homework}
+              information={data.today.announcements}
+              onOpen={(next) => open(next as StudentView)}
+            />
+          )
+        }
+      >
+        <Topbar name={name} onProfile={() => open('profile')} />
+      </SceneFrame>
+      {view === 'profile' && (
         <PanelShell
-          title={view}
+          title="Профиль"
           backLabel="Остров"
           onClose={() => setView(null)}
         >
-          {view === 'profile' ? (
-            <ProfilePanel profile={data.profile} roleLabel="ученик" />
-          ) : view === 'schedule' ? (
-            <SchedulePanel schedule={data.schedule} />
-          ) : view === 'homework' ? (
-            <HomeworkPanel homework={data.homework} />
-          ) : view === 'information' ? (
-            <InfoPanel items={data.today.announcements} />
-          ) : (
-            <GradesPanel items={grades} loading={gradesLoading} />
-          )}
+          <ProfilePanel profile={data.profile} roleLabel="ученик" />
           <button className="panel-refresh" onClick={onReload}>
             <RefreshCw size={15} /> Обновить данные
           </button>
         </PanelShell>
       )}
-    </main>
+    </>
   );
 }
 
@@ -1120,108 +1319,80 @@ function TeacherApp({
 }) {
   const [view, setView] = useState<TeacherView>(null);
   const homeroom = data.groups.find((group) => group.is_homeroom);
-  const hotspots: Array<{
-    id: TeacherView;
-    label: string;
-    icon: typeof Users;
-    className: string;
-  }> = [
-    {
-      id: 'schedule',
-      label: 'Расписание',
-      icon: CalendarDays,
-      className: 'teacher-hotspot--schedule',
-    },
-    {
-      id: 'groups',
-      label: 'Мои группы',
-      icon: Users,
-      className: 'teacher-hotspot--groups',
-    },
-    {
-      id: 'information',
-      label: 'Информация',
-      icon: Megaphone,
-      className: 'teacher-hotspot--info',
-    },
-    ...(homeroom
-      ? [
-          {
-            id: 'homeroom' as TeacherView,
-            label: 'Мой класс',
-            icon: School,
-            className: 'teacher-hotspot--homeroom',
-          },
-        ]
-      : []),
-  ];
+  const teacherLocations: SceneHotspot[] = teacherCampusLocations
+    .filter((location) => location.id !== 'homeroom' || Boolean(homeroom))
+    .map((location) => ({ ...location, icon: location.id }));
+  const selectedId = view && view !== 'profile' ? view : null;
+  const contextual = selectedId ? (
+    <ContextualSheet
+      title={
+        teacherLocations.find((item) => item.id === selectedId)?.label ||
+        'Кампус'
+      }
+      icon={selectedId}
+      kicker="Рабочая зона кампуса"
+    >
+      {selectedId === 'schedule' ? (
+        <SchedulePanel schedule={data.schedule} />
+      ) : selectedId === 'groups' ? (
+        <TeacherGroups
+          groups={data.groups.filter((group) => !group.is_homeroom)}
+          courses={data.courses}
+        />
+      ) : selectedId === 'homeroom' ? (
+        <TeacherGroups
+          groups={homeroom ? [homeroom] : []}
+          courses={data.courses}
+        />
+      ) : (
+        <InfoPanel items={data.information} staff />
+      )}
+      <button className="panel-refresh" onClick={onReload}>
+        <RefreshCw size={15} /> Обновить
+      </button>
+      <button className="panel-refresh" onClick={onLogout}>
+        <LogOut size={15} /> Завершить сессию
+      </button>
+    </ContextualSheet>
+  ) : undefined;
   return (
-    <main className="scene-app teacher-app">
-      <div className="scene-canvas teacher-scene" />
-      <div className="scene-shade" />
-      <Topbar
-        label="преподаватель"
-        name="Учитель"
-        onProfile={() => setView('profile')}
-        right={
-          onOpenAdmin && (
-            <button className="top-action" onClick={onOpenAdmin}>
-              <ShieldCheck size={16} /> <span>Admin</span>
-            </button>
+    <>
+      <SceneFrame
+        variant="teacher"
+        locations={teacherLocations}
+        selectedId={selectedId}
+        onSelect={(id) => setView(id as TeacherView)}
+        onBack={() => setView(null)}
+        sheet={
+          contextual || (
+            <TodaySheet
+              lessons={data.today}
+              information={data.information}
+              teacher
+              onOpen={(next) => setView(next as TeacherView)}
+            />
           )
         }
-      />
-      <div className="scene-welcome teacher-welcome">
-        <p>Рабочий день</p>
-        <h1>
-          Всё важное
-          <br />
-          на одном острове
-        </h1>
-      </div>
-      <div className="scene-hotspots teacher-hotspots">
-        {hotspots.map((item) => (
-          <button
-            key={item.id}
-            className={`scene-hotspot ${item.className}`}
-            onClick={() => setView(item.id)}
-          >
-            <span>
-              <item.icon size={18} />
-            </span>
-            <strong>{item.label}</strong>
-          </button>
-        ))}
-      </div>
-      <TodaySheet
-        lessons={data.today}
-        information={data.information}
-        teacher
-        onOpen={(next) => setView(next as TeacherView)}
-      />
-      {view && (
+      >
+        <Topbar
+          name="Учитель"
+          onProfile={() => setView('profile')}
+          right={
+            onOpenAdmin && (
+              <button className="top-action" onClick={onOpenAdmin}>
+                <ShieldCheck size={16} /> <span>Admin</span>
+              </button>
+            )
+          }
+        />
+      </SceneFrame>
+      {view === 'profile' && (
         <PanelShell
-          title={view}
-          backLabel="К кампусу"
+          title="Профиль"
+          backLabel="Кампус"
           onClose={() => setView(null)}
         >
-          {view === 'schedule' ? (
-            <SchedulePanel schedule={data.schedule} />
-          ) : view === 'groups' ? (
-            <TeacherGroups
-              groups={data.groups.filter((group) => !group.is_homeroom)}
-              courses={data.courses}
-            />
-          ) : view === 'homeroom' ? (
-            <TeacherGroups
-              groups={homeroom ? [homeroom] : []}
-              courses={data.courses}
-            />
-          ) : view === 'information' ? (
-            <InfoPanel items={data.information} staff />
-          ) : (
-            <ProfilePanel roleLabel="преподаватель" />
-          )}
+          <ProfilePanel roleLabel="преподаватель" />
           <button className="panel-refresh" onClick={onReload}>
             <RefreshCw size={15} /> Обновить
           </button>
@@ -1230,7 +1401,7 @@ function TeacherApp({
           </button>
         </PanelShell>
       )}
-    </main>
+    </>
   );
 }
 
@@ -2455,7 +2626,15 @@ export default function Home() {
 declare global {
   interface Window {
     Telegram?: {
-      WebApp?: { initData?: string; ready?: () => void; expand?: () => void };
+      WebApp?: {
+        initData?: string;
+        ready?: () => void;
+        expand?: () => void;
+        viewportHeight?: number;
+        viewportStableHeight?: number;
+        onEvent?: (event: string, callback: () => void) => void;
+        offEvent?: (event: string, callback: () => void) => void;
+      };
     };
   }
 }
