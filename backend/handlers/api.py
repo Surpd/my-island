@@ -56,15 +56,15 @@ class ScheduleScopePayload(BaseModel):
 def create_router(database: Database) -> APIRouter:
     router = APIRouter(prefix="/api")
 
-    def authenticate(init_data: str | None, dev_auth: str | None):
+    def authenticate(init_data: str | None, dev_auth: str | None, telegram_header: str | None = None):
         try:
-            return resolve_auth(init_data, dev_auth)
+            return resolve_auth(telegram_header or init_data, dev_auth)
         except AuthError as error:
             raise HTTPException(status_code=401, detail=str(error)) from error
 
     @router.post("/auth/session")
-    def session(payload: SessionPayload, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(payload.init_data, x_dev_auth)
+    def session(payload: SessionPayload, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(payload.init_data, x_dev_auth, x_telegram_init_data)
         selected_role = payload.role if payload.role in {"student", "teacher", "admin"} else "student"
         if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"}:
             selected_role = telegram_user["role"]
@@ -73,15 +73,15 @@ def create_router(database: Database) -> APIRouter:
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": state, "user": {"id": user["id"], "role": user["role"], "identity_id": user["identity_id"]}}
 
     @router.post("/identity/claim")
-    def create_identity_claim(payload: ClaimPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def create_identity_claim(payload: ClaimPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.get_or_create_user(telegram_user["id"], payload.role)
         claim = claim_identity(database, user["id"], payload.identity_id, payload.role)
         return {"id": claim["id"], "status": claim["status"]}
 
     @router.get("/student/today")
-    def student_today(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def student_today(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "student" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
@@ -93,16 +93,16 @@ def create_router(database: Database) -> APIRouter:
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], requested_day)], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements()]}
 
     @router.get("/student/grades")
-    def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "student" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_official_grades_for_user(user["id"])]}
 
     @router.get("/student/homework")
-    def student_homework(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def student_homework(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "student" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
@@ -114,8 +114,8 @@ def create_router(database: Database) -> APIRouter:
         }
 
     @router.get("/student/schedule")
-    def student_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def student_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "student" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
@@ -128,8 +128,8 @@ def create_router(database: Database) -> APIRouter:
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], start_day, end_day)]}
 
     @router.get("/student/profile")
-    def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "student" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
@@ -139,40 +139,40 @@ def create_router(database: Database) -> APIRouter:
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "user": dict(profile["user"]), "groups": [dict(group) for group in profile["groups"]]}
 
     @router.get("/admin/claims")
-    def pending_claims(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def pending_claims(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
         return {"items": [dict(item) for item in database.list_pending_claims()]}
 
     @router.get("/admin/users")
-    def admin_users(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def admin_users(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
         return {"items": database.list_users_with_groups()}
 
     @router.get("/admin/schedule/parses")
-    def admin_schedule_parses(audience: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def admin_schedule_parses(audience: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
         return {"items": [dict(item) for item in database.list_schedule_parse_issues(audience)]}
 
     @router.get("/admin/schedule/syncs")
-    def admin_schedule_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def admin_schedule_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
         return {"items": [dict(item) for item in database.list_schedule_syncs(max(1, min(limit, 100)))]}
 
     @router.post("/admin/schedule/refresh")
-    def admin_schedule_refresh(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def admin_schedule_refresh(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -182,16 +182,16 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @router.get("/admin/classroom/syncs")
-    def admin_classroom_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def admin_classroom_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
         return {"items": [dict(item) for item in database.list_classroom_sync_audit(max(1, min(limit, 100)))]}
 
     @router.post("/admin/classroom/refresh")
-    def admin_classroom_refresh(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def admin_classroom_refresh(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -201,8 +201,8 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @router.post("/admin/identities")
-    def create_student_identity(payload: IdentityPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def create_student_identity(payload: IdentityPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -213,8 +213,8 @@ def create_router(database: Database) -> APIRouter:
         return {"id": identity["id"], "display_name": identity["display_name"], "class_name": identity["class_name"]}
 
     @router.post("/admin/groups")
-    def create_student_group(payload: GroupPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def create_student_group(payload: GroupPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -225,8 +225,8 @@ def create_router(database: Database) -> APIRouter:
         return {"id": group["id"], "name": group["name"], "group_type": group["group_type"]}
 
     @router.post("/admin/memberships")
-    def create_student_membership(payload: MembershipPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def create_student_membership(payload: MembershipPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -237,8 +237,8 @@ def create_router(database: Database) -> APIRouter:
         return {"id": membership["id"], "group_id": membership["group_id"], "identity_id": membership["identity_id"], "member_role": membership["member_role"], "active": membership["active"]}
 
     @router.post("/admin/schedule-scopes")
-    def create_schedule_scope(payload: ScheduleScopePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def create_schedule_scope(payload: ScheduleScopePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -246,8 +246,8 @@ def create_router(database: Database) -> APIRouter:
         return {"id": scope["id"], "group_id": scope["group_id"], "audience": scope["audience"], "subject": scope["subject"], "subject_subgroup": scope["subject_subgroup"], "exam_track": scope["exam_track"]}
 
     @router.post("/admin/claims/{claim_id}/review")
-    def review_claim(claim_id: str, payload: ReviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def review_claim(claim_id: str, payload: ReviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = database.find_user(telegram_user["id"])
         if not reviewer or reviewer["role"] != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -260,16 +260,16 @@ def create_router(database: Database) -> APIRouter:
         return {"id": claim["id"], "status": claim["status"]}
 
     @router.get("/teacher/courses")
-    def teacher_courses(init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def teacher_courses(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "teacher" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Teacher approval required")
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(item) for item in database.list_teacher_courses(user["id"])]}
 
     @router.get("/teacher/schedule")
-    def teacher_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None)):
-        telegram_user = authenticate(init_data, x_dev_auth)
+    def teacher_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = database.find_user(telegram_user["id"])
         if not user or user["role"] != "teacher" or not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Teacher approval required")

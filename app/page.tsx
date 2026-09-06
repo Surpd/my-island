@@ -10,7 +10,7 @@ import {
 import { islandLocations, type IslandLocationId } from './island-config';
 
 type View = IslandLocationId | 'profile' | null;
-type LoadState = 'loading' | 'approved' | 'needs_identity' | 'auth_error';
+type LoadState = 'loading' | 'approved' | 'needs_identity' | 'telegram_sdk_missing' | 'telegram_init_data_empty' | 'telegram_rejected' | 'network_error' | 'api_error';
 
 type Lesson = {
   lesson_date: string;
@@ -55,11 +55,23 @@ type TeacherData = { courses: Array<Record<string, unknown>>; schedule: Lesson[]
 const runtimeEnv = (import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env || {};
 const API_BASE = String(runtimeEnv.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const isLocalBuild = runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
+let activeTelegramInitData = '';
 
-function telegramInitData(): string {
-  const telegram = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
-  telegram?.ready?.();
-  return telegram?.initData || '';
+async function telegramInitData(): Promise<{ kind: 'ready'; value: string } | { kind: 'telegram_sdk_missing' | 'telegram_init_data_empty' }> {
+  if (isLocalBuild && devHeader()) return { kind: 'ready', value: '' };
+  const deadline = Date.now() + 3000;
+  let webAppFound = false;
+  while (Date.now() < deadline) {
+    const telegram = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
+    if (telegram) {
+      webAppFound = true;
+      telegram.ready?.();
+      telegram.expand?.();
+      if (telegram.initData) return { kind: 'ready', value: telegram.initData };
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  return { kind: webAppFound ? 'telegram_init_data_empty' : 'telegram_sdk_missing' };
 }
 
 function devHeader(): string | undefined {
@@ -68,15 +80,25 @@ function devHeader(): string | undefined {
   return role === 'admin' ? 'admin:1' : role === 'teacher' ? 'teacher:1' : 'student:1';
 }
 
+class ApiError extends Error {
+  constructor(public readonly kind: 'telegram_rejected' | 'network_error' | 'api_error', message: string, public readonly status?: number) { super(message); }
+}
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set('Accept', 'application/json');
   if (options.body) headers.set('Content-Type', 'application/json');
   const localAuth = devHeader();
   if (localAuth) headers.set('X-Dev-Auth', localAuth);
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (activeTelegramInitData) headers.set('X-Telegram-Init-Data', activeTelegramInitData);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  } catch {
+    throw new ApiError('network_error', 'Сервис временно недоступен');
+  }
   const body = await response.json().catch(() => null) as { detail?: unknown } | null;
-  if (!response.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : `Запрос не выполнен (${response.status})`);
+  if (!response.ok) throw new ApiError(response.status === 401 ? 'telegram_rejected' : 'api_error', typeof body?.detail === 'string' ? body.detail : `Запрос не выполнен (${response.status})`, response.status);
   return body as T;
 }
 
@@ -125,7 +147,25 @@ function StudentApp({ data, onReload }: { data: ApiData; onReload: () => void })
   return <main className={`island-app ${night ? 'island-app--night' : ''}`}><div className="island-backdrop" aria-hidden="true" /><div className="island-vignette" aria-hidden="true" /><header className="topbar"><div className="brand-lockup"><span className="brand-mark">✦</span><div><p className="brand-title">Мой Остров</p><p className="brand-subtitle">личный кабинет · 9 класс</p></div></div><div className="topbar-actions"><button className="icon-button" onClick={() => setNight((value) => !value)} aria-label={night ? 'Включить день' : 'Включить ночь'}>{night ? <Sun size={18} /> : <Moon size={18} />}</button><button className="profile-button" onClick={() => openView('profile')} aria-label="Открыть профиль"><span className="profile-avatar">{data.profile.user.display_name.slice(0, 1)}</span><span className="profile-name">{data.profile.user.display_name.split(' ')[0]}</span><ChevronDown size={15} /></button></div></header><section className="island-stage"><div className="stage-heading"><div><p className="section-kicker"><Sparkles size={14} /> {formatDate(isoDate(new Date()), true)}</p><h1>Добро пожаловать,<br />{data.profile.user.display_name.split(' ')[0]}</h1><p className="stage-note">Остров — быстрый путь к тому, что важно сегодня.</p></div><div className="sync-chip"><span className="status-dot" /> Данные синхронизированы</div></div><div className="map-frame" aria-label="Остров навигации"><div className="map-art" />{islandLocations.map((location) => <button key={location.id} className={`hotspot hotspot--${location.id}`} style={{ left: `${location.x}%`, top: `${location.y}%` }} onClick={() => openView(location.id)} aria-label={`Открыть ${location.label}`}><span className="hotspot-pin"><IconForLocation id={location.id} /></span><span className="hotspot-label">{location.label}</span></button>)}<span className="world-label world-label--plaza">Площадь событий</span><span className="world-label world-label--lighthouse">Маяк</span><div className="map-compass" aria-hidden="true"><span>N</span><span className="compass-line" /></div></div></section><TodaySheet today={data.today} onOpen={openView} />{view && <dialog open className="panel-layer" aria-label={panelTitle}><button className="panel-scrim" onClick={() => setView(null)} aria-label="Закрыть" /><aside className="detail-panel"><div className="panel-toolbar"><button className="back-button" onClick={() => setView(null)}><ChevronLeft size={18} /> Остров</button><button className="panel-close" onClick={() => setView(null)} aria-label="Закрыть"><X size={18} /></button></div>{view === 'profile' ? <ProfilePanel profile={data.profile} /> : view === 'schedule' ? <SchedulePanel schedule={data.schedule} selectedDay={selectedDay} setSelectedDay={setSelectedDay} /> : view === 'homework' ? <HomeworkPanel homework={data.homework} /> : view === 'information' ? <InfoPanel announcements={data.today.announcements} /> : <GradesPanel grades={grades} loading={gradesLoading} />}<button className="panel-refresh" onClick={onReload}><RefreshCw size={15} /> Обновить данные</button></aside></dialog>}</main>;
 }
 
-function PendingState({ state, onRetry }: { state: 'needs_identity' | 'auth_error'; onRetry: () => void }) { const pending = state === 'needs_identity'; return <main className="status-screen"><div className="status-card"><span className="status-illustration">{pending ? <LockKeyhole size={28} /> : <CircleAlert size={28} />}</span><p className="eyebrow">Мой Остров · 9 класс</p><h1>{pending ? 'Доступ ещё не подтверждён' : 'Не удалось войти'}</h1><p>{pending ? 'Telegram распознан, но личность ученика ещё должна быть подтверждена администратором школы. Пока персональные данные закрыты.' : 'Проверьте, что приложение открыто внутри Telegram, и повторите попытку.'}</p><button className="primary-button" onClick={onRetry}>{pending ? 'Проверить снова' : 'Повторить вход'} <RefreshCw size={17} /></button>{isLocalBuild && <small className="dev-note">Локальная проверка: API {API_BASE}</small>}</div></main>; }
+function pendingState(state: LoadState): Exclude<LoadState, 'loading' | 'approved'> {
+  return state === 'needs_identity' || state === 'telegram_sdk_missing' || state === 'telegram_init_data_empty' || state === 'telegram_rejected' || state === 'network_error' || state === 'api_error' ? state : 'api_error';
+}
+
+function PendingState({ state, onRetry }: { state: Exclude<LoadState, 'loading' | 'approved'>; onRetry: () => void }) {
+  const copy = state === 'needs_identity'
+    ? ['Доступ ещё не подтверждён', 'Telegram распознан, но личность ученика ещё должна быть подтверждена администратором школы. Пока персональные данные закрыты.']
+    : state === 'telegram_sdk_missing'
+      ? ['Нужен запуск из Telegram', 'Telegram не передал контекст Mini App. Откройте приложение кнопкой внутри Telegram.']
+      : state === 'telegram_init_data_empty'
+        ? ['Нет данных Telegram', 'Mini App открылся, но Telegram не передал данные авторизации. Закройте окно и запустите его снова из кнопки бота.']
+        : state === 'telegram_rejected'
+          ? ['Telegram не принят', 'Сервер не подтвердил данные Telegram. Повторите запуск Mini App из Telegram.']
+          : state === 'network_error'
+            ? ['Сервер недоступен', 'Не удалось связаться с сервером. Проверьте соединение и повторите попытку.']
+            : ['Не удалось загрузить данные', 'Авторизация прошла, но данные кабинета пока недоступны. Повторите попытку.'];
+  const pending = state === 'needs_identity';
+  return <main className="status-screen"><div className="status-card"><span className="status-illustration">{pending ? <LockKeyhole size={28} /> : <CircleAlert size={28} />}</span><p className="eyebrow">Мой Остров · 9 класс</p><h1>{copy[0]}</h1><p>{copy[1]}</p><button className="primary-button" onClick={onRetry}>{pending ? 'Проверить снова' : 'Повторить вход'} <RefreshCw size={17} /></button>{isLocalBuild && <small className="dev-note">Локальная проверка: API {API_BASE}</small>}</div></main>;
+}
 
 function TeacherApp({ data, onLogout, onReload }: { data: TeacherData; onLogout: () => void; onReload: () => void }) {
   const lessons = [...data.schedule].sort((a, b) => `${a.lesson_date}${a.start_time}`.localeCompare(`${b.lesson_date}${b.start_time}`));
@@ -146,13 +186,13 @@ function AdminApp({ onLogout }: { onLogout: () => void }) {
 export default function Home() {
   const [state, setState] = useState<LoadState>('loading'); const [session, setSession] = useState<Session | null>(null); const [data, setData] = useState<ApiData | null>(null); const [teacherData, setTeacherData] = useState<TeacherData | null>(null); const [authKey, setAuthKey] = useState(0);
   const desiredRole = typeof window !== 'undefined' ? (() => { const role = new URLSearchParams(window.location.search).get('role'); return role === 'admin' || role === 'teacher' ? role : 'student'; })() : 'student';
-  const load = useCallback(async () => { setState('loading'); const initData = telegramInitData(); if (!initData && !devHeader()) { setState('auth_error'); return; } try { const nextSession = await api<Session>('/api/auth/session', { method: 'POST', body: JSON.stringify({ role: desiredRole, init_data: initData || null }) }); setSession(nextSession); if (nextSession.state !== 'approved') { setState('needs_identity'); return; } if (nextSession.user.role === 'admin') { setState('approved'); return; } const todayDate = isoDate(new Date()); const start = todayDate; const end = isoDate(addDays(new Date(), 6)); if (nextSession.user.role === 'teacher') { const [courses, schedule] = await Promise.all([api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'), api<{ items: Lesson[] }>(`/api/teacher/schedule?start_day=${start}&end_day=${end}`)]); setTeacherData({ courses: courses.items, schedule: schedule.items }); setState('approved'); return; } const [today, schedule, homework, profile] = await Promise.all([api<ApiData['today']>(`/api/student/today?day=${todayDate}`), api<{ items: Lesson[] }>(`/api/student/schedule?start_day=${start}&end_day=${end}`), api<{ items: Homework[] }>('/api/student/homework'), api<Profile>('/api/student/profile')]); setData({ today, schedule: schedule.items, homework: homework.items, profile }); setState('approved'); } catch { setState('auth_error'); } }, [desiredRole]);
+  const load = useCallback(async () => { setState('loading'); const telegram = await telegramInitData(); if (telegram.kind !== 'ready') { console.info(`[my-island-auth] ${telegram.kind}`); setState(telegram.kind); return; } activeTelegramInitData = telegram.value; try { const nextSession = await api<Session>('/api/auth/session', { method: 'POST', body: JSON.stringify({ role: desiredRole, init_data: telegram.value || null }) }); setSession(nextSession); if (nextSession.state !== 'approved') { setState('needs_identity'); return; } if (nextSession.user.role === 'admin') { setState('approved'); return; } const todayDate = isoDate(new Date()); const start = todayDate; const end = isoDate(addDays(new Date(), 6)); if (nextSession.user.role === 'teacher') { const [courses, schedule] = await Promise.all([api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'), api<{ items: Lesson[] }>(`/api/teacher/schedule?start_day=${start}&end_day=${end}`)]); setTeacherData({ courses: courses.items, schedule: schedule.items }); setState('approved'); return; } const [today, schedule, homework, profile] = await Promise.all([api<ApiData['today']>(`/api/student/today?day=${todayDate}`), api<{ items: Lesson[] }>(`/api/student/schedule?start_day=${start}&end_day=${end}`), api<{ items: Homework[] }>('/api/student/homework'), api<Profile>('/api/student/profile')]); setData({ today, schedule: schedule.items, homework: homework.items, profile }); } catch (error) { const nextState = error instanceof ApiError ? error.kind : 'api_error'; console.info(`[my-island-auth] ${nextState}`); setState(nextState); } }, [desiredRole]);
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [authKey, load]);
   if (state === 'loading') return <main className="status-screen status-screen--island"><div className="loading-orb"><LoaderCircle className="spin" size={28} /><span>Открываем остров…</span></div></main>;
-  if (state === 'approved' && session?.user.role === 'admin') return <AdminApp onLogout={() => { setSession(null); setData(null); setState('auth_error'); }} />;
-  if (state === 'approved' && session?.user.role === 'teacher' && teacherData) return <TeacherApp data={teacherData} onReload={() => setAuthKey((value) => value + 1)} onLogout={() => { setSession(null); setTeacherData(null); setState('auth_error'); }} />;
-  if (state !== 'approved' || !data) return <PendingState state={state === 'needs_identity' ? 'needs_identity' : 'auth_error'} onRetry={() => setAuthKey((value) => value + 1)} />;
+  if (state === 'approved' && session?.user.role === 'admin') return <AdminApp onLogout={() => { setSession(null); setData(null); setState('api_error'); }} />;
+  if (state === 'approved' && session?.user.role === 'teacher' && teacherData) return <TeacherApp data={teacherData} onReload={() => setAuthKey((value) => value + 1)} onLogout={() => { setSession(null); setTeacherData(null); setState('api_error'); }} />;
+  if (state !== 'approved' || !data) return <PendingState state={pendingState(state)} onRetry={() => setAuthKey((value) => value + 1)} />;
   return <StudentApp data={data} onReload={() => setAuthKey((value) => value + 1)} />;
 }
 
-declare global { interface Window { Telegram?: { WebApp?: { initData?: string; ready?: () => void } } } }
+declare global { interface Window { Telegram?: { WebApp?: { initData?: string; ready?: () => void; expand?: () => void } } } }
