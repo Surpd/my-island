@@ -267,6 +267,8 @@ class Database:
             user = self.execute(connection, "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,)).fetchone()
             if not user:
                 return None
+            placeholders = ",".join("?" for _ in roles)
+            self.execute(connection, f"DELETE FROM user_roles WHERE user_id = ? AND role NOT IN ({placeholders})", (user["id"], *roles))
             for role in roles:
                 self.execute(
                     connection,
