@@ -160,11 +160,12 @@ type AdminData = {
 const runtimeEnv =
   (import.meta as ImportMeta & { env?: Record<string, string | boolean> })
     .env || {};
-const API_BASE = String(
-  runtimeEnv.VITE_API_BASE_URL || 'http://localhost:8000',
-).replace(/\/$/, '');
 const isLocalBuild =
   runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
+const API_BASE = String(
+  runtimeEnv.VITE_API_BASE_URL ||
+    (isLocalBuild ? 'http://localhost:8000' : 'https://my-island-api.onrender.com'),
+).replace(/\/$/, '');
 let activeTelegramInitData = '';
 let activeStudentPreviewId = '';
 
