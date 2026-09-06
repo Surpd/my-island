@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+.vinext/
+.wrangler/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+data/
+backend/__pycache__/
+backend/**/__pycache__/
+.venv/
+site-scaffold/

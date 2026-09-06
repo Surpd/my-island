@@ -1,0 +1,39 @@
+# Blueprint only. It is not applied automatically and contains no secrets.
+services:
+  - type: web
+    name: my-island-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEV_AUTH_ENABLED
+        value: "false"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: BACKEND_PUBLIC_URL
+        sync: false
+      - key: FRONTEND_PUBLIC_URL
+        sync: false
+      - key: GOOGLE_SHEETS_SPREADSHEET_ID
+        sync: false
+      - key: GOOGLE_CLASSROOM_COURSE_ID
+        value: 800979670564
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_OAUTH_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_OAUTH_GRANTED_SCOPES
+        sync: false
