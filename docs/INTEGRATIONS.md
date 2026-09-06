@@ -10,12 +10,12 @@ Create a Google Cloud OAuth client of type **Web application** when ready. Confi
 
 The first read-only consent request should use only:
 
-- `https://www.googleapis.com/auth/spreadsheets.readonly` for the schedule spreadsheet;
+- `https://www.googleapis.com/auth/spreadsheets.readonly` for schedule and current 2026/27 journal spreadsheets;
 - `https://www.googleapis.com/auth/classroom.courses.readonly`;
 - `https://www.googleapis.com/auth/classroom.coursework.students.readonly`;
 - `https://www.googleapis.com/auth/classroom.student-submissions.students.readonly`.
 
-The Classroom scopes are for the teacher account’s courses, coursework and student submissions. `openid` and `email` are included only to verify the authorized technical account. Do not replace this with a service account. Run `python -m backend.scripts.google_oauth_smoke` for a fresh consent flow, or add `--reuse` to use the ignored local refresh token. Google calls remain outside student request handlers; a future importer will normalize and validate the result before writing the application database.
+The Classroom scopes are for the teacher account’s courses, coursework and student submissions. `openid` and `email` are included only to verify the authorized technical account. Do not replace this with a service account. Run `python -m backend.scripts.google_oauth_smoke` for a fresh consent flow, or add `--reuse` to use the ignored local refresh token. Google calls remain outside Student/Teacher request handlers; schedule, Classroom, and journal importers normalize a complete snapshot before transactional database replacement. No Google writes are implemented.
 
 ## Runtime env checklist
 
@@ -23,4 +23,4 @@ Fill now for local Telegram verification: `DEV_AUTH_ENABLED=true` is safe only w
 
 Fill for real Postgres after the migration is approved/applied: `DATABASE_URL`, copied from Supabase’s Connect dialog. The backend uses it server-side via psycopg and does not run migrations on startup.
 
-Fill later for hosted deployment: `CORS_ORIGINS`, `BACKEND_PUBLIC_URL`, `FRONTEND_PUBLIC_URL`. No Render environment variables have been set by this pass.
+Hosted deployment also requires correct `CORS_ORIGINS`, `BACKEND_PUBLIC_URL`, and `FRONTEND_PUBLIC_URL`. Apply database migrations before rolling out backend code that queries the new schema.

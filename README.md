@@ -1,6 +1,6 @@
 # Мой Остров
 
-Telegram Mini App + school backend. Первый вертикальный срез — student flow для 9 класса с заменяемым raster-island pack и реальными scoped reads из Postgres.
+Telegram Mini App + school backend с единым responsive Student / Teacher / Admin frontend. Student и Teacher работают как scene-based Mini App, а Admin — как desktop-friendly control center.
 
 ## Запуск
 
@@ -34,14 +34,16 @@ python -m backend.scripts.google_sync --write
 
 Ежедневный entrypoint для cron/Render Cron — `python -m backend.scripts.schedule_daily`.
 
+Текущие журналы 2026/27 читаются только из отдельных таблиц 5–11 классов. Admin запускает синхронизацию нужного класса/предмета, после чего явное сопоставление marker группы с внутренней группой открывает read-only журнал и аналитику преподавателю. Записи обратно в Google Sheets не выполняются.
+
 ## Структура
 
-- `app/` — Mini App shell, daily sheet и config-driven locations.
-- `public/island/` — временный Grade 9 master asset; заменяется без изменения business logic.
+- `app/` — единый Student / Teacher / Admin frontend, scene hotspots и Today bottom sheet.
+- `public/island/` — заменяемые student и teacher raster scenes без business logic внутри арта.
 - `backend/handlers/` — HTTP boundary.
 - `backend/services/` — Telegram verification, identity approval и deterministic schedule importer.
 - `backend/database.py` — единый repository слой для SQLite isolated tests и Supabase/Postgres runtime.
-- `backend/migrations/001_initial.sql` — Supabase/Postgres reference schema + deny-by-default RLS.
+- `backend/migrations/` — последовательная Supabase/Postgres schema, включая additive roles, preview, assignments, information и normalized journals; Data API deny-by-default.
 - `render.yaml` — Render Blueprint для API; secrets отмечены `sync: false`.
 - `docs/ARCHITECTURE.md` — durable boundaries и интеграционные статусы.
 

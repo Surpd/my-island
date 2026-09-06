@@ -25,6 +25,7 @@ _TIME_RANGE_RE = re.compile(r"^\s*(?P<start>\d{1,2}:\d{2})\s*[-–—]\s*(?P<end
 _ROOM_RE = re.compile(r"^\s*(?P<room>каб(?:инет)?\.?\s*.+|зал\b.*|онлайн\b.*)\s*$", re.IGNORECASE)
 _TEACHER_RE = re.compile(r"\b(?P<teacher>Елена\s+Викторовна|ДФ|ЕВ|ИА|АнК|Дмитрий|Юлия|Антон|Игорь|Леонид|Ангелина|Тарас|Иван|Родион|Анастасия|Мария|Анна|Татьяна|Елена|Сергей)\b", re.IGNORECASE)
 _CLASS_TOKEN_RE = re.compile(r"\b\d{1,2}(?:-[А-ЯЁA-Z])\b", re.IGNORECASE)
+_CLASS_HEADER_RE = re.compile(r"^\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?$", re.IGNORECASE)
 _SCHOOL_MONTHS = {
     "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
     "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
@@ -35,6 +36,10 @@ class LessonSemanticFallback(Protocol):
     """Optional semantic fallback; it may fill lesson fields but never owns audience."""
 
     def parse(self, raw_text: str, audience: str) -> dict[str, Any]: ...
+
+
+class StructuralBoundaryError(ValueError):
+    pass
 
 
 def sheet_values_to_rows(values: Sequence[Sequence[str]]) -> list[dict[str, str]]:
@@ -211,14 +216,22 @@ def _parse_lesson_semantics(value: object, audience: str, fallback: LessonSemant
 
 
 def _header_owners(headers: Sequence[str]) -> list[tuple[str, int]]:
+    """Resolve ownership before semantic parsing and fail closed at unknown headers.
+
+    A blank column inherits only from the nearest confirmed class header. Any non-empty,
+    non-class header terminates that block so a neighboring area cannot leak into it.
+    """
     owners: list[tuple[str, int]] = []
     current = ""
     current_column = 0
     for column_index, value in enumerate(headers):
         normalized = str(value or "").strip()
-        if column_index and normalized:
+        if column_index and _CLASS_HEADER_RE.fullmatch(normalized):
             current = normalized
             current_column = column_index + 1
+        elif column_index and normalized:
+            current = ""
+            current_column = 0
         owners.append((current, current_column))
     return owners
 
@@ -301,7 +314,7 @@ def parse_school_schedule_values(
 def looks_like_school_schedule(values: Sequence[Sequence[str]]) -> bool:
     if not values or not values[0]:
         return False
-    class_headers = sum(1 for value in values[0][1:] if re.fullmatch(r"\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?", str(value or "").strip(), re.IGNORECASE))
+    class_headers = sum(1 for value in values[0][1:] if _CLASS_HEADER_RE.fullmatch(str(value or "").strip()))
     has_date_marker = any(_parse_date_marker(row[0], date.today().year) for row in values[1:] if row)
     return class_headers >= 2 and has_date_marker
 

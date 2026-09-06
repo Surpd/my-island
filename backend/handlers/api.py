@@ -7,9 +7,13 @@ from datetime import date, datetime, timedelta, timezone
 from backend.database import Database
 from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
-from backend.services.admin import add_membership, create_group, create_identity, map_schedule_scope
+from backend.services.admin import (
+    add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
+    map_schedule_scope, override_membership, publish_information,
+)
 from backend.services.google_live import GoogleLiveError
-from backend.services.google_sync_service import refresh_classroom, refresh_schedule
+from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule
+from backend.services.teacher import journal_view
 from backend.config import get_settings
 
 
@@ -60,6 +64,45 @@ class RolesPayload(BaseModel):
 
 class StudentPreviewPayload(BaseModel):
     target_user_id: str
+
+
+class MembershipOverridePayload(BaseModel):
+    identity_id: str
+    group_id: str
+    member_role: str = "student"
+    action: str
+    reason: str = ""
+
+
+class TeacherAssignmentPayload(BaseModel):
+    teacher_identity_id: str
+    group_id: str
+    subject: str = ""
+    active: bool = True
+
+
+class HomeroomAssignmentPayload(BaseModel):
+    teacher_identity_id: str
+    group_id: str
+    active: bool = True
+
+
+class InformationPayload(BaseModel):
+    title: str
+    content: str
+    audience_kind: str = "all"
+    audience_ref: str | None = None
+    publish_at: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    pinned: bool = False
+    status: str = "draft"
+
+
+class JournalMappingPayload(BaseModel):
+    source_id: str
+    group_marker: str
+    group_id: str
 
 
 def create_router(database: Database) -> APIRouter:
@@ -126,7 +169,7 @@ def create_router(database: Database) -> APIRouter:
             date.fromisoformat(requested_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], requested_day)], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements()]}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], requested_day)], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
 
     @router.get("/student/grades")
     def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
@@ -178,6 +221,69 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         return {"items": database.list_users_with_groups()}
+
+    @router.get("/admin/overview")
+    def admin_overview(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return database.admin_overview()
+
+    @router.get("/admin/groups")
+    def admin_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return {"items": database.list_groups_admin()}
+
+    @router.get("/admin/audit")
+    def admin_audit(limit: int = 50, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return {"items": database.list_audit_events(max(1, min(limit, 100)))}
+
+    @router.get("/admin/information")
+    def admin_information(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return {"items": database.list_announcements_admin()}
+
+    @router.post("/admin/information")
+    def create_information(payload: InformationPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        try:
+            item = publish_information(database, payload.model_dump(), actor["id"])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        database.record_audit_event("information.created", "announcement", {"announcement_id": str(item["id"]), "status": item["status"]}, actor["id"])
+        return {"id": item["id"], "status": item["status"]}
+
+    @router.get("/admin/journals")
+    def admin_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return {"items": database.journal_status()}
+
+    @router.post("/admin/journals/refresh")
+    def admin_journal_refresh(grade: int = 9, subject: str = "Математика", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        try:
+            return refresh_journal(database, get_settings(), grade, subject)
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @router.post("/admin/journals/group-mappings")
+    def admin_journal_mapping(payload: JournalMappingPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        marker = payload.group_marker.strip()
+        if not marker or not database.journal_group_marker_exists(payload.source_id, marker):
+            raise HTTPException(status_code=400, detail="Journal group marker was not found in this source")
+        if not database.get_group(payload.group_id):
+            raise HTTPException(status_code=400, detail="Journal target group was not found")
+        item = database.map_journal_group(payload.source_id, marker, payload.group_id, actor["id"])
+        database.record_audit_event("journal_group_mapping.updated", "journal_group_mapping", {"source_id": payload.source_id, "group_marker": payload.group_marker, "group_id": payload.group_id}, actor["id"])
+        return {"id": item["id"]}
 
     @router.get("/admin/schedule/parses")
     def admin_schedule_parses(audience: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -244,6 +350,39 @@ def create_router(database: Database) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"id": membership["id"], "group_id": membership["group_id"], "identity_id": membership["identity_id"], "member_role": membership["member_role"], "active": membership["active"]}
+
+    @router.post("/admin/membership-overrides")
+    def create_membership_override(payload: MembershipOverridePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        try:
+            item = override_membership(database, payload.identity_id, payload.group_id, payload.member_role, payload.action, actor["id"], payload.reason)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        database.record_audit_event("membership_override.created", "membership_override", {"identity_id": payload.identity_id, "group_id": payload.group_id, "action": payload.action, "reason": payload.reason}, actor["id"])
+        return {"id": item["id"], "action": item["action"], "active": item["active"]}
+
+    @router.post("/admin/teacher-assignments")
+    def create_teacher_assignment(payload: TeacherAssignmentPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        try:
+            item = assign_teacher(database, payload.teacher_identity_id, payload.group_id, payload.subject, payload.active, actor["id"])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        database.record_audit_event("teacher_assignment.updated", "teacher_assignment", {"teacher_identity_id": payload.teacher_identity_id, "group_id": payload.group_id, "subject": payload.subject, "active": payload.active}, actor["id"])
+        return {"id": item["id"], "active": item["active"]}
+
+    @router.post("/admin/homeroom-assignments")
+    def create_homeroom_assignment(payload: HomeroomAssignmentPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        try:
+            item = assign_homeroom(database, payload.teacher_identity_id, payload.group_id, payload.active, actor["id"])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        database.record_audit_event("homeroom_assignment.updated", "homeroom_assignment", {"teacher_identity_id": payload.teacher_identity_id, "group_id": payload.group_id, "active": payload.active}, actor["id"])
+        return {"id": item["id"], "active": item["active"]}
 
     @router.post("/admin/schedule-scopes")
     def create_schedule_scope(payload: ScheduleScopePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -324,6 +463,46 @@ def create_router(database: Database) -> APIRouter:
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "not_configured", "items": []}
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(item) for item in database.list_teacher_courses(user["id"])]}
 
+    @router.get("/teacher/home")
+    def teacher_home(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        requested_day = day or date.today().isoformat()
+        try:
+            date.fromisoformat(requested_day)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="day must be ISO date") from error
+        if not user["identity_id"]:
+            return {"state": "not_configured", "schedule": [], "groups": [], "information": []}
+        return {
+            "state": "approved",
+            "schedule": [dict(row) for row in database.list_teacher_schedule(user["id"], requested_day)],
+            "groups": database.list_teacher_groups(user["id"]),
+            "information": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")],
+        }
+
+    @router.get("/teacher/groups")
+    def teacher_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        return {"items": database.list_teacher_groups(user["id"]) if user["identity_id"] else []}
+
+    @router.get("/teacher/groups/{group_id}")
+    def teacher_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        if not database.teacher_can_access_group(user["id"], group_id):
+            raise HTTPException(status_code=403, detail="Teacher is not assigned to this group")
+        journal = journal_view(database.list_group_journal(group_id))
+        grade_histories = journal.pop("students")
+        return {"students": database.list_group_students(group_id), "grade_histories": grade_histories, **journal}
+
+    @router.get("/teacher/information")
+    def teacher_information(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        return {"items": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")]}
+
     @router.get("/teacher/schedule")
     def teacher_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -336,6 +515,6 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
         if not user["identity_id"]:
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "not_configured", "items": []}
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], start_day, end_day)]}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_teacher_schedule(user["id"], start_day, end_day)]}
 
     return router

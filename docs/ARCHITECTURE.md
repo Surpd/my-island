@@ -8,7 +8,7 @@ Telegram Mini App authentication is server-side. `initData` is checked with the 
 
 Runtime configuration is centralized in `backend/config.py`; browser code reads only the public `VITE_API_BASE_URL` value from the build environment. `DATABASE_URL` selects the Postgres/Supabase connection for the same repository methods; when it is present, startup does not mutate schema and migrations remain an explicit operator action. Supabase Auth is not used: Data API roles `anon` and `authenticated` have no table grants or policies. The backend verifies Telegram `initData`, uses a privileged server-side database connection, and scopes personal queries through its internal user-to-identity mapping.
 
-Google boundaries are split into OAuth URL preparation, deterministic Sheets matrix normalization, and the existing schedule validation/atomic replacement service. The intended account is `antischool.island@gmail.com`; a normal OAuth web application client is required, not a service account. Classroom reads use courses, student coursework, and student-submissions read scopes; official grades remain a separate table/domain.
+Google boundaries are split into OAuth URL preparation, deterministic Sheets matrix normalization, and background snapshot replacement. The intended account is `antischool.island@gmail.com`; a normal OAuth web application client is required, not a service account. Classroom reads use courses, student coursework, and student-submissions read scopes. Current 2026/27 journals use their own normalized sources/assessments/results domain and never write back to Google.
 
 ## Identity approval
 
@@ -16,13 +16,13 @@ The intended sequence is `Telegram user → role → canonical identity → iden
 
 ## Groups and schedule
 
-`groups` is the common audience object for students, teachers, schedule, Classroom courses, and future official sources. Memberships include source and active/validity fields so an official import cannot erase an admin override.
+`groups` is the common audience object for students, teachers, schedule, Classroom courses, announcements, and journals. Imported memberships remain immutable provenance; explicit include/exclude overrides are evaluated above them. Teacher subject assignments and homeroom assignments are independent records, so `teacher`, `admin`, and homeroom capability do not collapse into one role.
 
-The schedule importer validates all rows and only then performs a replacement transaction. A failed parse records an error and leaves the last valid entries intact. The Google Sheet adapter is intentionally not enabled until read access/OAuth configuration is confirmed.
+The schedule importer deterministically establishes a class block before parsing lesson cells. A non-class header terminates the block; uncertain ownership stays unresolved, and adjacent-class cells never enter parser context or diagnostics. Validation finishes before transactional replacement, so a failed parse leaves the last valid snapshot intact. Semantic LLM enrichment, when added, belongs only in background sync and must receive the already-bounded block.
 
 ## Integrations
 
 - Google Sheets: server-side read boundary and deterministic parser are ready; the first local grant is still required before live reads.
 - Google Classroom: course/courseWork/studentSubmission reads use the same OAuth token and no service-account impersonation.
-- Supabase: `001_initial.sql` is the approved schema contract; RLS is enabled as a deny-by-default boundary for Data API roles, while application authorization and cross-student isolation are enforced in the backend repository layer.
-- Render: `render.yaml` is a non-applied API Blueprint; deployment and service env vars are intentionally out of scope for this pass.
+- Supabase: migrations `001`–`005` are the schema contract; RLS plus revoked `anon`/`authenticated` grants form a deny-by-default Data API boundary, while application authorization and cross-student isolation are enforced in the backend repository layer.
+- Render: `render.yaml` is the API Blueprint. Schema migrations remain an explicit operator step before deploying code that uses them.

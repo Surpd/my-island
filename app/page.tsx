@@ -1,17 +1,63 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  BarChart3, BookOpen, CalendarDays, Check, ChevronDown, ChevronLeft,
-  ChevronRight, CircleAlert, Clock3, ExternalLink, FileText, LoaderCircle,
-  LockKeyhole, LogOut, Megaphone, Moon, RefreshCw, ShieldCheck, Sparkles, Sun,
-  UserRound, Users, X,
+  BarChart3,
+  BookOpen,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  Clock3,
+  ExternalLink,
+  FileText,
+  LayoutDashboard,
+  LoaderCircle,
+  LockKeyhole,
+  LogOut,
+  Megaphone,
+  Network,
+  Pin,
+  RefreshCw,
+  School,
+  Search,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+  Users,
+  Wrench,
+  X,
 } from 'lucide-react';
 import { islandLocations, type IslandLocationId } from './island-config';
 
-type View = IslandLocationId | 'profile' | null;
-type LoadState = 'loading' | 'approved' | 'needs_identity' | 'telegram_sdk_missing' | 'telegram_init_data_empty' | 'telegram_rejected' | 'network_error' | 'api_error';
-
+type LoadState =
+  | 'loading'
+  | 'approved'
+  | 'needs_identity'
+  | 'telegram_sdk_missing'
+  | 'telegram_init_data_empty'
+  | 'telegram_rejected'
+  | 'network_error'
+  | 'api_error';
+type StudentView = IslandLocationId | 'profile' | null;
+type TeacherView =
+  | 'schedule'
+  | 'groups'
+  | 'information'
+  | 'homeroom'
+  | 'profile'
+  | null;
+type AdminSection =
+  | 'overview'
+  | 'people'
+  | 'structure'
+  | 'schedule'
+  | 'integrations'
+  | 'settings'
+  | 'diagnostics';
 type Lesson = {
   lesson_date: string;
   start_time: string;
@@ -26,7 +72,6 @@ type Lesson = {
   delivery_mode?: string | null;
   source_coordinate?: string | null;
 };
-
 type Homework = {
   external_coursework_id: string;
   title: string;
@@ -36,171 +81,2349 @@ type Homework = {
   state?: string | null;
   course_title?: string | null;
 };
-
+type Information = {
+  id?: string;
+  title: string;
+  body?: string;
+  content?: string;
+  audience_kind?: string;
+  expires_at?: string;
+  pinned?: boolean;
+  status?: string;
+  author_name?: string;
+};
 type Group = {
   id?: string;
   name: string;
-  member_role?: string | null;
-  source?: string | null;
-  scope_kind?: string | null;
-  schedule_scopes?: Array<{ audience: string; subject?: string; subject_subgroup?: string; exam_track?: string }>;
+  group_type?: string;
+  source?: string;
+  subject?: string;
+  student_count?: number;
+  is_homeroom?: boolean;
+  schedule_scopes?: Array<{
+    audience: string;
+    subject?: string;
+    subject_subgroup?: string;
+    exam_track?: string;
+  }>;
+};
+type Profile = {
+  user: { display_name: string; class_name?: string | null };
+  groups: Group[];
+};
+type Session = {
+  mode: string;
+  state: string;
+  user: {
+    id: string | number;
+    role: string;
+    roles?: string[];
+    identity_id?: string | null;
+  };
+};
+type ApiData = {
+  today: {
+    schedule: Lesson[];
+    homework: Homework[];
+    announcements: Information[];
+  };
+  schedule: Lesson[];
+  homework: Homework[];
+  profile: Profile;
+};
+type TeacherGroupDetail = {
+  students: Array<Record<string, unknown>>;
+  grade_histories: Array<Record<string, unknown>>;
+  assessments: Array<Record<string, unknown>>;
+  analytics: Record<string, unknown>;
+};
+type TeacherData = {
+  courses: Array<Record<string, unknown>>;
+  schedule: Lesson[];
+  today: Lesson[];
+  groups: Group[];
+  information: Information[];
+};
+type AdminData = {
+  overview: Record<string, number>;
+  claims: Array<Record<string, string>>;
+  users: Array<Record<string, unknown>>;
+  groups: Array<Record<string, unknown>>;
+  scheduleSyncs: Array<Record<string, unknown>>;
+  classroomSyncs: Array<Record<string, unknown>>;
+  journals: Array<Record<string, unknown>>;
+  information: Array<Record<string, unknown>>;
+  parseIssues: Array<Record<string, unknown>>;
+  audit: Array<Record<string, unknown>>;
 };
 
-type Profile = { user: { display_name: string; class_name?: string | null }; groups: Group[] };
-type Session = { mode: string; state: string; user: { id: string | number; role: string; primary_role?: string; roles?: string[]; identity_id?: string | null } };
-type ApiData = { today: { schedule: Lesson[]; homework: Homework[]; announcements: Array<{ title: string; body?: string; expires_at?: string }> }; schedule: Lesson[]; homework: Homework[]; profile: Profile };
-type AdminData = { claims: Array<Record<string, string>>; users: Array<Record<string, unknown>>; scheduleSyncs: Array<Record<string, unknown>>; classroomSyncs: Array<Record<string, unknown>>; parseIssues: Array<Record<string, unknown>> };
-type TeacherData = { courses: Array<Record<string, unknown>>; schedule: Lesson[] };
-
-const runtimeEnv = (import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env || {};
-const API_BASE = String(runtimeEnv.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
-const isLocalBuild = runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
+const runtimeEnv =
+  (import.meta as ImportMeta & { env?: Record<string, string | boolean> })
+    .env || {};
+const API_BASE = String(
+  runtimeEnv.VITE_API_BASE_URL || 'http://localhost:8000',
+).replace(/\/$/, '');
+const isLocalBuild =
+  runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
 let activeTelegramInitData = '';
 let activeStudentPreviewId = '';
-
-async function telegramInitData(): Promise<{ kind: 'ready'; value: string } | { kind: 'telegram_sdk_missing' | 'telegram_init_data_empty' }> {
-  if (isLocalBuild && devHeader()) return { kind: 'ready', value: '' };
-  const deadline = Date.now() + 3000;
-  let webAppFound = false;
-  while (Date.now() < deadline) {
-    const telegram = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
-    if (telegram) {
-      webAppFound = true;
-      telegram.ready?.();
-      telegram.expand?.();
-      if (telegram.initData) return { kind: 'ready', value: telegram.initData };
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 50));
-  }
-  return { kind: webAppFound ? 'telegram_init_data_empty' : 'telegram_sdk_missing' };
-}
 
 function devHeader(): string | undefined {
   if (!isLocalBuild || typeof window === 'undefined') return undefined;
   const role = new URLSearchParams(window.location.search).get('role');
-  return role === 'admin' ? 'admin:1' : role === 'teacher' ? 'teacher:1' : 'student:1';
+  return role === 'admin'
+    ? 'admin:1'
+    : role === 'teacher'
+      ? 'teacher:1'
+      : 'student:1';
 }
-
+async function telegramInitData(): Promise<
+  | { kind: 'ready'; value: string }
+  | { kind: 'telegram_sdk_missing' | 'telegram_init_data_empty' }
+> {
+  if (isLocalBuild && devHeader()) return { kind: 'ready', value: '' };
+  const deadline = Date.now() + 3000;
+  let found = false;
+  while (Date.now() < deadline) {
+    const app =
+      typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
+    if (app) {
+      found = true;
+      app.ready?.();
+      app.expand?.();
+      if (app.initData) return { kind: 'ready', value: app.initData };
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  return { kind: found ? 'telegram_init_data_empty' : 'telegram_sdk_missing' };
+}
 class ApiError extends Error {
-  constructor(public readonly kind: 'telegram_rejected' | 'network_error' | 'api_error', message: string, public readonly status?: number) { super(message); }
+  constructor(
+    public readonly kind: 'telegram_rejected' | 'network_error' | 'api_error',
+    message: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+  }
 }
-
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set('Accept', 'application/json');
   if (options.body) headers.set('Content-Type', 'application/json');
-  const localAuth = devHeader();
-  if (localAuth) headers.set('X-Dev-Auth', localAuth);
-  if (activeTelegramInitData) headers.set('X-Telegram-Init-Data', activeTelegramInitData);
-  if (activeStudentPreviewId) headers.set('X-Student-Preview-Id', activeStudentPreviewId);
+  const local = devHeader();
+  if (local) headers.set('X-Dev-Auth', local);
+  if (activeTelegramInitData)
+    headers.set('X-Telegram-Init-Data', activeTelegramInitData);
+  if (activeStudentPreviewId)
+    headers.set('X-Student-Preview-Id', activeStudentPreviewId);
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   } catch {
     throw new ApiError('network_error', 'Сервис временно недоступен');
   }
-  const body = await response.json().catch(() => null) as { detail?: unknown } | null;
-  if (!response.ok) throw new ApiError(response.status === 401 ? 'telegram_rejected' : 'api_error', typeof body?.detail === 'string' ? body.detail : `Запрос не выполнен (${response.status})`, response.status);
+  const body = (await response.json().catch(() => null)) as {
+    detail?: unknown;
+  } | null;
+  if (!response.ok)
+    throw new ApiError(
+      response.status === 401 ? 'telegram_rejected' : 'api_error',
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `Запрос не выполнен (${response.status})`,
+      response.status,
+    );
   return body as T;
 }
 
-function isoDate(value: Date): string { return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`; }
-function addDays(value: Date, days: number): Date { const copy = new Date(value); copy.setDate(copy.getDate() + days); return copy; }
-function weekStart(value = new Date()): Date { const day = (value.getDay() + 6) % 7; return addDays(new Date(value.getFullYear(), value.getMonth(), value.getDate()), -day); }
-function formatDate(value: string, long = false): string { const parsed = new Date(`${value}T12:00:00`); return new Intl.DateTimeFormat('ru-RU', long ? { weekday: 'long', day: 'numeric', month: 'long' } : { day: 'numeric', month: 'short' }).format(parsed); }
-function formatDue(value?: string | null): string { if (!value) return 'Срок не указан'; const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }).format(parsed); }
-function humanScope(group: Group): string { if (group.scope_kind === 'subject_subgroup') return 'Предметная группа'; if (group.scope_kind === 'exam_track') return 'Экзаменационный трек'; return 'Класс'; }
-function scopeMarker(lesson: Lesson): string { if (lesson.exam_track) return lesson.exam_track; return lesson.subject_subgroup ? `группа ${lesson.subject_subgroup}` : ''; }
-function displayValue(value: unknown, fallback = ''): string { return typeof value === 'string' || typeof value === 'number' ? String(value) : fallback; }
+const isoDate = (value: Date) =>
+  `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+const addDays = (value: Date, days: number) => {
+  const copy = new Date(value);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+};
+const weekStart = (value = new Date()) =>
+  addDays(
+    new Date(value.getFullYear(), value.getMonth(), value.getDate()),
+    -((value.getDay() + 6) % 7),
+  );
+const formatDate = (value: string, long = false) =>
+  new Intl.DateTimeFormat(
+    'ru-RU',
+    long
+      ? { weekday: 'long', day: 'numeric', month: 'long' }
+      : { day: 'numeric', month: 'short' },
+  ).format(new Date(`${value}T12:00:00`));
+const formatDue = (value?: string | null) =>
+  !value
+    ? 'Срок не указан'
+    : new Intl.DateTimeFormat('ru-RU', {
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date(value));
+const displayValue = (value: unknown, fallback = '') =>
+  typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : fallback;
+const scopeMarker = (lesson: Lesson) =>
+  lesson.exam_track ||
+  (lesson.subject_subgroup ? `группа ${lesson.subject_subgroup}` : '');
 
-function IconForLocation({ id }: { id: IslandLocationId }) { const Icon = { schedule: CalendarDays, homework: BookOpen, grades: BarChart3, information: Megaphone }[id]; return <Icon size={18} strokeWidth={2.2} />; }
-function LoadingState({ label }: { label: string }) { return <div className="loading-state"><LoaderCircle className="spin" size={23} /><span>{label}</span></div>; }
-function EmptyState({ icon: Icon, title, detail }: { icon: typeof FileText; title: string; detail: string }) { return <div className="empty-state"><span className="empty-icon"><Icon size={20} /></span><strong>{title}</strong><p>{detail}</p></div>; }
-
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="loading-state">
+      <LoaderCircle className="spin" size={23} />
+      <span>{label}</span>
+    </div>
+  );
+}
+function EmptyState({
+  icon: Icon,
+  title,
+  detail,
+}: {
+  icon: typeof FileText;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="empty-state">
+      <span className="empty-icon">
+        <Icon size={20} />
+      </span>
+      <strong>{title}</strong>
+      <p>{detail}</p>
+    </div>
+  );
+}
 function LessonRow({ lesson }: { lesson: Lesson }) {
-  const marker = scopeMarker(lesson);
-  return <div className="lesson-card"><time>{lesson.start_time}</time><div className="lesson-card__body"><strong>{lesson.subject}</strong><span>{[lesson.room, lesson.teacher].filter(Boolean).join(' · ') || 'Детали уточняются'}</span>{marker && <small>{marker}</small>}</div>{lesson.lesson_type && lesson.lesson_type !== 'lesson' && <span className="soft-badge">Особое</span>}</div>;
+  return (
+    <div className="lesson-card">
+      <time>{lesson.start_time}</time>
+      <div className="lesson-card__body">
+        <strong>{lesson.subject}</strong>
+        <span>
+          {[lesson.audience, lesson.room, lesson.teacher]
+            .filter(Boolean)
+            .join(' · ') || 'Детали уточняются'}
+        </span>
+        {scopeMarker(lesson) && <small>{scopeMarker(lesson)}</small>}
+      </div>
+      {lesson.lesson_type && lesson.lesson_type !== 'lesson' && (
+        <span className="soft-badge">Особое</span>
+      )}
+    </div>
+  );
+}
+function PanelShell({
+  title,
+  backLabel,
+  onClose,
+  children,
+}: {
+  title: string;
+  backLabel: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <dialog open className="panel-layer" aria-label={title}>
+      <button className="panel-scrim" onClick={onClose} aria-label="Закрыть" />
+      <aside className="detail-panel">
+        <div className="panel-toolbar">
+          <button className="back-button" onClick={onClose}>
+            <ChevronLeft size={18} /> {backLabel}
+          </button>
+          <button
+            className="panel-close"
+            onClick={onClose}
+            aria-label="Закрыть"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </aside>
+    </dialog>
+  );
+}
+function Topbar({
+  label,
+  name,
+  onProfile,
+  right,
+}: {
+  label: string;
+  name: string;
+  onProfile: () => void;
+  right?: React.ReactNode;
+}) {
+  return (
+    <header className="scene-topbar">
+      <div className="brand-lockup">
+        <span className="brand-mark">✦</span>
+        <div>
+          <p className="brand-title">Мой Остров</p>
+          <p className="brand-subtitle">{label}</p>
+        </div>
+      </div>
+      <div className="topbar-actions">
+        {right}
+        <button className="profile-button" onClick={onProfile}>
+          <span className="profile-avatar">{name.slice(0, 1)}</span>
+          <span className="profile-name">{name.split(' ')[0]}</span>
+          <ChevronDown size={15} />
+        </button>
+      </div>
+    </header>
+  );
 }
 
-function SchedulePanel({ schedule, selectedDay, setSelectedDay }: { schedule: Lesson[]; selectedDay: string; setSelectedDay: (value: string) => void }) {
+function SchedulePanel({ schedule }: { schedule: Lesson[] }) {
+  const initial = schedule[0]?.lesson_date || isoDate(new Date());
+  const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
-  const days = Array.from({ length: 5 }, (_, index) => isoDate(addDays(monday, index)));
-  const entries = schedule.filter((lesson) => lesson.lesson_date === selectedDay).sort((a, b) => a.start_time.localeCompare(b.start_time));
-  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Башня времени</p><h2>Расписание</h2><p>Только ваши уроки и предметные группы из подтверждённых доступов.</p></div></div><div className="day-picker" aria-label="Дни недели">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} уроков</span></div>{entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}-${lesson.source_coordinate}`} lesson={lesson} />)}</div> : <EmptyState icon={CalendarDays} title="Уроков нет" detail="На этот день в вашем расписании нет записей." />}</div>;
+  const days = Array.from({ length: 5 }, (_, index) =>
+    isoDate(addDays(monday, index)),
+  );
+  const entries = schedule
+    .filter((lesson) => lesson.lesson_date === selectedDay)
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+  return (
+    <div className="section-panel">
+      <div className="panel-intro">
+        <span className="panel-icon">
+          <CalendarDays size={21} />
+        </span>
+        <div>
+          <p className="eyebrow">Неделя</p>
+          <h2>Расписание</h2>
+          <p>Только подтверждённые занятия вашего учебного контура.</p>
+        </div>
+      </div>
+      <div className="day-picker">
+        {days.map((day) => (
+          <button
+            key={day}
+            className={day === selectedDay ? 'is-active' : ''}
+            onClick={() => setSelectedDay(day)}
+          >
+            <small>
+              {new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(
+                new Date(`${day}T12:00:00`),
+              )}
+            </small>
+            <strong>{day.slice(8)}</strong>
+          </button>
+        ))}
+      </div>
+      <div className="panel-date">
+        <strong>{formatDate(selectedDay, true)}</strong>
+        <span>{entries.length} занятий</span>
+      </div>
+      {entries.length ? (
+        <div className="lesson-stack">
+          {entries.map((lesson) => (
+            <LessonRow
+              key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}-${lesson.source_coordinate}`}
+              lesson={lesson}
+            />
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={CalendarDays}
+          title="Занятий нет"
+          detail="Для этого дня нет подтверждённых записей."
+        />
+      )}
+    </div>
+  );
 }
-
 function HomeworkPanel({ homework }: { homework: Homework[] }) {
-  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--coral"><BookOpen size={21} /></span><div><p className="eyebrow">Дом знаний</p><h2>Домашка</h2><p>Задания из Classroom. Статус показывается только когда его вернул источник.</p></div></div>{homework.length ? <div className="homework-stack">{homework.map((item) => <article className="homework-card" key={item.external_coursework_id}><div className="homework-card__top"><span className="subject-icon"><FileText size={17} /></span><span className="course-label">{item.course_title || 'Classroom'}</span>{item.state && <span className="state-badge">{item.state === 'PUBLISHED' ? 'Опубликовано' : item.state}</span>}</div><h3>{item.title}</h3>{item.description && <p>{item.description}</p>}<div className="homework-card__bottom"><span><Clock3 size={15} /> {formatDue(item.due_at)}</span>{item.alternate_link && <a href={item.alternate_link} target="_blank" rel="noreferrer">Открыть <ExternalLink size={14} /></a>}</div></article>)}</div> : <EmptyState icon={BookOpen} title="Домашних заданий нет" detail="Новые задания появятся здесь после синхронизации Classroom." />}</div>;
+  return (
+    <div className="section-panel">
+      <div className="panel-intro">
+        <span className="panel-icon panel-icon--coral">
+          <BookOpen size={21} />
+        </span>
+        <div>
+          <p className="eyebrow">Classroom</p>
+          <h2>Домашка</h2>
+          <p>Карточки ведут в оригинальные задания.</p>
+        </div>
+      </div>
+      {homework.length ? (
+        <div className="homework-stack">
+          {homework.map((item) => (
+            <article
+              className="homework-card"
+              key={item.external_coursework_id}
+            >
+              <span className="course-label">
+                {item.course_title || 'Classroom'}
+              </span>
+              <h3>{item.title}</h3>
+              {item.description && <p>{item.description}</p>}
+              <div className="homework-card__bottom">
+                <span>
+                  <Clock3 size={15} /> {formatDue(item.due_at)}
+                </span>
+                {item.alternate_link && (
+                  <a
+                    href={item.alternate_link}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Открыть <ExternalLink size={14} />
+                  </a>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={BookOpen}
+          title="Заданий нет"
+          detail="Новые задания появятся после фоновой синхронизации."
+        />
+      )}
+    </div>
+  );
+}
+function InfoPanel({
+  items,
+  staff = false,
+}: {
+  items: Information[];
+  staff?: boolean;
+}) {
+  return (
+    <div className="section-panel">
+      <div className="panel-intro">
+        <span className="panel-icon panel-icon--gold">
+          <Megaphone size={21} />
+        </span>
+        <div>
+          <p className="eyebrow">
+            {staff ? 'Для сотрудников' : 'Школьная информация'}
+          </p>
+          <h2>Информация</h2>
+          <p>Только сообщения, подходящие вашей аудитории.</p>
+        </div>
+      </div>
+      {items.length ? (
+        <div className="announcement-stack">
+          {items.map((item, index) => (
+            <article
+              className="announcement-card"
+              key={`${item.id || item.title}-${index}`}
+            >
+              {item.pinned ? <Pin size={17} /> : <Megaphone size={17} />}
+              <div>
+                <h3>{item.title}</h3>
+                <p>{item.body || item.content}</p>
+                <small>
+                  {[
+                    item.author_name,
+                    item.expires_at && `до ${formatDue(item.expires_at)}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </small>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={Megaphone}
+          title="Пока тихо"
+          detail="Актуальных сообщений для вашей аудитории нет."
+        />
+      )}
+    </div>
+  );
+}
+function ProfilePanel({
+  profile,
+  roleLabel,
+}: {
+  profile?: Profile;
+  roleLabel: string;
+}) {
+  return (
+    <div className="section-panel">
+      <div className="panel-intro">
+        <span className="panel-icon panel-icon--gold">
+          <UserRound size={21} />
+        </span>
+        <div>
+          <p className="eyebrow">Профиль и доступ</p>
+          <h2>{profile?.user.display_name || 'Преподаватель'}</h2>
+          <p>{profile?.user.class_name || roleLabel}</p>
+        </div>
+      </div>
+      <div className="verified-card">
+        <ShieldCheck size={19} />
+        <div>
+          <strong>Личность подтверждена</strong>
+          <span>Доступ рассчитывается на backend по ролям и назначениям.</span>
+        </div>
+        <Check size={18} />
+      </div>
+      {profile && (
+        <div className="profile-section">
+          <div className="subsection-title">
+            <Users size={16} /> Мои группы
+          </div>
+          {profile.groups.map((group) => (
+            <div className="group-card" key={`${group.id}-${group.name}`}>
+              <div>
+                <strong>{group.name}</strong>
+                <span>
+                  {group.source === 'admin_override'
+                    ? 'Admin override'
+                    : 'Источник школы'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function GradesPanel({
+  items,
+  loading,
+}: {
+  items: Array<Record<string, unknown>> | null;
+  loading: boolean;
+}) {
+  return (
+    <div className="section-panel">
+      <div className="panel-intro">
+        <span className="panel-icon panel-icon--violet">
+          <BarChart3 size={21} />
+        </span>
+        <div>
+          <p className="eyebrow">Официальный журнал</p>
+          <h2>Оценки</h2>
+          <p>Отдельно от Classroom grades.</p>
+        </div>
+      </div>
+      {loading ? (
+        <LoadingState label="Проверяем журнал" />
+      ) : items?.length ? (
+        <div className="grades-stack">
+          {items.map((item, index) => (
+            <div className="grade-card" key={index}>
+              <div>
+                <strong>{displayValue(item.subject, 'Предмет')}</strong>
+                <span>
+                  {displayValue(item.graded_on)} · вес{' '}
+                  {displayValue(item.weight, '—')}
+                </span>
+              </div>
+              <b>{displayValue(item.value, displayValue(item.status, '—'))}</b>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={BarChart3}
+          title="Оценок пока нет"
+          detail="Результаты появятся после journal sync и identity mapping."
+        />
+      )}
+    </div>
+  );
 }
 
-function InfoPanel({ announcements }: { announcements: ApiData['today']['announcements'] }) { return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--gold"><Megaphone size={21} /></span><div><p className="eyebrow">Павильон информации</p><h2>Новости</h2><p>Важные сообщения для вашего учебного контура.</p></div></div>{announcements.length ? <div className="announcement-stack">{announcements.map((item) => <article className="announcement-card" key={item.title}><span className="announcement-card__icon">✦</span><div><h3>{item.title}</h3><p>{item.body || 'Подробности появятся в сообщении.'}</p>{item.expires_at && <small>Актуально до {formatDue(item.expires_at)}</small>}</div></article>)}</div> : <EmptyState icon={Megaphone} title="Пока тихо" detail="Активных объявлений для вашей группы нет." />}</div>; }
-
-function ProfilePanel({ profile }: { profile: Profile }) { return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--gold"><UserRound size={21} /></span><div><p className="eyebrow">Профиль и доступ</p><h2>{profile.user.display_name}</h2><p>{profile.user.class_name || 'Учебная группа не указана'} · ученик</p></div></div><div className="verified-card"><ShieldCheck size={19} /><div><strong>Личность подтверждена</strong><span>Доступ ограничен вашими группами и курсами.</span></div><Check size={18} /></div><div className="profile-section"><div className="subsection-title"><Users size={16} /> Мои группы</div>{profile.groups.map((group) => <div className="group-card" key={`${group.id || group.name}-${group.scope_kind}`}><div><strong>{group.name}</strong><span>{humanScope(group)}{group.source ? ` · ${group.source === 'admin_override' ? 'подтверждено администратором' : 'источник школы'}` : ''}</span></div>{group.schedule_scopes?.map((scope) => <small key={`${scope.audience}-${scope.subject}-${scope.subject_subgroup}-${scope.exam_track}`}>{[scope.audience, scope.subject_subgroup && `группа ${scope.subject_subgroup}`, scope.exam_track].filter(Boolean).join(' · ')}</small>)}</div>)}</div></div>; }
-
-function GradesPanel({ grades, loading }: { grades: Array<Record<string, unknown>> | null; loading: boolean }) { return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--violet"><BarChart3 size={21} /></span><div><p className="eyebrow">Обсерватория</p><h2>Оценки</h2><p>Официальный журнал хранится отдельно от Classroom.</p></div></div>{loading ? <LoadingState label="Проверяем журнал" /> : grades?.length ? <div className="grades-stack">{grades.map((grade, index) => <div className="grade-card" key={`${displayValue(grade.subject, 'grade')}-${index}`}><div><strong>{displayValue(grade.subject, 'Предмет')}</strong><span>{displayValue(grade.graded_on)}</span></div><b>{displayValue(grade.value, '—')}</b></div>)}</div> : <EmptyState icon={BarChart3} title="Официальных оценок пока нет" detail="Источник школьного журнала ещё не подключён к этому кабинету." />}</div>; }
-
-function TodaySheet({ today, onOpen }: { today: ApiData['today']; onOpen: (view: View) => void }) { const lessons = [...today.schedule].sort((a, b) => a.start_time.localeCompare(b.start_time)); const next = lessons[0]; const homework = [...today.homework].sort((a, b) => String(a.due_at || '').localeCompare(String(b.due_at || '')))[0]; return <section className="today-sheet" aria-label="Сегодня"><div className="today-grabber" /><div className="today-heading"><div><span className="eyebrow">{formatDate(isoDate(new Date()), true)}</span><h2>Сегодня</h2></div><button className="outline-button" onClick={() => onOpen('schedule')}>Расписание <ChevronRight size={15} /></button></div><div className="today-grid"><button className="today-card today-card--lesson" onClick={() => onOpen('schedule')}><CalendarDays size={18} /><span><small>{next ? `Ближайший урок · ${next.start_time}` : 'Расписание'}</small><strong>{next?.subject || 'На сегодня уроков нет'}</strong><em>{next ? [next.room, scopeMarker(next)].filter(Boolean).join(' · ') : 'Отличный день для отдыха'}</em></span></button><button className="today-card today-card--homework" onClick={() => onOpen('homework')}><BookOpen size={18} /><span><small>На контроле</small><strong>{homework?.title || 'Домашних заданий нет'}</strong><em>{homework ? formatDue(homework.due_at) : 'Всё спокойно'}</em></span></button></div>{today.announcements.length > 0 && <button className="today-notice" onClick={() => onOpen('information')}><Megaphone size={16} /><span><strong>{today.announcements[0].title}</strong><small>Открыть новости</small></span><ChevronRight size={16} /></button>}</section>; }
-
-function StudentApp({ data, onReload }: { data: ApiData; onReload: () => void }) {
-  const [view, setView] = useState<View>(null); const [night, setNight] = useState(false); const [selectedDay, setSelectedDay] = useState([...data.today.schedule, ...data.schedule].sort((a, b) => `${a.lesson_date}${a.start_time}`.localeCompare(`${b.lesson_date}${b.start_time}`))[0]?.lesson_date || isoDate(new Date())); const [grades, setGrades] = useState<Array<Record<string, unknown>> | null>(null); const [gradesLoading, setGradesLoading] = useState(false);
-  const loadGrades = async () => { if (grades !== null || gradesLoading) return; setGradesLoading(true); try { setGrades((await api<{ items: Array<Record<string, unknown>> }>('/api/student/grades')).items); } catch { setGrades([]); } finally { setGradesLoading(false); } };
-  const openView = (nextView: View) => { setView(nextView); if (nextView === 'grades') void loadGrades(); };
-  const panelTitle = view === 'profile' ? 'Профиль' : view ? ({ schedule: 'Расписание', homework: 'Домашка', grades: 'Оценки', information: 'Новости' }[view]) : '';
-  return <main className={`island-app ${night ? 'island-app--night' : ''}`}><div className="island-backdrop" aria-hidden="true" /><div className="island-vignette" aria-hidden="true" /><header className="topbar"><div className="brand-lockup"><span className="brand-mark">✦</span><div><p className="brand-title">Мой Остров</p><p className="brand-subtitle">личный кабинет · 9 класс</p></div></div><div className="topbar-actions"><button className="icon-button" onClick={() => setNight((value) => !value)} aria-label={night ? 'Включить день' : 'Включить ночь'}>{night ? <Sun size={18} /> : <Moon size={18} />}</button><button className="profile-button" onClick={() => openView('profile')} aria-label="Открыть профиль"><span className="profile-avatar">{data.profile.user.display_name.slice(0, 1)}</span><span className="profile-name">{data.profile.user.display_name.split(' ')[0]}</span><ChevronDown size={15} /></button></div></header><section className="island-stage"><div className="stage-heading"><div><p className="section-kicker"><Sparkles size={14} /> {formatDate(isoDate(new Date()), true)}</p><h1>Добро пожаловать,<br />{data.profile.user.display_name.split(' ')[0]}</h1><p className="stage-note">Остров — быстрый путь к тому, что важно сегодня.</p></div><div className="sync-chip"><span className="status-dot" /> Данные синхронизированы</div></div><div className="map-frame" aria-label="Остров навигации"><div className="map-art" />{islandLocations.map((location) => <button key={location.id} className={`hotspot hotspot--${location.id}`} style={{ left: `${location.x}%`, top: `${location.y}%` }} onClick={() => openView(location.id)} aria-label={`Открыть ${location.label}`}><span className="hotspot-pin"><IconForLocation id={location.id} /></span><span className="hotspot-label">{location.label}</span></button>)}<span className="world-label world-label--plaza">Площадь событий</span><span className="world-label world-label--lighthouse">Маяк</span><div className="map-compass" aria-hidden="true"><span>N</span><span className="compass-line" /></div></div></section><TodaySheet today={data.today} onOpen={openView} />{view && <dialog open className="panel-layer" aria-label={panelTitle}><button className="panel-scrim" onClick={() => setView(null)} aria-label="Закрыть" /><aside className="detail-panel"><div className="panel-toolbar"><button className="back-button" onClick={() => setView(null)}><ChevronLeft size={18} /> Остров</button><button className="panel-close" onClick={() => setView(null)} aria-label="Закрыть"><X size={18} /></button></div>{view === 'profile' ? <ProfilePanel profile={data.profile} /> : view === 'schedule' ? <SchedulePanel schedule={data.schedule} selectedDay={selectedDay} setSelectedDay={setSelectedDay} /> : view === 'homework' ? <HomeworkPanel homework={data.homework} /> : view === 'information' ? <InfoPanel announcements={data.today.announcements} /> : <GradesPanel grades={grades} loading={gradesLoading} />}<button className="panel-refresh" onClick={onReload}><RefreshCw size={15} /> Обновить данные</button></aside></dialog>}</main>;
+function TodaySheet({
+  lessons,
+  homework = [],
+  information = [],
+  teacher = false,
+  onOpen,
+}: {
+  lessons: Lesson[];
+  homework?: Homework[];
+  information?: Information[];
+  teacher?: boolean;
+  onOpen: (view: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const sorted = [...lessons].sort((a, b) =>
+    a.start_time.localeCompare(b.start_time),
+  );
+  const next = sorted[0];
+  const task = homework[0];
+  return (
+    <section className={`today-sheet ${expanded ? 'is-expanded' : ''}`}>
+      <button
+        className="today-grabber"
+        onClick={() => setExpanded((value) => !value)}
+        aria-label={expanded ? 'Свернуть' : 'Развернуть'}
+      />
+      <div className="today-heading">
+        <div>
+          <span className="eyebrow">
+            {formatDate(isoDate(new Date()), true)}
+          </span>
+          <h2>Сегодня</h2>
+        </div>
+        <button
+          className="outline-button"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? 'Свернуть' : 'Подробнее'} <ChevronDown size={15} />
+        </button>
+      </div>
+      <div className="today-grid">
+        <button className="today-card" onClick={() => onOpen('schedule')}>
+          <CalendarDays size={18} />
+          <span>
+            <small>
+              {next
+                ? `${next.start_time} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
+                : 'Расписание'}
+            </small>
+            <strong>{next?.subject || 'Занятий нет'}</strong>
+            <em>
+              {[next?.room, next && scopeMarker(next)]
+                .filter(Boolean)
+                .join(' · ') || 'Свободное время'}
+            </em>
+          </span>
+        </button>
+        {teacher ? (
+          <button className="today-card" onClick={() => onOpen('groups')}>
+            <Users size={18} />
+            <span>
+              <small>Рабочий контур</small>
+              <strong>{sorted.length} занятий сегодня</strong>
+              <em>Открыть мои группы</em>
+            </span>
+          </button>
+        ) : (
+          <button className="today-card" onClick={() => onOpen('homework')}>
+            <BookOpen size={18} />
+            <span>
+              <small>На контроле</small>
+              <strong>{task?.title || 'Заданий нет'}</strong>
+              <em>{task ? formatDue(task.due_at) : 'Всё спокойно'}</em>
+            </span>
+          </button>
+        )}
+      </div>
+      {expanded && (
+        <div className="today-expanded">
+          {sorted.slice(0, 5).map((lesson) => (
+            <LessonRow
+              key={`${lesson.start_time}-${lesson.subject}`}
+              lesson={lesson}
+            />
+          ))}
+          {information[0] && (
+            <button
+              className="today-notice"
+              onClick={() => onOpen('information')}
+            >
+              <Megaphone size={16} />
+              <span>
+                <strong>{information[0].title}</strong>
+                <small>Открыть сообщение</small>
+              </span>
+              <ChevronRight size={16} />
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
 }
 
-function pendingState(state: LoadState): Exclude<LoadState, 'loading' | 'approved'> {
-  return state === 'needs_identity' || state === 'telegram_sdk_missing' || state === 'telegram_init_data_empty' || state === 'telegram_rejected' || state === 'network_error' || state === 'api_error' ? state : 'api_error';
+function StudentApp({
+  data,
+  onReload,
+}: {
+  data: ApiData;
+  onReload: () => void;
+}) {
+  const [view, setView] = useState<StudentView>(null);
+  const [grades, setGrades] = useState<Array<Record<string, unknown>> | null>(
+    null,
+  );
+  const [gradesLoading, setGradesLoading] = useState(false);
+  const open = (next: StudentView) => {
+    setView(next);
+    if (next === 'grades' && grades === null) {
+      setGradesLoading(true);
+      void api<{ items: Array<Record<string, unknown>> }>('/api/student/grades')
+        .then((result) => setGrades(result.items))
+        .catch(() => setGrades([]))
+        .finally(() => setGradesLoading(false));
+    }
+  };
+  const name = data.profile.user.display_name;
+  return (
+    <main className="scene-app student-app">
+      <div className="scene-canvas student-scene" />
+      <div className="scene-shade" />
+      <Topbar
+        label={`${data.profile.user.class_name || 'ученик'} · личный кабинет`}
+        name={name}
+        onProfile={() => open('profile')}
+      />
+      <div className="scene-welcome">
+        <p>
+          <Sparkles size={14} /> {formatDate(isoDate(new Date()), true)}
+        </p>
+        <h1>
+          Добро пожаловать,
+          <br />
+          {name.split(' ')[0]}
+        </h1>
+      </div>
+      <div className="scene-hotspots">
+        {islandLocations.map((location) => {
+          const Icon = {
+            schedule: CalendarDays,
+            homework: BookOpen,
+            grades: BarChart3,
+            information: Megaphone,
+          }[location.id];
+          return (
+            <button
+              key={location.id}
+              className={`scene-hotspot hotspot--${location.id}`}
+              style={{ left: `${location.x}%`, top: `${location.y}%` }}
+              onClick={() => open(location.id)}
+            >
+              <span>
+                <Icon size={18} />
+              </span>
+              <strong>{location.label}</strong>
+            </button>
+          );
+        })}
+      </div>
+      <TodaySheet
+        lessons={data.today.schedule}
+        homework={data.today.homework}
+        information={data.today.announcements}
+        onOpen={(next) => open(next as StudentView)}
+      />
+      {view && (
+        <PanelShell
+          title={view}
+          backLabel="Остров"
+          onClose={() => setView(null)}
+        >
+          {view === 'profile' ? (
+            <ProfilePanel profile={data.profile} roleLabel="ученик" />
+          ) : view === 'schedule' ? (
+            <SchedulePanel schedule={data.schedule} />
+          ) : view === 'homework' ? (
+            <HomeworkPanel homework={data.homework} />
+          ) : view === 'information' ? (
+            <InfoPanel items={data.today.announcements} />
+          ) : (
+            <GradesPanel items={grades} loading={gradesLoading} />
+          )}
+          <button className="panel-refresh" onClick={onReload}>
+            <RefreshCw size={15} /> Обновить данные
+          </button>
+        </PanelShell>
+      )}
+    </main>
+  );
 }
 
-function PendingState({ state, onRetry }: { state: Exclude<LoadState, 'loading' | 'approved'>; onRetry: () => void }) {
-  const copy = state === 'needs_identity'
-    ? ['Доступ ещё не подтверждён', 'Telegram распознан, но личность ученика ещё должна быть подтверждена администратором школы. Пока персональные данные закрыты.']
-    : state === 'telegram_sdk_missing'
-      ? ['Нужен запуск из Telegram', 'Telegram не передал контекст Mini App. Откройте приложение кнопкой внутри Telegram.']
-      : state === 'telegram_init_data_empty'
-        ? ['Нет данных Telegram', 'Mini App открылся, но Telegram не передал данные авторизации. Закройте окно и запустите его снова из кнопки бота.']
-        : state === 'telegram_rejected'
-          ? ['Telegram не принят', 'Сервер не подтвердил данные Telegram. Повторите запуск Mini App из Telegram.']
+function TeacherGroups({
+  groups,
+  courses,
+}: {
+  groups: Group[];
+  courses: Array<Record<string, unknown>>;
+}) {
+  const [selected, setSelected] = useState<Group | null>(null);
+  const [detail, setDetail] = useState<TeacherGroupDetail | null>(null);
+  const [tab, setTab] = useState<
+    'overview' | 'students' | 'journal' | 'analytics'
+  >('overview');
+  const choose = async (group: Group) => {
+    setSelected(group);
+    setDetail(null);
+    setTab('overview');
+    try {
+      setDetail(
+        await api<TeacherGroupDetail>(`/api/teacher/groups/${group.id}`),
+      );
+    } catch {
+      setDetail({
+        students: [],
+        grade_histories: [],
+        assessments: [],
+        analytics: {},
+      });
+    }
+  };
+  if (selected) {
+    const average = displayValue(detail?.analytics.average, '—');
+    return (
+      <div className="section-panel">
+        <button
+          className="back-button inline-back"
+          onClick={() => setSelected(null)}
+        >
+          <ChevronLeft size={17} /> Мои группы
+        </button>
+        <div className="panel-intro">
+          <span className="panel-icon">
+            <Users size={21} />
+          </span>
+          <div>
+            <p className="eyebrow">{selected.subject || selected.group_type}</p>
+            <h2>{selected.name}</h2>
+            <p>
+              {selected.student_count || detail?.students.length || 0} учеников
+              · среднее {average}
+            </p>
+          </div>
+        </div>
+        <div className="subtabs">
+          {(['overview', 'students', 'journal', 'analytics'] as const).map(
+            (item) => (
+              <button
+                key={item}
+                className={tab === item ? 'is-active' : ''}
+                onClick={() => setTab(item)}
+              >
+                {
+                  {
+                    overview: 'Обзор',
+                    students: 'Ученики',
+                    journal: 'Журнал',
+                    analytics: 'Аналитика',
+                  }[item]
+                }
+              </button>
+            ),
+          )}
+        </div>
+        {!detail ? (
+          <LoadingState label="Загружаем группу" />
+        ) : tab === 'students' ? (
+          <div className="people-list">
+            {detail.students.map((student, index) => (
+              <div
+                className="person-row"
+                key={displayValue(student.id, String(index))}
+              >
+                <span className="avatar-mini">
+                  {displayValue(student.display_name, '?').slice(0, 1)}
+                </span>
+                <div>
+                  <strong>{displayValue(student.display_name)}</strong>
+                  <small>
+                    {displayValue(student.class_name)} ·{' '}
+                    {displayValue(student.source)}
+                  </small>
+                  {detail.grade_histories
+                    .filter(
+                      (history) =>
+                        displayValue(history.name) ===
+                        displayValue(student.display_name),
+                    )
+                    .map((history) => (
+                      <small key={displayValue(history.name)}>
+                        История: {displayValue(history.average, '—')} среднее ·{' '}
+                        {Array.isArray(history.history)
+                          ? history.history.length
+                          : 0}{' '}
+                        работ
+                      </small>
+                    ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : tab === 'journal' ? (
+          <div className="assessment-list">
+            {detail.assessments.length ? (
+              detail.assessments.map((assessment, index) => (
+                <article
+                  className="assessment-card"
+                  key={displayValue(assessment.id, String(index))}
+                >
+                  <div>
+                    <strong>{displayValue(assessment.title)}</strong>
+                    <small>
+                      {displayValue(assessment.date)} · вес{' '}
+                      {displayValue(assessment.weight, '—')} · максимум{' '}
+                      {displayValue(assessment.max_score, '—')}
+                    </small>
+                  </div>
+                  <span className="count-badge">
+                    {Array.isArray(assessment.results)
+                      ? assessment.results.length
+                      : 0}
+                  </span>
+                </article>
+              ))
+            ) : (
+              <EmptyState
+                icon={BarChart3}
+                title="Журнал не сопоставлен"
+                detail="Нужен explicit mapping source group → internal group в Admin."
+              />
+            )}
+          </div>
+        ) : tab === 'analytics' ? (
+          <>
+            <div className="metric-grid">
+              <div className="metric-card">
+                <span>Среднее</span>
+                <strong>{average}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Результатов</span>
+                <strong>
+                  {displayValue(detail.analytics.result_count, '0')}
+                </strong>
+              </div>
+              <div className="metric-card">
+                <span>Числовых</span>
+                <strong>
+                  {displayValue(detail.analytics.numeric_count, '0')}
+                </strong>
+              </div>
+            </div>
+            <div className="subsection-title">Распределение статусов</div>
+            <div className="assessment-list">
+              {Object.entries(
+                (detail.analytics.status_distribution || {}) as Record<
+                  string,
+                  unknown
+                >,
+              ).map(([status, count]) => (
+                <div className="context-link" key={status}>
+                  <span>{status}</span>
+                  <strong>{displayValue(count)}</strong>
+                </div>
+              ))}
+              {!Object.keys(detail.analytics.status_distribution || {})
+                .length && (
+                <p className="sync-summary sync-summary--empty">
+                  Статусов пока нет
+                </p>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="metric-grid">
+              <div className="metric-card">
+                <span>Ученики</span>
+                <strong>{detail.students.length}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Работы</span>
+                <strong>{detail.assessments.length}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Среднее</span>
+                <strong>{average}</strong>
+              </div>
+            </div>
+            <div className="subsection-title">
+              <BookOpen size={16} /> Classroom
+            </div>
+            {courses
+              .filter(
+                (course) =>
+                  displayValue(course.group_id) === displayValue(selected.id),
+              )
+              .map((course, index) => (
+                <div className="context-link" key={index}>
+                  <span>{displayValue(course.title, 'Курс')}</span>
+                  <ExternalLink size={15} />
+                </div>
+              ))}
+          </>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="section-panel">
+      <div className="panel-intro">
+        <span className="panel-icon">
+          <Users size={21} />
+        </span>
+        <div>
+          <p className="eyebrow">Предметная работа</p>
+          <h2>Мои группы</h2>
+          <p>Ученики, журнал и аналитика живут внутри группы.</p>
+        </div>
+      </div>
+      {groups.length ? (
+        <div className="group-grid">
+          {groups.map((group) => (
+            <button
+              className="group-tile"
+              key={group.id}
+              onClick={() => void choose(group)}
+            >
+              <span className="group-tile__icon">
+                <School size={20} />
+              </span>
+              <div>
+                <strong>{group.name}</strong>
+                <small>
+                  {group.subject || group.group_type} ·{' '}
+                  {group.student_count || 0} учеников
+                </small>
+              </div>
+              <ChevronRight size={17} />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <EmptyState
+          icon={Users}
+          title="Нет назначенных групп"
+          detail="Teacher assignments настраиваются явно, а не выводятся из названий."
+        />
+      )}
+    </div>
+  );
+}
+function TeacherApp({
+  data,
+  onLogout,
+  onReload,
+  onOpenAdmin,
+}: {
+  data: TeacherData;
+  onLogout: () => void;
+  onReload: () => void;
+  onOpenAdmin?: () => void;
+}) {
+  const [view, setView] = useState<TeacherView>(null);
+  const homeroom = data.groups.find((group) => group.is_homeroom);
+  const hotspots: Array<{
+    id: TeacherView;
+    label: string;
+    icon: typeof Users;
+    className: string;
+  }> = [
+    {
+      id: 'schedule',
+      label: 'Расписание',
+      icon: CalendarDays,
+      className: 'teacher-hotspot--schedule',
+    },
+    {
+      id: 'groups',
+      label: 'Мои группы',
+      icon: Users,
+      className: 'teacher-hotspot--groups',
+    },
+    {
+      id: 'information',
+      label: 'Информация',
+      icon: Megaphone,
+      className: 'teacher-hotspot--info',
+    },
+    ...(homeroom
+      ? [
+          {
+            id: 'homeroom' as TeacherView,
+            label: 'Мой класс',
+            icon: School,
+            className: 'teacher-hotspot--homeroom',
+          },
+        ]
+      : []),
+  ];
+  return (
+    <main className="scene-app teacher-app">
+      <div className="scene-canvas teacher-scene" />
+      <div className="scene-shade" />
+      <Topbar
+        label="преподаватель"
+        name="Учитель"
+        onProfile={() => setView('profile')}
+        right={
+          onOpenAdmin && (
+            <button className="top-action" onClick={onOpenAdmin}>
+              <ShieldCheck size={16} /> <span>Admin</span>
+            </button>
+          )
+        }
+      />
+      <div className="scene-welcome teacher-welcome">
+        <p>Рабочий день</p>
+        <h1>
+          Всё важное
+          <br />
+          на одном острове
+        </h1>
+      </div>
+      <div className="scene-hotspots teacher-hotspots">
+        {hotspots.map((item) => (
+          <button
+            key={item.id}
+            className={`scene-hotspot ${item.className}`}
+            onClick={() => setView(item.id)}
+          >
+            <span>
+              <item.icon size={18} />
+            </span>
+            <strong>{item.label}</strong>
+          </button>
+        ))}
+      </div>
+      <TodaySheet
+        lessons={data.today}
+        information={data.information}
+        teacher
+        onOpen={(next) => setView(next as TeacherView)}
+      />
+      {view && (
+        <PanelShell
+          title={view}
+          backLabel="К кампусу"
+          onClose={() => setView(null)}
+        >
+          {view === 'schedule' ? (
+            <SchedulePanel schedule={data.schedule} />
+          ) : view === 'groups' ? (
+            <TeacherGroups
+              groups={data.groups.filter((group) => !group.is_homeroom)}
+              courses={data.courses}
+            />
+          ) : view === 'homeroom' ? (
+            <TeacherGroups
+              groups={homeroom ? [homeroom] : []}
+              courses={data.courses}
+            />
+          ) : view === 'information' ? (
+            <InfoPanel items={data.information} staff />
+          ) : (
+            <ProfilePanel roleLabel="преподаватель" />
+          )}
+          <button className="panel-refresh" onClick={onReload}>
+            <RefreshCw size={15} /> Обновить
+          </button>
+          <button className="panel-refresh" onClick={onLogout}>
+            <LogOut size={15} /> Завершить сессию
+          </button>
+        </PanelShell>
+      )}
+    </main>
+  );
+}
+
+const adminNav: Array<{ id: AdminSection; label: string; icon: typeof Users }> =
+  [
+    { id: 'overview', label: 'Обзор', icon: LayoutDashboard },
+    { id: 'people', label: 'Люди', icon: Users },
+    { id: 'structure', label: 'Структура школы', icon: Network },
+    { id: 'schedule', label: 'Расписание', icon: CalendarDays },
+    { id: 'integrations', label: 'Интеграции', icon: RefreshCw },
+    { id: 'settings', label: 'Настройки', icon: Settings },
+    { id: 'diagnostics', label: 'Диагностика', icon: Wrench },
+  ];
+function StatusCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  warning,
+  onClick,
+}: {
+  icon: typeof Users;
+  label: string;
+  value: string | number;
+  detail: string;
+  warning?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      className={`status-card ${warning ? 'is-warning' : ''}`}
+      onClick={onClick}
+    >
+      <span className="status-card__icon">
+        <Icon size={18} />
+      </span>
+      <span>
+        <small>{label}</small>
+        <strong>{value}</strong>
+        <em>{detail}</em>
+      </span>
+      <ChevronRight size={16} />
+    </button>
+  );
+}
+function SyncSummary({
+  item,
+  empty,
+}: {
+  item?: Record<string, unknown>;
+  empty: string;
+}) {
+  if (!item) return <p className="sync-summary sync-summary--empty">{empty}</p>;
+  const status = displayValue(item.status, displayValue(item.action, 'unknown'))
+    .split('.')
+    .pop();
+  return (
+    <div className="sync-summary">
+      <span
+        className={
+          status === 'success'
+            ? 'sync-dot sync-dot--ok'
+            : 'sync-dot sync-dot--bad'
+        }
+      />
+      <div>
+        <strong>{status}</strong>
+        <small>
+          {displayValue(item.created_at, displayValue(item.last_synced_at))}
+        </small>
+        {Boolean(item.error) && <small>{displayValue(item.error)}</small>}
+      </div>
+    </div>
+  );
+}
+function AdminApp({
+  onLogout,
+  onBackToTeacher,
+  onPreview,
+}: {
+  onLogout: () => void;
+  onBackToTeacher?: () => void;
+  onPreview: (userId: string) => void;
+}) {
+  const [data, setData] = useState<AdminData | null>(null);
+  const [section, setSection] = useState<AdminSection>('overview');
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
+  const [selectedUser, setSelectedUser] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const results = await Promise.allSettled([
+        api<Record<string, number>>('/api/admin/overview'),
+        api<{ items: Array<Record<string, string>> }>('/api/admin/claims'),
+        api<{ items: Array<Record<string, unknown>> }>('/api/admin/users'),
+        api<{ items: Array<Record<string, unknown>> }>('/api/admin/groups'),
+        api<{ items: Array<Record<string, unknown>> }>(
+          '/api/admin/schedule/syncs',
+        ),
+        api<{ items: Array<Record<string, unknown>> }>(
+          '/api/admin/classroom/syncs',
+        ),
+        api<{ items: Array<Record<string, unknown>> }>('/api/admin/journals'),
+        api<{ items: Array<Record<string, unknown>> }>(
+          '/api/admin/information',
+        ),
+        api<{ items: Array<Record<string, unknown>> }>(
+          '/api/admin/schedule/parses',
+        ),
+        api<{ items: Array<Record<string, unknown>> }>('/api/admin/audit'),
+      ]);
+      const value = <T,>(index: number, fallback: T): T => {
+        const result = results[index];
+        return result.status === 'fulfilled' ? (result.value as T) : fallback;
+      };
+      const [
+        overview,
+        claims,
+        users,
+        groups,
+        syncs,
+        classroomSyncs,
+        journals,
+        information,
+        parseIssues,
+        audit,
+      ] = [
+        value(0, {} as Record<string, number>),
+        value(1, { items: [] as Array<Record<string, string>> }),
+        value(2, { items: [] as Array<Record<string, unknown>> }),
+        value(3, { items: [] as Array<Record<string, unknown>> }),
+        value(4, { items: [] as Array<Record<string, unknown>> }),
+        value(5, { items: [] as Array<Record<string, unknown>> }),
+        value(6, { items: [] as Array<Record<string, unknown>> }),
+        value(7, { items: [] as Array<Record<string, unknown>> }),
+        value(8, { items: [] as Array<Record<string, unknown>> }),
+        value(9, { items: [] as Array<Record<string, unknown>> }),
+      ];
+      setData({
+        overview,
+        claims: claims.items,
+        users: users.items,
+        groups: groups.items,
+        scheduleSyncs: syncs.items,
+        classroomSyncs: classroomSyncs.items,
+        journals: journals.items,
+        information: information.items,
+        parseIssues: parseIssues.items,
+        audit: audit.items,
+      });
+      const failed = results.filter((result) => result.status === 'rejected');
+      if (failed.length) {
+        setMessage(
+          `Часть данных недоступна (${failed.length}/10). Можно обновить ещё раз.`,
+        );
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Ошибка загрузки');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+  const mutate = async (path: string, body?: unknown) => {
+    setMessage('Сохраняем…');
+    try {
+      await api(path, {
+        method: 'POST',
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      await load();
+      setMessage('Изменение сохранено и записано в аудит');
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : 'Операция не выполнена',
+      );
+    }
+  };
+  const filteredUsers = useMemo(
+    () =>
+      data?.users.filter((user) =>
+        `${displayValue(user.display_name)} ${displayValue(user.class_name)} ${((user.roles as string[]) || []).join(' ')}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      ) || [],
+    [data, query],
+  );
+  const filteredGroups = useMemo(
+    () =>
+      data?.groups.filter((group) =>
+        `${displayValue(group.name)} ${displayValue(group.group_type)}`
+          .toLowerCase()
+          .includes(query.toLowerCase()),
+      ) || [],
+    [data, query],
+  );
+  const toggleRole = (user: Record<string, unknown>, role: string) => {
+    const current = Array.isArray(user.roles)
+      ? user.roles.filter((item): item is string => typeof item === 'string')
+      : [];
+    const roles = current.includes(role)
+      ? current.filter((item) => item !== role)
+      : [...current, role];
+    if (roles.length)
+      void mutate(`/api/admin/users/${displayValue(user.id)}/roles`, { roles });
+  };
+  const assignment = (
+    kind: 'membership' | 'teacher' | 'homeroom',
+    active = true,
+  ) => {
+    if (!selectedUser || !selectedGroupId) return;
+    const identity = displayValue(selectedUser.identity_id);
+    if (kind === 'membership')
+      void mutate('/api/admin/membership-overrides', {
+        identity_id: identity,
+        group_id: selectedGroupId,
+        member_role: 'student',
+        action: active ? 'include' : 'exclude',
+        reason: 'Admin control panel',
+      });
+    if (kind === 'teacher')
+      void mutate('/api/admin/teacher-assignments', {
+        teacher_identity_id: identity,
+        group_id: selectedGroupId,
+        active,
+      });
+    if (kind === 'homeroom')
+      void mutate('/api/admin/homeroom-assignments', {
+        teacher_identity_id: identity,
+        group_id: selectedGroupId,
+        active,
+      });
+  };
+  const content = () => {
+    if (!data) return null;
+    if (section === 'overview')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="Состояние системы"
+            title="Обзор"
+            detail="Сигналы, изменения и то, что требует внимания."
+          />
+          <div className="status-grid">
+            <StatusCard
+              icon={Users}
+              label="Люди"
+              value={data.overview.users || 0}
+              detail={`${data.overview.pending_claims || 0} ожидают решения`}
+              warning={Boolean(data.overview.pending_claims)}
+              onClick={() => setSection('people')}
+            />
+            <StatusCard
+              icon={Network}
+              label="Структура"
+              value={data.overview.groups || 0}
+              detail="классов и групп"
+              onClick={() => setSection('structure')}
+            />
+            <StatusCard
+              icon={CalendarDays}
+              label="Расписание"
+              value={data.overview.parse_issues || 0}
+              detail="проблем разбора"
+              warning={Boolean(data.overview.parse_issues)}
+              onClick={() => setSection('diagnostics')}
+            />
+            <StatusCard
+              icon={BarChart3}
+              label="Журнал"
+              value={data.overview.journal_results || 0}
+              detail="результатов"
+              onClick={() => setSection('integrations')}
+            />
+          </div>
+          <section className="work-card">
+            <div className="work-card__heading">
+              <h2>Требует внимания</h2>
+              <span className="count-badge">
+                {data.claims.length + data.parseIssues.length}
+              </span>
+            </div>
+            {data.claims.slice(0, 3).map((claim) => (
+              <div className="action-row" key={claim.id}>
+                <span className="avatar-mini">
+                  {claim.display_name?.slice(0, 1)}
+                </span>
+                <div>
+                  <strong>{claim.display_name}</strong>
+                  <small>Заявка на роль {claim.requested_role}</small>
+                </div>
+                <button
+                  className="success-button"
+                  onClick={() =>
+                    void mutate(`/api/admin/claims/${claim.id}/review`, {
+                      status: 'approved',
+                    })
+                  }
+                >
+                  Одобрить
+                </button>
+              </div>
+            ))}
+            {data.parseIssues.slice(0, 3).map((issue, index) => (
+              <button
+                className="action-row"
+                key={index}
+                onClick={() => setSection('diagnostics')}
+              >
+                <CircleAlert size={18} />
+                <div>
+                  <strong>
+                    {displayValue(issue.audience)} ·{' '}
+                    {displayValue(issue.subject)}
+                  </strong>
+                  <small>
+                    {displayValue(issue.lesson_date)}{' '}
+                    {displayValue(issue.start_time)} ·{' '}
+                    {displayValue(issue.source_coordinate)}
+                  </small>
+                </div>
+                <ChevronRight size={16} />
+              </button>
+            ))}
+          </section>
+        </>
+      );
+    if (section === 'people')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="Identity · roles · assignments"
+            title="Люди"
+            detail="Один каталог учеников, учителей и администраторов."
+          />
+          <div className="split-view">
+            <section className="work-card people-catalog">
+              {filteredUsers.map((user, index) => (
+                <button
+                  className={`person-row ${displayValue(selectedUser?.id) === displayValue(user.id) ? 'is-selected' : ''}`}
+                  key={displayValue(user.id, String(index))}
+                  onClick={() => {
+                    setSelectedUser(user);
+                    setSelectedGroupId('');
+                  }}
+                >
+                  <span className="avatar-mini">
+                    {displayValue(user.display_name, '?').slice(0, 1)}
+                  </span>
+                  <div>
+                    <strong>
+                      {displayValue(user.display_name, 'Telegram user')}
+                    </strong>
+                    <small>
+                      {Array.isArray(user.roles)
+                        ? user.roles.join(' · ')
+                        : displayValue(user.role)}{' '}
+                      · {displayValue(user.class_name, 'без класса')}
+                    </small>
+                  </div>
+                  <ChevronRight size={16} />
+                </button>
+              ))}
+            </section>
+            <section className="work-card detail-card">
+              {selectedUser ? (
+                <>
+                  <div className="person-hero">
+                    <span className="avatar-large">
+                      {displayValue(selectedUser.display_name, '?').slice(0, 1)}
+                    </span>
+                    <div>
+                      <h2>
+                        {displayValue(
+                          selectedUser.display_name,
+                          'Telegram user',
+                        )}
+                      </h2>
+                      <p>
+                        {displayValue(
+                          selectedUser.class_name,
+                          'Класс не указан',
+                        )}{' '}
+                        · {displayValue(selectedUser.claim_status, 'без claim')}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="subsection-title">Роли</div>
+                  <div className="chip-row">
+                    {['student', 'teacher', 'admin'].map((role) => (
+                      <button
+                        key={role}
+                        className={
+                          Array.isArray(selectedUser.roles) &&
+                          selectedUser.roles.includes(role)
+                            ? 'role-chip is-active'
+                            : 'role-chip'
+                        }
+                        onClick={() => toggleRole(selectedUser, role)}
+                      >
+                        {role}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="subsection-title">
+                    Назначения и memberships
+                  </div>
+                  <select
+                    className="control-select"
+                    value={selectedGroupId}
+                    onChange={(event) => setSelectedGroupId(event.target.value)}
+                  >
+                    <option value="">Выберите группу…</option>
+                    {data.groups.map((group) => (
+                      <option
+                        key={displayValue(group.id)}
+                        value={displayValue(group.id)}
+                      >
+                        {displayValue(group.name)} ·{' '}
+                        {displayValue(group.group_type)}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="stack-actions">
+                    {Array.isArray(selectedUser.roles) &&
+                      selectedUser.roles.includes('student') && (
+                        <>
+                          <button
+                            onClick={() => assignment('membership', true)}
+                          >
+                            Добавить membership override
+                          </button>
+                          <button
+                            onClick={() => assignment('membership', false)}
+                          >
+                            Исключить override
+                          </button>
+                        </>
+                      )}
+                    {Array.isArray(selectedUser.roles) &&
+                      selectedUser.roles.includes('teacher') && (
+                        <>
+                          <button onClick={() => assignment('teacher')}>
+                            Назначить группу
+                          </button>
+                          <button onClick={() => assignment('teacher', false)}>
+                            Снять назначение
+                          </button>
+                          <button onClick={() => assignment('homeroom')}>
+                            Назначить классное руководство
+                          </button>
+                        </>
+                      )}
+                  </div>
+                  {Array.isArray(selectedUser.roles) &&
+                    selectedUser.roles.includes('student') &&
+                    selectedUser.identity_id && (
+                      <button
+                        className="preview-button"
+                        onClick={() => onPreview(displayValue(selectedUser.id))}
+                      >
+                        <UserRound size={16} /> Посмотреть как ученик
+                      </button>
+                    )}
+                  <div className="subsection-title">Связи</div>
+                  <div className="related-list">
+                    {Array.isArray(selectedUser.groups) &&
+                      selectedUser.groups.map((group, index) => (
+                        <button
+                          key={index}
+                          onClick={() => {
+                            setQuery(
+                              displayValue(
+                                (group as Record<string, unknown>).name,
+                              ),
+                            );
+                            setSection('structure');
+                          }}
+                        >
+                          {displayValue(
+                            (group as Record<string, unknown>).name,
+                          )}{' '}
+                          <ChevronRight size={14} />
+                        </button>
+                      ))}
+                  </div>
+                </>
+              ) : (
+                <EmptyState
+                  icon={UserRound}
+                  title="Выберите человека"
+                  detail="Здесь появятся роли, provenance и связанные назначения."
+                />
+              )}
+            </section>
+          </div>
+        </>
+      );
+    if (section === 'structure')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="School structure"
+            title="Структура школы"
+            detail="Классы, предметные и экзаменационные группы."
+          />
+          <section className="work-card">
+            <div className="structure-grid">
+              {filteredGroups.map((group, index) => (
+                <article
+                  className="structure-node"
+                  key={displayValue(group.id, String(index))}
+                >
+                  <span>
+                    <School size={18} />
+                  </span>
+                  <div>
+                    <strong>{displayValue(group.name)}</strong>
+                    <small>
+                      {displayValue(group.group_type)} ·{' '}
+                      {displayValue(group.member_count, '0')} участников ·{' '}
+                      {displayValue(group.teacher_count, '0')} учителей
+                    </small>
+                  </div>
+                  <div className="node-links">
+                    <button
+                      onClick={() => {
+                        setQuery(displayValue(group.name));
+                        setSection('people');
+                      }}
+                    >
+                      Люди
+                    </button>
+                    <button onClick={() => setSection('schedule')}>
+                      Расписание
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </>
+      );
+    if (section === 'schedule')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="Diff + exceptions"
+            title="Расписание"
+            detail="Изменения и проблемы, а не сотни одинаковых строк."
+            action={
+              <button
+                className="primary-button primary-button--compact"
+                onClick={() => void mutate('/api/admin/schedule/refresh')}
+              >
+                <RefreshCw size={16} /> Sync now
+              </button>
+            }
+          />
+          <section className="work-card">
+            <SyncSummary
+              item={data.scheduleSyncs[0]}
+              empty="Синхронизаций ещё нет"
+            />
+          </section>
+          <IssueList items={data.parseIssues} />
+        </>
+      );
+    if (section === 'integrations')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="Background sync"
+            title="Интеграции"
+            detail="Google не участвует в пользовательском request path."
+          />
+          <div className="integration-grid">
+            <Integration
+              title="Расписание 2026/27"
+              icon={CalendarDays}
+              summary={
+                <SyncSummary
+                  item={data.scheduleSyncs[0]}
+                  empty="Нет запусков"
+                />
+              }
+              onClick={() => void mutate('/api/admin/schedule/refresh')}
+            />
+            <Integration
+              title="Google Classroom"
+              icon={BookOpen}
+              summary={
+                <SyncSummary
+                  item={data.classroomSyncs[0]}
+                  empty="Нет запусков"
+                />
+              }
+              onClick={() => void mutate('/api/admin/classroom/refresh')}
+            />
+            <Integration
+              title="Журналы 2026/27"
+              icon={BarChart3}
+              summary={
+                <p>
+                  {data.journals.length
+                    ? `${displayValue(data.journals[0].spreadsheet_title)} · ${displayValue(data.journals[0].result_count, '0')} результатов`
+                    : 'Grade 9 Math ещё не синхронизирован'}
+                </p>
+              }
+              onClick={() =>
+                void mutate(
+                  '/api/admin/journals/refresh?grade=9&subject=Математика',
+                )
+              }
+            />
+            <Integration
+              title="Telegram"
+              icon={ShieldCheck}
+              summary={
+                <p>Server-side initData verification · secrets скрыты</p>
+              }
+            />
+          </div>
+          {data.journals.map((journal) => (
+            <section className="work-card" key={displayValue(journal.id)}>
+              <div className="work-card__heading">
+                <div>
+                  <h2>{displayValue(journal.spreadsheet_title)}</h2>
+                  <small>
+                    {displayValue(journal.sheet_title)} ·{' '}
+                    {displayValue(journal.assessment_count, '0')} работ ·{' '}
+                    {displayValue(journal.unmapped_count, '0')} результатов без
+                    identity
+                  </small>
+                </div>
+                <span className="health-badge">read-only</span>
+              </div>
+              <div className="mapping-list">
+                {(Array.isArray(journal.markers) ? journal.markers : []).map(
+                  (marker) => {
+                    const mapping = Array.isArray(journal.mappings)
+                      ? journal.mappings.find(
+                          (item) => displayValue(item.group_marker) === marker,
+                        )
+                      : undefined;
+                    return (
+                      <form
+                        className="mapping-row"
+                        key={displayValue(marker)}
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const form = new FormData(event.currentTarget);
+                          void mutate('/api/admin/journals/group-mappings', {
+                            source_id: journal.id,
+                            group_marker: marker,
+                            group_id: form.get('group_id'),
+                          });
+                        }}
+                      >
+                        <strong>{displayValue(marker)}</strong>
+                        <select
+                          name="group_id"
+                          required
+                          defaultValue={displayValue(mapping?.group_id)}
+                        >
+                          <option value="">Выберите внутреннюю группу</option>
+                          {data.groups.map((group) => (
+                            <option
+                              key={displayValue(group.id)}
+                              value={displayValue(group.id)}
+                            >
+                              {displayValue(group.name)} ·{' '}
+                              {displayValue(group.group_type)}
+                            </option>
+                          ))}
+                        </select>
+                        <button className="outline-button" type="submit">
+                          {mapping ? 'Изменить' : 'Сопоставить'}
+                        </button>
+                      </form>
+                    );
+                  },
+                )}
+              </div>
+            </section>
+          ))}
+        </>
+      );
+    if (section === 'settings')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="Продуктовая конфигурация"
+            title="Настройки"
+            detail="Информация школы и реальные управляемые возможности."
+          />
+          <section className="work-card">
+            <div className="work-card__heading">
+              <h2>Информация и объявления</h2>
+              <span className="count-badge">{data.information.length}</span>
+            </div>
+            <form
+              className="information-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = new FormData(event.currentTarget);
+                void mutate('/api/admin/information', {
+                  title: form.get('title'),
+                  content: form.get('content'),
+                  audience_kind: form.get('audience_kind'),
+                  pinned: form.get('pinned') === 'on',
+                  status: 'published',
+                });
+                event.currentTarget.reset();
+              }}
+            >
+              <input name="title" required placeholder="Заголовок" />
+              <textarea name="content" required placeholder="Сообщение школе" />
+              <select name="audience_kind">
+                <option value="all">Все</option>
+                <option value="student">Ученики</option>
+                <option value="teacher">Учителя</option>
+              </select>
+              <label>
+                <input type="checkbox" name="pinned" /> Закрепить
+              </label>
+              <button
+                className="primary-button primary-button--compact"
+                type="submit"
+              >
+                Опубликовать
+              </button>
+            </form>
+            <div className="announcement-stack">
+              {data.information.map((item, index) => (
+                <article className="announcement-card" key={index}>
+                  <Megaphone size={17} />
+                  <div>
+                    <h3>{displayValue(item.title)}</h3>
+                    <p>{displayValue(item.body)}</p>
+                    <small>
+                      {displayValue(item.audience_kind)} ·{' '}
+                      {displayValue(item.status)}
+                    </small>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </>
+      );
+    return (
+      <>
+        <AdminHeading
+          eyebrow="Issues · provenance · audit"
+          title="Диагностика"
+          detail="Технические детали отделены от рабочих экранов."
+        />
+        <IssueList items={data.parseIssues} />
+        <section className="work-card">
+          <div className="work-card__heading">
+            <h2>История изменений</h2>
+            <span className="count-badge">{data.audit.length}</span>
+          </div>
+          {data.audit.slice(0, 30).map((event, index) => (
+            <div className="audit-row" key={index}>
+              <span className="audit-dot" />
+              <div>
+                <strong>{displayValue(event.action)}</strong>
+                <small>
+                  {displayValue(event.actor_name)} ·{' '}
+                  {displayValue(event.created_at)} ·{' '}
+                  {displayValue(event.entity_type)}
+                </small>
+              </div>
+            </div>
+          ))}
+        </section>
+      </>
+    );
+  };
+  return (
+    <main className="admin-shell">
+      <aside className="admin-sidebar">
+        <div className="admin-brand">
+          <span className="brand-mark">✦</span>
+          <div>
+            <strong>Мой Остров</strong>
+            <small>Control center</small>
+          </div>
+        </div>
+        <nav>
+          {adminNav.map((item) => (
+            <button
+              key={item.id}
+              className={section === item.id ? 'is-active' : ''}
+              onClick={() => setSection(item.id)}
+            >
+              <item.icon size={18} />
+              <span>{item.label}</span>
+              {item.id === 'diagnostics' &&
+                Boolean(data?.parseIssues.length) && (
+                  <b>{data?.parseIssues.length}</b>
+                )}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          {onBackToTeacher && (
+            <button onClick={onBackToTeacher}>
+              <BookOpen size={17} /> Teacher
+            </button>
+          )}
+          <button onClick={onLogout}>
+            <LogOut size={17} /> Выйти
+          </button>
+        </div>
+      </aside>
+      <section className="admin-main">
+        <header className="admin-topbar">
+          <div className="global-search">
+            <Search size={17} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Поиск людей, классов и групп"
+            />
+          </div>
+          <button
+            className="icon-button icon-button--dark"
+            onClick={() => void load()}
+            aria-label="Обновить"
+          >
+            <RefreshCw size={17} />
+          </button>
+        </header>
+        {message && (
+          <div className="admin-message">
+            <CircleAlert size={16} /> {message}
+            <button onClick={() => setMessage('')}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        {loading ? (
+          <LoadingState label="Загружаем control center" />
+        ) : (
+          content()
+        )}
+      </section>
+    </main>
+  );
+}
+function AdminHeading({
+  eyebrow,
+  title,
+  detail,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  detail: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="admin-page-heading">
+      <div>
+        <p className="eyebrow">{eyebrow}</p>
+        <h1>{title}</h1>
+        <p>{detail}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+function IssueList({ items }: { items: Array<Record<string, unknown>> }) {
+  return (
+    <section className="work-card">
+      <div className="work-card__heading">
+        <h2>Проблемы разбора</h2>
+        <span className="count-badge">{items.length}</span>
+      </div>
+      {items.map((issue, index) => (
+        <details className="issue-row" key={index}>
+          <summary>
+            <div>
+              <strong>
+                {displayValue(issue.audience)} ·{' '}
+                {displayValue(issue.lesson_date)}{' '}
+                {displayValue(issue.start_time)}
+              </strong>
+              <small>
+                Не удалось надёжно разобрать «{displayValue(issue.subject)}» ·{' '}
+                {displayValue(issue.source_coordinate)}
+              </small>
+            </div>
+            <span>{displayValue(issue.parse_status)}</span>
+          </summary>
+          <div className="technical-details">
+            <strong>Технические детали</strong>
+            <p>
+              {displayValue(issue.parse_diagnostics, 'Диагностика не указана')}
+            </p>
+          </div>
+        </details>
+      ))}
+    </section>
+  );
+}
+function Integration({
+  title,
+  icon: Icon,
+  summary,
+  onClick,
+}: {
+  title: string;
+  icon: typeof Users;
+  summary: React.ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <section className="integration-card">
+      <Icon size={20} />
+      <div>
+        <h2>{title}</h2>
+        {summary}
+      </div>
+      {onClick ? (
+        <button onClick={onClick}>Обновить</button>
+      ) : (
+        <span className="health-badge">configured</span>
+      )}
+    </section>
+  );
+}
+
+function PendingState({
+  state,
+  onRetry,
+}: {
+  state: Exclude<LoadState, 'loading' | 'approved'>;
+  onRetry: () => void;
+}) {
+  const copy =
+    state === 'needs_identity'
+      ? [
+          'Доступ ещё не подтверждён',
+          'Личность должна быть подтверждена администратором школы. До этого персональные данные закрыты.',
+        ]
+      : state === 'telegram_sdk_missing'
+        ? [
+            'Нужен запуск из Telegram',
+            'Откройте приложение кнопкой внутри Telegram.',
+          ]
+        : state === 'telegram_init_data_empty'
+          ? [
+              'Нет данных Telegram',
+              'Закройте Mini App и запустите его снова из бота.',
+            ]
           : state === 'network_error'
-            ? ['Сервер недоступен', 'Не удалось связаться с сервером. Проверьте соединение и повторите попытку.']
-            : ['Не удалось загрузить данные', 'Авторизация прошла, но данные кабинета пока недоступны. Повторите попытку.'];
-  const pending = state === 'needs_identity';
-  return <main className="status-screen"><div className="status-card"><span className="status-illustration">{pending ? <LockKeyhole size={28} /> : <CircleAlert size={28} />}</span><p className="eyebrow">Мой Остров · 9 класс</p><h1>{copy[0]}</h1><p>{copy[1]}</p><button className="primary-button" onClick={onRetry}>{pending ? 'Проверить снова' : 'Повторить вход'} <RefreshCw size={17} /></button>{isLocalBuild && <small className="dev-note">Локальная проверка: API {API_BASE}</small>}</div></main>;
-}
-
-function TeacherApp({ data, onLogout, onReload, onOpenAdmin }: { data: TeacherData; onLogout: () => void; onReload: () => void; onOpenAdmin?: () => void }) {
-  const lessons = [...data.schedule].sort((a, b) => `${a.lesson_date}${a.start_time}`.localeCompare(`${b.lesson_date}${b.start_time}`));
-  return <main className="admin-app teacher-app"><header className="admin-header"><div><p className="eyebrow">Мой Остров · преподаватель</p><h1>Рабочий контур</h1></div><div>{onOpenAdmin && <button className="outline-button" onClick={onOpenAdmin}><ShieldCheck size={15} /> Админ-центр</button>}<button className="outline-button" onClick={onReload}><RefreshCw size={15} /> Обновить</button><button className="icon-button icon-button--dark" onClick={onLogout} aria-label="Выйти"><LogOut size={17} /></button></div></header><div className="admin-grid"><section className="admin-card admin-card--wide"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--blue"><BookOpen size={18} /></span><h2>Доступные курсы</h2></div><span className="count-badge">{data.courses.length}</span></div>{data.courses.length ? data.courses.map((course, index) => <div className="claim-row" key={displayValue(course.id, String(index))}><div><strong>{displayValue(course.title, 'Курс')}</strong><span>{displayValue(course.group_name, 'Подтверждённый учебный контур')}</span></div></div>) : <EmptyState icon={BookOpen} title="Teacher identity ещё не настроена" detail="Роль подтверждена, но учебные курсы появятся только после явного teacher identity и membership mapping." />}</section><section className="admin-card admin-card--wide"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--gold"><CalendarDays size={18} /></span><h2>Расписание курсов</h2></div><span className="count-badge">{lessons.length}</span></div>{lessons.length ? <div className="lesson-stack">{lessons.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}-${lesson.source_coordinate}`} lesson={lesson} />)}</div> : <EmptyState icon={CalendarDays} title="Teacher schedule не настроено" detail="Здесь не создаются догадки о курсах или группах." />}</section></div><p className="admin-footer"><LockKeyhole size={14} /> Данные ограничены курсами и группами, связанными с этой teacher identity.</p></main>;
-}
-
-function SyncSummary({ item, empty }: { item?: Record<string, unknown>; empty: string }) { if (!item) return <p className="sync-summary sync-summary--empty">{empty}</p>; const status = displayValue(item.status, displayValue(item.action, 'unknown')).split('.').pop() || 'unknown'; const hasError = typeof item.error === 'string' || typeof item.error === 'number'; return <div className="sync-summary"><span className={status === 'success' ? 'sync-dot sync-dot--ok' : 'sync-dot sync-dot--bad'} /><div><strong>{status}</strong><small>{displayValue(item.created_at)}</small>{hasError && <small>{displayValue(item.error)}</small>}</div></div>; }
-
-function AdminApp({ onLogout, onBackToTeacher, onPreview }: { onLogout: () => void; onBackToTeacher?: () => void; onPreview?: (userId: string) => void }) {
-  const [data, setData] = useState<AdminData | null>(null); const [loading, setLoading] = useState(true); const [message, setMessage] = useState('');
-  const load = useCallback(async () => { setLoading(true); try { const [claims, users, syncs, classroomSyncs, parseIssues] = await Promise.all([api<{ items: Array<Record<string, string>> }>('/api/admin/claims'), api<{ items: Array<Record<string, unknown>> }>('/api/admin/users'), api<{ items: Array<Record<string, unknown>> }>('/api/admin/schedule/syncs'), api<{ items: Array<Record<string, unknown>> }>('/api/admin/classroom/syncs'), api<{ items: Array<Record<string, unknown>> }>('/api/admin/schedule/parses')]); setData({ claims: claims.items, users: users.items, scheduleSyncs: syncs.items, classroomSyncs: classroomSyncs.items, parseIssues: parseIssues.items }); } catch (error) { setMessage(error instanceof Error ? error.message : 'Ошибка загрузки'); } finally { setLoading(false); } }, []);
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
-  const review = async (id: string, status: 'approved' | 'rejected') => { setMessage('Сохраняем решение…'); try { await api(`/api/admin/claims/${id}/review`, { method: 'POST', body: JSON.stringify({ status }) }); setMessage(status === 'approved' ? 'Заявка одобрена' : 'Заявка отклонена'); await load(); } catch (error) { setMessage(error instanceof Error ? error.message : 'Не удалось сохранить решение'); } };
-  const refresh = async (kind: 'schedule' | 'classroom') => { setMessage('Запускаем обновление snapshot…'); try { await api(`/api/admin/${kind}/refresh`, { method: 'POST' }); setMessage(`${kind === 'schedule' ? 'Расписание' : 'Classroom'} обновлено`); await load(); } catch (error) { setMessage(error instanceof Error ? error.message : 'Синхронизация не выполнена'); } };
-  const updateRole = async (user: Record<string, unknown>, role: string) => { const current = Array.isArray(user.roles) ? user.roles.filter((item): item is string => typeof item === 'string') : [displayValue(user.role, 'student')]; const roles = current.includes(role) ? current.filter((item) => item !== role) : [...current, role]; setMessage('Сохраняем роли…'); try { await api(`/api/admin/users/${displayValue(user.id)}/roles`, { method: 'POST', body: JSON.stringify({ roles }) }); await load(); setMessage('Роли обновлены'); } catch (error) { setMessage(error instanceof Error ? error.message : 'Не удалось обновить роли'); } };
-  const students = data?.users.filter((user) => Boolean(user.identity_id) && Array.isArray(user.roles) && user.roles.includes('student')) || [];
-  return <main className="admin-app"><header className="admin-header"><div><p className="eyebrow">Мой Остров · эксплуатация</p><h1>Админ-центр</h1></div><div>{onBackToTeacher && <button className="outline-button" onClick={onBackToTeacher}><BookOpen size={15} /> Teacher</button>}<button className="outline-button" onClick={() => void load()}><RefreshCw size={15} /> Обновить</button><button className="icon-button icon-button--dark" onClick={onLogout} aria-label="Выйти"><LogOut size={17} /></button></div></header>{message && <div className="admin-message"><CircleAlert size={16} /> {message}</div>}{loading ? <LoadingState label="Загружаем состояние проекта" /> : data && <div className="admin-grid"><section className="admin-card admin-card--wide"><div className="admin-card-heading"><div><span className="admin-icon"><ShieldCheck size={18} /></span><h2>Заявки на identity</h2></div><span className="count-badge">{data.claims.length}</span></div>{data.claims.length ? data.claims.map((claim) => <div className="claim-row" key={claim.id}><div><strong>{claim.display_name || 'Без имени'}</strong><span>{claim.class_name || 'Класс не указан'} · {claim.requested_role}</span></div><div className="row-actions"><button className="success-button" onClick={() => void review(claim.id, 'approved')}><Check size={15} /> Одобрить</button><button className="danger-button" onClick={() => void review(claim.id, 'rejected')}><X size={15} /> Отклонить</button></div></div>) : <EmptyState icon={ShieldCheck} title="Новых заявок нет" detail="Подтверждённые identity остаются в базе с audit trail." />}</section><section className="admin-card admin-card--wide"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--blue"><Users size={18} /></span><h2>Пользователи и роли</h2></div><span className="count-badge">{data.users.length}</span></div><div className="admin-stat-list">{data.users.map((user, index) => <div key={displayValue(user.id, String(index))}><strong>{displayValue(user.display_name, 'Telegram user')}</strong><span>{Array.isArray(user.roles) ? user.roles.join(' · ') : displayValue(user.role)} · {displayValue(user.claim_status, 'claim не создан')}</span><small>{Array.isArray(user.groups) ? user.groups.map((group) => displayValue((group as Record<string, unknown>).name)).join(' · ') || 'Группы не указаны' : 'Группы не указаны'}</small><div className="row-actions">{['student', 'teacher', 'admin'].map((role) => <button key={role} className="outline-button" onClick={() => void updateRole(user, role)}>{Array.isArray(user.roles) && user.roles.includes(role) ? '− ' : '+ '}{role}</button>)}{onPreview && Boolean(user.identity_id) && Array.isArray(user.roles) && user.roles.includes('student') && <button className="primary-button primary-button--small" onClick={() => onPreview(displayValue(user.id))}>Открыть как ученик</button>}</div></div>)}</div></section><section className="admin-card admin-card--wide"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--blue"><UserRound size={18} /></span><h2>Student Preview</h2></div><span className="count-badge">{students.length}</span></div>{students.length ? <div className="claim-row"><div><strong>Выберите реального approved ученика</strong><span>Preview использует тот же student API и не меняет текущую Telegram identity.</span></div></div> : <EmptyState icon={UserRound} title="Нет approved students" detail="В preview попадают только реальные пользователи с подтверждённой identity." />}</section><section className="admin-card"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--gold"><CalendarDays size={18} /></span><h2>Расписание</h2></div></div><button className="primary-button primary-button--small" onClick={() => void refresh('schedule')}><RefreshCw size={15} /> Обновить snapshot</button><SyncSummary item={data.scheduleSyncs[0]} empty="Синхронизаций ещё нет" /></section><section className="admin-card"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--coral"><BookOpen size={18} /></span><h2>Classroom</h2></div></div><button className="primary-button primary-button--small" onClick={() => void refresh('classroom')}><RefreshCw size={15} /> Обновить курс</button><SyncSummary item={data.classroomSyncs[0]} empty="Синхронизаций ещё нет" /></section><section className="admin-card admin-card--wide"><div className="admin-card-heading"><div><span className="admin-icon admin-icon--violet"><CircleAlert size={18} /></span><h2>Неоднозначные parse entries</h2></div><span className="count-badge">{data.parseIssues.length}</span></div>{data.parseIssues.length ? <div className="issue-list">{data.parseIssues.slice(0, 12).map((issue, index) => <details key={`${displayValue(issue.source_coordinate, String(index))}-${index}`}><summary><strong>{displayValue(issue.lesson_date)} · {displayValue(issue.start_time)} · {displayValue(issue.subject)}</strong><span>{displayValue(issue.audience)} · {displayValue(issue.parse_status)} · {displayValue(issue.source_coordinate)}</span></summary><pre>{JSON.stringify({ raw_source: issue.raw_source, parse_diagnostics: issue.parse_diagnostics }, null, 2)}</pre></details>)}</div> : <EmptyState icon={CircleAlert} title="Проблем парсинга нет" detail="Неполные и неоднозначные записи появятся здесь, не попадая в student UI." />}</section></div>}<p className="admin-footer"><LockKeyhole size={14} /> Все действия дополнительно защищены backend role authorization.</p></main>;
+            ? ['Сервер недоступен', 'Проверьте соединение и повторите попытку.']
+            : ['Не удалось загрузить данные', 'Повторите вход из Telegram.'];
+  return (
+    <main className="status-screen">
+      <div className="status-card-login">
+        <span className="status-illustration">
+          {state === 'needs_identity' ? (
+            <LockKeyhole size={28} />
+          ) : (
+            <CircleAlert size={28} />
+          )}
+        </span>
+        <p className="eyebrow">Мой Остров</p>
+        <h1>{copy[0]}</h1>
+        <p>{copy[1]}</p>
+        <button className="primary-button" onClick={onRetry}>
+          Повторить <RefreshCw size={17} />
+        </button>
+      </div>
+    </main>
+  );
 }
 
 export default function Home() {
-  const [state, setState] = useState<LoadState>('loading'); const [session, setSession] = useState<Session | null>(null); const [data, setData] = useState<ApiData | null>(null); const [teacherData, setTeacherData] = useState<TeacherData | null>(null); const [section, setSection] = useState<'student' | 'teacher' | 'admin' | 'student-preview'>('student'); const [previewTarget, setPreviewTarget] = useState(''); const [authKey, setAuthKey] = useState(0);
-  const desiredRole = typeof window !== 'undefined' ? (() => { const role = new URLSearchParams(window.location.search).get('role'); return role === 'admin' || role === 'teacher' ? role : 'student'; })() : 'student';
-  const loadStudentData = useCallback(async () => { const todayDate = isoDate(new Date()); const start = todayDate; const end = isoDate(addDays(new Date(), 6)); const [today, schedule, homework, profile] = await Promise.all([api<ApiData['today']>(`/api/student/today?day=${todayDate}`), api<{ items: Lesson[] }>(`/api/student/schedule?start_day=${start}&end_day=${end}`), api<{ items: Homework[] }>('/api/student/homework'), api<Profile>('/api/student/profile')]); return { today, schedule: schedule.items, homework: homework.items, profile }; }, []);
-  const load = useCallback(async () => { setState('loading'); const telegram = await telegramInitData(); if (telegram.kind !== 'ready') { console.info(`[my-island-auth] ${telegram.kind}`); setState(telegram.kind); return; } activeTelegramInitData = telegram.value; activeStudentPreviewId = ''; try { const nextSession = await api<Session>('/api/auth/session', { method: 'POST', body: JSON.stringify({ role: desiredRole, init_data: telegram.value || null }) }); setSession(nextSession); if (nextSession.state !== 'approved') { setState('needs_identity'); return; } const role = nextSession.user.role; setSection(role === 'admin' ? 'admin' : role === 'teacher' ? 'teacher' : 'student'); const todayDate = isoDate(new Date()); const start = todayDate; const end = isoDate(addDays(new Date(), 6)); if (role === 'admin') { setState('approved'); return; } if (role === 'teacher') { const [courses, schedule] = await Promise.all([api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'), api<{ items: Lesson[] }>(`/api/teacher/schedule?start_day=${start}&end_day=${end}`)]); setTeacherData({ courses: courses.items, schedule: schedule.items }); setState('approved'); return; } setData(await loadStudentData()); setState('approved'); } catch (error) { const nextState = error instanceof ApiError ? error.kind : 'api_error'; console.info(`[my-island-auth] ${nextState}`); setState(nextState); } }, [desiredRole, loadStudentData]);
-  const startPreview = async (userId: string) => { try { const preview = await api<{ id: string; target: { display_name: string } }>('/api/admin/student-previews', { method: 'POST', body: JSON.stringify({ target_user_id: userId }) }); activeStudentPreviewId = preview.id; setPreviewTarget(preview.target.display_name); setData(await loadStudentData()); setSection('student-preview'); } catch (error) { console.info(`[my-island-preview] ${error instanceof Error ? error.message : 'failed'}`); } };
-  const exitPreview = async () => { if (activeStudentPreviewId) { try { await api(`/api/admin/student-previews/${activeStudentPreviewId}/end`, { method: 'POST' }); } catch { /* local UI still exits; server expiry remains bounded */ } } activeStudentPreviewId = ''; setPreviewTarget(''); setSection('admin'); setData(null); };
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [authKey, load]);
-  if (state === 'loading') return <main className="status-screen status-screen--island"><div className="loading-orb"><LoaderCircle className="spin" size={28} /><span>Открываем остров…</span></div></main>;
-  if (state === 'approved' && section === 'admin' && session?.user.roles?.includes('admin')) return <AdminApp onPreview={(userId) => void startPreview(userId)} onBackToTeacher={session.user.roles.includes('teacher') ? () => setSection('teacher') : undefined} onLogout={() => { setSession(null); setData(null); setState('api_error'); }} />;
-  if (state === 'approved' && section === 'student-preview' && data && previewTarget) return <><div className="admin-message preview-banner"><span>Режим просмотра: {previewTarget}</span><button className="outline-button" onClick={() => void exitPreview()}>Выйти из preview</button></div><StudentApp data={data} onReload={() => { void loadStudentData().then(setData).catch(() => undefined); }} /></>;
-  if (state === 'approved' && section === 'teacher' && teacherData) return <TeacherApp data={teacherData} onOpenAdmin={session?.user.roles?.includes('admin') ? () => setSection('admin') : undefined} onReload={() => setAuthKey((value) => value + 1)} onLogout={() => { setSession(null); setTeacherData(null); setState('api_error'); }} />;
-  if (state !== 'approved' || !data) return <PendingState state={pendingState(state)} onRetry={() => setAuthKey((value) => value + 1)} />;
-  return <StudentApp data={data} onReload={() => setAuthKey((value) => value + 1)} />;
+  const [state, setState] = useState<LoadState>('loading');
+  const [session, setSession] = useState<Session | null>(null);
+  const [data, setData] = useState<ApiData | null>(null);
+  const [teacherData, setTeacherData] = useState<TeacherData | null>(null);
+  const [section, setSection] = useState<
+    'student' | 'teacher' | 'admin' | 'student-preview'
+  >('student');
+  const [previewTarget, setPreviewTarget] = useState('');
+  const [authKey, setAuthKey] = useState(0);
+  const desiredRole =
+    typeof window !== 'undefined'
+      ? (() => {
+          const role = new URLSearchParams(window.location.search).get('role');
+          return role === 'admin' || role === 'teacher' ? role : 'student';
+        })()
+      : 'student';
+  const loadStudentData = useCallback(async () => {
+    const today = isoDate(new Date());
+    const end = isoDate(addDays(new Date(), 6));
+    const [day, schedule, homework, profile] = await Promise.all([
+      api<ApiData['today']>(`/api/student/today?day=${today}`),
+      api<{ items: Lesson[] }>(
+        `/api/student/schedule?start_day=${today}&end_day=${end}`,
+      ),
+      api<{ items: Homework[] }>('/api/student/homework'),
+      api<Profile>('/api/student/profile'),
+    ]);
+    return {
+      today: day,
+      schedule: schedule.items,
+      homework: homework.items,
+      profile,
+    };
+  }, []);
+  const loadTeacherData = useCallback(async () => {
+    const today = isoDate(new Date());
+    const end = isoDate(addDays(new Date(), 6));
+    const [home, schedule, courses] = await Promise.all([
+      api<{ schedule: Lesson[]; groups: Group[]; information: Information[] }>(
+        '/api/teacher/home',
+      ),
+      api<{ items: Lesson[] }>(
+        `/api/teacher/schedule?start_day=${today}&end_day=${end}`,
+      ),
+      api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'),
+    ]);
+    const next = {
+      today: home.schedule,
+      groups: home.groups,
+      information: home.information,
+      schedule: schedule.items,
+      courses: courses.items,
+    };
+    setTeacherData(next);
+    return next;
+  }, []);
+  const load = useCallback(async () => {
+    setState('loading');
+    const telegram = await telegramInitData();
+    if (telegram.kind !== 'ready') {
+      setState(telegram.kind);
+      return;
+    }
+    activeTelegramInitData = telegram.value;
+    activeStudentPreviewId = '';
+    try {
+      const next = await api<Session>('/api/auth/session', {
+        method: 'POST',
+        body: JSON.stringify({
+          role: desiredRole,
+          init_data: telegram.value || null,
+        }),
+      });
+      setSession(next);
+      if (next.state !== 'approved') {
+        setState('needs_identity');
+        return;
+      }
+      const role = next.user.role;
+      setSection(
+        role === 'admin' ? 'admin' : role === 'teacher' ? 'teacher' : 'student',
+      );
+      if (role === 'admin') {
+        setState('approved');
+        return;
+      }
+      if (role === 'teacher') {
+        await loadTeacherData();
+        setState('approved');
+        return;
+      }
+      setData(await loadStudentData());
+      setState('approved');
+    } catch (error) {
+      setState(error instanceof ApiError ? error.kind : 'api_error');
+    }
+  }, [desiredRole, loadStudentData, loadTeacherData]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [authKey, load]);
+  const startPreview = async (userId: string) => {
+    const preview = await api<{ id: string; target: { display_name: string } }>(
+      '/api/admin/student-previews',
+      { method: 'POST', body: JSON.stringify({ target_user_id: userId }) },
+    );
+    activeStudentPreviewId = preview.id;
+    setPreviewTarget(preview.target.display_name);
+    setData(await loadStudentData());
+    setSection('student-preview');
+  };
+  const exitPreview = async () => {
+    if (activeStudentPreviewId)
+      await api(`/api/admin/student-previews/${activeStudentPreviewId}/end`, {
+        method: 'POST',
+      }).catch(() => undefined);
+    activeStudentPreviewId = '';
+    setPreviewTarget('');
+    setSection('admin');
+    setData(null);
+  };
+  const openTeacher = async () => {
+    setState('loading');
+    try {
+      if (!teacherData) await loadTeacherData();
+      setSection('teacher');
+      setState('approved');
+    } catch (error) {
+      setState(error instanceof ApiError ? error.kind : 'api_error');
+    }
+  };
+  if (state === 'loading')
+    return (
+      <main className="status-screen status-screen--island">
+        <div className="loading-orb">
+          <LoaderCircle className="spin" size={28} />
+          <span>Открываем остров…</span>
+        </div>
+      </main>
+    );
+  if (
+    state === 'approved' &&
+    section === 'admin' &&
+    session?.user.roles?.includes('admin')
+  )
+    return (
+      <AdminApp
+        onPreview={(id) => void startPreview(id)}
+        onBackToTeacher={
+          session.user.roles.includes('teacher')
+            ? () => void openTeacher()
+            : undefined
+        }
+        onLogout={() => setState('api_error')}
+      />
+    );
+  if (state === 'approved' && section === 'student-preview' && data)
+    return (
+      <div className="preview-mode">
+        <div className="preview-banner">
+          <span>
+            <ShieldCheck size={16} /> Режим просмотра:{' '}
+            <strong>{previewTarget}</strong> · только чтение
+          </span>
+          <button onClick={() => void exitPreview()}>Выйти</button>
+        </div>
+        <StudentApp
+          data={data}
+          onReload={() => void loadStudentData().then(setData)}
+        />
+      </div>
+    );
+  if (state === 'approved' && section === 'teacher' && teacherData)
+    return (
+      <TeacherApp
+        data={teacherData}
+        onOpenAdmin={
+          session?.user.roles?.includes('admin')
+            ? () => setSection('admin')
+            : undefined
+        }
+        onReload={() => setAuthKey((value) => value + 1)}
+        onLogout={() => setState('api_error')}
+      />
+    );
+  if (state !== 'approved' || !data)
+    return (
+      <PendingState
+        state={state === 'approved' ? 'api_error' : state}
+        onRetry={() => setAuthKey((value) => value + 1)}
+      />
+    );
+  return (
+    <StudentApp data={data} onReload={() => setAuthKey((value) => value + 1)} />
+  );
 }
 
-declare global { interface Window { Telegram?: { WebApp?: { initData?: string; ready?: () => void; expand?: () => void } } } }
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: { initData?: string; ready?: () => void; expand?: () => void };
+    };
+  }
+}
