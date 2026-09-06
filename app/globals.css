@@ -1692,6 +1692,10 @@ button {
 /* Mobile spatial interaction pass: island canvas → landmark → sheet. */
 :root {
   --telegram-height: 100svh;
+  --tg-safe-top: 0px;
+  --tg-safe-bottom: 0px;
+  --tg-content-safe-top: 0px;
+  --tg-content-safe-bottom: 0px;
   --ivory: #fffaf0;
   --navy: #173042;
 }
@@ -1704,9 +1708,27 @@ button {
 .scene-canvas {
   background-size: cover;
   transition:
-    transform 280ms cubic-bezier(0.2, 0.78, 0.2, 1),
+    transform 320ms cubic-bezier(0.2, 0.78, 0.2, 1),
     filter 280ms ease;
   will-change: transform;
+}
+.scene-focus-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  opacity: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  transform: scale(1.025);
+  transition:
+    opacity 260ms ease,
+    transform 480ms cubic-bezier(0.2, 0.78, 0.2, 1);
+  will-change: opacity, transform;
+}
+.scene-focus-canvas.is-visible {
+  opacity: 1;
+  transform: scale(1);
 }
 .scene-shade {
   transition: background 280ms ease;
@@ -1720,7 +1742,7 @@ button {
   );
 }
 .scene-topbar {
-  padding-top: max(10px, env(safe-area-inset-top));
+  padding-top: max(10px, env(safe-area-inset-top), var(--tg-content-safe-top));
   padding-right: max(14px, env(safe-area-inset-right));
   padding-left: max(14px, env(safe-area-inset-left));
 }
@@ -1740,7 +1762,11 @@ button {
   padding: 8px;
 }
 .scene-welcome {
-  top: max(68px, calc(env(safe-area-inset-top) + 50px));
+  top: max(
+    68px,
+    calc(env(safe-area-inset-top) + 50px),
+    calc(var(--tg-content-safe-top) + 50px)
+  );
   left: max(16px, env(safe-area-inset-left));
 }
 .scene-welcome h1 {
@@ -1751,7 +1777,11 @@ button {
   font-size: 10px;
 }
 .teacher-welcome {
-  top: max(72px, calc(env(safe-area-inset-top) + 54px));
+  top: max(
+    72px,
+    calc(env(safe-area-inset-top) + 54px),
+    calc(var(--tg-content-safe-top) + 54px)
+  );
 }
 .scene-hotspots {
   inset: 0;
@@ -1764,31 +1794,29 @@ button {
 }
 .scene-hotspot {
   flex-direction: row;
-  gap: 6px;
-  min-height: 40px;
-  padding: 4px 10px 4px 4px;
-  border: 1px solid rgb(255 242 201/92%);
-  border-radius: 999px;
-  background: rgb(255 249 235/90%);
+  gap: 0;
+  min-height: 44px;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
   color: var(--navy);
-  box-shadow:
-    0 7px 22px rgb(4 28 43/30%),
-    inset 0 1px rgb(255 255 255/68%);
-  backdrop-filter: blur(12px);
+  box-shadow: none;
   transition:
     opacity 220ms ease,
     transform 220ms ease,
     background 220ms ease;
 }
 .scene-hotspot span {
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 50%;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgb(255 236 190/82%);
+  border-radius: 11px;
   overflow: hidden;
-  background: #102f48;
+  background: rgb(16 47 72/92%);
   transform: none;
-  box-shadow: none;
+  box-shadow: 0 5px 15px rgb(4 28 43/28%);
 }
 .landmark-icon {
   display: block;
@@ -1798,19 +1826,22 @@ button {
   user-select: none;
 }
 .scene-hotspot .landmark-icon {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
 }
 .scene-hotspot strong {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  margin-left: -4px;
+  padding: 5px 7px 5px 9px;
+  border: 1px solid rgb(255 242 201/72%);
+  border-left: 0;
+  border-radius: 0 10px 10px 0;
+  background: rgb(255 249 235/82%);
   color: var(--navy);
-  font-size: 11px;
+  font-size: 9.5px;
   font-weight: 800;
   text-shadow: none;
-  backdrop-filter: none;
+  box-shadow: 0 4px 12px rgb(4 28 43/18%);
+  backdrop-filter: blur(7px);
 }
 .scene-hotspot:hover span,
 .scene-hotspot:focus-visible span {
@@ -1823,8 +1854,7 @@ button {
 .scene-hotspot:active,
 .scene-hotspot.is-selected {
   transform: translate(-50%, -50%) scale(0.94);
-  background: #173b55;
-  color: #fff9e9;
+  background: transparent;
 }
 .scene-hotspots.is-focused .scene-hotspot,
 .scene-hotspots.is-focused .scene-hotspot.is-selected {
@@ -1833,7 +1863,11 @@ button {
 .scene-focus-back {
   position: absolute;
   z-index: 12;
-  top: max(58px, calc(env(safe-area-inset-top) + 42px));
+  top: max(
+    58px,
+    calc(env(safe-area-inset-top) + 42px),
+    calc(var(--tg-content-safe-top) + 42px)
+  );
   left: max(14px, env(safe-area-inset-left));
   display: inline-flex;
   align-items: center;
@@ -1857,7 +1891,8 @@ button {
   width: min(680px, calc(100% - 10px));
   height: min(760px, calc(100% - 50px));
   margin: auto;
-  padding: 8px 14px max(14px, env(safe-area-inset-bottom));
+  padding: 8px 14px
+    max(14px, env(safe-area-inset-bottom), var(--tg-content-safe-bottom));
   overflow: hidden;
   border: 1px solid rgb(255 255 255/78%);
   border-bottom: 0;
@@ -2063,8 +2098,8 @@ button {
     inset: 0;
   }
   .scene-hotspot {
-    min-height: 38px;
-    padding-right: 8px;
+    min-height: 44px;
+    padding: 5px 0;
   }
   .scene-hotspot strong {
     font-size: 10px;

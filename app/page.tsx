@@ -175,6 +175,15 @@ const API_BASE = String(
 let activeTelegramInitData = '';
 let activeStudentPreviewId = '';
 
+function tryTelegramAction(action?: () => void) {
+  try {
+    action?.();
+  } catch {
+    // Telegram bridges may expose newer methods before the current client
+    // actually supports them. The older expanded mode remains functional.
+  }
+}
+
 function devHeader(): string | undefined {
   if (!isLocalBuild || typeof window === 'undefined') return undefined;
   const role = new URLSearchParams(window.location.search).get('role');
@@ -191,13 +200,20 @@ async function telegramInitData(): Promise<
   if (isLocalBuild && devHeader()) return { kind: 'ready', value: '' };
   const deadline = Date.now() + 3000;
   let found = false;
+  let prepared = false;
   while (Date.now() < deadline) {
     const app =
       typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
     if (app) {
       found = true;
-      app.ready?.();
-      app.expand?.();
+      if (!prepared) {
+        prepared = true;
+        tryTelegramAction(app.ready?.bind(app));
+        tryTelegramAction(app.expand?.bind(app));
+        tryTelegramAction(app.disableVerticalSwipes?.bind(app));
+        if (!app.isFullscreen)
+          tryTelegramAction(app.requestFullscreen?.bind(app));
+      }
       if (app.initData) return { kind: 'ready', value: app.initData };
     }
     await new Promise((resolve) => window.setTimeout(resolve, 50));
@@ -662,6 +678,7 @@ type SceneHotspot = {
   x: number;
   y: number;
   camera?: { x: number; y: number; scale: number };
+  focusAsset?: string;
   icon: IslandIconName;
 };
 
@@ -703,6 +720,9 @@ function SpatialSheet({
     setDrag(0);
     startY.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
+    window.setTimeout(() => {
+      moved.current = false;
+    }, 0);
   };
   const offset = stage === 'full' ? '0px' : 'calc(100% - 184px)';
   const sheetStyle = {
@@ -908,17 +928,73 @@ function SceneFrame({
   children: React.ReactNode;
 }) {
   const selected = locations.find((item) => item.id === selectedId);
+  const [loadedFocusAsset, setLoadedFocusAsset] = useState<string | null>(null);
   useEffect(() => {
     const root = document.documentElement;
     const webApp = window.Telegram?.WebApp;
     const update = () => {
       const height = webApp?.viewportStableHeight || webApp?.viewportHeight;
       if (height) root.style.setProperty('--telegram-height', `${height}px`);
+      const safe = webApp?.safeAreaInset;
+      const contentSafe = webApp?.contentSafeAreaInset;
+      if (safe) {
+        root.style.setProperty('--tg-safe-top', `${safe.top}px`);
+        root.style.setProperty('--tg-safe-bottom', `${safe.bottom}px`);
+      }
+      if (contentSafe) {
+        root.style.setProperty('--tg-content-safe-top', `${contentSafe.top}px`);
+        root.style.setProperty(
+          '--tg-content-safe-bottom',
+          `${contentSafe.bottom}px`,
+        );
+      }
     };
+    tryTelegramAction(webApp?.ready?.bind(webApp));
+    tryTelegramAction(webApp?.expand?.bind(webApp));
+    tryTelegramAction(webApp?.disableVerticalSwipes?.bind(webApp));
+    if (!webApp?.isFullscreen)
+      tryTelegramAction(webApp?.requestFullscreen?.bind(webApp));
     update();
     webApp?.onEvent?.('viewportChanged', update);
-    return () => webApp?.offEvent?.('viewportChanged', update);
+    webApp?.onEvent?.('fullscreenChanged', update);
+    webApp?.onEvent?.('safeAreaChanged', update);
+    webApp?.onEvent?.('contentSafeAreaChanged', update);
+    return () => {
+      webApp?.offEvent?.('viewportChanged', update);
+      webApp?.offEvent?.('fullscreenChanged', update);
+      webApp?.offEvent?.('safeAreaChanged', update);
+      webApp?.offEvent?.('contentSafeAreaChanged', update);
+      tryTelegramAction(webApp?.enableVerticalSwipes?.bind(webApp));
+    };
   }, []);
+  useEffect(() => {
+    if (!selected?.focusAsset) {
+      return;
+    }
+    let disposed = false;
+    let zoomStarted = false;
+    let imageLoaded = false;
+    const reveal = () => {
+      if (!disposed && zoomStarted && imageLoaded)
+        setLoadedFocusAsset(selected.focusAsset || null);
+    };
+    const image = new window.Image();
+    image.onload = () => {
+      imageLoaded = true;
+      reveal();
+    };
+    image.src = selected.focusAsset;
+    if (image.complete) imageLoaded = true;
+    const timer = window.setTimeout(() => {
+      zoomStarted = true;
+      reveal();
+    }, 170);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      image.onload = null;
+    };
+  }, [selected?.focusAsset]);
   const camera = selected?.camera || { x: 50, y: 50, scale: 1.18 };
   const focusStyle = selected
     ? ({
@@ -929,6 +1005,13 @@ function SceneFrame({
   return (
     <main className={`scene-app ${variant}-app ${selected ? 'has-focus' : ''}`}>
       <div className={`scene-canvas ${variant}-scene`} style={focusStyle} />
+      {selected?.focusAsset && (
+        <div
+          className={`scene-focus-canvas ${loadedFocusAsset === selected.focusAsset ? 'is-visible' : ''}`}
+          style={{ backgroundImage: `url(${selected.focusAsset})` }}
+          aria-hidden="true"
+        />
+      )}
       <div className="scene-shade" />
       {children}
       <div className={`scene-hotspots ${selected ? 'is-focused' : ''}`}>
@@ -2632,8 +2715,30 @@ declare global {
         expand?: () => void;
         viewportHeight?: number;
         viewportStableHeight?: number;
-        onEvent?: (event: string, callback: () => void) => void;
-        offEvent?: (event: string, callback: () => void) => void;
+        isFullscreen?: boolean;
+        safeAreaInset?: {
+          top: number;
+          right: number;
+          bottom: number;
+          left: number;
+        };
+        contentSafeAreaInset?: {
+          top: number;
+          right: number;
+          bottom: number;
+          left: number;
+        };
+        requestFullscreen?: () => void;
+        disableVerticalSwipes?: () => void;
+        enableVerticalSwipes?: () => void;
+        onEvent?: (
+          event: string,
+          callback: (...args: unknown[]) => void,
+        ) => void;
+        offEvent?: (
+          event: string,
+          callback: (...args: unknown[]) => void,
+        ) => void;
       };
     };
   }
