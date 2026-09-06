@@ -335,6 +335,8 @@ CREATE INDEX IF NOT EXISTS journal_students_source_marker_idx ON journal_student
 CREATE INDEX IF NOT EXISTS journal_students_identity_idx ON journal_students(identity_id);
 CREATE INDEX IF NOT EXISTS journal_group_mappings_group_idx ON journal_group_mappings(group_id);
 CREATE INDEX IF NOT EXISTS journal_group_mappings_dimensions_idx ON journal_group_mappings(source_id, subject_subgroup, base_class_name, exam_track);
+CREATE INDEX IF NOT EXISTS journal_group_mappings_classroom_course_idx ON journal_group_mappings(classroom_course_id);
+CREATE INDEX IF NOT EXISTS teacher_assignments_classroom_course_idx ON teacher_assignments(classroom_course_id);
 CREATE INDEX IF NOT EXISTS announcements_author_idx ON announcements(author_user_id);
 """
 
