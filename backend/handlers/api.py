@@ -65,11 +65,11 @@ def create_router(database: Database) -> APIRouter:
     @router.post("/auth/session")
     def session(payload: SessionPayload, x_dev_auth: str | None = Header(default=None)):
         telegram_user = authenticate(payload.init_data, x_dev_auth)
-        selected_role = payload.role if payload.role in {"student", "teacher"} else "student"
+        selected_role = payload.role if payload.role in {"student", "teacher", "admin"} else "student"
         if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"}:
             selected_role = telegram_user["role"]
         user = database.get_or_create_user(telegram_user["id"], selected_role)
-        state = "approved" if user["identity_id"] else "needs_identity"
+        state = "approved" if selected_role == "admin" or user["identity_id"] else "needs_identity"
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": state, "user": {"id": user["id"], "role": user["role"], "identity_id": user["identity_id"]}}
 
     @router.post("/identity/claim")
