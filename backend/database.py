@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS identities (
   kind TEXT NOT NULL CHECK (kind IN ('student', 'teacher')),
   display_name TEXT NOT NULL,
   class_name TEXT,
-  status TEXT NOT NULL DEFAULT 'active'
+  status TEXT NOT NULL DEFAULT 'active',
+  origin TEXT,
+  source_ref TEXT
 );
 CREATE TABLE IF NOT EXISTS identity_claims (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,6 +563,10 @@ class Database:
             result_columns = {row["name"] for row in connection.execute("PRAGMA table_info(journal_results)").fetchall()}
             if "journal_student_id" not in result_columns:
                 connection.execute("ALTER TABLE journal_results ADD COLUMN journal_student_id INTEGER REFERENCES journal_students(id) ON DELETE SET NULL")
+            identity_columns = {row["name"] for row in connection.execute("PRAGMA table_info(identities)").fetchall()}
+            for name, definition in {"origin": "TEXT", "source_ref": "TEXT"}.items():
+                if name not in identity_columns:
+                    connection.execute(f"ALTER TABLE identities ADD COLUMN {name} {definition}")
             mapping_columns = {row["name"] for row in connection.execute("PRAGMA table_info(journal_group_mappings)").fetchall()}
             for name, definition in {
                 "base_class_name": "TEXT",
@@ -917,6 +923,101 @@ class Database:
                     "homeroom_assignments": [],
                 })
             return result
+
+    def list_people_library(self, kind: str | None = None, query: str | None = None, class_name: str | None = None) -> list[dict[str, Any]]:
+        """Canonical School Directory view, independent of app accounts."""
+        clauses = ["i.status = 'active'"]
+        params: list[Any] = []
+        if kind in {"student", "teacher"}:
+            clauses.append("i.kind = ?")
+            params.append(kind)
+        if query:
+            clauses.append("lower(i.display_name || ' ' || coalesce(i.class_name, '')) like ?")
+            params.append(f"%{query.strip().lower()}%")
+        if class_name:
+            clauses.append("i.class_name = ?")
+            params.append(class_name)
+        with self.connection() as connection:
+            identities = self.execute(
+                connection,
+                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
+                params,
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for identity in identities:
+                identity_id = identity["id"]
+                groups = self.execute(
+                    connection,
+                    """SELECT g.id, g.name, g.display_name, g.group_type, g.subject, g.base_class_name,
+                              g.subject_subgroup, g.exam_track, m.source, m.source_ref
+                         FROM memberships m JOIN groups g ON g.id = m.group_id
+                        WHERE m.identity_id = ? AND m.active IS TRUE
+                          AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                          AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                        ORDER BY g.group_type, g.name""",
+                    (identity_id,),
+                ).fetchall()
+                assignments = self.execute(
+                    connection,
+                    """SELECT ta.id, g.id AS group_id, g.name, g.display_name, g.group_type,
+                              ta.subject, ta.base_class_name, ta.subject_subgroup, ta.exam_track,
+                              ta.source, ta.source_ref
+                         FROM teacher_assignments ta JOIN groups g ON g.id = ta.group_id
+                        WHERE ta.teacher_identity_id = ? AND ta.active IS TRUE
+                          AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                          AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                        ORDER BY g.name""",
+                    (identity_id,),
+                ).fetchall()
+                homerooms = self.execute(
+                    connection,
+                    """SELECT h.id, g.id AS group_id, g.name, g.display_name
+                         FROM homeroom_assignments h JOIN groups g ON g.id = h.class_group_id
+                        WHERE h.teacher_identity_id = ? AND h.active IS TRUE
+                          AND (h.valid_from IS NULL OR h.valid_from <= CURRENT_DATE)
+                          AND (h.valid_until IS NULL OR h.valid_until >= CURRENT_DATE)
+                        ORDER BY g.name""",
+                    (identity_id,),
+                ).fetchall()
+                account = self.execute(
+                    connection,
+                    """SELECT u.id AS user_id, u.telegram_user_id, u.role,
+                              COALESCE(ail.status, 'unlinked') AS account_status
+                         FROM users u LEFT JOIN account_identity_links ail ON ail.user_id = u.id
+                        WHERE u.identity_id = ? LIMIT 1""",
+                    (identity_id,),
+                ).fetchone()
+                roles = {identity["kind"]}
+                if account:
+                    roles.add(account["role"])
+                    for role in self.execute(connection, "SELECT role FROM user_roles WHERE user_id = ?", (account["user_id"],)).fetchall():
+                        roles.add(role["role"])
+                unresolved = self.execute(
+                    connection,
+                    """SELECT id, issue_type, status, details, evidence
+                         FROM school_resolution_issues
+                        WHERE status = 'open' AND CAST(details AS TEXT) LIKE ?
+                        ORDER BY created_at DESC""",
+                    (f"%{identity['display_name']}%",),
+                ).fetchall()
+                result.append({
+                    **dict(identity),
+                    "identity_kind": identity["kind"],
+                    "roles": sorted(roles),
+                    "user_id": account["user_id"] if account else None,
+                    "telegram_user_id": account["telegram_user_id"] if account else None,
+                    "account_status": account["account_status"] if account else "unlinked",
+                    "has_account": bool(account),
+                    "groups": [dict(item) for item in groups],
+                    "teacher_assignments": [dict(item) for item in assignments],
+                    "homerooms": [dict(item) for item in homerooms],
+                    "unresolved": [dict(item) for item in unresolved],
+                })
+            return result
+
+    def get_people_library_person(self, identity_id: Any) -> dict[str, Any] | None:
+        items = self.list_people_library()
+        return next((item for item in items if str(item["id"]) == str(identity_id)), None)
 
     def list_schedule_explanations_for_user(self, user_id: Any, lesson_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
         entries = [dict(row) for row in self.list_schedule_entries_for_user(user_id, lesson_date, end_date)]
