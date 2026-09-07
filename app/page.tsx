@@ -27,7 +27,6 @@ import {
   ShieldCheck,
   UserRound,
   Users,
-  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -104,6 +103,7 @@ type Group = {
   group_type?: string;
   source?: string;
   subject?: string;
+  subject_subgroup?: string;
   student_count?: number;
   is_homeroom?: boolean;
   schedule_scopes?: Array<{
@@ -149,6 +149,7 @@ type TeacherData = {
   today: Lesson[];
   groups: Group[];
   information: Information[];
+  profile: Profile | null;
 };
 type AdminData = {
   overview: Record<string, number>;
@@ -279,6 +280,19 @@ const humanRole = (role: unknown) =>
   ({ student: 'Ученик', teacher: 'Учитель', admin: 'Администратор' })[
     displayValue(role)
   ] || displayValue(role, 'Роль не указана');
+
+const humanAuditAction = (action: string) =>
+  ({
+    'identity.confirmed': 'Подтверждена школьная личность',
+    'identity_claim.approved': 'Подтверждён доступ человека',
+    'identity_claim.rejected': 'Отклонена заявка на доступ',
+    'membership_override.created': 'Изменён состав группы',
+    'teacher_assignment.updated': 'Изменено преподавание в группе',
+    'homeroom_assignment.updated': 'Изменено классное руководство',
+    'information.created': 'Опубликовано сообщение',
+    'student_preview.started': 'Открыт просмотр ученика',
+    'student_preview.ended': 'Завершён просмотр ученика',
+  })[action] || 'Обновлены данные My Island';
 const scopeMarker = (lesson: Lesson) =>
   lesson.exam_track ||
   (lesson.subject_subgroup ? `группа ${lesson.subject_subgroup}` : '');
@@ -601,9 +615,13 @@ function ProfilePanel({
               <div>
                 <strong>{group.name}</strong>
                 <span>
-                  {group.source === 'admin_override'
-                    ? 'Добавлено школой'
-                    : 'Школьная группа'}
+                  {[
+                    group.subject,
+                    group.subject_subgroup &&
+                      `подгруппа ${group.subject_subgroup}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || 'Школьная группа'}
                 </span>
               </div>
             </div>
@@ -1522,7 +1540,10 @@ function TeacherApp({
           backLabel="Кампус"
           onClose={() => setView(null)}
         >
-          <ProfilePanel roleLabel="преподаватель" />
+          <ProfilePanel
+            profile={data.profile || undefined}
+            roleLabel={onOpenAdmin ? 'Учитель · Администратор' : 'Учитель'}
+          />
           <button className="panel-refresh" onClick={onReload}>
             <RefreshCw size={15} /> Обновить
           </button>
@@ -1535,46 +1556,55 @@ function TeacherApp({
   );
 }
 
-const adminNav: Array<{ id: AdminSection; label: string; icon: typeof Users }> =
-  [
-    { id: 'overview', label: 'Обзор', icon: LayoutDashboard },
-    { id: 'people', label: 'Люди', icon: Users },
-    { id: 'structure', label: 'Структура школы', icon: Network },
-    { id: 'schedule', label: 'Расписание', icon: CalendarDays },
-    { id: 'integrations', label: 'Интеграции', icon: RefreshCw },
-    { id: 'settings', label: 'Настройки', icon: Settings },
-    { id: 'diagnostics', label: 'Диагностика', icon: Wrench },
-  ];
-function StatusCard({
-  icon: Icon,
-  label,
-  value,
-  detail,
-  warning,
-  onClick,
-}: {
-  icon: typeof Users;
+const adminNav: Array<{
+  id: AdminSection;
   label: string;
-  value: string | number;
-  detail: string;
-  warning?: boolean;
-  onClick?: () => void;
+  icon: typeof Users;
+  includes: AdminSection[];
+}> = [
+  {
+    id: 'overview',
+    label: 'Главная',
+    icon: LayoutDashboard,
+    includes: ['overview'],
+  },
+  { id: 'people', label: 'Люди', icon: Users, includes: ['people'] },
+  { id: 'structure', label: 'Школа', icon: Network, includes: ['structure'] },
+  {
+    id: 'integrations',
+    label: 'Данные',
+    icon: RefreshCw,
+    includes: ['schedule', 'integrations'],
+  },
+  {
+    id: 'diagnostics',
+    label: 'Система',
+    icon: Settings,
+    includes: ['settings', 'diagnostics'],
+  },
+];
+
+function AdminSubnav({
+  items,
+  section,
+  onChange,
+}: {
+  items: Array<{ id: AdminSection; label: string }>;
+  section: AdminSection;
+  onChange: (next: AdminSection) => void;
 }) {
   return (
-    <button
-      className={`status-card ${warning ? 'is-warning' : ''}`}
-      onClick={onClick}
-    >
-      <span className="status-card__icon">
-        <Icon size={18} />
-      </span>
-      <span>
-        <small>{label}</small>
-        <strong>{value}</strong>
-        <em>{detail}</em>
-      </span>
-      <ChevronRight size={16} />
-    </button>
+    <div className="admin-subnav" aria-label="Подразделы">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          className={section === item.id ? 'is-active' : ''}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
   );
 }
 function SyncSummary({
@@ -1746,6 +1776,7 @@ function AdminApp({
     [data, query],
   );
   const toggleRole = (user: Record<string, unknown>, role: string) => {
+    if (user.has_account === false) return;
     const current = Array.isArray(user.roles)
       ? user.roles.filter((item): item is string => typeof item === 'string')
       : [];
@@ -1767,7 +1798,7 @@ function AdminApp({
         group_id: selectedGroupId,
         member_role: 'student',
         action: active ? 'include' : 'exclude',
-        reason: 'Admin control panel',
+        reason: 'Изменено администратором',
       });
     if (kind === 'teacher')
       void mutate('/api/admin/teacher-assignments', {
@@ -1788,47 +1819,17 @@ function AdminApp({
       return (
         <>
           <AdminHeading
-            eyebrow="Состояние системы"
-            title="Обзор"
-            detail="Сигналы, изменения и то, что требует внимания."
+            eyebrow="Сегодня в My Island"
+            title="Главная"
+            detail="Важные события, состояние данных и следующие действия."
           />
-          <div className="status-grid">
-            <StatusCard
-              icon={Users}
-              label="Люди"
-              value={data.overview.users || 0}
-              detail={`${data.overview.pending_claims || 0} ожидают решения`}
-              warning={Boolean(data.overview.pending_claims)}
-              onClick={() => setSection('people')}
-            />
-            <StatusCard
-              icon={Network}
-              label="Структура"
-              value={data.overview.groups || 0}
-              detail="классов и групп"
-              onClick={() => setSection('structure')}
-            />
-            <StatusCard
-              icon={CalendarDays}
-              label="Расписание"
-              value={data.overview.parse_issues || 0}
-              detail="проблем разбора"
-              warning={Boolean(data.overview.parse_issues)}
-              onClick={() => setSection('diagnostics')}
-            />
-            <StatusCard
-              icon={BarChart3}
-              label="Журнал"
-              value={data.overview.journal_results || 0}
-              detail="результатов"
-              onClick={() => setSection('integrations')}
-            />
-          </div>
           <section className="work-card">
             <div className="work-card__heading">
               <h2>Требует внимания</h2>
               <span className="count-badge">
-                {data.claims.length + data.parseIssues.length}
+                {data.claims.length +
+                  data.parseIssues.length +
+                  (data.overview.unlinked_accounts || 0)}
               </span>
             </div>
             {data.claims.slice(0, 3).map((claim) => (
@@ -1856,7 +1857,7 @@ function AdminApp({
               <button
                 className="action-row"
                 key={index}
-                onClick={() => setSection('diagnostics')}
+                onClick={() => setSection('schedule')}
               >
                 <CircleAlert size={18} />
                 <div>
@@ -1873,6 +1874,98 @@ function AdminApp({
                 <ChevronRight size={16} />
               </button>
             ))}
+            {Boolean(data.overview.unlinked_accounts) && (
+              <button
+                className="action-row"
+                onClick={() => setSection('people')}
+              >
+                <UserRound size={18} />
+                <div>
+                  <strong>
+                    {data.overview.unlinked_accounts} аккаунта без школьного
+                    профиля
+                  </strong>
+                  <small>Проверьте связь человека с Telegram</small>
+                </div>
+                <ChevronRight size={16} />
+              </button>
+            )}
+            {!data.claims.length &&
+              !data.parseIssues.length &&
+              !data.overview.unlinked_accounts && (
+                <p className="calm-empty">Сейчас ничего срочного нет.</p>
+              )}
+          </section>
+          <section className="work-card">
+            <div className="work-card__heading">
+              <h2>Последние изменения</h2>
+              <button
+                className="text-action"
+                onClick={() => setSection('diagnostics')}
+              >
+                Вся история
+              </button>
+            </div>
+            {data.audit.slice(0, 4).map((event, index) => (
+              <div className="audit-row" key={index}>
+                <span className="audit-dot" />
+                <div>
+                  <strong>
+                    {humanAuditAction(displayValue(event.action))}
+                  </strong>
+                  <small>
+                    {displayValue(event.actor_name)} ·{' '}
+                    {displayValue(event.created_at)}
+                  </small>
+                </div>
+              </div>
+            ))}
+          </section>
+          <section className="work-card">
+            <div className="work-card__heading">
+              <h2>Источники данных</h2>
+              <button
+                className="text-action"
+                onClick={() => setSection('integrations')}
+              >
+                Открыть
+              </button>
+            </div>
+            <div className="source-health-list">
+              <div>
+                <CalendarDays size={17} />
+                <span>
+                  <strong>Расписание</strong>
+                  <small>
+                    {data.scheduleSyncs.length
+                      ? 'Источник подключён'
+                      : 'Ещё не синхронизировано'}
+                  </small>
+                </span>
+              </div>
+              <div>
+                <BarChart3 size={17} />
+                <span>
+                  <strong>Журнал</strong>
+                  <small>
+                    {data.journals.length
+                      ? `${data.overview.journal_results || 0} результатов`
+                      : 'Ещё не синхронизирован'}
+                  </small>
+                </span>
+              </div>
+              <div>
+                <BookOpen size={17} />
+                <span>
+                  <strong>Classroom</strong>
+                  <small>
+                    {data.classroomSyncs.length
+                      ? 'Источник подключён'
+                      : 'Нет истории синхронизации'}
+                  </small>
+                </span>
+              </div>
+            </div>
           </section>
         </>
       );
@@ -1880,7 +1973,7 @@ function AdminApp({
       return (
         <>
           <AdminHeading
-            eyebrow="Identity · roles · assignments"
+            eyebrow="Аккаунты, роли и доступ"
             title="Люди"
             detail="Один каталог учеников, учителей и администраторов."
           />
@@ -1900,7 +1993,7 @@ function AdminApp({
                   </span>
                   <div>
                     <strong>
-                      {displayValue(user.display_name, 'Telegram user')}
+                      {displayValue(user.display_name, 'Не сопоставлен')}
                     </strong>
                     <small>
                       {Array.isArray(user.roles)
@@ -1924,7 +2017,7 @@ function AdminApp({
                       <h2>
                         {displayValue(
                           selectedUser.display_name,
-                          'Telegram user',
+                          'Не сопоставлен',
                         )}
                       </h2>
                       <p>
@@ -1932,7 +2025,11 @@ function AdminApp({
                           selectedUser.class_name,
                           'Класс не указан',
                         )}{' '}
-                        · {displayValue(selectedUser.claim_status, 'без claim')}
+                        ·{' '}
+                        {displayValue(selectedUser.identity_status) ===
+                        'confirmed'
+                          ? 'личность подтверждена'
+                          : 'требует сопоставления'}
                       </p>
                     </div>
                   </div>
@@ -1948,63 +2045,22 @@ function AdminApp({
                             : 'role-chip'
                         }
                         onClick={() => toggleRole(selectedUser, role)}
+                        disabled={selectedUser.has_account === false}
                       >
-                        {role}
+                        {humanRole(role)}
                       </button>
                     ))}
                   </div>
-                  <div className="subsection-title">
-                    Назначения и memberships
-                  </div>
-                  <select
-                    className="control-select"
-                    value={selectedGroupId}
-                    onChange={(event) => setSelectedGroupId(event.target.value)}
+                  <div className="subsection-title">Школьная структура</div>
+                  <button
+                    className="outline-button"
+                    onClick={() => setSection('structure')}
                   >
-                    <option value="">Выберите группу…</option>
-                    {data.groups.map((group) => (
-                      <option
-                        key={displayValue(group.id)}
-                        value={displayValue(group.id)}
-                      >
-                        {displayValue(group.name)} ·{' '}
-                        {displayValue(group.group_type)}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="stack-actions">
-                    {Array.isArray(selectedUser.roles) &&
-                      selectedUser.roles.includes('student') && (
-                        <>
-                          <button
-                            onClick={() => assignment('membership', true)}
-                          >
-                            Добавить membership override
-                          </button>
-                          <button
-                            onClick={() => assignment('membership', false)}
-                          >
-                            Исключить override
-                          </button>
-                        </>
-                      )}
-                    {Array.isArray(selectedUser.roles) &&
-                      selectedUser.roles.includes('teacher') && (
-                        <>
-                          <button onClick={() => assignment('teacher')}>
-                            Назначить группу
-                          </button>
-                          <button onClick={() => assignment('teacher', false)}>
-                            Снять назначение
-                          </button>
-                          <button onClick={() => assignment('homeroom')}>
-                            Назначить классное руководство
-                          </button>
-                        </>
-                      )}
-                  </div>
+                    Открыть обучение и преподавание
+                  </button>
                   {Array.isArray(selectedUser.roles) &&
                     selectedUser.roles.includes('student') &&
+                    selectedUser.has_account !== false &&
                     selectedUser.identity_id && (
                       <button
                         className="preview-button"
@@ -2040,7 +2096,7 @@ function AdminApp({
                 <EmptyState
                   icon={UserRound}
                   title="Выберите человека"
-                  detail="Здесь появятся роли, provenance и связанные назначения."
+                  detail="Здесь появятся роли, доступ и школьные связи."
                 />
               )}
             </section>
@@ -2051,10 +2107,84 @@ function AdminApp({
       return (
         <>
           <AdminHeading
-            eyebrow="School structure"
-            title="Структура школы"
-            detail="Классы, предметные и экзаменационные группы."
+            eyebrow="Классы, группы и преподаватели"
+            title="Школа"
+            detail="Кто где учится и преподаёт — без дублирования аккаунтов."
           />
+          <section className="work-card school-assignment-editor">
+            <div className="work-card__heading">
+              <h2>Обучение и преподавание</h2>
+              <small>Единое место для школьных связей</small>
+            </div>
+            <select
+              className="control-select"
+              value={displayValue(selectedUser?.id)}
+              onChange={(event) => {
+                setSelectedUser(
+                  data.users.find(
+                    (user) => displayValue(user.id) === event.target.value,
+                  ) || null,
+                );
+                setSelectedGroupId('');
+              }}
+            >
+              <option value="">Выберите человека…</option>
+              {data.users
+                .filter((user) => Boolean(user.identity_id))
+                .map((user) => (
+                  <option
+                    key={displayValue(user.id)}
+                    value={displayValue(user.id)}
+                  >
+                    {displayValue(user.display_name)}
+                  </option>
+                ))}
+            </select>
+            <select
+              className="control-select"
+              value={selectedGroupId}
+              onChange={(event) => setSelectedGroupId(event.target.value)}
+            >
+              <option value="">Выберите класс или группу…</option>
+              {data.groups.map((group) => (
+                <option
+                  key={displayValue(group.id)}
+                  value={displayValue(group.id)}
+                >
+                  {displayValue(group.name)} · {displayValue(group.group_type)}
+                </option>
+              ))}
+            </select>
+            {selectedUser && selectedGroupId && (
+              <div className="stack-actions">
+                {Array.isArray(selectedUser.roles) &&
+                  selectedUser.roles.includes('student') && (
+                    <>
+                      <button onClick={() => assignment('membership', true)}>
+                        Добавить в группу
+                      </button>
+                      <button onClick={() => assignment('membership', false)}>
+                        Исключить из группы
+                      </button>
+                    </>
+                  )}
+                {Array.isArray(selectedUser.roles) &&
+                  selectedUser.roles.includes('teacher') && (
+                    <>
+                      <button onClick={() => assignment('teacher')}>
+                        Назначить преподавателем
+                      </button>
+                      <button onClick={() => assignment('teacher', false)}>
+                        Снять назначение
+                      </button>
+                      <button onClick={() => assignment('homeroom')}>
+                        Назначить классным руководителем
+                      </button>
+                    </>
+                  )}
+              </div>
+            )}
+          </section>
           <section className="work-card">
             <div className="structure-grid">
               {filteredGroups.map((group, index) => (
@@ -2082,8 +2212,8 @@ function AdminApp({
                     >
                       Люди
                     </button>
-                    <button onClick={() => setSection('schedule')}>
-                      Расписание
+                    <button onClick={() => setSection('integrations')}>
+                      Данные
                     </button>
                   </div>
                 </article>
@@ -2095,8 +2225,16 @@ function AdminApp({
     if (section === 'schedule')
       return (
         <>
+          <AdminSubnav
+            items={[
+              { id: 'integrations', label: 'Источники' },
+              { id: 'schedule', label: 'Расписание' },
+            ]}
+            section={section}
+            onChange={setSection}
+          />
           <AdminHeading
-            eyebrow="Diff + exceptions"
+            eyebrow="Изменения и проблемы"
             title="Расписание"
             detail="Изменения и проблемы, а не сотни одинаковых строк."
             action={
@@ -2120,10 +2258,18 @@ function AdminApp({
     if (section === 'integrations')
       return (
         <>
+          <AdminSubnav
+            items={[
+              { id: 'integrations', label: 'Источники' },
+              { id: 'schedule', label: 'Расписание' },
+            ]}
+            section={section}
+            onChange={setSection}
+          />
           <AdminHeading
-            eyebrow="Background sync"
-            title="Интеграции"
-            detail="Google не участвует в пользовательском request path."
+            eyebrow="Расписание, журнал и Classroom"
+            title="Данные"
+            detail="Состояние школьных источников и история обновлений."
           />
           <div className="integration-grid">
             <Integration
@@ -2167,9 +2313,7 @@ function AdminApp({
             <Integration
               title="Telegram"
               icon={ShieldCheck}
-              summary={
-                <p>Server-side initData verification · secrets скрыты</p>
-              }
+              summary={<p>Вход через Telegram защищён и работает</p>}
             />
           </div>
           {data.journals.map((journal) => (
@@ -2182,11 +2326,11 @@ function AdminApp({
                     {displayValue(journal.assessment_count, '0')} работ ·{' '}
                     {displayValue(journal.roster_student_count, '0')} учеников в
                     источнике ·{' '}
-                    {displayValue(journal.account_unlinked_count, '0')} без app
-                    identity
+                    {displayValue(journal.account_unlinked_count, '0')} без
+                    профиля My Island
                   </small>
                 </div>
-                <span className="health-badge">read-only</span>
+                <span className="health-badge">Только чтение</span>
               </div>
               <div className="mapping-list">
                 {(Array.isArray(journal.markers) ? journal.markers : []).map(
@@ -2271,6 +2415,14 @@ function AdminApp({
     if (section === 'settings')
       return (
         <>
+          <AdminSubnav
+            items={[
+              { id: 'settings', label: 'Настройки' },
+              { id: 'diagnostics', label: 'Диагностика и история' },
+            ]}
+            section={section}
+            onChange={setSection}
+          />
           <AdminHeading
             eyebrow="Продуктовая конфигурация"
             title="Настройки"
@@ -2346,8 +2498,16 @@ function AdminApp({
       );
     return (
       <>
+        <AdminSubnav
+          items={[
+            { id: 'settings', label: 'Настройки' },
+            { id: 'diagnostics', label: 'Диагностика и история' },
+          ]}
+          section={section}
+          onChange={setSection}
+        />
         <AdminHeading
-          eyebrow="Issues · provenance · audit"
+          eyebrow="Проверка системы"
           title="Диагностика"
           detail="Технические детали отделены от рабочих экранов."
         />
@@ -2361,7 +2521,7 @@ function AdminApp({
             <div className="audit-row" key={index}>
               <span className="audit-dot" />
               <div>
-                <strong>{displayValue(event.action)}</strong>
+                <strong>{humanAuditAction(displayValue(event.action))}</strong>
                 <small>
                   {displayValue(event.actor_name)} ·{' '}
                   {displayValue(event.created_at)} ·{' '}
@@ -2388,7 +2548,7 @@ function AdminApp({
           {adminNav.map((item) => (
             <button
               key={item.id}
-              className={section === item.id ? 'is-active' : ''}
+              className={item.includes.includes(section) ? 'is-active' : ''}
               onClick={() => setSection(item.id)}
             >
               <item.icon size={18} />
@@ -2627,7 +2787,7 @@ export default function Home() {
   const loadTeacherData = useCallback(async () => {
     const today = isoDate(new Date());
     const end = isoDate(addDays(new Date(), 6));
-    const [home, schedule, courses] = await Promise.all([
+    const [home, schedule, courses, profile] = await Promise.all([
       api<{ schedule: Lesson[]; groups: Group[]; information: Information[] }>(
         '/api/teacher/home',
       ),
@@ -2635,6 +2795,7 @@ export default function Home() {
         `/api/teacher/schedule?start_day=${today}&end_day=${end}`,
       ),
       api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'),
+      api<Profile & { state: string }>('/api/teacher/profile'),
     ]);
     const next = {
       today: home.schedule,
@@ -2642,6 +2803,7 @@ export default function Home() {
       information: home.information,
       schedule: schedule.items,
       courses: courses.items,
+      profile: profile.user ? profile : null,
     };
     setTeacherData(next);
     return next;

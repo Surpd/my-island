@@ -254,8 +254,33 @@ class ClassroomSyncTests(unittest.TestCase):
             claim = claim_identity(database, first_user, identity_id, "student")
             self.assertEqual(claim["status"], "pending")
             self.assertEqual(review_identity_claim(database, claim["id"], admin, "approved")["status"], "approved")
+            with database.connection() as connection:
+                link = connection.execute(
+                    "SELECT status, source FROM account_identity_links WHERE user_id = ?",
+                    (first_user,),
+                ).fetchone()
+            self.assertEqual(tuple(link), ("confirmed", "identity_claim"))
             conflict_claim = claim_identity(database, second_user, identity_id, "student")
             self.assertEqual(review_identity_claim(database, conflict_claim["id"], admin, "approved")["status"], "identity_conflict")
+
+    def test_teacher_profile_uses_canonical_person_and_assignments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            with database.connection() as connection:
+                identity_id = connection.execute(
+                    "INSERT INTO identities(kind, display_name) VALUES ('teacher', 'Дмитрий Филиппов') RETURNING id"
+                ).fetchone()[0]
+                user_id = connection.execute(
+                    "INSERT INTO users(telegram_user_id, role, identity_id) VALUES (4242, 'teacher', ?) RETURNING id",
+                    (identity_id,),
+                ).fetchone()[0]
+            group = database.create_group("9-1 Дмитрий", "subject_subgroup")
+            database.set_teacher_assignment(identity_id, group["id"], "Математика", True, user_id, subject_subgroup="A")
+            profile = database.get_teacher_profile(user_id)
+            self.assertEqual(profile["user"]["display_name"], "Дмитрий Филиппов")
+            self.assertEqual(profile["groups"][0]["subject"], "Математика")
+            self.assertEqual(profile["groups"][0]["subject_subgroup"], "A")
 
     def test_official_grades_are_scoped_by_backend_user(self):
         with tempfile.TemporaryDirectory() as directory:

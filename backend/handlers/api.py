@@ -516,6 +516,15 @@ def create_router(database: Database) -> APIRouter:
         user = require_role(telegram_user, "teacher")
         return {"items": database.list_teacher_groups(user["id"]) if user["identity_id"] else []}
 
+    @router.get("/teacher/profile")
+    def teacher_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        profile = database.get_teacher_profile(user["id"])
+        if not profile:
+            return {"state": "not_configured", "user": None, "groups": []}
+        return {"state": "approved", **profile}
+
     @router.get("/teacher/groups/{group_id}")
     def teacher_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)

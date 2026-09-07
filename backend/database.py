@@ -90,6 +90,17 @@ CREATE TABLE IF NOT EXISTS user_roles (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(user_id, role)
 );
+CREATE TABLE IF NOT EXISTS account_identity_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  identity_id INTEGER NOT NULL UNIQUE REFERENCES identities(id),
+  status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('pending','confirmed','conflict','revoked')),
+  source TEXT NOT NULL,
+  source_ref TEXT,
+  confirmed_by INTEGER REFERENCES users(id),
+  confirmed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS student_preview_sessions (
   id TEXT PRIMARY KEY,
   actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -99,6 +110,7 @@ CREATE TABLE IF NOT EXISTS student_preview_sessions (
   ended_at TEXT
 );
 CREATE INDEX IF NOT EXISTS user_roles_user_idx ON user_roles(user_id);
+CREATE INDEX IF NOT EXISTS account_identity_links_status_idx ON account_identity_links(status, created_at);
 CREATE INDEX IF NOT EXISTS student_preview_actor_active_idx ON student_preview_sessions(actor_user_id, expires_at);
 CREATE TABLE IF NOT EXISTS schedule_syncs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -413,6 +425,9 @@ class Database:
             connection.execute(
                 "INSERT OR IGNORE INTO user_roles(user_id, role, source) SELECT id, role, 'legacy_user_role' FROM users"
             )
+            connection.execute(
+                "INSERT OR IGNORE INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_at) SELECT id, identity_id, 'confirmed', 'legacy_backfill', 'users.identity_id', created_at FROM users WHERE identity_id IS NOT NULL"
+            )
 
     def execute(self, connection: Any, query: str, params: tuple[Any, ...] = ()) -> Any:
         if self.database_url:
@@ -557,6 +572,14 @@ class Database:
                     self.execute(connection, "UPDATE users SET identity_id = ?, role = ? WHERE id = ?", (claim["identity_id"], claim["requested_role"], claim["user_id"]))
                     self.execute(
                         connection,
+                        """INSERT INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_by, confirmed_at)
+                           VALUES (?, ?, 'confirmed', 'identity_claim', ?, ?, CURRENT_TIMESTAMP)
+                           ON CONFLICT(user_id) DO UPDATE SET identity_id = excluded.identity_id, status = 'confirmed', source = excluded.source,
+                             source_ref = excluded.source_ref, confirmed_by = excluded.confirmed_by, confirmed_at = excluded.confirmed_at""",
+                        (claim["user_id"], claim["identity_id"], str(claim_id), reviewer_id),
+                    )
+                    self.execute(
+                        connection,
                         "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'identity_claim') ON CONFLICT(user_id, role) DO NOTHING",
                         (claim["user_id"], claim["requested_role"]),
                     )
@@ -666,9 +689,12 @@ class Database:
         with self.connection() as connection:
             users = self.execute(
                 connection,
-                """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name,
+                """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name, i.kind AS identity_kind,
+                              COALESCE(ail.status, CASE WHEN u.identity_id IS NULL THEN 'unlinked' ELSE 'confirmed' END) AS identity_status,
+                              COALESCE(ail.source, CASE WHEN u.identity_id IS NULL THEN NULL ELSE 'legacy' END) AS identity_source,
                               (SELECT c.status FROM identity_claims c WHERE c.user_id = u.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS claim_status
                      FROM users u LEFT JOIN identities i ON i.id = u.identity_id
+                     LEFT JOIN account_identity_links ail ON ail.user_id = u.id AND ail.identity_id = u.identity_id
                     ORDER BY u.created_at""",
             ).fetchall()
             role_rows = self.execute(connection, "SELECT user_id, role FROM user_roles ORDER BY role").fetchall()
@@ -701,9 +727,28 @@ class Database:
                     (user["identity_id"],),
                 ).fetchall() if user["identity_id"] else []
                 result.append({
-                    **dict(user), "roles": roles, "groups": [dict(group) for group in groups],
+                    **dict(user), "has_account": True, "roles": roles, "groups": [dict(group) for group in groups],
                     "teacher_assignments": [dict(item) for item in teacher_assignments],
                     "homeroom_assignments": [dict(item) for item in homeroom],
+                })
+            unlinked_identities = self.execute(
+                connection,
+                """SELECT i.id AS identity_id, i.kind AS identity_kind, i.display_name, i.class_name,
+                          'confirmed' AS identity_status
+                     FROM identities i
+                    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.identity_id = i.id)
+                    ORDER BY i.display_name""",
+            ).fetchall()
+            for identity in unlinked_identities:
+                result.append({
+                    **dict(identity),
+                    "id": f"identity:{identity['identity_id']}",
+                    "has_account": False,
+                    "identity_source": "school_record",
+                    "roles": [str(identity["identity_kind"])],
+                    "groups": [],
+                    "teacher_assignments": [],
+                    "homeroom_assignments": [],
                 })
             return result
 
@@ -1189,8 +1234,23 @@ class Database:
                 "groups": "SELECT COUNT(*) AS value FROM groups",
                 "parse_issues": "SELECT COUNT(*) AS value FROM schedule_entries WHERE parse_status IN ('partial','ambiguous','failed')",
                 "journal_results": "SELECT COUNT(*) AS value FROM journal_results",
+                "unlinked_accounts": "SELECT COUNT(*) AS value FROM users WHERE identity_id IS NULL",
+                "identity_conflicts": "SELECT COUNT(*) AS value FROM identity_claims WHERE status = 'identity_conflict'",
             }
             return {name: int(self.execute(connection, sql).fetchone()["value"]) for name, sql in queries.items()}
+
+    def get_teacher_profile(self, user_id: Any) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            user = self.execute(
+                connection,
+                """SELECT u.id, u.identity_id, i.display_name, i.class_name
+                     FROM users u JOIN identities i ON i.id = u.identity_id
+                    WHERE u.id = ? AND i.kind = 'teacher'""",
+                (user_id,),
+            ).fetchone()
+            if not user:
+                return None
+        return {"user": dict(user), "groups": self.list_teacher_groups(user_id)}
 
     def save_journal_snapshot(self, source: dict[str, Any], assessments: list[dict[str, Any]], results: list[dict[str, Any]], students: list[dict[str, Any]] | None = None) -> dict[str, int]:
         import json
