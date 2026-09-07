@@ -1828,8 +1828,9 @@ function AdminApp({
     }
   };
   const catalogUsers = useMemo<Array<Record<string, unknown>>>(
-    () =>
-      data?.people.map((person): Record<string, unknown> => {
+    () => {
+      if (!data) return [];
+      const people = data.people.map((person): Record<string, unknown> => {
         const account = data.users.find(
           (user) => displayValue(user.identity_id) === displayValue(person.id),
         );
@@ -1841,7 +1842,19 @@ function AdminApp({
           roles: person.roles,
           has_account: Boolean(account),
         });
-      }) || [],
+      });
+      const unmatchedAccounts = data.users
+        .filter((user) => !user.identity_id)
+        .map((user): Record<string, unknown> => ({
+          ...user,
+          id: user.id,
+          identity_id: null,
+          display_name: user.display_name,
+          roles: user.roles || [user.role],
+          has_account: true,
+        }));
+      return [...people, ...unmatchedAccounts];
+    },
     [data],
   );
   const classGroups = useMemo(
