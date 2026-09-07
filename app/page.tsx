@@ -171,6 +171,10 @@ type AdminData = {
   parseIssues: Array<Record<string, unknown>>;
   audit: Array<Record<string, unknown>>;
 };
+type AdminEntityRef = {
+  kind: 'person' | 'class' | 'group';
+  id: string;
+};
 
 const runtimeEnv =
   (import.meta as ImportMeta & { env?: Record<string, string | boolean> })
@@ -1730,6 +1734,8 @@ function AdminApp({
     unknown
   > | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [selectedEntity, setSelectedEntity] = useState<AdminEntityRef | null>(null);
+  const [entityHistory, setEntityHistory] = useState<AdminEntityRef[]>([]);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -1947,6 +1953,71 @@ function AdminApp({
       ),
     [query, structureGroupFilter, structureGroups],
   );
+  const entityLabel = (entity: AdminEntityRef) => {
+    if (entity.kind === 'person') {
+      const person = catalogUsers.find(
+        (item) => displayValue(item.identity_id, displayValue(item.id)) === entity.id,
+      );
+      return person ? personLabel(person) : 'Человек';
+    }
+    const group = data?.groups.find((item) => displayValue(item.id) === entity.id);
+    return group ? groupLabel(group) : entity.kind === 'class' ? 'Класс' : 'Группа';
+  };
+  const openPersonEntity = (
+    user: Record<string, unknown>,
+    resetHistory = true,
+  ) => {
+    setSelectedUser(user);
+    setSelectedGroupId('');
+    if (resetHistory) setEntityHistory([]);
+    setSelectedEntity({
+      kind: 'person',
+      id: displayValue(user.identity_id, displayValue(user.id)),
+    });
+    setSection('people');
+  };
+  const openRelatedEntity = (entity: AdminEntityRef) => {
+    if (selectedEntity && selectedEntity.id !== entity.id) {
+      setEntityHistory((history) => [...history, selectedEntity]);
+    }
+    setSelectedEntity(entity);
+    if (entity.kind === 'person') {
+      const person = catalogUsers.find(
+        (item) => displayValue(item.identity_id, displayValue(item.id)) === entity.id,
+      );
+      setSelectedUser(person || null);
+      setSection('people');
+    } else {
+      setSection('structure');
+    }
+  };
+  const leaveEntityDetail = () => {
+    const previous = entityHistory[entityHistory.length - 1];
+    if (!previous) {
+      setSelectedEntity(null);
+      setEntityHistory([]);
+      return;
+    }
+    setEntityHistory((history) => history.slice(0, -1));
+    setSelectedEntity(previous);
+    if (previous.kind === 'person') {
+      const person = catalogUsers.find(
+        (item) => displayValue(item.identity_id, displayValue(item.id)) === previous.id,
+      );
+      setSelectedUser(person || null);
+      setSection('people');
+    } else {
+      setSection('structure');
+    }
+  };
+  const openGlobalSection = (nextSection: AdminSection) => {
+    setSelectedEntity(null);
+    setEntityHistory([]);
+    setSelectedStructureGroupId('');
+    setSelectedUser(null);
+    setSelectedGroupId('');
+    setSection(nextSection);
+  };
   const toggleRole = (user: Record<string, unknown>, role: string) => {
     if (user.has_account === false) return;
     const current = Array.isArray(user.roles)
@@ -2205,10 +2276,7 @@ function AdminApp({
                 <button
                   className={`person-row ${displayValue(selectedUser?.id) === displayValue(user.id) ? 'is-selected' : ''}`}
                   key={displayValue(user.id, String(index))}
-                  onClick={() => {
-                    setSelectedUser(user);
-                    setSelectedGroupId('');
-                  }}
+                  onClick={() => openPersonEntity(user)}
                 >
                   <span className="avatar-mini">
                     {personLabel(user).slice(0, 1)}
@@ -2239,6 +2307,11 @@ function AdminApp({
                       </p>
                     </div>
                   </div>
+                  {entityHistory.length > 0 && (
+                    <button className="text-action" onClick={leaveEntityDetail}>
+                      <ChevronLeft size={14} /> Назад к {entityLabel(entityHistory[entityHistory.length - 1])}
+                    </button>
+                  )}
                   <div className="subsection-title">Роли</div>
                   <div className="chip-row">
                     {['student', 'teacher', 'admin'].map((role) => (
@@ -2262,7 +2335,27 @@ function AdminApp({
                     <>
                       <div className="person-meta-row">
                         <strong>Базовый класс:</strong>{' '}
-                        {personBaseClass(selectedUser) || 'не подтверждён'}
+                        {(() => {
+                          const className = personBaseClass(selectedUser);
+                          const classGroup = classGroups.find(
+                            (group) => displayValue(group.name) === className,
+                          );
+                          return classGroup ? (
+                            <button
+                              className="text-action"
+                              onClick={() =>
+                                openRelatedEntity({
+                                  kind: 'class',
+                                  id: displayValue(classGroup.id),
+                                })
+                              }
+                            >
+                              {className} <ChevronRight size={14} />
+                            </button>
+                          ) : (
+                            className || 'не подтверждён'
+                          );
+                        })()}
                       </div>
                       {displayValue(selectedUser.account_status) && (
                         <div className="person-meta-row">
@@ -2272,12 +2365,6 @@ function AdminApp({
                       )}
                     </>
                   )}
-                  <button
-                    className="outline-button"
-                    onClick={() => setSection('structure')}
-                  >
-                    Открыть обучение и преподавание
-                  </button>
                   {Array.isArray(selectedUser.roles) &&
                     selectedUser.roles.includes('student') &&
                     selectedUser.has_account !== false &&
@@ -2297,11 +2384,12 @@ function AdminApp({
                           selectedUser.instructional_memberships.map((group, index) => (
                             <button
                               key={index}
-                              onClick={() => {
-                                setStructureGroupFilter(displayValue((group as Record<string, unknown>).id));
-                                setQuery('');
-                                setSection('structure');
-                              }}
+                              onClick={() =>
+                                openRelatedEntity({
+                                  kind: 'group',
+                                  id: displayValue((group as Record<string, unknown>).id),
+                                })
+                              }
                             >
                               {groupLabel(group as Record<string, unknown>)}
                               {Boolean((group as Record<string, unknown>).is_manual) && ' · вручную'}
@@ -2315,11 +2403,12 @@ function AdminApp({
                           selectedUser.exam_profile_memberships.map((group, index) => (
                             <button
                               key={index}
-                              onClick={() => {
-                                setStructureGroupFilter(displayValue((group as Record<string, unknown>).id));
-                                setQuery('');
-                                setSection('structure');
-                              }}
+                              onClick={() =>
+                                openRelatedEntity({
+                                  kind: 'group',
+                                  id: displayValue((group as Record<string, unknown>).id),
+                                })
+                              }
                             >
                               {groupLabel(group as Record<string, unknown>)}
                               {Boolean((group as Record<string, unknown>).is_manual) && ' · вручную'}
@@ -2335,14 +2424,12 @@ function AdminApp({
                       selectedUser.groups.map((group, index) => (
                         <button
                           key={index}
-                          onClick={() => {
-                            setQuery(
-                              displayValue(
-                                (group as Record<string, unknown>).name,
-                              ),
-                            );
-                            setSection('structure');
-                          }}
+                          onClick={() =>
+                            openRelatedEntity({
+                              kind: 'group',
+                              id: displayValue((group as Record<string, unknown>).id),
+                            })
+                          }
                         >
                           {groupLabel(group as Record<string, unknown>)}{' '}
                           <ChevronRight size={14} />
@@ -2383,6 +2470,94 @@ function AdminApp({
           </div>
         </>
       );
+    if (
+      section === 'structure' &&
+      selectedEntity &&
+      (selectedEntity.kind === 'class' || selectedEntity.kind === 'group')
+    ) {
+      const selectedEntityGroup = data.groups.find(
+        (group) => displayValue(group.id) === selectedEntity.id,
+      );
+      if (selectedEntityGroup) {
+        const students = Array.isArray(selectedEntityGroup.students)
+          ? (selectedEntityGroup.students as Array<Record<string, unknown>>)
+          : [];
+        const assignments = Array.isArray(selectedEntityGroup.teacher_assignments)
+          ? (selectedEntityGroup.teacher_assignments as Array<Record<string, unknown>>)
+          : [];
+        return (
+          <>
+            <AdminHeading
+              eyebrow={selectedEntity.kind === 'class' ? 'Базовый класс' : humanGroupType(selectedEntityGroup.group_type)}
+              title={groupLabel(selectedEntityGroup as Record<string, unknown>)}
+              detail="Точная карточка сущности и её подтверждённый состав."
+            />
+            <section className="work-card detail-card entity-detail">
+              <button className="text-action" onClick={leaveEntityDetail}>
+                <ChevronLeft size={14} />{' '}
+                {entityHistory.length > 0
+                  ? `Назад к ${entityLabel(entityHistory[entityHistory.length - 1])}`
+                  : 'Назад к школе'}
+              </button>
+              <div className="work-card__heading">
+                <div>
+                  <h2>{groupLabel(selectedEntityGroup as Record<string, unknown>)}</h2>
+                  <small>
+                    {humanGroupType(selectedEntityGroup.group_type)} ·{' '}
+                    {displayValue(selectedEntityGroup.member_count, String(students.length))} участников
+                  </small>
+                </div>
+                <small>
+                  {displayValue(selectedEntityGroup.provenance_source) || 'Источник не указан'}
+                  {displayValue(selectedEntityGroup.provenance_ref)
+                    ? ` · ${displayValue(selectedEntityGroup.provenance_ref)}`
+                    : ''}
+                </small>
+              </div>
+              {assignments.length > 0 && (
+                <div className="person-meta-row">
+                  <strong>Преподаватели:</strong>{' '}
+                  {assignments.map((assignment) =>
+                    displayValue(
+                      assignment.teacher_name,
+                      displayValue(assignment.display_name, displayValue(assignment.name)),
+                    ),
+                  ).filter(Boolean).join(', ')}
+                </div>
+              )}
+              <div className="subsection-title">Состав</div>
+              {students.length > 0 ? (
+                <div className="related-list">
+                  {students.map((student, index) => (
+                    <button
+                      key={displayValue(student.id, String(index))}
+                      onClick={() => {
+                        const person = catalogUsers.find(
+                          (item) => displayValue(item.identity_id, displayValue(item.id)) === displayValue(student.id),
+                        );
+                        if (person) {
+                          openRelatedEntity({ kind: 'person', id: displayValue(student.id) });
+                        }
+                      }}
+                    >
+                      {displayValue(student.display_name, displayValue(student.name))}
+                      {Boolean(student.is_manual) && ' · вручную'}
+                      <ChevronRight size={14} />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  icon={Users}
+                  title="Состав не найден"
+                  detail="Для этой сущности пока нет подтверждённых участников."
+                />
+              )}
+            </section>
+          </>
+        );
+      }
+    }
     if (section === 'structure')
       return (
         <>
@@ -2520,13 +2695,22 @@ function AdminApp({
                     </small>
                   </div>
                   <div className="node-links">
-                    <button onClick={() => setSelectedStructureGroupId(displayValue(group.id))}>Состав</button>
+                    <button
+                      onClick={() =>
+                        openRelatedEntity({
+                          kind: 'class',
+                          id: displayValue(group.id),
+                        })
+                      }
+                    >
+                      Состав
+                    </button>
                     <button
                       onClick={() => {
                         setPeopleClassFilter(displayValue(group.name));
                         setPeopleGroupFilter('');
                         setQuery('');
-                        setSection('people');
+                        openGlobalSection('people');
                       }}
                     >
                       Люди
@@ -2560,12 +2744,21 @@ function AdminApp({
                     )}
                   </div>
                   <div className="node-links">
-                    <button onClick={() => setSelectedStructureGroupId(displayValue(group.id))}>Состав</button>
+                    <button
+                      onClick={() =>
+                        openRelatedEntity({
+                          kind: 'group',
+                          id: displayValue(group.id),
+                        })
+                      }
+                    >
+                      Состав
+                    </button>
                     <button onClick={() => {
                       setPeopleClassFilter(structureClassFilter || '');
                       setPeopleGroupFilter(displayValue(group.id));
                       setQuery('');
-                      setSection('people');
+                      openGlobalSection('people');
                     }}>Люди</button>
                   </div>
                 </article>
@@ -2587,11 +2780,10 @@ function AdminApp({
                 <div className="related-list">
                   {students.map((student, index) => (
                     <button key={displayValue(student.id, String(index))} onClick={() => {
-                      const person = catalogUsers.find((item) => displayValue(item.identity_id) === displayValue(student.id));
-                      if (person) setSelectedUser(person);
-                      setPeopleClassFilter(person ? personBaseClass(person) : '');
-                      setPeopleGroupFilter(displayValue(selectedGroup.id));
-                      setSection('people');
+                      const person = catalogUsers.find(
+                        (item) => displayValue(item.identity_id, displayValue(item.id)) === displayValue(student.id),
+                      );
+                      if (person) openRelatedEntity({ kind: 'person', id: displayValue(student.id) });
                     }}>
                       {displayValue(student.display_name)}
                       {Boolean(student.is_manual) && ' · вручную'}
@@ -2930,7 +3122,7 @@ function AdminApp({
             <button
               key={item.id}
               className={item.includes.includes(section) ? 'is-active' : ''}
-              onClick={() => setSection(item.id)}
+              onClick={() => openGlobalSection(item.id)}
             >
               <item.icon size={18} />
               <span>{item.label}</span>
