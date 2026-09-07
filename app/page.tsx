@@ -156,6 +156,7 @@ type AdminData = {
   overview: Record<string, number>;
   claims: Array<Record<string, string>>;
   users: Array<Record<string, unknown>>;
+  people: Array<Record<string, unknown>>;
   groups: Array<Record<string, unknown>>;
   scheduleSyncs: Array<Record<string, unknown>>;
   classroomSyncs: Array<Record<string, unknown>>;
@@ -1728,6 +1729,7 @@ function AdminApp({
           '/api/admin/schedule/parses',
         ),
         api<{ items: Array<Record<string, unknown>> }>('/api/admin/audit'),
+        api<{ items: Array<Record<string, unknown>> }>('/api/admin/people'),
       ]);
       const value = <T,>(index: number, fallback: T): T => {
         const result = results[index];
@@ -1744,6 +1746,7 @@ function AdminApp({
         information,
         parseIssues,
         audit,
+        people,
       ] = [
         value(0, {} as Record<string, number>),
         value(1, { items: [] as Array<Record<string, string>> }),
@@ -1755,11 +1758,13 @@ function AdminApp({
         value(7, { items: [] as Array<Record<string, unknown>> }),
         value(8, { items: [] as Array<Record<string, unknown>> }),
         value(9, { items: [] as Array<Record<string, unknown>> }),
+        value(10, { items: [] as Array<Record<string, unknown>> }),
       ];
       setData({
         overview,
         claims: claims.items,
         users: users.items,
+        people: people.items,
         groups: groups.items,
         scheduleSyncs: syncs.items,
         classroomSyncs: classroomSyncs.items,
@@ -1771,7 +1776,7 @@ function AdminApp({
       const failed = results.filter((result) => result.status === 'rejected');
       if (failed.length) {
         setMessage(
-          `Часть данных недоступна (${failed.length}/10). Можно обновить ещё раз.`,
+          `Часть данных недоступна (${failed.length}/11). Можно обновить ещё раз.`,
         );
       }
     } catch (error) {
@@ -1799,9 +1804,28 @@ function AdminApp({
       );
     }
   };
+  const catalogUsers = useMemo(
+    () =>
+      data?.people.map((person) => {
+        const account = data.users.find(
+          (user) => displayValue(user.identity_id) === displayValue(person.id),
+        );
+        return {
+          ...person,
+          ...(account || {}),
+          id: account?.id || person.id,
+          identity_id: person.id,
+          display_name: person.display_name,
+          class_name: person.class_name,
+          roles: person.roles,
+          has_account: Boolean(account),
+        };
+      }) || [],
+    [data],
+  );
   const filteredUsers = useMemo(
     () =>
-      data?.users.filter((user) => {
+      catalogUsers.filter((user) => {
         const roles = Array.isArray(user.roles)
           ? user.roles.filter((item): item is string => typeof item === 'string')
           : [displayValue(user.role)];
@@ -1810,7 +1834,8 @@ function AdminApp({
             ? true
             : peopleFilter === 'unmatched'
               ? !user.identity_id
-              : roles.includes(peopleFilter);
+              : roles.includes(peopleFilter) ||
+                displayValue(user.identity_kind) === peopleFilter;
         return (
           matchesFilter &&
           `${displayValue(user.display_name)} ${displayValue(user.class_name)} ${roles.join(' ')}`
@@ -1818,7 +1843,7 @@ function AdminApp({
             .includes(query.toLowerCase())
         );
       }) || [],
-    [data, peopleFilter, query],
+    [catalogUsers, peopleFilter, query],
   );
   const filteredGroups = useMemo(
     () =>
@@ -2146,6 +2171,28 @@ function AdminApp({
                         </button>
                       ))}
                   </div>
+                  {Array.isArray(selectedUser.teacher_assignments) &&
+                    selectedUser.teacher_assignments.length > 0 && (
+                      <>
+                        <div className="subsection-title">Постоянные назначения</div>
+                        <div className="related-list">
+                          {selectedUser.teacher_assignments.map((assignment, index) => (
+                            <div className="person-meta-row" key={index}>
+                              {displayValue(assignment.display_name, assignment.name)}
+                              {displayValue(assignment.subject)
+                                ? ` · ${displayValue(assignment.subject)}`
+                                : ''}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  {Array.isArray(selectedUser.unresolved) &&
+                    selectedUser.unresolved.length > 0 && (
+                      <div className="notice-card">
+                        Требует внимания: {selectedUser.unresolved.length} unresolved issue(s).
+                      </div>
+                    )}
                 </>
               ) : (
                 <EmptyState

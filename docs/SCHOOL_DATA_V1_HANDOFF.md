@@ -24,3 +24,13 @@ Verify migrations `013`–`016`; implement snapshot/run repository methods; insp
 ## Do not guess
 
 Source precedence by grade/relationship; complete memberships for Иван Куренков; any Grade 11/base/profile relationships; homeroom; replacement vs additional semantics for unverified exam groups; combined/unknown source columns; schedule boundaries that deterministic extraction cannot prove; or Groq model/acceptance thresholds before benchmark fixtures exist.
+
+## Confirmed School Directory bootstrap (2026-09-07)
+
+The current spreadsheet `Расписание 2026/27` was inspected directly. The authoritative tabs for this pass are:
+
+- `Списки по классам 26/27` — base classes 5, 6, 7, 8, 9-А, 9-Д, 10, 11;
+- `списки групп 26-27` — subject rosters, English rosters, and group labels;
+- `ОГЭ/ЕГЭ` — exam/profile choices and Grade 9 Math A/B/C markers.
+
+`учебные планы` is a structural cross-check only; it is not used to invent student memberships. Teacher headers in the group tab often contain only a first name, initials, or a group label, so they remain review evidence and do not create teacher identities/assignments. The bootstrap preserves only the known-good Dmitry Filippov A/B/C assignments.

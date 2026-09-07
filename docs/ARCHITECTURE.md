@@ -28,6 +28,8 @@ The schedule importer deterministically establishes a class block before parsing
 
 Migrations `013`–`016` add the durable path `source → snapshot → structural record/diff → optional semantic interpretation → validated candidate → canonical apply`. Source records and candidates retain evidence; conflicts and unknown identities become review issues. A manually confirmed mapping is immutable and versioned through end/supersede instead of silent replacement.
 
+The first live School Directory bootstrap confirmed the 2026/27 source authority: base classes come from `Списки по классам 26/27`, instructional and English rosters from `списки групп 26-27`, and OGE/EGE/profile memberships from `ОГЭ/ЕГЭ`. The school has separate base classes 9-А and 9-Д; Grade 9 Math is the distinct canonical A/B/C subject structure. Teacher labels in rosters are not treated as canonical teachers unless a full identity is proven.
+
 Initial bootstrap may use Groq for ambiguous semantic units, but Groq is behind a provider/model-neutral interface and never writes canonical rows. Subsequent runs compare deterministic record fingerprints and send only new or changed ambiguous units to the provider. The last known valid snapshot remains explicit.
 
 Schedule entries can carry an extensible `audience_rule` and resolved-audience diagnostics. Rules support canonical cohorts, union/intersection, exclusion/complement, and explicit exceptions, so a residual lesson does not require a fake permanent group.
