@@ -1151,7 +1151,7 @@ class Database:
                 """SELECT DISTINCT g.id, g.name, g.group_type, COALESCE(ta.subject, '') AS subject,
                           COALESCE(ta.base_class_name, '') AS base_class_name,
                           COALESCE(ta.subject_subgroup, '') AS subject_subgroup,
-                          COALESCE(ta.classroom_course_id, '') AS classroom_course_id,
+                          ta.classroom_course_id AS classroom_course_id,
                           COALESCE(ta.exam_track, '') AS exam_track,
                           CASE WHEN h.id IS NULL THEN FALSE ELSE TRUE END AS is_homeroom,
                           COUNT(DISTINCT CASE WHEN sm.active IS TRUE AND sm.member_role = 'student' THEN sm.identity_id END) AS student_count
