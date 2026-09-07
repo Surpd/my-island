@@ -19,6 +19,8 @@ The Classroom scopes are for the teacher account’s courses, coursework and stu
 
 Current journal sync uses the separate 2026/27 grade spreadsheets recorded in the project context. Grade 9 Mathematics is normalized into `journal_sources`, `journal_assessments`, `journal_students`, and `journal_results`; the roster is usable even when `identity_id` is null. Its confirmed canonical instructional groups are A/B/C. Legacy `9-1`/`9-2`/`9-3` source markers normalize to A/B/C in the bounded compatibility path; base class, Classroom course, and exam track remain separate optional mapping fields.
 
+School Directory sources use the shared `school_sources` registry and immutable snapshots/records. Bootstrap stages candidates with source coordinates/evidence before canonical apply. Incremental sync is fingerprint/diff-first; unchanged records bypass semantic work, and conflicting or structurally uncertain records remain unresolved. Groq is the intended semantic provider, with the model selected by configuration after a representative benchmark. Neither Groq nor a Google adapter may create canonical people/groups directly.
+
 ## Runtime env checklist
 
 Fill now for local Telegram verification: `DEV_AUTH_ENABLED=true` is safe only with `APP_ENV=development`; `TELEGRAM_BOT_TOKEN` is needed for signed Telegram `initData` tests and stays server-only.

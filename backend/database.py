@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
   identity_id INTEGER NOT NULL REFERENCES identities(id),
-  member_role TEXT NOT NULL,
+  member_role TEXT NOT NULL CHECK (member_role = 'student'),
   source TEXT NOT NULL,
   source_ref TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1,
@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS schedule_entries (
   week_start TEXT,
   source_hash TEXT NOT NULL,
   raw_source TEXT,
+  audience_rule TEXT,
+  resolved_audience TEXT,
+  teacher_identity_ids TEXT NOT NULL DEFAULT '[]',
+  source_snapshot_id INTEGER,
   archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
@@ -246,32 +250,32 @@ CREATE TABLE IF NOT EXISTS teacher_assignments (
   exam_track TEXT,
   capability TEXT NOT NULL DEFAULT 'teach',
   source TEXT NOT NULL DEFAULT 'admin_override',
-  source_ref TEXT,
+  source_ref TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1,
   valid_from TEXT,
   valid_until TEXT,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(teacher_identity_id, group_id, subject, capability, source)
+  UNIQUE(teacher_identity_id, group_id, subject, capability, source, source_ref)
 );
 CREATE TABLE IF NOT EXISTS homeroom_assignments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   teacher_identity_id INTEGER NOT NULL REFERENCES identities(id),
   class_group_id INTEGER NOT NULL REFERENCES groups(id),
   source TEXT NOT NULL DEFAULT 'admin_override',
-  source_ref TEXT,
+  source_ref TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1,
   valid_from TEXT,
   valid_until TEXT,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(teacher_identity_id, class_group_id, source)
+  UNIQUE(teacher_identity_id, class_group_id, source, source_ref)
 );
 CREATE TABLE IF NOT EXISTS membership_overrides (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   identity_id INTEGER NOT NULL REFERENCES identities(id),
   group_id INTEGER NOT NULL REFERENCES groups(id),
-  member_role TEXT NOT NULL,
+  member_role TEXT NOT NULL CHECK (member_role = 'student'),
   action TEXT NOT NULL CHECK (action IN ('include', 'exclude')),
   reason TEXT,
   active INTEGER NOT NULL DEFAULT 1,
@@ -347,6 +351,146 @@ CREATE TABLE IF NOT EXISTS journal_group_mappings (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(source_id, group_marker)
 );
+CREATE TABLE IF NOT EXISTS school_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_type TEXT NOT NULL CHECK (source_type IN ('base_class_list','instructional_group_list','exam_profile_list','journal','schedule','classroom','manual','other')),
+  external_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  location_ref TEXT,
+  authority_status TEXT NOT NULL DEFAULT 'unknown' CHECK (authority_status IN ('unknown','reference','authoritative','manual')),
+  configuration TEXT NOT NULL DEFAULT '{}',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_type, external_key)
+);
+CREATE TABLE IF NOT EXISTS school_sync_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES school_sources(id),
+  mode TEXT NOT NULL CHECK (mode IN ('bootstrap','incremental','full_reparse')),
+  status TEXT NOT NULL DEFAULT 'started' CHECK (status IN ('started','staged','applied','failed','unresolved')),
+  idempotency_key TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT,
+  diagnostics TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(source_id, idempotency_key)
+);
+CREATE TABLE IF NOT EXISTS school_source_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES school_sources(id),
+  sync_run_id INTEGER NOT NULL REFERENCES school_sync_runs(id),
+  previous_snapshot_id INTEGER REFERENCES school_source_snapshots(id),
+  fingerprint TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  effective_from TEXT,
+  effective_until TEXT,
+  raw_payload TEXT,
+  structural_payload TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'staged' CHECK (status IN ('staged','valid','rejected','superseded')),
+  is_last_known_valid INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (effective_until IS NULL OR effective_from IS NULL OR effective_until >= effective_from),
+  UNIQUE(source_id, fingerprint)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS school_source_snapshots_last_valid_idx ON school_source_snapshots(source_id) WHERE is_last_known_valid = 1;
+CREATE TABLE IF NOT EXISTS school_source_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  snapshot_id INTEGER NOT NULL REFERENCES school_source_snapshots(id) ON DELETE CASCADE,
+  record_key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  change_kind TEXT NOT NULL CHECK (change_kind IN ('new','changed','unchanged','deleted')),
+  parse_status TEXT NOT NULL DEFAULT 'structural' CHECK (parse_status IN ('structural','semantic_required','validated','unresolved','rejected')),
+  raw_payload TEXT,
+  structural_payload TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(snapshot_id, record_key)
+);
+CREATE TABLE IF NOT EXISTS school_semantic_interpretations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_record_id INTEGER NOT NULL REFERENCES school_source_records(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  request_fingerprint TEXT NOT NULL,
+  request_payload TEXT NOT NULL,
+  response_payload TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','validated','rejected','unresolved','failed')),
+  validation_diagnostics TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_record_id, provider, model, request_fingerprint)
+);
+CREATE TABLE IF NOT EXISTS school_candidate_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sync_run_id INTEGER NOT NULL REFERENCES school_sync_runs(id),
+  source_record_id INTEGER REFERENCES school_source_records(id),
+  change_type TEXT NOT NULL CHECK (change_type IN ('create','update','end','map')),
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('person','group','membership','teacher_assignment','homeroom_assignment','source_mapping','schedule_audience')),
+  natural_key TEXT NOT NULL,
+  proposed_payload TEXT NOT NULL,
+  evidence TEXT NOT NULL CHECK (evidence <> '{}'),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','applied','unresolved','conflict')),
+  manual_decision INTEGER NOT NULL DEFAULT 0,
+  decision_by INTEGER REFERENCES users(id),
+  decision_at TEXT,
+  applied_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(sync_run_id, entity_type, natural_key)
+);
+CREATE TABLE IF NOT EXISTS school_resolution_issues (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sync_run_id INTEGER NOT NULL REFERENCES school_sync_runs(id),
+  source_record_id INTEGER REFERENCES school_source_records(id),
+  candidate_change_id INTEGER REFERENCES school_candidate_changes(id),
+  issue_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved','ignored')),
+  details TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '{}',
+  resolution TEXT,
+  resolved_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TEXT
+);
+CREATE TABLE IF NOT EXISTS school_source_mappings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES school_sources(id),
+  external_key TEXT NOT NULL,
+  mapping_type TEXT NOT NULL CHECK (mapping_type IN ('identity','group','classroom_course','subject','audience_rule')),
+  identity_id INTEGER REFERENCES identities(id),
+  group_id INTEGER REFERENCES groups(id),
+  classroom_course_id INTEGER REFERENCES classroom_courses(id),
+  canonical_value TEXT,
+  status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','confirmed','conflict','revoked')),
+  manually_confirmed INTEGER NOT NULL DEFAULT 0,
+  evidence TEXT NOT NULL DEFAULT '{}',
+  valid_from TEXT,
+  valid_until TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  supersedes_mapping_id INTEGER REFERENCES school_source_mappings(id),
+  CHECK ((identity_id IS NOT NULL) + (group_id IS NOT NULL) + (classroom_course_id IS NOT NULL) + (canonical_value IS NOT NULL) = 1),
+  CHECK ((mapping_type = 'identity' AND identity_id IS NOT NULL) OR (mapping_type = 'group' AND group_id IS NOT NULL) OR (mapping_type = 'classroom_course' AND classroom_course_id IS NOT NULL) OR (mapping_type IN ('subject','audience_rule') AND canonical_value IS NOT NULL)),
+  CHECK (valid_until IS NULL OR valid_from IS NULL OR valid_until >= valid_from)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS school_source_mappings_current_idx ON school_source_mappings(source_id, external_key, mapping_type) WHERE valid_until IS NULL AND status <> 'revoked';
+CREATE INDEX IF NOT EXISTS school_sync_runs_review_idx ON school_sync_runs(status, started_at);
+CREATE INDEX IF NOT EXISTS school_source_records_diff_idx ON school_source_records(snapshot_id, change_kind, parse_status);
+CREATE INDEX IF NOT EXISTS school_candidate_changes_review_idx ON school_candidate_changes(status, entity_type, created_at);
+CREATE INDEX IF NOT EXISTS school_resolution_issues_open_idx ON school_resolution_issues(status, issue_type, created_at);
+CREATE INDEX IF NOT EXISTS school_source_mappings_target_idx ON school_source_mappings(mapping_type, status, identity_id, group_id);
+CREATE INDEX IF NOT EXISTS school_source_snapshots_sync_run_idx ON school_source_snapshots(sync_run_id);
+CREATE INDEX IF NOT EXISTS school_source_snapshots_previous_idx ON school_source_snapshots(previous_snapshot_id);
+CREATE INDEX IF NOT EXISTS school_candidate_changes_source_record_idx ON school_candidate_changes(source_record_id);
+CREATE INDEX IF NOT EXISTS school_candidate_changes_decision_by_idx ON school_candidate_changes(decision_by);
+CREATE INDEX IF NOT EXISTS school_resolution_issues_sync_run_idx ON school_resolution_issues(sync_run_id);
+CREATE INDEX IF NOT EXISTS school_resolution_issues_source_record_idx ON school_resolution_issues(source_record_id);
+CREATE INDEX IF NOT EXISTS school_resolution_issues_candidate_idx ON school_resolution_issues(candidate_change_id);
+CREATE INDEX IF NOT EXISTS school_resolution_issues_resolved_by_idx ON school_resolution_issues(resolved_by);
+CREATE INDEX IF NOT EXISTS school_source_mappings_identity_idx ON school_source_mappings(identity_id);
+CREATE INDEX IF NOT EXISTS school_source_mappings_group_idx ON school_source_mappings(group_id);
+CREATE INDEX IF NOT EXISTS school_source_mappings_classroom_course_idx ON school_source_mappings(classroom_course_id);
+CREATE INDEX IF NOT EXISTS school_source_mappings_created_by_idx ON school_source_mappings(created_by);
+CREATE INDEX IF NOT EXISTS school_source_mappings_supersedes_idx ON school_source_mappings(supersedes_mapping_id);
 CREATE INDEX IF NOT EXISTS teacher_assignments_teacher_idx ON teacher_assignments(teacher_identity_id, active);
 CREATE INDEX IF NOT EXISTS teacher_assignments_group_idx ON teacher_assignments(group_id, active);
 CREATE INDEX IF NOT EXISTS homeroom_assignments_teacher_idx ON homeroom_assignments(teacher_identity_id, active);
@@ -622,7 +766,9 @@ class Database:
                      JOIN memberships m ON m.group_id = ga.group_id AND m.active IS TRUE
                      JOIN users u ON u.identity_id = m.identity_id
                      WHERE u.id = ?
-                       AND se.archived IS FALSE
+                        AND se.archived IS FALSE
+                       AND (m.valid_from IS NULL OR m.valid_from <= se.lesson_date)
+                       AND (m.valid_until IS NULL OR m.valid_until >= se.lesson_date)
                       AND NOT EXISTS (
                         SELECT 1 FROM membership_overrides mo
                          WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id
@@ -657,7 +803,9 @@ class Database:
                 connection,
                 """SELECT g.id, g.name, g.group_type, m.member_role, m.source, m.active
                      FROM memberships m JOIN groups g ON g.id = m.group_id
-                    WHERE m.identity_id = ? AND m.active IS TRUE
+                     WHERE m.identity_id = ? AND m.active IS TRUE
+                       AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                       AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                       AND NOT EXISTS (
                         SELECT 1 FROM membership_overrides mo
                          WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id
@@ -692,9 +840,11 @@ class Database:
                 connection,
                 """SELECT c.external_course_id, c.title, c.section, c.description, c.group_id, g.name AS group_name
                      FROM classroom_courses c JOIN groups g ON g.id = c.group_id
-                     JOIN memberships m ON m.group_id = g.id AND m.active IS TRUE AND m.member_role = 'teacher'
-                     JOIN users u ON u.identity_id = m.identity_id
-                    WHERE u.id = ?
+                      JOIN teacher_assignments ta ON ta.group_id = g.id AND ta.active IS TRUE
+                      JOIN users u ON u.identity_id = ta.teacher_identity_id
+                     WHERE u.id = ?
+                       AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                       AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
                     ORDER BY c.title""",
                 (user_id,),
             ).fetchall()
@@ -719,10 +869,12 @@ class Database:
             for user in users:
                 groups = self.execute(
                     connection,
-                     """SELECT g.id, g.name, g.display_name, g.group_type, m.source
-                         FROM memberships m JOIN groups g ON g.id = m.group_id
-                        WHERE m.identity_id = ? AND m.active IS TRUE
-                        ORDER BY g.name""",
+                      """SELECT g.id, g.name, g.display_name, g.group_type, m.source
+                          FROM memberships m JOIN groups g ON g.id = m.group_id
+                         WHERE m.identity_id = ? AND m.active IS TRUE
+                           AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                           AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                         ORDER BY g.name""",
                     (user["identity_id"],),
                 ).fetchall() if user["identity_id"] else []
                 roles = roles_by_user.get(user["id"], [str(user["role"])])
@@ -780,6 +932,8 @@ class Database:
                                   JOIN group_schedule_audiences ga ON ga.group_id = m.group_id AND ga.archived IS FALSE
                                  JOIN users u ON u.identity_id = m.identity_id
                                 WHERE u.id = ? AND m.active IS TRUE
+                                  AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                                  AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                                 ORDER BY g.name, ga.subject, ga.subject_subgroup, ga.exam_track""",
                     (user_id,),
                 ).fetchall()
@@ -888,7 +1042,9 @@ class Database:
                     a.audience_kind = 'all' OR a.audience_kind = ?
                     OR (a.audience_kind = 'group' AND EXISTS (
                         SELECT 1 FROM memberships m JOIN users u ON u.identity_id = m.identity_id
-                         WHERE u.id = ? AND m.active IS TRUE AND CAST(m.group_id AS TEXT) = a.audience_ref
+                          WHERE u.id = ? AND m.active IS TRUE AND CAST(m.group_id AS TEXT) = a.audience_ref
+                            AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                            AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                     ))
                 )"""
                 params = (role, user_id)
@@ -999,7 +1155,9 @@ class Database:
                      JOIN classroom_courses c ON c.id = cw.course_id
                      JOIN memberships m ON m.group_id = c.group_id AND m.active IS TRUE
                      JOIN users u ON u.identity_id = m.identity_id
-                    WHERE u.id = ?
+                     WHERE u.id = ?
+                       AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                       AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                     ORDER BY cw.due_at NULLS LAST, cw.id DESC""",
                 (user_id,),
             ).fetchall()
@@ -1046,6 +1204,12 @@ class Database:
 
     def create_membership(self, group_id: Any, identity_id: Any, member_role: str, source: str, source_ref: str = "", created_by: Any | None = None) -> Any:
         with self.connection() as connection:
+            identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (identity_id,)).fetchone()
+            group = self.execute(connection, "SELECT canonical FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if member_role != "student" or not identity or identity["kind"] != "student" or identity["status"] != "active":
+                raise ValueError("Membership requires an active student identity")
+            if not group or not group["canonical"]:
+                raise ValueError("Membership requires a canonical group")
             row = self.execute(
                 connection,
                 """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by)
@@ -1084,11 +1248,13 @@ class Database:
                 """SELECT g.id, g.name, g.display_name, g.group_type, g.subject, g.base_class_name,
                           g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref,
                           g.canonical,
-                          COUNT(DISTINCT CASE WHEN m.active IS TRUE THEN m.identity_id END) AS member_count,
-                          COUNT(DISTINCT CASE WHEN ta.active IS TRUE THEN ta.teacher_identity_id END) AS teacher_count
-                     FROM groups g
-                     LEFT JOIN memberships m ON m.group_id = g.id
-                     LEFT JOIN teacher_assignments ta ON ta.group_id = g.id
+                           COUNT(DISTINCT m.identity_id) AS member_count,
+                           COUNT(DISTINCT ta.teacher_identity_id) AS teacher_count
+                      FROM groups g
+                      LEFT JOIN memberships m ON m.group_id = g.id AND m.active IS TRUE
+                        AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE) AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                      LEFT JOIN teacher_assignments ta ON ta.group_id = g.id AND ta.active IS TRUE
+                        AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
                     GROUP BY g.id, g.name, g.group_type
                     ORDER BY g.group_type, g.name""",
             ).fetchall()
@@ -1126,11 +1292,17 @@ class Database:
 
     def set_teacher_assignment(self, teacher_identity_id: Any, group_id: Any, subject: str, active: bool, actor_user_id: Any, *, base_class_name: str | None = None, subject_subgroup: str | None = None, classroom_course_id: Any | None = None, exam_track: str | None = None) -> Any:
         with self.connection() as connection:
+            identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
+            group = self.execute(connection, "SELECT canonical FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
+                raise ValueError("Teacher assignment requires an active teacher identity")
+            if not group or not group["canonical"]:
+                raise ValueError("Teacher assignment requires a canonical group")
             row = self.execute(
                 connection,
                 """INSERT INTO teacher_assignments(teacher_identity_id, group_id, subject, base_class_name, subject_subgroup, classroom_course_id, exam_track, source, active, created_by)
                    VALUES (?, ?, ?, ?, ?, ?, ?, 'admin_override', ?, ?)
-                   ON CONFLICT(teacher_identity_id, group_id, subject, capability, source)
+                   ON CONFLICT(teacher_identity_id, group_id, subject, capability, source, source_ref)
                    DO UPDATE SET base_class_name = excluded.base_class_name, subject_subgroup = excluded.subject_subgroup,
                      classroom_course_id = excluded.classroom_course_id, exam_track = excluded.exam_track,
                      active = excluded.active, created_by = excluded.created_by
@@ -1141,11 +1313,17 @@ class Database:
 
     def set_homeroom_assignment(self, teacher_identity_id: Any, group_id: Any, active: bool, actor_user_id: Any) -> Any:
         with self.connection() as connection:
+            identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
+            group = self.execute(connection, "SELECT group_type, canonical FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
+                raise ValueError("Homeroom assignment requires an active teacher identity")
+            if not group or group["group_type"] != "class" or not group["canonical"]:
+                raise ValueError("Homeroom assignment requires a canonical class group")
             row = self.execute(
                 connection,
                 """INSERT INTO homeroom_assignments(teacher_identity_id, class_group_id, source, active, created_by)
                    VALUES (?, ?, 'admin_override', ?, ?)
-                   ON CONFLICT(teacher_identity_id, class_group_id, source)
+                   ON CONFLICT(teacher_identity_id, class_group_id, source, source_ref)
                    DO UPDATE SET active = excluded.active, created_by = excluded.created_by
                    RETURNING id""",
                 (teacher_identity_id, group_id, active, actor_user_id),
@@ -1158,11 +1336,12 @@ class Database:
                 connection,
                 """SELECT 1 FROM users u
                      WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
-                       EXISTS (SELECT 1 FROM teacher_assignments ta WHERE ta.teacher_identity_id = u.identity_id AND ta.group_id = ? AND ta.active IS TRUE)
-                       OR EXISTS (SELECT 1 FROM memberships m WHERE m.identity_id = u.identity_id AND m.group_id = ? AND m.member_role = 'teacher' AND m.active IS TRUE)
-                       OR EXISTS (SELECT 1 FROM homeroom_assignments h WHERE h.teacher_identity_id = u.identity_id AND h.class_group_id = ? AND h.active IS TRUE)
+                       EXISTS (SELECT 1 FROM teacher_assignments ta WHERE ta.teacher_identity_id = u.identity_id AND ta.group_id = ? AND ta.active IS TRUE
+                         AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE))
+                       OR EXISTS (SELECT 1 FROM homeroom_assignments h WHERE h.teacher_identity_id = u.identity_id AND h.class_group_id = ? AND h.active IS TRUE
+                         AND (h.valid_from IS NULL OR h.valid_from <= CURRENT_DATE) AND (h.valid_until IS NULL OR h.valid_until >= CURRENT_DATE))
                      )""",
-                (user_id, group_id, group_id, group_id),
+                 (user_id, group_id, group_id),
             ).fetchone()
             return bool(row)
 
@@ -1176,16 +1355,20 @@ class Database:
                           ta.classroom_course_id AS classroom_course_id,
                           COALESCE(ta.exam_track, '') AS exam_track,
                           CASE WHEN h.id IS NULL THEN FALSE ELSE TRUE END AS is_homeroom,
-                          COUNT(DISTINCT CASE WHEN sm.active IS TRUE AND sm.member_role = 'student' THEN sm.identity_id END) AS student_count
+                           COUNT(DISTINCT sm.identity_id) AS student_count
                      FROM users u
                      JOIN groups g ON (
-                       EXISTS (SELECT 1 FROM teacher_assignments x WHERE x.teacher_identity_id = u.identity_id AND x.group_id = g.id AND x.active IS TRUE)
-                       OR EXISTS (SELECT 1 FROM memberships tm WHERE tm.identity_id = u.identity_id AND tm.group_id = g.id AND tm.member_role = 'teacher' AND tm.active IS TRUE)
-                       OR EXISTS (SELECT 1 FROM homeroom_assignments hx WHERE hx.teacher_identity_id = u.identity_id AND hx.class_group_id = g.id AND hx.active IS TRUE)
+                        EXISTS (SELECT 1 FROM teacher_assignments x WHERE x.teacher_identity_id = u.identity_id AND x.group_id = g.id AND x.active IS TRUE
+                          AND (x.valid_from IS NULL OR x.valid_from <= CURRENT_DATE) AND (x.valid_until IS NULL OR x.valid_until >= CURRENT_DATE))
+                        OR EXISTS (SELECT 1 FROM homeroom_assignments hx WHERE hx.teacher_identity_id = u.identity_id AND hx.class_group_id = g.id AND hx.active IS TRUE
+                          AND (hx.valid_from IS NULL OR hx.valid_from <= CURRENT_DATE) AND (hx.valid_until IS NULL OR hx.valid_until >= CURRENT_DATE))
                      )
                      LEFT JOIN teacher_assignments ta ON ta.teacher_identity_id = u.identity_id AND ta.group_id = g.id AND ta.active IS TRUE
+                       AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
                      LEFT JOIN homeroom_assignments h ON h.teacher_identity_id = u.identity_id AND h.class_group_id = g.id AND h.active IS TRUE
-                     LEFT JOIN memberships sm ON sm.group_id = g.id
+                       AND (h.valid_from IS NULL OR h.valid_from <= CURRENT_DATE) AND (h.valid_until IS NULL OR h.valid_until >= CURRENT_DATE)
+                      LEFT JOIN memberships sm ON sm.group_id = g.id AND sm.active IS TRUE AND sm.member_role = 'student'
+                        AND (sm.valid_from IS NULL OR sm.valid_from <= CURRENT_DATE) AND (sm.valid_until IS NULL OR sm.valid_until >= CURRENT_DATE)
                     WHERE u.id = ?
                      GROUP BY g.id, g.name, g.display_name, g.group_type, ta.subject, ta.base_class_name, ta.subject_subgroup, ta.classroom_course_id, ta.exam_track, h.id
                     ORDER BY is_homeroom DESC, g.name""",
@@ -1199,7 +1382,9 @@ class Database:
                 connection,
                 """SELECT i.id, i.display_name, i.class_name, m.source
                      FROM memberships m JOIN identities i ON i.id = m.identity_id
-                    WHERE m.group_id = ? AND m.member_role = 'student' AND m.active IS TRUE
+                     WHERE m.group_id = ? AND m.member_role = 'student' AND m.active IS TRUE
+                       AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                       AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                       AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = i.id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE)
                     ORDER BY i.display_name""",
                 (group_id,),
@@ -1217,7 +1402,9 @@ class Database:
                      JOIN teacher_assignments ta ON ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
                      JOIN group_schedule_audiences ga ON ga.group_id = ta.group_id
                      JOIN schedule_entries se ON se.audience = ga.audience AND se.archived IS FALSE
-                     WHERE u.id = ? AND ga.archived IS FALSE AND {date_range} AND (ta.subject = '' OR ta.subject = se.subject)
+                      WHERE u.id = ? AND ga.archived IS FALSE AND {date_range} AND (ta.subject = '' OR ta.subject = se.subject)
+                       AND (ta.valid_from IS NULL OR ta.valid_from <= se.lesson_date)
+                       AND (ta.valid_until IS NULL OR ta.valid_until >= se.lesson_date)
                     ORDER BY se.lesson_date, se.start_time, se.subject""",
                 (user_id, start_day, end_day, start_day),
             ).fetchall()
@@ -1362,13 +1549,16 @@ class Database:
                 connection,
                 """INSERT INTO journal_group_mappings(source_id, group_marker, group_id, base_class_name, subject_subgroup, classroom_course_id, exam_track, source, created_by)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_id, group_marker) DO UPDATE SET
-                     group_id = excluded.group_id, base_class_name = excluded.base_class_name,
-                     subject_subgroup = excluded.subject_subgroup, classroom_course_id = excluded.classroom_course_id,
-                     exam_track = excluded.exam_track, source = excluded.source, created_by = excluded.created_by
-                   RETURNING id""",
+                      group_id = excluded.group_id, base_class_name = excluded.base_class_name,
+                      subject_subgroup = excluded.subject_subgroup, classroom_course_id = excluded.classroom_course_id,
+                      exam_track = excluded.exam_track, source = excluded.source, created_by = excluded.created_by
+                    WHERE journal_group_mappings.source <> 'admin_override' OR excluded.source = 'admin_override'
+                    RETURNING id""",
                 (source_id, group_marker, group_id, base_class_name, subject_subgroup, classroom_course_id, exam_track, source, actor_user_id),
             ).fetchone()
-            return self.execute(connection, "SELECT * FROM journal_group_mappings WHERE id = ?", (row["id"],)).fetchone()
+            if row:
+                return self.execute(connection, "SELECT * FROM journal_group_mappings WHERE id = ?", (row["id"],)).fetchone()
+            return self.execute(connection, "SELECT * FROM journal_group_mappings WHERE source_id = ? AND group_marker = ?", (source_id, group_marker)).fetchone()
 
     def journal_group_marker_exists(self, source_id: Any, group_marker: str) -> bool:
         with self.connection() as connection:
@@ -1435,6 +1625,8 @@ class Database:
                       EXISTS (
                         SELECT 1 FROM teacher_assignments ta
                          WHERE ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
+                           AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                           AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
                            AND (ta.subject = '' OR lower(ta.subject) = lower(js.subject))
                            AND (
                              ta.group_id = gm.group_id
@@ -1443,11 +1635,6 @@ class Database:
                            AND (ta.base_class_name IS NULL OR ta.base_class_name = gm.base_class_name)
                            AND (ta.classroom_course_id IS NULL OR ta.classroom_course_id = gm.classroom_course_id)
                            AND (ta.exam_track IS NULL OR ta.exam_track = gm.exam_track)
-                      )
-                      OR EXISTS (
-                        SELECT 1 FROM memberships m
-                         WHERE m.identity_id = u.identity_id AND m.group_id = gm.group_id
-                           AND m.member_role = 'teacher' AND m.active IS TRUE
                       )
                     )""",
                 (source_id, group_marker, user_id),

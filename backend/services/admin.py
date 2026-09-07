@@ -28,8 +28,8 @@ def add_membership(
     source_ref: str = "",
     created_by: Any | None = None,
 ) -> Any:
-    if member_role not in {"student", "teacher"}:
-        raise ValueError("Membership role must be student or teacher")
+    if member_role != "student":
+        raise ValueError("Student membership cannot grant teacher responsibility; use a teacher assignment")
     return database.create_membership(group_id, identity_id, member_role, source, source_ref, created_by)
 
 
@@ -54,8 +54,8 @@ def map_schedule_scope(
 
 
 def override_membership(database: Database, identity_id: Any, group_id: Any, member_role: str, action: str, actor_user_id: Any, reason: str = "") -> Any:
-    if member_role not in {"student", "teacher"}:
-        raise ValueError("Membership role must be student or teacher")
+    if member_role != "student":
+        raise ValueError("Membership override is only valid for a student membership")
     if action not in {"include", "exclude"}:
         raise ValueError("Membership override action must be include or exclude")
     identity = database.get_identity(identity_id)
