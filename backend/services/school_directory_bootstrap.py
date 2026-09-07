@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 from .school_data import stable_fingerprint
+from .identity_reconciliation import IdentityCandidate, Resolution, SourceObservation, resolve_identity
 
 
 def clean_name(value: Any) -> str:
@@ -75,6 +76,18 @@ class BootstrapDiff:
         return bool(self.reasons)
 
 
+def reconcile_source_person(
+    source_name: str,
+    canonical_people: Iterable[IdentityCandidate],
+    *,
+    class_name: str | None = None,
+    source_ref: str = "",
+    observations: Iterable[SourceObservation] = (),
+) -> Resolution:
+    """Shared apply-layer entry point; parsers never create canonical people."""
+    return resolve_identity(source_name, canonical_people, class_name=class_name, source_ref=source_ref, observations=observations)
+
+
 def _cell(rows: Sequence[Sequence[Any]], row: int, col: int) -> str:
     if row >= len(rows) or col >= len(rows[row]):
         return ""
@@ -113,10 +126,10 @@ def parse_group_rosters(rows: Sequence[Sequence[Any]]) -> tuple[list[DirectoryGr
     issues: list[DirectoryIssue] = []
 
     # Each block has subject row, class row, label row, then names in even columns.
-    blocks = [(2, 3, 4, "Математика"), (23, 24, 25, "Английский язык"), (47, 48, 49, "Обществознание"),
-              (47, 48, 49, "Литература"), (47, 48, 49, "География"), (69, 70, 71, "Биология"),
-              (69, 70, 71, "Физика"), (69, 70, 71, "Химия"), (84, 85, 86, "История"), (84, 85, 86, "Информатика")]
-    for subject_row, class_row, label_row, subject in blocks:
+    blocks = [(2, 3, 4, 17, "Математика"), (23, 24, 25, 41, "Английский язык"), (47, 48, 49, 66, "Обществознание"),
+              (47, 48, 49, 66, "Литература"), (47, 48, 49, 66, "География"), (69, 70, 71, 79, "Биология"),
+              (69, 70, 71, 79, "Физика"), (69, 70, 71, 79, "Химия"), (84, 85, 86, 98, "История"), (84, 85, 86, 98, "Информатика")]
+    for subject_row, class_row, label_row, end_row, subject in blocks:
         # subject headings are sparse; use the columns whose heading matches this block.
         for col in range(1, max((len(r) for r in rows), default=0), 2):
             heading = _cell(rows, subject_row, col)
@@ -125,16 +138,21 @@ def parse_group_rosters(rows: Sequence[Sequence[Any]]) -> tuple[list[DirectoryGr
             if not heading:
                 # A block may have one heading only; stop at a blank run when the requested subject is not present.
                 continue
-            class_label = _cell(rows, class_row, col)
             label = _cell(rows, label_row, col)
+            class_label = _cell(rows, class_row, col)
+            if not class_label:
+                for previous in range(col - 2, -1, -2):
+                    class_label = _cell(rows, class_row, previous)
+                    if class_label:
+                        break
+            if not class_label and subject == "Математика" and re.match(r"^9-", label, re.I):
+                class_label = "9 класс"
             if not class_label or not label:
                 continue
             group_key = f"subject:{_subject_slug(subject)}:{class_label}:{label}"
             group_type = "subject_group" if "ОГЭ" not in label and "ЕГЭ" not in label else "exam_track"
             groups.append(DirectoryGroup(group_key, group_type, f"{subject} · {class_label} · {label}", subject=subject, base_class_name=class_label.replace(" класс", ""), subject_subgroup=label, exam_track=("ОГЭ" if "ОГЭ" in label else "ЕГЭ" if "ЕГЭ" in label else None), source_ref=f"списки групп 26-27!{chr(65 + col)}{label_row + 1}"))
-            for row in range(label_row + 1, len(rows)):
-                if not any(str(value or "").strip() for value in rows[row]):
-                    break
+            for row in range(label_row + 1, min(end_row, len(rows))):
                 person = _cell(rows, row, col)
                 if not person:
                     continue
@@ -143,14 +161,20 @@ def parse_group_rosters(rows: Sequence[Sequence[Any]]) -> tuple[list[DirectoryGr
     for subject, header_row, label_row, cols in (("Математика", 3, 4, (1,3,5,7,9,11,13,15,17,19,21)), ("Английский язык",24,25,(1,3,5,7,9,11,13,15,17,19))):
         for col in cols:
             class_label, label = _cell(rows, header_row, col), _cell(rows, label_row, col)
+            if not class_label:
+                for previous in reversed([candidate for candidate in cols if candidate < col]):
+                    class_label = _cell(rows, header_row, previous)
+                    if class_label:
+                        break
+            if not class_label and subject == "Математика" and re.match(r"^9-", label, re.I):
+                class_label = "9 класс"
             if not class_label or not label:
                 continue
             group_key = f"subject:{_subject_slug(subject)}:{class_label}:{label}"
-            subgroup = label.split(" ", 1)[0] if label.split(" ", 1)[0].isdigit() or label.split(" ", 1)[0].upper() in {"A", "B", "C"} else label
+            subgroup_match = re.match(r"^9-([ABC])", label, re.IGNORECASE)
+            subgroup = subgroup_match.group(1).upper() if subgroup_match else (label.split(" ", 1)[0] if label.split(" ", 1)[0].isdigit() or label.split(" ", 1)[0].upper() in {"A", "B", "C"} else label)
             groups.append(DirectoryGroup(group_key, "subject_group", f"{subject} · {class_label} · {label}", subject=subject, base_class_name=class_label.replace(" класс", ""), subject_subgroup=subgroup, source_ref=f"списки групп 26-27!{chr(65 + col)}{label_row + 1}"))
-            for row in range(label_row + 1, len(rows)):
-                if not any(str(value or "").strip() for value in rows[row]):
-                    break
+            for row in range(label_row + 1, min(41 if subject == "Английский язык" else 17, len(rows))):
                 person = _cell(rows, row, col)
                 if person:
                     memberships.append(DirectoryMembership(person, group_key, f"списки групп 26-27!{chr(65 + col)}{row + 1}"))

@@ -8,6 +8,7 @@ from backend.services.school_directory_bootstrap import (
     clean_name,
     name_without_note,
     parse_class_lists,
+    parse_group_rosters,
 )
 
 
@@ -42,6 +43,19 @@ class SchoolDirectoryBootstrapTests(unittest.TestCase):
             person = next(item for item in people if item["display_name"] == "Каталог Ученик")
             self.assertFalse(person["has_account"])
             self.assertEqual(person["groups"][0]["name"], "6")
+
+    def test_group_parser_propagates_merged_grade_heading_and_keeps_blank_rows(self):
+        rows = [[] for _ in range(18)]
+        for row in rows:
+            row.extend([None] * 22)
+        rows[2][1] = "Математика"
+        rows[3][11] = "9 класс"
+        rows[4][11], rows[4][13], rows[4][15] = "9-A Дмитрий", "9-B Дмитрий", "9-C Дмитрий"
+        rows[5][11], rows[5][13], rows[5][15] = "Иванов Иван", "Петров Пётр", "Сидоров Саша"
+        rows[6][13] = "Второй Б"
+        groups, memberships, _ = parse_group_rosters(rows)
+        self.assertEqual({item.subject_subgroup for item in groups if item.subject == "Математика"}, {"A", "B", "C"})
+        self.assertEqual(len([item for item in memberships if item.group.endswith(":9 класс:9-B Дмитрий")]), 2)
 
 
 if __name__ == "__main__":

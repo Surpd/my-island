@@ -34,3 +34,9 @@ The current spreadsheet `Расписание 2026/27` was inspected directly. T
 - `ОГЭ/ЕГЭ` — exam/profile choices and Grade 9 Math A/B/C markers.
 
 `учебные планы` is a structural cross-check only; it is not used to invent student memberships. Teacher headers in the group tab often contain only a first name, initials, or a group label, so they remain review evidence and do not create teacher identities/assignments. The bootstrap preserves only the known-good Dmitry Filippov A/B/C assignments.
+
+## Confirmed reconciliation follow-up (2026-09-07)
+
+The live group parser now propagates merged headings and uses explicit block boundaries, so blank cells in one roster column do not truncate neighboring rosters. All 42 instructional groups (312 source roster records) reconcile with zero unresolved memberships. Grade 9 Math is A=5, B=11, C=12; old 9-1/9-2/9-3 runtime groups remain absent.
+
+The identity resolver uses normalized names, confirmed source observations, and Russian short-name variants with class/group context. Four confirmed duplicate pairs were merged while preserving historical memberships and source observations. Source disappearance is generic: the stale `Федя` base-list relationship was ended from the live snapshot and the orphaned imported identity was inactivated without merging it into Иващенко Фёдор. Only three missing base-class links remain for human review (Иващенко Фёдор, Нестерова Алиса, Холодова Татьяна).

@@ -47,10 +47,22 @@ for col,cls in ((0,"5"),(2,"6"),(4,"7"),(6,"8"),(8,"9-Д"),(10,"9-А"),(12,"10")
         if n and not re.fullmatch(r"(?:true|false|\d+)",n,re.I): add_member(n,gkey,"Списки по классам 26/27!"+letter(col+1)+str(r+1),cls)
 
 tab=raw["groups"]
-def roster(subject,cr,lr,cols):
+def roster(subject,cr,lr,cols,end_row):
     for col in cols:
-        cls=clean(tab[cr][col] if col<len(tab[cr]) else "")
         label=clean(tab[lr][col] if col<len(tab[lr]) else "")
+        cls=clean(tab[cr][col] if col<len(tab[cr]) else "")
+        # Google Sheets uses merged headings: only the first column of a
+        # multi-column block contains the grade. Carry it to adjacent groups.
+        if not cls:
+            for previous in reversed(cols):
+                if previous >= col: continue
+                candidate=clean(tab[cr][previous] if previous<len(tab[cr]) else "")
+                if candidate:
+                    cls=candidate
+                    break
+        if not cls and subject == "Математика":
+            match=re.match(r"^9-", label, re.I)
+            if match: cls="9 класс"
         if not cls or not label: continue
         mm=re.match(r"^9-([ABC])",label,re.I) if subject=="Математика" else None
         if mm:
@@ -62,22 +74,21 @@ def roster(subject,cr,lr,cols):
         add_group(g)
         hint=re.sub(r"^[0-9]+\s*","",label).strip()
         if hint: teacher_hints.setdefault(hint,[]).append(g["source_ref"])
-        for r in range(lr+1,len(tab)):
-            if not any(clean(x) for x in tab[r]): break
+        for r in range(lr+1,min(end_row,len(tab))):
             n=clean(tab[r][col] if col<len(tab[r]) else "")
             roster_cls=cls.replace(" класс","")
             if roster_cls == "9": roster_cls=None
             if n: add_member(n,gkey,"списки групп 26-27!"+letter(col)+str(r+1),roster_cls)
-roster("Математика",3,4,[1,3,5,7,9,11,13,15,17,19,21])
-roster("Английский язык",24,25,[1,3,5,7,9,11,13,15,17,19])
-roster("Обществознание",48,49,[1,3])
-roster("Литература",48,49,[13,15,17])
-roster("География",48,49,[19])
-roster("Биология",70,71,[1,3,5])
-roster("Физика",70,71,[7,9,11])
-roster("Химия",70,71,[13,15])
-roster("История",85,86,[1,3,5])
-roster("Информатика",85,86,[9,11,13,15])
+roster("Математика",3,4,[1,3,5,7,9,11,13,15,17,19,21],17)
+roster("Английский язык",24,25,[1,3,5,7,9,11,13,15,17,19],41)
+roster("Обществознание",48,49,[1,3],66)
+roster("Литература",48,49,[13,15,17],66)
+roster("География",48,49,[19],66)
+roster("Биология",70,71,[1,3,5],79)
+roster("Физика",70,71,[7,9,11],79)
+roster("Химия",70,71,[13,15],79)
+roster("История",85,86,[1,3,5],98)
+roster("Информатика",85,86,[9,11,13,15],98)
 
 exam=raw["exam"]
 for ri,row in enumerate(exam):

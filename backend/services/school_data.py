@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -60,6 +62,77 @@ class SemanticProvider(Protocol):
     def model_name(self) -> str: ...
 
     def interpret(self, request: SemanticRequest) -> SemanticResponse: ...
+
+
+class GroqSemanticProvider:
+    """Optional backend-only Groq fallback.
+
+    The provider returns a proposal only.  Callers must validate it with the
+    deterministic reconciliation gate before touching canonical data.
+    """
+
+    provider_name = "groq"
+
+    def __init__(self, *, api_key: str | None = None, model: str | None = None, timeout: float = 15.0):
+        self._api_key = os.getenv("GROQ_API_KEY", "") if api_key is None else api_key
+        self._configured_model = os.getenv("GROQ_MODEL", "") if model is None else model
+        self.timeout = timeout
+        self._model = self._configured_model or ""
+
+    @property
+    def model_name(self) -> str:
+        return self._model or "runtime-selected"
+
+    def available_models(self) -> list[str]:
+        if not self._api_key:
+            return []
+        request = urllib.request.Request(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {self._api_key}", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        models = [str(item.get("id")) for item in payload.get("data", []) if item.get("id")]
+        if self._configured_model and self._configured_model in models:
+            self._model = self._configured_model
+        elif models:
+            preferred = [item for item in models if any(token in item.lower() for token in ("llama", "qwen", "compound"))]
+            self._model = sorted(preferred or models)[0]
+        return models
+
+    def interpret(self, request: SemanticRequest) -> SemanticResponse:
+        if not self._api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured")
+        if not self._model:
+            self.available_models()
+        if not self._model:
+            raise RuntimeError("Groq returned no usable models")
+        prompt = {
+            "source_type": request.source_type,
+            "record_key": request.record_key,
+            "structural_payload": request.structural_payload,
+            "raw_payload": request.raw_payload,
+            "instruction": "Return JSON only: identity_id, confidence, evidence, reason. Do not invent identities.",
+        }
+        body = json.dumps({
+            "model": self._model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": "You are a conservative school-directory reconciliation assistant."},
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+            ],
+        }).encode("utf-8")
+        request_obj = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request_obj, timeout=self.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        content = payload["choices"][0]["message"]["content"]
+        return SemanticResponse(self.provider_name, self._model, json.loads(content))
 
 
 def validate_candidate_change(candidate: Mapping[str, Any]) -> None:
