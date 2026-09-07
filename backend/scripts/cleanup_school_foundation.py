@@ -60,12 +60,11 @@ def _print_inventory(inventory: dict[str, object]) -> None:
 
 def _backfill_group_metadata(connection: psycopg.Connection) -> None:
     values = [
-        ("Математика · группа A (9 класс)", "Математика", "9 класс", "A", None, "journal_mapping", "journal:9-1", "9-1 Дмитрий", "subject_subgroup"),
-        ("Математика · группа B (9 класс)", "Математика", "9 класс", "B", None, "journal_mapping", "journal:9-2", "9-2 Дмитрий", "subject_subgroup"),
-        ("Математика · группа C (9 класс)", "Математика", "9 класс", "C", None, "journal_mapping", "journal:9-3", "9-3 Дмитрий", "subject_subgroup"),
+        ("Математика · группа A · 9 класс", "Математика", None, "A", None, "school_structure", "grade9:math:A", "grade9-math-A", "subject_group"),
+        ("Математика · группа B · 9 класс", "Математика", None, "B", None, "school_structure", "grade9:math:B", "grade9-math-B", "subject_group"),
+        ("Математика · группа C · 9 класс", "Математика", None, "C", None, "school_structure", "grade9:math:C", "grade9-math-C", "subject_group"),
         ("9-Д · базовый класс", None, "9-Д", None, None, "admin_override", "confirmed_student_membership", "9-Д", "class"),
         ("9-Д · Информатика · ОГЭ", "Информатика", "9-Д", None, "ОГЭ", "admin_override", "confirmed_student_membership", "9-Д / Информатика ОГЭ", "exam_track"),
-        ("Математика · группа C · Classroom", "Математика", None, "C", None, "classroom_mapping", "course:800979670564", "9-C Математика Дмитрий", "class"),
     ]
     with connection.cursor() as cursor:
         for display_name, subject, base_class, subgroup, exam_track, source, source_ref, name, group_type in values:

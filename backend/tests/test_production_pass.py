@@ -31,10 +31,10 @@ class JournalTests(unittest.TestCase):
         ["Задание", "Входное тестирование", "ДЗ", "Итого"],
         ["Вес", "2", "1", ""],
         ["Оценка", "10", "5", ""],
-        ["9-1", "", "", ""],
+        ["A", "", "", ""],
         ["Иванов Иван", "8,5", "н", "8,5"],
         ["Петрова Анна", "10", "5", "15"],
-        ["9-2", "", "", ""],
+        ["B", "", "", ""],
         ["Сидоров Пётр", "7", "4", "11"],
     ]
 
@@ -49,7 +49,7 @@ class JournalTests(unittest.TestCase):
         self.assertEqual((absence["numeric_score"], absence["status"]), (None, "н"))
 
     def test_roster_keeps_student_with_no_scores_yet(self):
-        values = [*self.VALUES, ["9-3", "", "", ""], ["Новая Ученица", "", "", ""]]
+        values = [*self.VALUES, ["C", "", "", ""], ["Новая Ученица", "", "", ""]]
         parsed = parse_journal_values(values, grade=9, subject="Математика", sheet_title="Математика")
         self.assertIn("Новая Ученица", {student["student_name"] for student in parsed["students"]})
         self.assertNotIn("Новая Ученица", {result["student_name"] for result in parsed["results"]})
@@ -68,8 +68,8 @@ class JournalTests(unittest.TestCase):
             database.set_teacher_assignment(teacher_identity, group["id"], "Математика", True, teacher_user)
             counts = sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
             source_id = database.journal_status()[0]["id"]
-            database.map_journal_group(source_id, "9-1", group["id"], teacher_user)
-            database.map_journal_group(source_id, "9-2", None, teacher_user, subject_subgroup="B", source="school_mapping")
+            database.map_journal_group(source_id, "A", group["id"], teacher_user)
+            database.map_journal_group(source_id, "B", None, teacher_user, subject_subgroup="B", source="school_mapping")
             database.set_teacher_assignment(teacher_identity, group["id"], "Математика", True, teacher_user, subject_subgroup="B")
             status = database.journal_status()[0]
             view = journal_view(database.list_group_journal(group["id"]))
@@ -77,17 +77,26 @@ class JournalTests(unittest.TestCase):
             self.assertEqual(counts["roster_students"], 3)
             self.assertEqual(counts["linked_students"], 1)
             self.assertEqual(counts["mapped_results"], 2)
-            self.assertEqual(status["markers"], ["9-1", "9-2"])
+            self.assertEqual(status["markers"], ["A", "B"])
             self.assertEqual(status["roster_student_count"], 3)
             self.assertEqual(status["account_unlinked_count"], 4)
             self.assertEqual(status["mappings"][0]["group_name"], "Math A")
-            subgroup_mapping = next(item for item in status["mappings"] if item["group_marker"] == "9-2")
+            subgroup_mapping = next(item for item in status["mappings"] if item["group_marker"] == "B")
             self.assertEqual((subgroup_mapping["group_id"], subgroup_mapping["subject_subgroup"]), (None, "B"))
-            self.assertTrue(database.teacher_can_access_journal_marker(teacher_user, source_id, "9-2"))
-            self.assertFalse(database.teacher_can_access_journal_marker(teacher_user, source_id, "9-3"))
+            self.assertTrue(database.teacher_can_access_journal_marker(teacher_user, source_id, "B"))
+            self.assertFalse(database.teacher_can_access_journal_marker(teacher_user, source_id, "C"))
             self.assertEqual(view["students"][0]["name"], "Иванов Иван")
             self.assertIn("Петрова Анна", {student["name"] for student in view["students"]})
             self.assertEqual(view["analytics"]["average"], 7.83)
+
+    def test_legacy_grade_nine_math_markers_normalize_to_confirmed_groups(self):
+        parsed = parse_journal_values(
+            [["Дата", "01.09"], ["Задание", "ДЗ"], ["Вес", "1"], ["Оценка", "5"], ["9-1"], ["Иванов Иван", "5"]],
+            grade=9,
+            subject="Математика",
+            sheet_title="Математика",
+        )
+        self.assertEqual(parsed["students"][0]["group_marker"], "A")
 
     def test_journal_failure_marks_health_without_deleting_last_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:

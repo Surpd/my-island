@@ -10,7 +10,7 @@ from backend.database import Database
 
 
 SUMMARY_HEADERS = {"итого", "допуск", "оценка", "итоговая", "пропущенные весы"}
-GROUP_MARKER_RE = re.compile(r"^\d{1,2}-\d{1,2}$")
+GROUP_MARKER_RE = re.compile(r"^(?:\d{1,2}-\d{1,2}|[ABC])$", re.IGNORECASE)
 
 
 def column_name(index: int) -> str:
@@ -24,6 +24,13 @@ def column_name(index: int) -> str:
 
 def _normalized(value: object) -> str:
     return " ".join(str(value or "").strip().casefold().split())
+
+
+def _canonical_group_marker(marker: str, *, grade: int, subject: str) -> str:
+    """Keep confirmed Grade 9 Mathematics groups in the A/B/C vocabulary."""
+    if grade == 9 and _normalized(subject) in {"математика", "math"}:
+        return {"9-1": "A", "9-2": "B", "9-3": "C"}.get(marker, marker.upper())
+    return marker.upper() if marker.casefold() in {"a", "b", "c"} else marker
 
 
 def _number(value: object) -> float | None:
@@ -113,7 +120,7 @@ def parse_journal_values(values: Sequence[Sequence[object]], *, grade: int, subj
         if not first:
             continue
         if GROUP_MARKER_RE.fullmatch(first):
-            group_marker = first
+            group_marker = _canonical_group_marker(first, grade=grade, subject=subject)
             continue
         if not group_marker or _normalized(first) in SUMMARY_HEADERS:
             continue

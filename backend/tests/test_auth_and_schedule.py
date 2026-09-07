@@ -327,7 +327,7 @@ class ClassroomSyncTests(unittest.TestCase):
                     "INSERT INTO users(telegram_user_id, role, identity_id) VALUES (4242, 'teacher', ?) RETURNING id",
                     (identity_id,),
                 ).fetchone()[0]
-            group = database.create_group("9-1 Дмитрий", "subject_subgroup")
+            group = database.create_group("grade9-math-A", "subject_group")
             database.set_teacher_assignment(identity_id, group["id"], "Математика", True, user_id, subject_subgroup="A")
             profile = database.get_teacher_profile(user_id)
             self.assertEqual(profile["user"]["display_name"], "Дмитрий Филиппов")
