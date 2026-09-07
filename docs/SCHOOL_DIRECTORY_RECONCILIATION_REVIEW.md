@@ -37,4 +37,10 @@
 - Alias pairs Горлова и Мищенко не дублируются.
 - Production groups API сохраняет active student rosters и показывает manual/source distinction.
 
+## Проверка пяти случайных учеников
+
+Проверены `Бруннер Агата` (11), `Куренков Иван` (9-Д), `Николаев Максим` (6), `Парамонов Женя` (6) и `Турчин Алексей` (7). Для каждого найден ровно один base-class membership; instructional и exam/profile memberships отделены по `group_type` и имеют source refs. У Куренкова обнаружился один лишний active `admin_override` row на тот же base class 9-Д — он деактивирован как дубль, исходная official membership сохранена. Manual Math C membership сохранена отдельно. Дополнительно подтверждены связи Куренкова: English `9 класс · 7 Ангелина` (`списки групп 26-27!N30`), Social base (`B56`), Physics/Chemistry OGE (`H76`/`N74`) и Informatics OGE (`L88`).
+
+При этой проверке обнаружена системная ошибка первого применения: валидированные English membership records для групп 4, 5, 7, 8 и 10 существовали, но соответствующие group rows отсутствовали. Это не было проблемой источника или отдельных учеников; добавлены только пять групп, явно подтверждённых заголовками `H26/J26/N26/P26/T26`, и их однозначные memberships. Короткие имена `Маша/Оля/Катя` сопоставлены только там, где уже есть canonical identity mapping; остальные identities не создавались.
+
 Короткие teacher labels (`Иван`, `Мария`, `Ангелина`, `Игорь`, `Тарас`, `Антон`, `Юлия`, `ЕВ`, `ИА`) по-прежнему являются source metadata, а не canonical teachers или assignments.

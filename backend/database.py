@@ -976,8 +976,9 @@ class Database:
                         ORDER BY g.group_type, g.name""",
                     (identity_id,),
                 ).fetchall()
-                group_items = [dict(item) for item in groups]
-                for item in group_items:
+                group_items_by_id: dict[Any, dict[str, Any]] = {}
+                for raw_item in groups:
+                    item = dict(raw_item)
                     item["membership_kind"] = (
                         "base_class" if item["group_type"] == "class"
                         else "exam_profile" if item["group_type"] == "exam_track"
@@ -985,6 +986,19 @@ class Database:
                         else "other"
                     )
                     item["is_manual"] = item.get("source") == "admin_override"
+                    item["membership_sources"] = [item.get("source")]
+                    item["source_refs"] = [item.get("source_ref")] if item.get("source_ref") else []
+                    existing = group_items_by_id.get(item["id"])
+                    if existing is None:
+                        group_items_by_id[item["id"]] = item
+                    else:
+                        existing["is_manual"] = existing["is_manual"] or item["is_manual"]
+                        existing["membership_sources"] = sorted(set(existing["membership_sources"] + item["membership_sources"]))
+                        existing["source_refs"] = sorted(set(existing["source_refs"] + item["source_refs"]))
+                        if existing.get("source") == "admin_override" and item.get("source") != "admin_override":
+                            existing["source"] = item.get("source")
+                            existing["source_ref"] = item.get("source_ref")
+                group_items = list(group_items_by_id.values())
                 base_classes = [item for item in group_items if item["membership_kind"] == "base_class"]
                 instructional_memberships = [item for item in group_items if item["membership_kind"] == "instructional"]
                 exam_profile_memberships = [item for item in group_items if item["membership_kind"] == "exam_profile"]
@@ -1422,10 +1436,19 @@ class Database:
                         ORDER BY i.display_name""",
                     (row["id"],),
                 ).fetchall()
-                group["students"] = [
-                    {**dict(member), "is_manual": member["source"] == "admin_override"}
-                    for member in members
-                ]
+                students_by_id: dict[Any, dict[str, Any]] = {}
+                for raw_member in members:
+                    member = {**dict(raw_member), "is_manual": raw_member["source"] == "admin_override"}
+                    member["membership_sources"] = [member.get("source")]
+                    member["source_refs"] = [member.get("source_ref")] if member.get("source_ref") else []
+                    existing_member = students_by_id.get(member["id"])
+                    if existing_member is None:
+                        students_by_id[member["id"]] = member
+                    else:
+                        existing_member["is_manual"] = existing_member["is_manual"] or member["is_manual"]
+                        existing_member["membership_sources"] = sorted(set(existing_member["membership_sources"] + member["membership_sources"]))
+                        existing_member["source_refs"] = sorted(set(existing_member["source_refs"] + member["source_refs"]))
+                group["students"] = list(students_by_id.values())
                 group["teacher_assignments"] = [dict(item) for item in assignments]
                 group["relationship_kind"] = (
                     "base_class" if row["group_type"] == "class"

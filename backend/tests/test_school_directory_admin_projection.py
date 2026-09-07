@@ -32,6 +32,7 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
                 )
             database.create_membership(base["id"], student["id"], "student", "official_import", "base!A1")
             database.create_membership(instructional["id"], student["id"], "student", "official_import", "groups!A1")
+            database.create_membership(instructional["id"], student["id"], "student", "admin_override", "")
             database.create_membership(exam["id"], student["id"], "student", "official_import", "exam!A1")
             database.create_membership(base["id"], stale["id"], "student", "official_import", "base!A2")
             with database.connection() as connection:
@@ -42,6 +43,8 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             person = people[0]
             self.assertEqual(person["base_class"]["name"], "9-А")
             self.assertEqual([item["name"] for item in person["instructional_memberships"]], ["grade9-math-A"])
+            self.assertTrue(person["instructional_memberships"][0]["is_manual"])
+            self.assertEqual(len(person["groups"]), 3)
             self.assertEqual([item["name"] for item in person["exam_profile_memberships"]], ["9-А · Биология · ОГЭ"])
             self.assertEqual(len(database.list_people_library(kind="student", class_name="9-А")), 1)
             self.assertEqual(len(database.list_people_library(kind="student", group_id=instructional["id"])), 1)
