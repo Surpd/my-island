@@ -64,6 +64,23 @@ class DirectoryIssue:
 
 
 @dataclass(frozen=True)
+class DirectorySelection:
+    person: str
+    grade: str
+    subject: str
+    source_ref: str
+    selection_kind: str
+
+
+@dataclass(frozen=True)
+class ManifestItem:
+    action: str
+    natural_key: str
+    payload: Mapping[str, Any]
+    evidence: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class BootstrapDiff:
     deleted_memberships: int
     changed_memberships: int
@@ -119,38 +136,81 @@ def _subject_slug(subject: str) -> str:
     return re.sub(r"[^a-z0-9а-яё]+", "-", subject.casefold(), flags=re.IGNORECASE).strip("-")
 
 
+def carry_forward_cells(row: Sequence[Any], columns: Sequence[int]) -> dict[int, str]:
+    """Expand display values across adjacent columns covered by merged headers."""
+    current = ""
+    result: dict[int, str] = {}
+    for col in columns:
+        value = clean_name(row[col] if col < len(row) else "")
+        if value:
+            current = value
+        result[col] = current
+    return result
+
+
+def english_group_key(label: str) -> str:
+    match = re.match(r"^(\d+)\b", clean_name(label))
+    if not match:
+        raise ValueError("English group label must start with its global number")
+    return f"english:{match.group(1)}"
+
+
+def literal_true(value: Any) -> bool:
+    return clean_name(value).casefold() == "true"
+
+
+def parse_exam_selections(rows: Sequence[Sequence[Any]]) -> tuple[list[DirectorySelection], list[DirectoryIssue]]:
+    """Extract only literal TRUE checkbox facts; text remains reviewable metadata."""
+    selections: list[DirectorySelection] = []
+    issues: list[DirectoryIssue] = []
+    blocks = (("9", 1, 34), ("10", 35, 47), ("11", 47, len(rows)))
+    for grade, title_row, end_row in blocks:
+        headers = rows[title_row + 1] if title_row + 1 < len(rows) else ()
+        for row in range(title_row + 2, min(end_row, len(rows))):
+            person = _cell(rows, row, 1)
+            if not person:
+                continue
+            for col in range(2, len(headers)):
+                subject = _cell(rows, title_row + 1, col)
+                if not subject:
+                    continue
+                value = _cell(rows, row, col)
+                ref = f"ОГЭ/ЕГЭ!{chr(65 + col)}{row + 1}"
+                if literal_true(value):
+                    selections.append(DirectorySelection(person, grade, subject, ref, "oge" if grade == "9" else "ege_profile"))
+                elif value and value.casefold() != "false":
+                    issues.append(DirectoryIssue(
+                        "non_boolean_selection_value",
+                        f"selection:{grade}:{name_key(person)}:{_subject_slug(subject)}",
+                        f"'{value}' не является literal TRUE и не импортируется как выбор",
+                        (ref,),
+                    ))
+    return selections, issues
+
+
 def parse_group_rosters(rows: Sequence[Sequence[Any]]) -> tuple[list[DirectoryGroup], list[DirectoryMembership], list[DirectoryIssue]]:
     """Parse obvious roster blocks; teacher labels are evidence, not identities."""
     groups: list[DirectoryGroup] = []
     memberships: list[DirectoryMembership] = []
     issues: list[DirectoryIssue] = []
 
-    # Each block has subject row, class row, label row, then names in even columns.
-    blocks = [(2, 3, 4, 17, "Математика"), (23, 24, 25, 41, "Английский язык"), (47, 48, 49, 66, "Обществознание"),
-              (47, 48, 49, 66, "Литература"), (47, 48, 49, 66, "География"), (69, 70, 71, 79, "Биология"),
-              (69, 70, 71, 79, "Физика"), (69, 70, 71, 79, "Химия"), (84, 85, 86, 98, "История"), (84, 85, 86, 98, "Информатика")]
-    for subject_row, class_row, label_row, end_row, subject in blocks:
-        # subject headings are sparse; use the columns whose heading matches this block.
-        for col in range(1, max((len(r) for r in rows), default=0), 2):
-            heading = _cell(rows, subject_row, col)
-            if heading and heading.casefold() != subject.casefold():
-                continue
-            if not heading:
-                # A block may have one heading only; stop at a blank run when the requested subject is not present.
-                continue
+    # Sparse/merged headings apply to adjacent subgroup columns until the next value.
+    width = max((len(r) for r in rows), default=0)
+    columns = tuple(range(1, width, 2))
+    blocks = ((47, 48, 49, 66), (69, 70, 71, 79), (84, 85, 86, 98))
+    for subject_row, class_row, label_row, end_row in blocks:
+        subjects = carry_forward_cells(rows[subject_row] if subject_row < len(rows) else (), columns)
+        classes = carry_forward_cells(rows[class_row] if class_row < len(rows) else (), columns)
+        for col in columns:
+            subject = subjects[col]
             label = _cell(rows, label_row, col)
-            class_label = _cell(rows, class_row, col)
-            if not class_label:
-                for previous in range(col - 2, -1, -2):
-                    class_label = _cell(rows, class_row, previous)
-                    if class_label:
-                        break
-            if not class_label and subject == "Математика" and re.match(r"^9-", label, re.I):
-                class_label = "9 класс"
-            if not class_label or not label:
+            class_label = classes[col]
+            if not subject or not class_label or not label:
                 continue
             group_key = f"subject:{_subject_slug(subject)}:{class_label}:{label}"
-            group_type = "subject_group" if "ОГЭ" not in label and "ЕГЭ" not in label else "exam_track"
+            # This sheet is an instructional roster. OGE/EGE in the label
+            # describes the class taught, not a student's selection fact.
+            group_type = "subject_group"
             groups.append(DirectoryGroup(group_key, group_type, f"{subject} · {class_label} · {label}", subject=subject, base_class_name=class_label.replace(" класс", ""), subject_subgroup=label, exam_track=("ОГЭ" if "ОГЭ" in label else "ЕГЭ" if "ЕГЭ" in label else None), source_ref=f"списки групп 26-27!{chr(65 + col)}{label_row + 1}"))
             for row in range(label_row + 1, min(end_row, len(rows))):
                 person = _cell(rows, row, col)
@@ -170,7 +230,7 @@ def parse_group_rosters(rows: Sequence[Sequence[Any]]) -> tuple[list[DirectoryGr
                 class_label = "9 класс"
             if not class_label or not label:
                 continue
-            group_key = f"subject:{_subject_slug(subject)}:{class_label}:{label}"
+            group_key = english_group_key(label) if subject == "Английский язык" else f"subject:{_subject_slug(subject)}:{class_label}:{label}"
             subgroup_match = re.match(r"^9-([ABC])", label, re.IGNORECASE)
             subgroup = subgroup_match.group(1).upper() if subgroup_match else (label.split(" ", 1)[0] if label.split(" ", 1)[0].isdigit() or label.split(" ", 1)[0].upper() in {"A", "B", "C"} else label)
             groups.append(DirectoryGroup(group_key, "subject_group", f"{subject} · {class_label} · {label}", subject=subject, base_class_name=class_label.replace(" класс", ""), subject_subgroup=subgroup, source_ref=f"списки групп 26-27!{chr(65 + col)}{label_row + 1}"))
@@ -202,3 +262,26 @@ def assess_bulk_change(previous: Mapping[str, int], current: Mapping[str, int]) 
 
 def candidate_fingerprint(entity_type: str, natural_key: str, payload: Mapping[str, Any]) -> str:
     return stable_fingerprint({"entity_type": entity_type, "natural_key": natural_key, "payload": dict(payload)})
+
+
+def deduplicate_manifest(items: Iterable[ManifestItem]) -> list[ManifestItem]:
+    """Keep one logical action per natural key while retaining all provenance."""
+    result: dict[tuple[str, str], ManifestItem] = {}
+    for item in items:
+        key = (item.action, item.natural_key)
+        previous = result.get(key)
+        if previous is None:
+            result[key] = item
+            continue
+        refs = sorted(set(previous.evidence.get("source_refs", ())) | set(item.evidence.get("source_refs", ())))
+        result[key] = ManifestItem(item.action, item.natural_key, item.payload, {**previous.evidence, **item.evidence, "source_refs": refs})
+    return sorted(result.values(), key=lambda item: (item.action, item.natural_key))
+
+
+def render_manifest_examples(items: Iterable[ManifestItem]) -> str:
+    """Render from manifest objects so examples cannot diverge from computed actions."""
+    rows = ["| Action | Natural key | Evidence |", "|---|---|---|"]
+    for item in deduplicate_manifest(items):
+        refs = ", ".join(str(ref) for ref in item.evidence.get("source_refs", ())) or "—"
+        rows.append(f"| {item.action} | {item.natural_key} | {refs} |")
+    return "\n".join(rows)

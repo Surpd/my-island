@@ -9,6 +9,10 @@ from backend.services.school_directory_bootstrap import (
     name_without_note,
     parse_class_lists,
     parse_group_rosters,
+    parse_exam_selections,
+    english_group_key,
+    ManifestItem,
+    render_manifest_examples,
 )
 
 
@@ -71,6 +75,34 @@ class SchoolDirectoryBootstrapTests(unittest.TestCase):
             {item.display_name.rsplit(" · ", 1)[-1] for item in groups if item.subject == "Английский язык"},
             set(labels),
         )
+        self.assertEqual(english_group_key("7 Ангелина"), "english:7")
+
+    def test_sparse_subject_and_grade_headers_carry_across_adjacent_groups(self):
+        rows = [[None] * 16 for _ in range(99)]
+        rows[47][1] = "Обществознание"
+        rows[48][1] = "9 класс"
+        rows[49][1], rows[49][3] = "База Антон", "ОГЭ Антон"
+        rows[50][1], rows[50][3] = "Базов Иван", "Экзаменов Пётр"
+        groups, memberships, _ = parse_group_rosters(rows)
+        self.assertIn("subject:обществознание:9 класс:ОГЭ Антон", {group.name for group in groups})
+        self.assertIn("Экзаменов Пётр", {membership.person for membership in memberships})
+
+    def test_exam_parser_accepts_literal_true_only(self):
+        rows = [[None] * 12 for _ in range(40)]
+        rows[1][1], rows[2][2], rows[2][3] = "9 класс", "Физика", "Химия"
+        rows[3][1], rows[3][2], rows[3][3] = "Иванов Иван", "TRUE", "химия по желанию"
+        selections, issues = parse_exam_selections(rows)
+        self.assertEqual([(item.subject, item.person) for item in selections], [("Физика", "Иванов Иван")])
+        self.assertEqual([item.issue_type for item in issues], ["non_boolean_selection_value"])
+
+    def test_report_examples_are_derived_from_deduplicated_manifest(self):
+        items = [
+            ManifestItem("KEEP", "student:group", {}, {"source_refs": ["sheet!A1"]}),
+            ManifestItem("KEEP", "student:group", {}, {"source_refs": ["sheet!A2"]}),
+        ]
+        report = render_manifest_examples(items)
+        self.assertEqual(report.count("| KEEP | student:group |"), 1)
+        self.assertIn("sheet!A1, sheet!A2", report)
 
 
 if __name__ == "__main__":

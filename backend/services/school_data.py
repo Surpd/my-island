@@ -138,7 +138,7 @@ class GroqSemanticProvider:
 def validate_candidate_change(candidate: Mapping[str, Any]) -> None:
     allowed_entities = {
         "person", "group", "membership", "teacher_assignment", "homeroom_assignment",
-        "source_mapping", "schedule_audience",
+        "source_mapping", "schedule_audience", "selection_fact",
     }
     if candidate.get("entity_type") not in allowed_entities:
         raise ValueError("Unsupported School Directory candidate entity")

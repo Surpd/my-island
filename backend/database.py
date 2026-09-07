@@ -286,6 +286,24 @@ CREATE TABLE IF NOT EXISTS membership_overrides (
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS student_selection_facts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  identity_id INTEGER NOT NULL REFERENCES identities(id),
+  academic_year TEXT NOT NULL,
+  grade_level TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  selection_kind TEXT NOT NULL CHECK (selection_kind IN ('oge','ege_profile')),
+  source TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '{}',
+  active INTEGER NOT NULL DEFAULT 1,
+  valid_from TEXT,
+  valid_until TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(identity_id, academic_year, subject, selection_kind, source, source_ref)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS student_selection_facts_active_logical_idx
+  ON student_selection_facts(identity_id, academic_year, subject, selection_kind) WHERE active = 1 AND valid_until IS NULL;
 CREATE TABLE IF NOT EXISTS journal_sources (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   spreadsheet_id TEXT NOT NULL,
@@ -426,7 +444,7 @@ CREATE TABLE IF NOT EXISTS school_candidate_changes (
   sync_run_id INTEGER NOT NULL REFERENCES school_sync_runs(id),
   source_record_id INTEGER REFERENCES school_source_records(id),
   change_type TEXT NOT NULL CHECK (change_type IN ('create','update','end','map')),
-  entity_type TEXT NOT NULL CHECK (entity_type IN ('person','group','membership','teacher_assignment','homeroom_assignment','source_mapping','schedule_audience')),
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('person','group','membership','teacher_assignment','homeroom_assignment','source_mapping','schedule_audience','selection_fact')),
   natural_key TEXT NOT NULL,
   proposed_payload TEXT NOT NULL,
   evidence TEXT NOT NULL CHECK (evidence <> '{}'),
@@ -1001,7 +1019,36 @@ class Database:
                 group_items = list(group_items_by_id.values())
                 base_classes = [item for item in group_items if item["membership_kind"] == "base_class"]
                 instructional_memberships = [item for item in group_items if item["membership_kind"] == "instructional"]
-                exam_profile_memberships = [item for item in group_items if item["membership_kind"] == "exam_profile"]
+                selection_rows = self.execute(
+                    connection,
+                    """SELECT id, academic_year, grade_level, subject, selection_kind,
+                              source, source_ref, evidence
+                         FROM student_selection_facts
+                        WHERE identity_id = ? AND active IS TRUE
+                          AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+                          AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
+                        ORDER BY grade_level, subject""",
+                    (identity_id,),
+                ).fetchall()
+                selection_facts = [dict(item) for item in selection_rows]
+                # Compatibility projection for the existing Admin card. Actual
+                # OGE/EGE roster groups remain instructional memberships.
+                exam_profile_memberships = [{
+                    "id": f"selection:{item['id']}",
+                    "name": f"selection:{item['grade_level']}:{item['subject']}",
+                    "display_name": f"{item['subject']} · {'ОГЭ' if item['selection_kind'] == 'oge' else 'ЕГЭ/профиль'}",
+                    "group_type": "selection_fact",
+                    "subject": item["subject"],
+                    "base_class_name": item["grade_level"],
+                    "subject_subgroup": None,
+                    "exam_track": "ОГЭ" if item["selection_kind"] == "oge" else "ЕГЭ",
+                    "membership_kind": "exam_profile",
+                    "source": item["source"],
+                    "source_ref": item["source_ref"],
+                    "source_refs": [item["source_ref"]],
+                    "membership_sources": [item["source"]],
+                    "is_manual": item["source"] == "admin_override",
+                } for item in selection_facts]
                 assignments = self.execute(
                     connection,
                     """SELECT ta.id, g.id AS group_id, g.name, g.display_name, g.group_type,
@@ -1060,6 +1107,7 @@ class Database:
                     "base_classes": base_classes,
                     "instructional_memberships": instructional_memberships,
                     "exam_profile_memberships": exam_profile_memberships,
+                    "selection_facts": selection_facts,
                     "relationship_issue": "multiple_active_base_classes" if len(base_classes) > 1 else None,
                     "teacher_assignments": [dict(item) for item in assignments],
                     "homerooms": [dict(item) for item in homerooms],
