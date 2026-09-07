@@ -102,10 +102,16 @@ type Group = {
   name: string;
   display_name?: string;
   group_type?: string;
+  relationship_kind?: string;
+  base_class_name?: string | null;
   source?: string;
   subject?: string;
   subject_subgroup?: string;
+  exam_track?: string | null;
   student_count?: number;
+  member_count?: number;
+  students?: Array<Record<string, unknown>>;
+  teacher_assignments?: Array<Record<string, unknown>>;
   is_homeroom?: boolean;
   schedule_scopes?: Array<{
     audience: string;
@@ -293,6 +299,18 @@ const humanGroupType = (groupType: unknown) =>
   })[displayValue(groupType)] || displayValue(groupType, 'Группа');
 const groupLabel = (group: Record<string, unknown>) =>
   displayValue(group.display_name, displayValue(group.name, 'Группа'));
+const personBaseClass = (person: Record<string, unknown>) => {
+  const base = person.base_class as Record<string, unknown> | null | undefined;
+  return displayValue(base?.name, displayValue(person.class_name));
+};
+const personMemberships = (person: Record<string, unknown>) => [
+  ...(Array.isArray(person.instructional_memberships)
+    ? person.instructional_memberships
+    : []),
+  ...(Array.isArray(person.exam_profile_memberships)
+    ? person.exam_profile_memberships
+    : []),
+];
 const personLabel = (user: Record<string, unknown>) =>
   user.identity_id
     ? displayValue(user.display_name, 'Школьная личность')
@@ -1702,6 +1720,11 @@ function AdminApp({
   const [peopleFilter, setPeopleFilter] = useState<
     'all' | 'student' | 'teacher' | 'admin' | 'unmatched'
   >('all');
+  const [peopleClassFilter, setPeopleClassFilter] = useState('');
+  const [peopleGroupFilter, setPeopleGroupFilter] = useState('');
+  const [structureClassFilter, setStructureClassFilter] = useState('');
+  const [structureGroupFilter, setStructureGroupFilter] = useState('');
+  const [selectedStructureGroupId, setSelectedStructureGroupId] = useState('');
   const [selectedUser, setSelectedUser] = useState<Record<
     string,
     unknown
@@ -1804,25 +1827,49 @@ function AdminApp({
       );
     }
   };
-  const catalogUsers = useMemo(
+  const catalogUsers = useMemo<Array<Record<string, unknown>>>(
     () =>
-      data?.people.map((person) => {
+      data?.people.map((person): Record<string, unknown> => {
         const account = data.users.find(
           (user) => displayValue(user.identity_id) === displayValue(person.id),
         );
-        return {
-          ...person,
-          ...(account || {}),
+        return Object.assign({}, person, account, {
           id: account?.id || person.id,
           identity_id: person.id,
           display_name: person.display_name,
           class_name: person.class_name,
           roles: person.roles,
           has_account: Boolean(account),
-        };
+        });
       }) || [],
     [data],
   );
+  const classGroups = useMemo(
+    () => data?.groups.filter((group) => group.group_type === 'class') || [],
+    [data],
+  );
+  const instructionalGroups = useMemo(
+    () => data?.groups.filter((group) => group.group_type !== 'class') || [],
+    [data],
+  );
+  const peopleGroupOptions = useMemo(() => {
+    if (!peopleClassFilter) return instructionalGroups;
+    const classPeople = catalogUsers.filter(
+      (person) => personBaseClass(person) === peopleClassFilter,
+    );
+    const ids = new Set(
+      classPeople.flatMap((person) =>
+        personMemberships(person).map((membership) =>
+          displayValue((membership as Record<string, unknown>).id),
+        ),
+      ),
+    );
+    return instructionalGroups.filter(
+      (group) =>
+        displayValue(group.base_class_name) === peopleClassFilter ||
+        ids.has(displayValue(group.id)),
+    );
+  }, [catalogUsers, instructionalGroups, peopleClassFilter]);
   const filteredUsers = useMemo(
     () =>
       catalogUsers.filter((user) => {
@@ -1836,23 +1883,56 @@ function AdminApp({
               ? !user.identity_id
               : roles.includes(peopleFilter) ||
                 displayValue(user.identity_kind) === peopleFilter;
+        const matchesClass =
+          !peopleClassFilter || personBaseClass(user) === peopleClassFilter;
+        const matchesGroup =
+          !peopleGroupFilter ||
+          personMemberships(user).some(
+            (membership) =>
+              displayValue((membership as Record<string, unknown>).id) ===
+              peopleGroupFilter,
+          );
         return (
           matchesFilter &&
-          `${displayValue(user.display_name)} ${displayValue(user.class_name)} ${roles.join(' ')}`
+          matchesClass &&
+          matchesGroup &&
+          `${displayValue(user.display_name)} ${personBaseClass(user)} ${roles.join(' ')}`
             .toLowerCase()
             .includes(query.toLowerCase())
         );
       }) || [],
-    [catalogUsers, peopleFilter, query],
+    [catalogUsers, peopleClassFilter, peopleFilter, peopleGroupFilter, query],
+  );
+  const structureGroups = useMemo(
+    () =>
+      data?.groups.filter((group) => {
+        if (structureClassFilter && group.group_type === 'class')
+          return displayValue(group.name) === structureClassFilter;
+        if (structureClassFilter && group.group_type !== 'class') {
+          return (
+            displayValue(group.base_class_name) === structureClassFilter ||
+            (Array.isArray(group.students) &&
+              group.students.some(
+                (student) =>
+                  personBaseClass(student) === structureClassFilter,
+              ))
+          );
+        }
+        return true;
+      }) || [],
+    [data, structureClassFilter],
   );
   const filteredGroups = useMemo(
     () =>
-      data?.groups.filter((group) =>
-        `${displayValue(group.name)} ${displayValue(group.display_name)} ${displayValue(group.group_type)} ${displayValue(group.subject)} ${displayValue(group.base_class_name)} ${displayValue(group.subject_subgroup)} ${displayValue(group.exam_track)}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ) || [],
-    [data, query],
+      structureGroups.filter(
+        (group) =>
+          (!structureGroupFilter ||
+            displayValue(group.id) === structureGroupFilter) &&
+          `${displayValue(group.name)} ${displayValue(group.display_name)} ${displayValue(group.group_type)} ${displayValue(group.subject)} ${displayValue(group.base_class_name)} ${displayValue(group.subject_subgroup)} ${displayValue(group.exam_track)}`
+            .toLowerCase()
+            .includes(query.toLowerCase()),
+      ),
+    [query, structureGroupFilter, structureGroups],
   );
   const toggleRole = (user: Record<string, unknown>, role: string) => {
     if (user.has_account === false) return;
@@ -2077,6 +2157,37 @@ function AdminApp({
                   </button>
                 ))}
               </div>
+              <div className="people-filters people-filters--selects" aria-label="Фильтр школы">
+                <select
+                  className="control-select"
+                  aria-label="Базовый класс"
+                  value={peopleClassFilter}
+                  onChange={(event) => {
+                    setPeopleClassFilter(event.target.value);
+                    setPeopleGroupFilter('');
+                  }}
+                >
+                  <option value="">Все классы</option>
+                  {classGroups.map((group) => (
+                    <option key={displayValue(group.id)} value={displayValue(group.name)}>
+                      {displayValue(group.name)}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="control-select"
+                  aria-label="Учебная или экзаменационная группа"
+                  value={peopleGroupFilter}
+                  onChange={(event) => setPeopleGroupFilter(event.target.value)}
+                >
+                  <option value="">Все учебные группы</option>
+                  {peopleGroupOptions.map((group) => (
+                    <option key={displayValue(group.id)} value={displayValue(group.id)}>
+                      {groupLabel(group as Record<string, unknown>)}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {filteredUsers.map((user, index) => (
                 <button
                   className={`person-row ${displayValue(selectedUser?.id) === displayValue(user.id) ? 'is-selected' : ''}`}
@@ -2134,6 +2245,20 @@ function AdminApp({
                     ))}
                   </div>
                   <div className="subsection-title">Связи со школой</div>
+                  {selectedUser.identity_kind === 'student' && (
+                    <>
+                      <div className="person-meta-row">
+                        <strong>Базовый класс:</strong>{' '}
+                        {personBaseClass(selectedUser) || 'не подтверждён'}
+                      </div>
+                      {displayValue(selectedUser.account_status) && (
+                        <div className="person-meta-row">
+                          <strong>Telegram / аккаунт:</strong>{' '}
+                          {displayValue(selectedUser.account_status)}
+                        </div>
+                      )}
+                    </>
+                  )}
                   <button
                     className="outline-button"
                     onClick={() => setSection('structure')}
@@ -2151,8 +2276,48 @@ function AdminApp({
                         <UserRound size={16} /> Посмотреть как ученик
                       </button>
                     )}
-                  <div className="subsection-title">Связи</div>
-                  <div className="related-list">
+                  {selectedUser.identity_kind === 'student' && (
+                    <>
+                      <div className="subsection-title">Предметные группы</div>
+                      <div className="related-list">
+                        {Array.isArray(selectedUser.instructional_memberships) &&
+                          selectedUser.instructional_memberships.map((group, index) => (
+                            <button
+                              key={index}
+                              onClick={() => {
+                                setStructureGroupFilter(displayValue((group as Record<string, unknown>).id));
+                                setQuery('');
+                                setSection('structure');
+                              }}
+                            >
+                              {groupLabel(group as Record<string, unknown>)}
+                              {Boolean((group as Record<string, unknown>).is_manual) && ' · вручную'}
+                              <ChevronRight size={14} />
+                            </button>
+                          ))}
+                      </div>
+                      <div className="subsection-title">ОГЭ / ЕГЭ / профиль</div>
+                      <div className="related-list">
+                        {Array.isArray(selectedUser.exam_profile_memberships) &&
+                          selectedUser.exam_profile_memberships.map((group, index) => (
+                            <button
+                              key={index}
+                              onClick={() => {
+                                setStructureGroupFilter(displayValue((group as Record<string, unknown>).id));
+                                setQuery('');
+                                setSection('structure');
+                              }}
+                            >
+                              {groupLabel(group as Record<string, unknown>)}
+                              {Boolean((group as Record<string, unknown>).is_manual) && ' · вручную'}
+                              <ChevronRight size={14} />
+                            </button>
+                          ))}
+                      </div>
+                    </>
+                  )}
+                  {selectedUser.identity_kind !== 'student' && <div className="subsection-title">Связи</div>}
+                  {selectedUser.identity_kind !== 'student' && <div className="related-list">
                     {Array.isArray(selectedUser.groups) &&
                       selectedUser.groups.map((group, index) => (
                         <button
@@ -2170,7 +2335,7 @@ function AdminApp({
                           <ChevronRight size={14} />
                         </button>
                       ))}
-                  </div>
+                  </div>}
                   {Array.isArray(selectedUser.teacher_assignments) &&
                     selectedUser.teacher_assignments.length > 0 && (
                       <>
@@ -2289,8 +2454,43 @@ function AdminApp({
             )}
           </section>
           <section className="work-card">
+            <div className="people-filters people-filters--selects" aria-label="Фильтр школьной структуры">
+              <select
+                className="control-select"
+                aria-label="Класс структуры"
+                value={structureClassFilter}
+                onChange={(event) => {
+                  setStructureClassFilter(event.target.value);
+                  setStructureGroupFilter('');
+                }}
+              >
+                <option value="">Все классы</option>
+                {classGroups.map((group) => (
+                  <option key={displayValue(group.id)} value={displayValue(group.name)}>
+                    {displayValue(group.name)}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="control-select"
+                aria-label="Группа структуры"
+                value={structureGroupFilter}
+                onChange={(event) => setStructureGroupFilter(event.target.value)}
+              >
+                <option value="">Все группы</option>
+                {structureGroups.filter((group) => group.group_type !== 'class').map((group) => (
+                  <option key={displayValue(group.id)} value={displayValue(group.id)}>
+                    {groupLabel(group as Record<string, unknown>)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="work-card__heading">
+              <h2>Базовые классы</h2>
+              <small>Состав класса — отдельная связь, не дочерняя группа</small>
+            </div>
             <div className="structure-grid">
-              {filteredGroups.map((group, index) => (
+              {filteredGroups.filter((group) => group.group_type === 'class').map((group, index) => (
                 <article
                   className="structure-node"
                   key={displayValue(group.id, String(index))}
@@ -2307,9 +2507,12 @@ function AdminApp({
                     </small>
                   </div>
                   <div className="node-links">
+                    <button onClick={() => setSelectedStructureGroupId(displayValue(group.id))}>Состав</button>
                     <button
                       onClick={() => {
-                        setQuery(displayValue(group.name));
+                        setPeopleClassFilter(displayValue(group.name));
+                        setPeopleGroupFilter('');
+                        setQuery('');
                         setSection('people');
                       }}
                     >
@@ -2322,7 +2525,70 @@ function AdminApp({
                 </article>
               ))}
             </div>
+            <div className="work-card__heading">
+              <h2>Учебные и экзаменационные группы</h2>
+              <small>Это memberships учеников, а не дополнительные классы</small>
+            </div>
+            <div className="structure-grid">
+              {filteredGroups.filter((group) => group.group_type !== 'class').map((group, index) => (
+                <article
+                  className={`structure-node ${selectedStructureGroupId === displayValue(group.id) ? 'is-selected' : ''}`}
+                  key={`instructional-${displayValue(group.id, String(index))}`}
+                >
+                  <span><School size={18} /></span>
+                  <div>
+                    <strong>{groupLabel(group)}</strong>
+                    <small>
+                      {humanGroupType(group.group_type)} · {displayValue(group.member_count, '0')} учеников
+                      {displayValue(group.subject) ? ` · ${displayValue(group.subject)}` : ''}
+                    </small>
+                    {Array.isArray(group.teacher_assignments) && group.teacher_assignments.length > 0 && (
+                      <small>Преподаватель: {group.teacher_assignments.map((item) => displayValue(item.teacher_name)).join(', ')}</small>
+                    )}
+                  </div>
+                  <div className="node-links">
+                    <button onClick={() => setSelectedStructureGroupId(displayValue(group.id))}>Состав</button>
+                    <button onClick={() => {
+                      setPeopleClassFilter(structureClassFilter || '');
+                      setPeopleGroupFilter(displayValue(group.id));
+                      setQuery('');
+                      setSection('people');
+                    }}>Люди</button>
+                  </div>
+                </article>
+              ))}
+            </div>
           </section>
+          {selectedStructureGroupId && (() => {
+            const selectedGroup = data.groups.find((group) => displayValue(group.id) === selectedStructureGroupId);
+            if (!selectedGroup) return null;
+            const students = Array.isArray(selectedGroup.students)
+              ? selectedGroup.students as Array<Record<string, unknown>>
+              : [];
+            return (
+              <section className="work-card detail-card">
+                <div className="work-card__heading">
+                  <h2>{groupLabel(selectedGroup as Record<string, unknown>)}</h2>
+                  <small>{humanGroupType(selectedGroup.group_type)} · {displayValue(selectedGroup.member_count, '0')} active students</small>
+                </div>
+                <div className="related-list">
+                  {students.map((student, index) => (
+                    <button key={displayValue(student.id, String(index))} onClick={() => {
+                      const person = catalogUsers.find((item) => displayValue(item.identity_id) === displayValue(student.id));
+                      if (person) setSelectedUser(person);
+                      setPeopleClassFilter(person ? personBaseClass(person) : '');
+                      setPeopleGroupFilter(displayValue(selectedGroup.id));
+                      setSection('people');
+                    }}>
+                      {displayValue(student.display_name)}
+                      {Boolean(student.is_manual) && ' · вручную'}
+                      <ChevronRight size={14} />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
         </>
       );
     if (section === 'schedule')
@@ -2678,6 +2944,9 @@ function AdminApp({
           <div className="global-search">
             <Search size={17} />
             <input
+              aria-label="Поиск людей, классов и групп"
+              name="admin-search"
+              autoComplete="off"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Поиск людей, классов и групп"
@@ -2697,7 +2966,7 @@ function AdminApp({
           </button>
         </header>
         {message && (
-          <div className="admin-message">
+          <div className="admin-message" aria-live="polite">
             <CircleAlert size={16} /> {message}
             <button onClick={() => setMessage('')}>
               <X size={14} />

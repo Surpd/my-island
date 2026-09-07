@@ -924,8 +924,14 @@ class Database:
                 })
             return result
 
-    def list_people_library(self, kind: str | None = None, query: str | None = None, class_name: str | None = None) -> list[dict[str, Any]]:
-        """Canonical School Directory view, independent of app accounts."""
+    def list_people_library(
+        self,
+        kind: str | None = None,
+        query: str | None = None,
+        class_name: str | None = None,
+        group_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Canonical School Directory view with explicit relationship semantics."""
         clauses = ["i.status = 'active'"]
         params: list[Any] = []
         if kind in {"student", "teacher"}:
@@ -935,8 +941,21 @@ class Database:
             clauses.append("lower(i.display_name || ' ' || coalesce(i.class_name, '')) like ?")
             params.append(f"%{query.strip().lower()}%")
         if class_name:
-            clauses.append("i.class_name = ?")
+            clauses.append(
+                "EXISTS (SELECT 1 FROM memberships cm JOIN groups cg ON cg.id = cm.group_id "
+                "WHERE cm.identity_id = i.id AND cm.active IS TRUE AND cg.group_type = 'class' "
+                "AND cg.name = ? AND (cm.valid_from IS NULL OR cm.valid_from <= CURRENT_DATE) "
+                "AND (cm.valid_until IS NULL OR cm.valid_until >= CURRENT_DATE))"
+            )
             params.append(class_name)
+        if group_id:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM memberships gm WHERE gm.identity_id = i.id "
+                "AND gm.group_id = ? AND gm.active IS TRUE "
+                "AND (gm.valid_from IS NULL OR gm.valid_from <= CURRENT_DATE) "
+                "AND (gm.valid_until IS NULL OR gm.valid_until >= CURRENT_DATE))"
+            )
+            params.append(group_id)
         with self.connection() as connection:
             identities = self.execute(
                 connection,
@@ -957,6 +976,18 @@ class Database:
                         ORDER BY g.group_type, g.name""",
                     (identity_id,),
                 ).fetchall()
+                group_items = [dict(item) for item in groups]
+                for item in group_items:
+                    item["membership_kind"] = (
+                        "base_class" if item["group_type"] == "class"
+                        else "exam_profile" if item["group_type"] == "exam_track"
+                        else "instructional" if item["group_type"] in {"subject_group", "instructional_group"}
+                        else "other"
+                    )
+                    item["is_manual"] = item.get("source") == "admin_override"
+                base_classes = [item for item in group_items if item["membership_kind"] == "base_class"]
+                instructional_memberships = [item for item in group_items if item["membership_kind"] == "instructional"]
+                exam_profile_memberships = [item for item in group_items if item["membership_kind"] == "exam_profile"]
                 assignments = self.execute(
                     connection,
                     """SELECT ta.id, g.id AS group_id, g.name, g.display_name, g.group_type,
@@ -1008,7 +1039,14 @@ class Database:
                     "telegram_user_id": account["telegram_user_id"] if account else None,
                     "account_status": account["account_status"] if account else "unlinked",
                     "has_account": bool(account),
-                    "groups": [dict(item) for item in groups],
+                    # `groups` remains for backwards compatibility; new Admin UI must
+                    # consume the typed projections below instead of guessing by label.
+                    "groups": group_items,
+                    "base_class": base_classes[0] if len(base_classes) == 1 else None,
+                    "base_classes": base_classes,
+                    "instructional_memberships": instructional_memberships,
+                    "exam_profile_memberships": exam_profile_memberships,
+                    "relationship_issue": "multiple_active_base_classes" if len(base_classes) > 1 else None,
                     "teacher_assignments": [dict(item) for item in assignments],
                     "homerooms": [dict(item) for item in homerooms],
                     "unresolved": [dict(item) for item in unresolved],
@@ -1359,7 +1397,44 @@ class Database:
                     GROUP BY g.id, g.name, g.group_type
                     ORDER BY g.group_type, g.name""",
             ).fetchall()
-            return [dict(row) for row in rows]
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                group = dict(row)
+                members = self.execute(
+                    connection,
+                    """SELECT i.id, i.display_name, i.class_name, m.source, m.source_ref
+                         FROM memberships m JOIN identities i ON i.id = m.identity_id
+                        WHERE m.group_id = ? AND m.active IS TRUE AND i.status = 'active'
+                          AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                          AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                        ORDER BY i.display_name""",
+                    (row["id"],),
+                ).fetchall()
+                assignments = self.execute(
+                    connection,
+                    """SELECT ta.id, ta.subject, ta.source, ta.source_ref,
+                              i.id AS teacher_identity_id, i.display_name AS teacher_name
+                         FROM teacher_assignments ta
+                         JOIN identities i ON i.id = ta.teacher_identity_id
+                        WHERE ta.group_id = ? AND ta.active IS TRUE AND i.status = 'active'
+                          AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                          AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                        ORDER BY i.display_name""",
+                    (row["id"],),
+                ).fetchall()
+                group["students"] = [
+                    {**dict(member), "is_manual": member["source"] == "admin_override"}
+                    for member in members
+                ]
+                group["teacher_assignments"] = [dict(item) for item in assignments]
+                group["relationship_kind"] = (
+                    "base_class" if row["group_type"] == "class"
+                    else "exam_profile" if row["group_type"] == "exam_track"
+                    else "instructional" if row["group_type"] in {"subject_group", "instructional_group"}
+                    else "other"
+                )
+                result.append(group)
+            return result
 
     def set_membership_override(self, identity_id: Any, group_id: Any, member_role: str, action: str, actor_user_id: Any, reason: str = "") -> Any:
         with self.connection() as connection:

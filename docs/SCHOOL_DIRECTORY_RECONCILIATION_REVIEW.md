@@ -1,22 +1,40 @@
 # School Directory reconciliation review
 
-Дата: 2026-09-07. Это единственная оставшаяся очередь human review после live-read и reconciliation. Нормальные записи, включая 312/312 instructional roster records и четыре подтверждённых alias merge, сюда не попадают.
+Дата: 2026-09-07. **Очередь закрыта: 0 открытых review items.**
 
-## 1. Missing base-class links (одна системная причина)
+## Применённые решения пользователя
 
-| Сущность | Source value / provenance | Контекст | Почему автоматике нельзя выбрать | Варианты |
-|---|---|---|---|---|
-| Иващенко Фёдор | `списки групп 26-27!B54`, `списки групп 26-27!B88` | 9-class instructional/exam records | authoritative `Списки по классам 26/27` не содержит человека; source не различает 9-А/9-Д | подтвердить 9-А или 9-Д |
-| Нестерова Алиса | `списки групп 26-27!J93` | Informatics · 9 класс · База Тарас | есть только instructional roster, нет base-class source record | подтвердить 9-А или 9-Д |
-| Холодова Татьяна | `списки групп 26-27!B73`, `!N76` | Biology/Chemistry · 9 класс · ОГЭ | есть только exam-prep rosters, нет base-class source record | подтвердить 9-А или 9-Д |
+- `Иващенко Фёдор` — старая запись; identity оставлена для historical provenance, но переведена в `inactive`, все active memberships закрыты, merge не выполнялся.
+- `Нестерова Алиса` — старая запись; identity оставлена для historical provenance, но переведена в `inactive`, все active memberships закрыты.
+- `Холодова Татьяна` — добавлена user-confirmed base-class membership `9-А` с `admin_override` и active membership guard; последующий неполный source не должен молча заменить это решение.
 
-Для всех трёх identity сама по себе однозначна; unresolved только структурная связь с базовым классом. Memberships уже применены и не потеряны.
+## Проверка active Directory
 
-## 2. Не является review item
+- Active canonical students: **115**.
+- Иващенко Фёдор: отсутствует в active Directory, active memberships: **0**.
+- Нестерова Алиса: отсутствует в active Directory, active memberships: **0**.
+- Холодова Татьяна: active, base class **9-А**, active memberships: **5**.
+- Open resolution issues в production: **0**.
+- Горлова Вика/Виктория и Мищенко Петя/Пётр остаются одной canonical identity; duplicate active identities не создавались.
 
-- `Горлова Вика` = `Горлова Виктория`, `Мищенко Петя` = `Мищенко Пётр`, `Коченкова Тая` = `Коченкова Таисия`, `Кудимов Петя` = `Кудимов Пётр`, and the equally unambiguous `Провоторова Маша` = `Провоторова Мария`: deterministic name-variant/context resolver, canonical identities merged, source observations retained.
-- `Федя` отсутствует в live authoritative base list (`Списки по классам 26/27!J16` — старый snapshot only). Relationship ended by generic source-disappearance lifecycle; identity is inactive and was not merged with Иващенко Фёдор.
-- Short teacher labels remain source metadata. They do not create teachers or teaching assignments.
-- Grade 9 Math source is complete: A=5, B=11, C=12, unresolved=0. Obsolete 9-1/9-2/9-3 are absent.
+## Admin projection/UI verification
 
-Groq audit: no calls were necessary in this pass. The backend-only replaceable provider is implemented, but deterministic validation remains mandatory before any canonical mutation.
+Найденная системная проблема была в projection: `/api/admin/people` отдавал связи единым плоским `groups`, а `/api/admin/groups` — только counts. Из-за этого UI не мог надёжно отличить базовый класс, instructional membership и ОГЭ/ЕГЭ/profile.
+
+Исправлено:
+
+- explicit `base_class`, `base_classes`, `instructional_memberships`, `exam_profile_memberships`, `teacher_assignments`, `relationship_issue` в People Library;
+- active group rosters и `is_manual`/source provenance в Groups API;
+- фильтр People: сначала базовый класс, затем учебная/экзаменационная группа;
+- School UI: базовые классы и учебные/exam groups разделены, карточка состава открывается отдельно, переходы используют ту же canonical person;
+- поиск получил отдельные class/group constraints и доступное имя поля.
+
+## Regression dataset
+
+- Grade 9 Math: A = **5 source-derived**, B = **11 source-derived**, C = **12 source-derived + 1 manual override** (13 active total).
+- Холодова Татьяна открывается как `9-А` и сохраняет предметные/exam memberships.
+- Иващенко Фёдор и Нестерова Алиса не попадают в active People/API projections.
+- Alias pairs Горлова и Мищенко не дублируются.
+- Production groups API сохраняет active student rosters и показывает manual/source distinction.
+
+Короткие teacher labels (`Иван`, `Мария`, `Ангелина`, `Игорь`, `Тарас`, `Антон`, `Юлия`, `ЕВ`, `ИА`) по-прежнему являются source metadata, а не canonical teachers или assignments.
