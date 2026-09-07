@@ -92,6 +92,15 @@ class ScheduleTests(unittest.TestCase):
             with database.connection() as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM schedule_entries").fetchone()[0], 1)
 
+    def test_archived_schedule_is_outside_runtime_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            sync_schedule(database, [{"date": "2026-09-05", "start_time": "10:55", "subject": "Математика"}])
+            with database.connection() as connection:
+                connection.execute("UPDATE schedule_entries SET archived = 1")
+            self.assertEqual(database.list_schedule_entries("2026-09-05"), [])
+
     def test_school_matrix_parser_uses_date_time_and_class_headers(self):
         values = [
             ["", "9-C", "9-D"],
@@ -162,6 +171,23 @@ class ScheduleTests(unittest.TestCase):
 
 
 class ClassroomSyncTests(unittest.TestCase):
+    def test_classroom_sync_requires_explicit_internal_mapping(self):
+        class EmptyClient:
+            def coursework(self, course_id):
+                return []
+
+            def coursework_materials(self, course_id):
+                return []
+
+            def student_submissions(self, course_id, coursework_id):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            with self.assertRaisesRegex(ValueError, "explicit internal group mapping"):
+                sync_classroom_course(database, EmptyClient(), {"id": "course-1", "name": "Новый курс"}, teacher_account="teacher@example.test")
+
     def test_classroom_sync_is_idempotent_and_keeps_materials_separate(self):
         class FakeClient:
             def coursework(self, course_id):
@@ -179,14 +205,37 @@ class ClassroomSyncTests(unittest.TestCase):
             course = {"id": "course-1", "name": "9-C Математика", "updateTime": "2026-09-05T10:00:00Z"}
             with database.connection() as connection:
                 identity_id = connection.execute("INSERT INTO identities(kind, display_name) VALUES ('student', 'Student One') RETURNING id").fetchone()[0]
-            first = sync_classroom_course(database, FakeClient(), course, teacher_account="teacher@example.test", identity_map={"student-1": identity_id})
-            second = sync_classroom_course(database, FakeClient(), course, teacher_account="teacher@example.test", identity_map={"student-1": identity_id})
+            group = database.create_group("9-C Математика", "class")
+            first = sync_classroom_course(database, FakeClient(), course, teacher_account="teacher@example.test", identity_map={"student-1": identity_id}, group_id=group["id"])
+            second = sync_classroom_course(database, FakeClient(), course, teacher_account="teacher@example.test", identity_map={"student-1": identity_id}, group_id=group["id"])
             self.assertEqual(first, second)
             with database.connection() as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM classroom_courses").fetchone()[0], 1)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM classroom_coursework").fetchone()[0], 1)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM classroom_coursework_materials").fetchone()[0], 2)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM classroom_student_submissions").fetchone()[0], 1)
+
+    def test_existing_classroom_mapping_cannot_be_reassigned_by_sync(self):
+        class EmptyClient:
+            def coursework(self, course_id):
+                return []
+
+            def coursework_materials(self, course_id):
+                return []
+
+            def student_submissions(self, course_id, coursework_id):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            first_group = database.create_group("Math A", "subject_group")
+            second_group = database.create_group("Math B", "subject_group")
+            sync_classroom_course(database, EmptyClient(), {"id": "course-1", "name": "Math"}, teacher_account="teacher@example.test", group_id=first_group["id"])
+            sync_classroom_course(database, EmptyClient(), {"id": "course-1", "name": "Math"}, teacher_account="teacher@example.test", group_id=second_group["id"])
+            with database.connection() as connection:
+                mapped_group_id = connection.execute("SELECT group_id FROM classroom_courses WHERE external_course_id = 'course-1'").fetchone()[0]
+            self.assertEqual(mapped_group_id, first_group["id"])
 
     def test_unmapped_submission_is_audited_without_exposing_student_data(self):
         class FakeClient:
@@ -202,12 +251,14 @@ class ClassroomSyncTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(os.path.join(directory, "test.db"))
             database.initialize()
+            group = database.create_group("9-C Математика", "class")
             counts = sync_classroom_course(
                 database,
                 FakeClient(),
                 {"id": "course-1", "name": "9-C Математика"},
                 teacher_account="teacher@example.test",
                 identity_map={},
+                group_id=group["id"],
             )
             self.assertEqual(counts["unmapped_submissions"], 1)
             self.assertEqual(counts["student_submissions"], 0)
@@ -236,7 +287,8 @@ class ClassroomSyncTests(unittest.TestCase):
             database = Database(os.path.join(directory, "test.db"))
             database.initialize()
             course = {"id": "course-1", "name": "9-C Математика"}
-            sync_classroom_course(database, WorkingClient(), course, teacher_account="teacher@example.test")
+            group = database.create_group("9-C Математика", "class")
+            sync_classroom_course(database, WorkingClient(), course, teacher_account="teacher@example.test", group_id=group["id"])
             with self.assertRaisesRegex(RuntimeError, "temporary Classroom outage"):
                 sync_classroom_course(database, FailingClient(), course, teacher_account="teacher@example.test")
             with database.connection() as connection:

@@ -101,6 +101,7 @@ def sync_classroom_course(
     *,
     teacher_account: str,
     identity_map: dict[str, Any] | None = None,
+    group_id: Any | None = None,
 ) -> dict[str, int]:
     normalized_course = normalize_course(course)
     if not normalized_course["external_id"] or not normalized_course["title"]:
@@ -121,7 +122,7 @@ def sync_classroom_course(
         raise
 
     try:
-        course_row = database.upsert_classroom_course(normalized_course, teacher_account)
+        course_row = database.upsert_classroom_course(normalized_course, teacher_account, group_id=group_id)
         counts = {"coursework": 0, "embedded_materials": 0, "dedicated_materials": 0, "student_submissions": 0, "unmapped_submissions": 0}
         seen_work_ids: list[str] = []
         for work in works:

@@ -25,10 +25,12 @@ def add_membership(
     identity_id: Any,
     source: str = "admin_override",
     member_role: str = "student",
+    source_ref: str = "",
+    created_by: Any | None = None,
 ) -> Any:
     if member_role not in {"student", "teacher"}:
         raise ValueError("Membership role must be student or teacher")
-    return database.create_membership(group_id, identity_id, member_role, source)
+    return database.create_membership(group_id, identity_id, member_role, source, source_ref, created_by)
 
 
 def map_schedule_scope(

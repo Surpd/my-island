@@ -953,6 +953,10 @@ button {
   background: transparent;
   font-size: 11px;
 }
+.admin-mode-switch {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .icon-button {
   display: grid;
   flex: 0 0 auto;
@@ -1221,6 +1225,28 @@ button {
 .people-catalog,
 .detail-card {
   margin-top: 0;
+}
+.people-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -2px 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.people-filters button {
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+}
+.people-filters button.is-active {
+  border-color: var(--line);
+  background: #edf6f3;
+  color: var(--navy);
 }
 .person-row {
   padding: 10px;

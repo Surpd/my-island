@@ -28,5 +28,5 @@ The schedule importer deterministically establishes a class block before parsing
 
 - Google Sheets: server-side read boundary and deterministic parser are ready; the first local grant is still required before live reads.
 - Google Classroom: course/courseWork/studentSubmission reads use the same OAuth token and no service-account impersonation.
-- Supabase: migrations `001`–`007` are the schema contract; RLS plus revoked `anon`/`authenticated` grants form a deny-by-default Data API boundary, while application authorization and cross-student isolation are enforced in the backend repository layer.
+- Supabase/Postgres: migrations `001`–`011` are the schema contract. Migrations `010`–`011` add explicit school-group dimensions/provenance, membership source references, and a recoverable archive boundary for disposable legacy schedule snapshots. RLS plus revoked `anon`/`authenticated` grants form a deny-by-default Data API boundary, while application authorization and cross-student isolation are enforced in the backend repository layer.
 - Render: `render.yaml` is the API Blueprint. Schema migrations remain an explicit operator step before deploying code that uses them.

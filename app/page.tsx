@@ -100,6 +100,7 @@ type Information = {
 type Group = {
   id?: string;
   name: string;
+  display_name?: string;
   group_type?: string;
   source?: string;
   subject?: string;
@@ -280,6 +281,44 @@ const humanRole = (role: unknown) =>
   ({ student: 'Ученик', teacher: 'Учитель', admin: 'Администратор' })[
     displayValue(role)
   ] || displayValue(role, 'Роль не указана');
+const humanGroupType = (groupType: unknown) =>
+  ({
+    class: 'Базовый класс',
+    subject_group: 'Предметная группа',
+    subject_subgroup: 'Предметная группа',
+    exam_track: 'Экзаменационный трек',
+    instructional_group: 'Учебная группа',
+    classroom_course: 'Группа Classroom',
+  })[displayValue(groupType)] || displayValue(groupType, 'Группа');
+const groupLabel = (group: Record<string, unknown>) =>
+  displayValue(group.display_name, displayValue(group.name, 'Группа'));
+const personLabel = (user: Record<string, unknown>) =>
+  user.identity_id
+    ? displayValue(user.display_name, 'Школьная личность')
+    : 'Telegram-аккаунт без школьной личности';
+const personSummary = (user: Record<string, unknown>) => {
+  const roles = Array.isArray(user.roles)
+    ? user.roles.filter((item): item is string => typeof item === 'string')
+    : [displayValue(user.role)];
+  if (!user.identity_id)
+    return `Требует сопоставления · ${roles.map(humanRole).join(' · ')}`;
+  if (roles.includes('teacher')) {
+    const assignments = Array.isArray(user.teacher_assignments)
+      ? user.teacher_assignments
+      : [];
+    const subjects = Array.from(
+      new Set(
+        assignments
+          .map((item) => displayValue((item as Record<string, unknown>).subject))
+          .filter(Boolean),
+      ),
+    );
+    return subjects.length
+      ? `${roles.map(humanRole).join(' · ')} · ${subjects.join(', ')}`
+      : `${roles.map(humanRole).join(' · ')} · назначения не указаны`;
+  }
+  return `${roles.map(humanRole).join(' · ')} · ${displayValue(user.class_name, 'класс не указан')}`;
+};
 
 const humanAuditAction = (action: string) =>
   ({
@@ -1379,9 +1418,9 @@ function TeacherGroups({
                 <School size={20} />
               </span>
               <div>
-                <strong>{group.name}</strong>
+                <strong>{group.display_name || group.name}</strong>
                 <small>
-                  {group.subject || group.group_type} ·{' '}
+                  {group.subject || humanGroupType(group.group_type)} ·{' '}
                   {group.student_count || 0} учеников
                 </small>
               </div>
@@ -1659,6 +1698,9 @@ function AdminApp({
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [query, setQuery] = useState('');
+  const [peopleFilter, setPeopleFilter] = useState<
+    'all' | 'student' | 'teacher' | 'admin' | 'unmatched'
+  >('all');
   const [selectedUser, setSelectedUser] = useState<Record<
     string,
     unknown
@@ -1759,17 +1801,29 @@ function AdminApp({
   };
   const filteredUsers = useMemo(
     () =>
-      data?.users.filter((user) =>
-        `${displayValue(user.display_name)} ${displayValue(user.class_name)} ${((user.roles as string[]) || []).join(' ')}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ) || [],
-    [data, query],
+      data?.users.filter((user) => {
+        const roles = Array.isArray(user.roles)
+          ? user.roles.filter((item): item is string => typeof item === 'string')
+          : [displayValue(user.role)];
+        const matchesFilter =
+          peopleFilter === 'all'
+            ? true
+            : peopleFilter === 'unmatched'
+              ? !user.identity_id
+              : roles.includes(peopleFilter);
+        return (
+          matchesFilter &&
+          `${displayValue(user.display_name)} ${displayValue(user.class_name)} ${roles.join(' ')}`
+            .toLowerCase()
+            .includes(query.toLowerCase())
+        );
+      }) || [],
+    [data, peopleFilter, query],
   );
   const filteredGroups = useMemo(
     () =>
       data?.groups.filter((group) =>
-        `${displayValue(group.name)} ${displayValue(group.group_type)}`
+        `${displayValue(group.name)} ${displayValue(group.display_name)} ${displayValue(group.group_type)} ${displayValue(group.subject)} ${displayValue(group.base_class_name)} ${displayValue(group.subject_subgroup)} ${displayValue(group.exam_track)}`
           .toLowerCase()
           .includes(query.toLowerCase()),
       ) || [],
@@ -1935,7 +1989,7 @@ function AdminApp({
               <div>
                 <CalendarDays size={17} />
                 <span>
-                  <strong>Расписание</strong>
+                    <strong>Расписание · новый pipeline не подключён</strong>
                   <small>
                     {data.scheduleSyncs.length
                       ? 'Источник подключён'
@@ -1946,21 +2000,21 @@ function AdminApp({
               <div>
                 <BarChart3 size={17} />
                 <span>
-                  <strong>Журнал</strong>
+                  <strong>Журнал · исходный snapshot</strong>
                   <small>
                     {data.journals.length
-                      ? `${data.overview.journal_results || 0} результатов`
-                      : 'Ещё не синхронизирован'}
+                      ? `${data.overview.journal_results || 0} записей · не canonical grades`
+                      : 'Нет импортированного snapshot'}
                   </small>
                 </span>
               </div>
               <div>
                 <BookOpen size={17} />
                 <span>
-                  <strong>Classroom</strong>
+                  <strong>Classroom · metadata</strong>
                   <small>
                     {data.classroomSyncs.length
-                      ? 'Источник подключён'
+                      ? 'Не является официальным журналом'
                       : 'Нет истории синхронизации'}
                   </small>
                 </span>
@@ -1979,6 +2033,25 @@ function AdminApp({
           />
           <div className="split-view">
             <section className="work-card people-catalog">
+              <div className="people-filters" aria-label="Фильтр людей">
+                {(
+                  [
+                    ['all', 'Все'],
+                    ['student', 'Ученики'],
+                    ['teacher', 'Учителя'],
+                    ['admin', 'Администраторы'],
+                    ['unmatched', 'Требуют сопоставления'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    className={peopleFilter === id ? 'is-active' : ''}
+                    onClick={() => setPeopleFilter(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               {filteredUsers.map((user, index) => (
                 <button
                   className={`person-row ${displayValue(selectedUser?.id) === displayValue(user.id) ? 'is-selected' : ''}`}
@@ -1989,18 +2062,11 @@ function AdminApp({
                   }}
                 >
                   <span className="avatar-mini">
-                    {displayValue(user.display_name, '?').slice(0, 1)}
+                    {personLabel(user).slice(0, 1)}
                   </span>
                   <div>
-                    <strong>
-                      {displayValue(user.display_name, 'Не сопоставлен')}
-                    </strong>
-                    <small>
-                      {Array.isArray(user.roles)
-                        ? user.roles.map(humanRole).join(' · ')
-                        : humanRole(user.role)}{' '}
-                      · {displayValue(user.class_name, 'без класса')}
-                    </small>
+                    <strong>{personLabel(user)}</strong>
+                    <small>{personSummary(user)}</small>
                   </div>
                   <ChevronRight size={16} />
                 </button>
@@ -2011,21 +2077,12 @@ function AdminApp({
                 <>
                   <div className="person-hero">
                     <span className="avatar-large">
-                      {displayValue(selectedUser.display_name, '?').slice(0, 1)}
+                      {personLabel(selectedUser).slice(0, 1)}
                     </span>
                     <div>
-                      <h2>
-                        {displayValue(
-                          selectedUser.display_name,
-                          'Не сопоставлен',
-                        )}
-                      </h2>
+                      <h2>{personLabel(selectedUser)}</h2>
                       <p>
-                        {displayValue(
-                          selectedUser.class_name,
-                          'Класс не указан',
-                        )}{' '}
-                        ·{' '}
+                        {personSummary(selectedUser)} ·{' '}
                         {displayValue(selectedUser.identity_status) ===
                         'confirmed'
                           ? 'личность подтверждена'
@@ -2051,7 +2108,7 @@ function AdminApp({
                       </button>
                     ))}
                   </div>
-                  <div className="subsection-title">Школьная структура</div>
+                  <div className="subsection-title">Связи со школой</div>
                   <button
                     className="outline-button"
                     onClick={() => setSection('structure')}
@@ -2084,9 +2141,7 @@ function AdminApp({
                             setSection('structure');
                           }}
                         >
-                          {displayValue(
-                            (group as Record<string, unknown>).name,
-                          )}{' '}
+                          {groupLabel(group as Record<string, unknown>)}{' '}
                           <ChevronRight size={14} />
                         </button>
                       ))}
@@ -2113,8 +2168,8 @@ function AdminApp({
           />
           <section className="work-card school-assignment-editor">
             <div className="work-card__heading">
-              <h2>Обучение и преподавание</h2>
-              <small>Единое место для школьных связей</small>
+              <h2>Управление связями</h2>
+              <small>Отдельно от просмотра структуры школы</small>
             </div>
             <select
               className="control-select"
@@ -2151,7 +2206,8 @@ function AdminApp({
                   key={displayValue(group.id)}
                   value={displayValue(group.id)}
                 >
-                  {displayValue(group.name)} · {displayValue(group.group_type)}
+                  {groupLabel(group as Record<string, unknown>)} ·{' '}
+                  {humanGroupType(group.group_type)}
                 </option>
               ))}
             </select>
@@ -2196,9 +2252,9 @@ function AdminApp({
                     <School size={18} />
                   </span>
                   <div>
-                    <strong>{displayValue(group.name)}</strong>
+                    <strong>{groupLabel(group)}</strong>
                     <small>
-                      {displayValue(group.group_type)} ·{' '}
+                      {humanGroupType(group.group_type)} ·{' '}
                       {displayValue(group.member_count, '0')} участников ·{' '}
                       {displayValue(group.teacher_count, '0')} учителей
                     </small>
@@ -2295,12 +2351,12 @@ function AdminApp({
               onClick={() => void mutate('/api/admin/classroom/refresh')}
             />
             <Integration
-              title="Журналы 2026/27"
+              title="Журналы 2026/27 · snapshot"
               icon={BarChart3}
               summary={
                 <p>
                   {data.journals.length
-                    ? `${displayValue(data.journals[0].spreadsheet_title)} · ${displayValue(data.journals[0].result_count, '0')} результатов`
+                    ? `${displayValue(data.journals[0].spreadsheet_title)} · ${displayValue(data.journals[0].result_count, '0')} записей · только чтение`
                     : 'Grade 9 Math ещё не синхронизирован'}
                 </p>
               }
@@ -2373,8 +2429,7 @@ function AdminApp({
                               key={displayValue(group.id)}
                               value={displayValue(group.id)}
                             >
-                              {displayValue(group.name)} ·{' '}
-                              {displayValue(group.group_type)}
+                              {groupLabel(group)} · {humanGroupType(group.group_type)}
                             </option>
                           ))}
                         </select>
@@ -2581,6 +2636,11 @@ function AdminApp({
               placeholder="Поиск людей, классов и групп"
             />
           </div>
+          {onBackToTeacher && (
+            <button className="outline-button admin-mode-switch" onClick={onBackToTeacher}>
+              <BookOpen size={16} /> В режим учителя
+            </button>
+          )}
           <button
             className="icon-button icon-button--dark"
             onClick={() => void load()}

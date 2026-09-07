@@ -46,6 +46,7 @@ class MembershipPayload(BaseModel):
     group_id: str
     identity_id: str
     source: str = "admin_override"
+    source_ref: str = ""
     member_role: str = "student"
 
 
@@ -362,9 +363,9 @@ def create_router(database: Database) -> APIRouter:
     @router.post("/admin/memberships")
     def create_student_membership(payload: MembershipPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        require_role(telegram_user, "admin")
+        actor = require_role(telegram_user, "admin")
         try:
-            membership = add_membership(database, payload.group_id, payload.identity_id, payload.source, payload.member_role)
+            membership = add_membership(database, payload.group_id, payload.identity_id, payload.source, payload.member_role, payload.source_ref, actor["id"])
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"id": membership["id"], "group_id": membership["group_id"], "identity_id": membership["identity_id"], "member_role": membership["member_role"], "active": membership["active"]}

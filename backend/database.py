@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   group_type TEXT NOT NULL,
+  display_name TEXT,
+  subject TEXT,
+  base_class_name TEXT,
+  subject_subgroup TEXT,
+  exam_track TEXT,
+  provenance_source TEXT,
+  provenance_ref TEXT,
+  canonical INTEGER NOT NULL DEFAULT 1,
   UNIQUE(name, group_type)
 );
 CREATE TABLE IF NOT EXISTS memberships (
@@ -45,10 +53,12 @@ CREATE TABLE IF NOT EXISTS memberships (
   identity_id INTEGER NOT NULL REFERENCES identities(id),
   member_role TEXT NOT NULL,
   source TEXT NOT NULL,
+  source_ref TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1,
   valid_from TEXT,
   valid_until TEXT,
-  UNIQUE(group_id, identity_id, source)
+  created_by INTEGER REFERENCES users(id),
+  UNIQUE(group_id, identity_id, member_role, source, source_ref)
 );
 CREATE TABLE IF NOT EXISTS schedule_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +81,8 @@ CREATE TABLE IF NOT EXISTS schedule_entries (
   header_source_column TEXT,
   week_start TEXT,
   source_hash TEXT NOT NULL,
-  raw_source TEXT
+  raw_source TEXT,
+  archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +91,7 @@ CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   subject TEXT NOT NULL DEFAULT '',
   subject_subgroup TEXT NOT NULL DEFAULT '',
   exam_track TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
   UNIQUE(group_id, audience, subject, subject_subgroup, exam_track)
 );
 CREATE TABLE IF NOT EXISTS user_roles (
@@ -119,7 +131,8 @@ CREATE TABLE IF NOT EXISTS schedule_syncs (
   source_hash TEXT,
   error TEXT,
   validation_problems TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -593,7 +606,7 @@ class Database:
 
     def list_schedule_entries(self, lesson_date: str) -> list[sqlite3.Row]:
         with self.connection() as connection:
-            return self.execute(connection, "SELECT lesson_date, start_time, end_time, subject, teacher, room, audience FROM schedule_entries WHERE lesson_date = ? ORDER BY start_time", (lesson_date,)).fetchall()
+            return self.execute(connection, "SELECT lesson_date, start_time, end_time, subject, teacher, room, audience FROM schedule_entries WHERE lesson_date = ? AND archived IS FALSE ORDER BY start_time", (lesson_date,)).fetchall()
 
     def list_schedule_entries_for_user(self, user_id: Any, lesson_date: str, end_date: str | None = None) -> list[Any]:
         with self.connection() as connection:
@@ -605,10 +618,11 @@ class Database:
                           se.delivery_mode, se.parse_status, se.parse_diagnostics, se.source_tab,
                           se.source_coordinate
                      FROM schedule_entries se
-                     JOIN group_schedule_audiences ga ON ga.audience = se.audience
+                     JOIN group_schedule_audiences ga ON ga.audience = se.audience AND ga.archived IS FALSE
                      JOIN memberships m ON m.group_id = ga.group_id AND m.active IS TRUE
                      JOIN users u ON u.identity_id = m.identity_id
-                    WHERE u.id = ?
+                     WHERE u.id = ?
+                       AND se.archived IS FALSE
                       AND NOT EXISTS (
                         SELECT 1 FROM membership_overrides mo
                          WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id
@@ -659,8 +673,8 @@ class Database:
                 scopes = self.execute(
                     connection,
                     """SELECT audience, subject, subject_subgroup, exam_track
-                         FROM group_schedule_audiences
-                        WHERE group_id = ?
+                        FROM group_schedule_audiences
+                        WHERE group_id = ? AND archived IS FALSE
                         ORDER BY audience, subject, subject_subgroup, exam_track""",
                     (group["id"],),
                 ).fetchall()
@@ -705,7 +719,7 @@ class Database:
             for user in users:
                 groups = self.execute(
                     connection,
-                    """SELECT g.id, g.name, g.group_type, m.source
+                     """SELECT g.id, g.name, g.display_name, g.group_type, m.source
                          FROM memberships m JOIN groups g ON g.id = m.group_id
                         WHERE m.identity_id = ? AND m.active IS TRUE
                         ORDER BY g.name""",
@@ -714,14 +728,14 @@ class Database:
                 roles = roles_by_user.get(user["id"], [str(user["role"])])
                 teacher_assignments = self.execute(
                     connection,
-                    """SELECT ta.id, ta.group_id, g.name AS group_name, ta.subject, ta.capability, ta.source, ta.active
+                     """SELECT ta.id, ta.group_id, g.name AS group_name, g.display_name AS group_display_name, ta.subject, ta.capability, ta.source, ta.active
                          FROM teacher_assignments ta JOIN groups g ON g.id = ta.group_id
                         WHERE ta.teacher_identity_id = ? ORDER BY g.name, ta.subject""",
                     (user["identity_id"],),
                 ).fetchall() if user["identity_id"] else []
                 homeroom = self.execute(
                     connection,
-                    """SELECT h.id, h.class_group_id AS group_id, g.name AS group_name, h.source, h.active
+                     """SELECT h.id, h.class_group_id AS group_id, g.name AS group_name, g.display_name AS group_display_name, h.source, h.active
                          FROM homeroom_assignments h JOIN groups g ON g.id = h.class_group_id
                         WHERE h.teacher_identity_id = ? ORDER BY g.name""",
                     (user["identity_id"],),
@@ -763,7 +777,7 @@ class Database:
                                       ga.subject_subgroup, ga.exam_track
                                  FROM memberships m
                                  JOIN groups g ON g.id = m.group_id
-                                 JOIN group_schedule_audiences ga ON ga.group_id = m.group_id
+                                  JOIN group_schedule_audiences ga ON ga.group_id = m.group_id AND ga.archived IS FALSE
                                  JOIN users u ON u.identity_id = m.identity_id
                                 WHERE u.id = ? AND m.active IS TRUE
                                 ORDER BY g.name, ga.subject, ga.subject_subgroup, ga.exam_track""",
@@ -807,7 +821,7 @@ class Database:
             query = """SELECT lesson_date, start_time, subject, audience, parse_status, parse_diagnostics,
                               source_tab, source_coordinate, raw_source
                          FROM schedule_entries
-                        WHERE parse_status IN ('partial', 'ambiguous', 'failed')"""
+                        WHERE archived IS FALSE AND parse_status IN ('partial', 'ambiguous', 'failed')"""
             params: tuple[Any, ...] = ()
             if audience:
                 query += " AND audience = ?"
@@ -817,7 +831,7 @@ class Database:
 
     def list_schedule_syncs(self, limit: int = 20) -> list[Any]:
         with self.connection() as connection:
-            return self.execute(connection, "SELECT id, status, source, source_hash, error, validation_problems, created_at FROM schedule_syncs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+            return self.execute(connection, "SELECT id, status, source, source_hash, error, validation_problems, created_at FROM schedule_syncs WHERE archived IS FALSE ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
 
     def list_classroom_sync_audit(self, limit: int = 20) -> list[Any]:
         with self.connection() as connection:
@@ -907,21 +921,26 @@ class Database:
                 (user_id,),
             ).fetchall()
 
-    def upsert_classroom_course(self, course: dict[str, Any], teacher_account: str) -> Any:
+    def upsert_classroom_course(self, course: dict[str, Any], teacher_account: str, group_id: Any | None = None) -> Any:
         with self.connection() as connection:
-            group = self.execute(
+            existing = self.execute(
                 connection,
-                "INSERT INTO groups(name, group_type) VALUES (?, ?) ON CONFLICT(name, group_type) DO UPDATE SET name = excluded.name RETURNING id",
-                (course["title"], "class"),
+                "SELECT id, group_id FROM classroom_courses WHERE external_course_id = ?",
+                (course["external_id"],),
             ).fetchone()
+            mapped_group_id = existing["group_id"] if existing else group_id
+            if not mapped_group_id:
+                raise ValueError("Classroom course has no explicit internal group mapping")
+            if not self.execute(connection, "SELECT 1 FROM groups WHERE id = ?", (mapped_group_id,)).fetchone():
+                raise ValueError("Classroom course mapping points to a missing internal group")
             self.execute(
                 connection,
                 """INSERT INTO classroom_courses(external_course_id, group_id, title, teacher_account, section, description, room, update_time, raw_source)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(external_course_id) DO UPDATE SET group_id = excluded.group_id, title = excluded.title,
-                     teacher_account = excluded.teacher_account, section = excluded.section, description = excluded.description,
-                     room = excluded.room, update_time = excluded.update_time, raw_source = excluded.raw_source""",
-                (course["external_id"], group["id"], course["title"], teacher_account, course.get("section"), course.get("description"), course.get("room"), course.get("update_time"), course.get("raw_source")),
+                   ON CONFLICT(external_course_id) DO UPDATE SET title = excluded.title,
+                      teacher_account = excluded.teacher_account, section = excluded.section, description = excluded.description,
+                      room = excluded.room, update_time = excluded.update_time, raw_source = excluded.raw_source""",
+                (course["external_id"], mapped_group_id, course["title"], teacher_account, course.get("section"), course.get("description"), course.get("room"), course.get("update_time"), course.get("raw_source")),
             )
             return self.execute(connection, "SELECT * FROM classroom_courses WHERE external_course_id = ?", (course["external_id"],)).fetchone()
 
@@ -1025,15 +1044,15 @@ class Database:
         with self.connection() as connection:
             return self.execute(connection, "SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
 
-    def create_membership(self, group_id: Any, identity_id: Any, member_role: str, source: str) -> Any:
+    def create_membership(self, group_id: Any, identity_id: Any, member_role: str, source: str, source_ref: str = "", created_by: Any | None = None) -> Any:
         with self.connection() as connection:
             row = self.execute(
                 connection,
-                """INSERT INTO memberships(group_id, identity_id, member_role, source, active)
-                   VALUES (?, ?, ?, ?, TRUE)
-                   ON CONFLICT(group_id, identity_id, source) DO UPDATE SET active = TRUE
+                """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by)
+                   VALUES (?, ?, ?, ?, ?, TRUE, ?)
+                   ON CONFLICT(group_id, identity_id, member_role, source, source_ref) DO UPDATE SET active = TRUE
                    RETURNING id""",
-                (group_id, identity_id, member_role, source),
+                (group_id, identity_id, member_role, source, source_ref.strip(), created_by),
             ).fetchone()
             return self.execute(connection, "SELECT * FROM memberships WHERE id = ?", (row["id"],)).fetchone()
 
@@ -1062,7 +1081,9 @@ class Database:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.group_type,
+                """SELECT g.id, g.name, g.display_name, g.group_type, g.subject, g.base_class_name,
+                          g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref,
+                          g.canonical,
                           COUNT(DISTINCT CASE WHEN m.active IS TRUE THEN m.identity_id END) AS member_count,
                           COUNT(DISTINCT CASE WHEN ta.active IS TRUE THEN ta.teacher_identity_id END) AS teacher_count
                      FROM groups g
@@ -1089,10 +1110,11 @@ class Database:
             if action == "include":
                 self.execute(
                     connection,
-                    """INSERT INTO memberships(group_id, identity_id, member_role, source, active)
-                       VALUES (?, ?, ?, 'admin_override', TRUE)
-                       ON CONFLICT(group_id, identity_id, source) DO UPDATE SET member_role = excluded.member_role, active = TRUE""",
-                    (group_id, identity_id, member_role),
+                    """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by)
+                       VALUES (?, ?, ?, 'admin_override', ?, TRUE, ?)
+                       ON CONFLICT(group_id, identity_id, member_role, source, source_ref)
+                       DO UPDATE SET active = TRUE, created_by = excluded.created_by""",
+                    (group_id, identity_id, member_role, f"membership_override:{row['id']}", actor_user_id),
                 )
             else:
                 self.execute(
@@ -1148,7 +1170,7 @@ class Database:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT DISTINCT g.id, g.name, g.group_type, COALESCE(ta.subject, '') AS subject,
+                """SELECT DISTINCT g.id, g.name, g.display_name, g.group_type, COALESCE(ta.subject, '') AS subject,
                           COALESCE(ta.base_class_name, '') AS base_class_name,
                           COALESCE(ta.subject_subgroup, '') AS subject_subgroup,
                           ta.classroom_course_id AS classroom_course_id,
@@ -1165,7 +1187,7 @@ class Database:
                      LEFT JOIN homeroom_assignments h ON h.teacher_identity_id = u.identity_id AND h.class_group_id = g.id AND h.active IS TRUE
                      LEFT JOIN memberships sm ON sm.group_id = g.id
                     WHERE u.id = ?
-                    GROUP BY g.id, g.name, g.group_type, ta.subject, ta.base_class_name, ta.subject_subgroup, ta.classroom_course_id, ta.exam_track, h.id
+                     GROUP BY g.id, g.name, g.display_name, g.group_type, ta.subject, ta.base_class_name, ta.subject_subgroup, ta.classroom_course_id, ta.exam_track, h.id
                     ORDER BY is_homeroom DESC, g.name""",
                 (user_id,),
             ).fetchall()
@@ -1194,8 +1216,8 @@ class Database:
                      FROM users u
                      JOIN teacher_assignments ta ON ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
                      JOIN group_schedule_audiences ga ON ga.group_id = ta.group_id
-                     JOIN schedule_entries se ON se.audience = ga.audience
-                    WHERE u.id = ? AND {date_range} AND (ta.subject = '' OR ta.subject = se.subject)
+                     JOIN schedule_entries se ON se.audience = ga.audience AND se.archived IS FALSE
+                     WHERE u.id = ? AND ga.archived IS FALSE AND {date_range} AND (ta.subject = '' OR ta.subject = se.subject)
                     ORDER BY se.lesson_date, se.start_time, se.subject""",
                 (user_id, start_day, end_day, start_day),
             ).fetchall()
@@ -1232,7 +1254,7 @@ class Database:
                 "pending_claims": "SELECT COUNT(*) AS value FROM identity_claims WHERE status = 'pending'",
                 "users": "SELECT COUNT(*) AS value FROM users",
                 "groups": "SELECT COUNT(*) AS value FROM groups",
-                "parse_issues": "SELECT COUNT(*) AS value FROM schedule_entries WHERE parse_status IN ('partial','ambiguous','failed')",
+                "parse_issues": "SELECT COUNT(*) AS value FROM schedule_entries WHERE archived IS FALSE AND parse_status IN ('partial','ambiguous','failed')",
                 "journal_results": "SELECT COUNT(*) AS value FROM journal_results",
                 "unlinked_accounts": "SELECT COUNT(*) AS value FROM users WHERE identity_id IS NULL",
                 "identity_conflicts": "SELECT COUNT(*) AS value FROM identity_claims WHERE status = 'identity_conflict'",
