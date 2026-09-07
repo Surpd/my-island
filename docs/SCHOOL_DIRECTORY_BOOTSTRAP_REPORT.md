@@ -8,9 +8,9 @@
 - Учеников: **115 active canonical students** (5 duplicate identities merged; stale `Федя`, Иващенко Фёдор и Нестерова Алиса deactivated)
 - Учителей: **1**
 - Базовых классов: **8** (5, 6, 7, 8, 9-А, 9-Д, 10, 11; legacy 9-1/9-2/9-3 отсутствуют)
-- Предметных групп: **20**
-- Экзаменационных/профильных групп: **46**
-- Активных memberships: **550** (547 official source-derived plus 3 non-official/manual preserved)
+- Предметных групп: **22**
+- Экзаменационных/профильных групп: **48**
+- Активных memberships: **591** (588 official source-derived plus 3 non-official/manual preserved)
 - Teacher assignments: **3** — Дмитрий Филиппов: Grade 9 Math A/B/C
 - Автоматически применено: **312/312 instructional roster records** plus validated identity merges and 167 exam/profile records
 - Открыто review issues: **0** (user decisions applied; no unresolved active-directory cases)
@@ -90,7 +90,7 @@ Authority, подтверждённая inspection:
 | Кузнецов Леонид | 8 | — | — | — | — | распознано |
 | Кулиш Владимир | 5 | Математика · 5 класс · Мария | Английский язык · 5-6 класс · 1 Ангелина | — | — | распознано |
 | Кулиш Григорий | 8 | Математика · 8 класс · Мария | Английский язык · 7-8 класс · 3 Ангелина | — | — | распознано |
-| Куренков Иван | 9-Д | Математика · группа C · 9 класс | Английский язык · 9 класс · 7 Ангелина | 9-Д · Информатика · ОГЭ<br>9 класс · Группа Математики<br>9 класс · Информатика<br>9 класс · Математика профиль<br>9 класс · Физика<br>9 класс · Химия<br>Физика · 9 класс · ОГЭ<br>Химия · 9 класс · ОГЭ | Обществознание · 9 класс · База Антон | распознано |
+| Куренков Иван | 9-Д | Математика · группа C · 9 класс | Английский язык · 9 класс · 7 Ангелина | 9-Д · Информатика · ОГЭ<br>9 класс · Группа Математики<br>9 класс · Информатика<br>9 класс · Математика профиль<br>9 класс · Физика<br>9 класс · Химия<br>Информатика · 9 класс · ОГЭ Тарас<br>Физика · 9 класс · ОГЭ<br>Химия · 9 класс · ОГЭ | Обществознание · 9 класс · База Антон | распознано |
 | Лукина Таисия | 11 | Математика · 11 класс · База Дмитрий | Английский язык · 10-11 класс · 9 Ангелина | 11 класс · Литература<br>11 класс · Общество<br>Литература · 11 класс · ЕГЭ ЕВ | — | распознано |
 | Маркова Иванка | 7 | Математика · 7 класс · 7-1 Иван | Английский язык · 7-8 класс · 3 Ангелина | — | — | распознано |
 | Мартынов Иван | 8 | Математика · 8 класс · Мария | — | — | — | распознано |
@@ -166,7 +166,7 @@ Authority, подтверждённая inspection:
 - Исправлена системная проблема: прежний плоский `groups` payload заставлял frontend угадывать тип связи. Backwards-compatible `groups` оставлен, но Admin UI использует typed projections.
 - В Admin добавлены независимые фильтры: сначала базовый класс, затем учебная/экзаменационная группа; структура школы разделена на базовые классы и memberships. Карточка группы показывает active roster и source/manual distinction; переходы ведут к той же canonical person.
 - Regression records: Холодова Татьяна → 9-А; Иващенко Фёдор и Нестерова Алиса отсутствуют среди active; Горлова Вика/Виктория и Мищенко Петя/Пётр остаются одной canonical identity; Grade 9 Math A/B/C = 5/11/13 active, из них source-derived 5/11/12 и manual C=1.
-- Five-person relationship spot check: `Бруннер Агата` (11), `Куренков Иван` (9-Д), `Николаев Максим` (6), `Парамонов Женя` (6), `Турчин Алексей` (7). У каждого ровно один active base class; instructional и exam/profile memberships разделены. Найденный у Куренкова дубль base-class `admin_override` деактивирован; canonical projection дополнительно deduplicates same group relation while retaining source/manual provenance. Для Куренкова подтверждён и восстановлен English `9 класс · 7 Ангелина` из `списки групп 26-27!N30`.
+- Five-person relationship spot check: `Бруннер Агата` (11), `Куренков Иван` (9-Д), `Николаев Максим` (6), `Парамонов Женя` (6), `Турчин Алексей` (7). У каждого ровно один active base class; instructional и exam/profile memberships разделены. Найденный у Куренкова дубль base-class `admin_override` деактивирован; canonical projection дополнительно deduplicates same group relation while retaining source/manual provenance. Для Куренкова подтверждены English `9 класс · 7 Ангелина` (`N30`) и Informatics OGE roster `Информатика · 9 класс · ОГЭ Тарас` (`L88`); оба восстановлены общим ремонтом отсутствующих roster groups.
 
 ## Completeness matrix — instructional source
 
