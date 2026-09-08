@@ -197,7 +197,7 @@ def build_assignment_candidates(rows: Sequence[TeacherRow], groups: Mapping[str,
         subjects = normalize_subjects(row.subject)
         text = row.audiences
         lower = _key(text)
-        if "по расписанию" in lower:
+        if "по расписанию" in lower and not _grades(text):
             issues.append(TeacherIssue(row.teacher, row.subject, "постоянная группа не указана: «по расписанию»", row.source_ref))
         # English groups are global and have no class dimension.
         english_numbers = re.findall(r"(?:групп[аы]?\s*)?(\d{1,2})(?=\b)", text, flags=re.IGNORECASE) if "англий" in _key(row.subject) else []
@@ -216,9 +216,11 @@ def build_assignment_candidates(rows: Sequence[TeacherRow], groups: Mapping[str,
         has_ege = bool(re.search(r"\bегэ\b", lower))
         oge_grades = _track_grades(text, "огэ", grades) if has_oge else set()
         ege_grades = _track_grades(text, "егэ", grades) if has_ege else set()
+        if has_ege and not ege_grades:
+            issues.append(TeacherIssue(row.teacher, row.subject, "ЕГЭ указан без однозначного класса", row.source_ref))
         explicit_base = bool(re.search(r"\bбаз", lower))
         explicit_profile = bool(re.search(r"профил|угл", lower))
-        math_letters = re.findall(r"(?:групп[аы]?\s*)?([абвabc])\b", lower, flags=re.IGNORECASE) if "математ" in _key(row.subject) else []
+        math_letters = re.findall(r"(?:групп[аы]?\s*)?([абвсabc])\b", lower, flags=re.IGNORECASE) if "математ" in _key(row.subject) else []
         if math_letters and "9" in grades:
             for letter in dict.fromkeys(math_letters):
                 letter = {"а": "A", "б": "B", "в": "B", "с": "C"}.get(letter, letter.upper())
@@ -306,15 +308,17 @@ def sync_teacher_directory(database: Any, rows: Sequence[Sequence[Any]], *, spre
         candidates, mapping_issues = build_assignment_candidates(parsed_rows, groups)
         issues = parse_issues + mapping_issues
         teacher_ids: dict[str, Any] = {}
-        for candidate in candidates:
-            name = candidate.teacher
+        source_teacher_refs = {
+            canonical_teacher_name(row.teacher): row.source_ref for row in parsed_rows
+        }
+        for name, source_ref in sorted(source_teacher_refs.items()):
             identity = database.execute(connection, "SELECT * FROM identities WHERE kind = 'teacher' AND status = 'active' AND lower(replace(display_name, 'ё', 'е')) = lower(replace(?, 'ё', 'е')) ORDER BY id LIMIT 1", (name,)).fetchone()
             if not identity:
-                identity = database.execute(connection, "INSERT INTO identities(kind, display_name, status, origin, source_ref) VALUES ('teacher', ?, 'active', 'official_import', ?) RETURNING *", (name, f"{SHEET_NAME}!A:{name}")).fetchone()
+                identity = database.execute(connection, "INSERT INTO identities(kind, display_name, status, origin, source_ref) VALUES ('teacher', ?, 'active', 'official_import', ?) RETURNING *", (name, source_ref)).fetchone()
             teacher_ids[name] = identity["id"]
             external_key = f"teacher:{name}"
             database.execute(connection, """INSERT INTO school_source_mappings(source_id, external_key, mapping_type, identity_id, status, manually_confirmed, evidence)
-              VALUES (?, ?, 'identity', ?, 'confirmed', FALSE, ?) ON CONFLICT(source_id, external_key, mapping_type) WHERE valid_until IS NULL AND status <> 'revoked' DO UPDATE SET identity_id=excluded.identity_id, evidence=excluded.evidence""", (source_id, external_key, identity["id"], json.dumps({"source_ref": candidate.source_ref, "source_name": name}, ensure_ascii=False)))
+              VALUES (?, ?, 'identity', ?, 'confirmed', FALSE, ?) ON CONFLICT(source_id, external_key, mapping_type) WHERE valid_until IS NULL AND status <> 'revoked' DO UPDATE SET identity_id=excluded.identity_id, evidence=excluded.evidence""", (source_id, external_key, identity["id"], json.dumps({"source_ref": source_ref, "source_name": name}, ensure_ascii=False)))
         desired_refs: set[str] = set()
         counts = {"KEEP": 0, "ADD": 0, "REMOVE": 0, "UNRESOLVED": len(issues)}
         for candidate in candidates:

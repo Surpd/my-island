@@ -43,7 +43,7 @@ class TeacherDirectoryTests(unittest.TestCase):
         self.assertEqual(canonical_teacher_name("ДФ"), "Дмитрий Филиппов")
         self.assertEqual(canonical_teacher_name("Дмитрий Ф"), "Дмитрий Филиппов")
         self.assertEqual(normalize_subjects("Русский язык, литература, лаборатория"), ("Русский язык", "Литература"))
-        self.assertEqual(len(candidates), 3 + 6 + 4)
+        self.assertEqual(len(candidates), 4 + 6 + 4)
         self.assertFalse(mapping_issues)
 
     def test_sync_is_idempotent_and_does_not_touch_student_memberships(self):
