@@ -10,6 +10,7 @@ from backend.services.google_oauth import google_config
 from backend.services.google_sheets import import_school_schedule_tabs
 from backend.services.journal_import import sync_journal_values
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
+from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
 
 
 CURRENT_JOURNAL_FOLDER_ID = "1u7LS5hjyiTRe4fgUoEqRB4T9c02Nq18L"
@@ -120,3 +121,45 @@ def refresh_teacher_directory(database: Database, settings: Settings) -> dict[st
     result = sync_teacher_directory(database, values, spreadsheet_id=spreadsheet_id, spreadsheet_title=title)
     database.record_audit_event("teacher_directory_sync.success", "teacher_directory", {"spreadsheet_id": spreadsheet_id, **result})
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "sheet_title": sheet_title, **result}
+
+
+def refresh_teacher_directory_dry_run(database: Database, settings: Settings) -> dict[str, Any]:
+    """Read the structured teacher source and compare it with current state.
+
+    This path intentionally performs no snapshot, issue, identity, assignment,
+    audit, or membership writes.  It is safe to run against production DB
+    credentials for an operator-facing preview.
+    """
+    client, _ = _client(settings)
+    spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
+    metadata = client.spreadsheet(spreadsheet_id)
+    title = str((metadata.get("properties") or {}).get("title", ""))
+    tabs = [str((sheet.get("properties") or {}).get("title", "")) for sheet in metadata.get("sheets") or []]
+    sheet_title = _resolve_sheet_title(tabs, STRUCTURED_TEACHER_SHEET)
+    if not sheet_title:
+        raise GoogleLiveError(f"Teacher directory tab {STRUCTURED_TEACHER_SHEET} was not found in {title}")
+    escaped_title = sheet_title.replace("'", "''")
+    values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:F")
+    with database.connection() as connection:
+        teachers = [dict(row) for row in database.execute(connection, "SELECT id, display_name, status FROM identities WHERE kind = 'teacher' AND status = 'active'").fetchall()]
+        group_rows = database.execute(connection, "SELECT id, name, group_type, subject, base_class_name, subject_subgroup, exam_track, canonical FROM groups WHERE canonical IS TRUE").fetchall()
+        groups = {str(row["name"]): dict(row) for row in group_rows}
+        assignment_rows = database.execute(connection, """SELECT ta.teacher_identity_id AS teacher_id, i.display_name AS teacher_name,
+                ta.group_id, g.name AS group_name, ta.subject, ta.base_class_name, ta.subject_subgroup,
+                ta.exam_track, ta.source, ta.source_ref, ta.active
+            FROM teacher_assignments ta
+            JOIN identities i ON i.id = ta.teacher_identity_id
+            JOIN groups g ON g.id = ta.group_id
+            WHERE ta.active IS TRUE""").fetchall()
+        current_assignments = [dict(row) for row in assignment_rows]
+        canonical_subjects = {str(row["subject"]) for row in group_rows if row["subject"]}
+        canonical_subjects.update(str(row["subject"]) for row in assignment_rows if row["subject"])
+    plan = build_teacher_reconciliation_plan(values, canonical_teachers=teachers, canonical_groups=groups, canonical_subjects=canonical_subjects, current_assignments=current_assignments)
+    return {
+        "mode": "dry_run",
+        "spreadsheet_id": spreadsheet_id,
+        "spreadsheet_title": title,
+        "sheet_title": sheet_title,
+        "report": render_teacher_reconciliation_report(plan, spreadsheet_id=spreadsheet_id, spreadsheet_title=title),
+        **plan.to_dict(),
+    }

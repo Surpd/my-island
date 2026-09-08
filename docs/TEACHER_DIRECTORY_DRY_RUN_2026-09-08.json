@@ -1,0 +1,5610 @@
+{
+  "mode": "dry_run",
+  "spreadsheet_id": "1j5dI2VbT0RoW2A5ZkCpMYVdt7cSY4ZjNxQaMWtu--Fo",
+  "spreadsheet_title": "Расписание  2026/27",
+  "sheet_title": "Учителя и группы — данные",
+  "counts": {
+    "rows_read": 128,
+    "normalized_rows": 124,
+    "matched_teacher": 124,
+    "unmatched_teacher": 0,
+    "matched_subject": 124,
+    "unmatched_subject": 0,
+    "matched_audience": 124,
+    "unresolved_audience": 1,
+    "proposed_create_assignments": 11,
+    "proposed_update_assignments": 0,
+    "proposed_deactivate_assignments": 11,
+    "manual_assignments_needing_confirmation": 1,
+    "unchanged_assignments": 113,
+    "computed_schedule_audiences": 1,
+    "conflicts": 0,
+    "skipped_blank_rows": 4,
+    "student_memberships_touched": 0,
+    "production_apply_performed": 0
+  },
+  "rows": [
+    {
+      "row_number": 2,
+      "raw_teacher": "Дмитрий Ф",
+      "raw_subject": "Математика",
+      "raw_grade": "9",
+      "raw_audience": "Группа A",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "group",
+      "audience_value": "A",
+      "tags": []
+    },
+    {
+      "row_number": 3,
+      "raw_teacher": "Дмитрий Ф",
+      "raw_subject": "Математика",
+      "raw_grade": "9",
+      "raw_audience": "Группа B",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "group",
+      "audience_value": "B",
+      "tags": []
+    },
+    {
+      "row_number": 4,
+      "raw_teacher": "Дмитрий Ф",
+      "raw_subject": "Математика",
+      "raw_grade": "9",
+      "raw_audience": "Группа C",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "group",
+      "audience_value": "C",
+      "tags": []
+    },
+    {
+      "row_number": 5,
+      "raw_teacher": "Дмитрий Ф",
+      "raw_subject": "Математика",
+      "raw_grade": "11",
+      "raw_audience": "База",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "base",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 6,
+      "raw_teacher": "Дмитрий К",
+      "raw_subject": "География",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 7,
+      "raw_teacher": "Дмитрий К",
+      "raw_subject": "География",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 8,
+      "raw_teacher": "Дмитрий К",
+      "raw_subject": "География",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 9,
+      "raw_teacher": "Дмитрий К",
+      "raw_subject": "География",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 10,
+      "raw_teacher": "Дмитрий К",
+      "raw_subject": "История",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Дмитрий К",
+      "subject": "История",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 11,
+      "raw_teacher": "Мария",
+      "raw_subject": "Математика",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 12,
+      "raw_teacher": "Мария",
+      "raw_subject": "Математика",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 13,
+      "raw_teacher": "Мария",
+      "raw_subject": "Математика",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 14,
+      "raw_teacher": "Мария",
+      "raw_subject": "Математика",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 15,
+      "raw_teacher": "Иван",
+      "raw_subject": "Математика",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Иван",
+      "subject": "Математика",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 16,
+      "raw_teacher": "Иван",
+      "raw_subject": "Математика",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Иван",
+      "subject": "Математика",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 17,
+      "raw_teacher": "Иван",
+      "raw_subject": "Физика",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 18,
+      "raw_teacher": "Иван",
+      "raw_subject": "Физика",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 19,
+      "raw_teacher": "Иван",
+      "raw_subject": "Физика",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 20,
+      "raw_teacher": "Иван",
+      "raw_subject": "Физика",
+      "raw_grade": "10",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "Физика ЕГЭ 10–11",
+      "raw_note": "занимаются вместе",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context",
+        "shared_lesson"
+      ]
+    },
+    {
+      "row_number": 21,
+      "raw_teacher": "Иван",
+      "raw_subject": "Физика",
+      "raw_grade": "11",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "Физика ЕГЭ 10–11",
+      "raw_note": "занимаются вместе",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context",
+        "shared_lesson"
+      ]
+    },
+    {
+      "row_number": 22,
+      "raw_teacher": "Анна Владимировна",
+      "raw_subject": "Математика",
+      "raw_grade": "11",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Владимировна",
+      "subject": "Математика",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 23,
+      "raw_teacher": "Анна Владимировна",
+      "raw_subject": "История искусства",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 24,
+      "raw_teacher": "Анна Владимировна",
+      "raw_subject": "История искусства",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 25,
+      "raw_teacher": "Анна Владимировна",
+      "raw_subject": "История искусства",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 26,
+      "raw_teacher": "Анна Владимировна",
+      "raw_subject": "История искусства",
+      "raw_grade": "11",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 27,
+      "raw_teacher": "Ангелина",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 1",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "1",
+      "tags": []
+    },
+    {
+      "row_number": 28,
+      "raw_teacher": "Ангелина",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 3",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "3",
+      "tags": []
+    },
+    {
+      "row_number": 29,
+      "raw_teacher": "Ангелина",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 4",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "4",
+      "tags": []
+    },
+    {
+      "row_number": 30,
+      "raw_teacher": "Ангелина",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 6",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "6",
+      "tags": []
+    },
+    {
+      "row_number": 31,
+      "raw_teacher": "Ангелина",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 7",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "7",
+      "tags": []
+    },
+    {
+      "row_number": 32,
+      "raw_teacher": "Ангелина",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 9",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "9",
+      "tags": []
+    },
+    {
+      "row_number": 33,
+      "raw_teacher": "Игорь",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 2",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "2",
+      "tags": []
+    },
+    {
+      "row_number": 34,
+      "raw_teacher": "Игорь",
+      "raw_subject": "Английский язык",
+      "raw_grade": "",
+      "raw_audience": "Группа 5",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "grades": [],
+      "audience_kind": "group",
+      "audience_value": "5",
+      "tags": []
+    },
+    {
+      "row_number": 35,
+      "raw_teacher": "Игорь",
+      "raw_subject": "Английский язык",
+      "raw_grade": "9",
+      "raw_audience": "Группа 8 / ОГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "group",
+      "audience_value": "8",
+      "tags": [
+        "oge_context"
+      ]
+    },
+    {
+      "row_number": 36,
+      "raw_teacher": "Игорь",
+      "raw_subject": "Английский язык",
+      "raw_grade": "10–11",
+      "raw_audience": "Группа 10 / ЕГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "grades": [
+        "10",
+        "11"
+      ],
+      "audience_kind": "group",
+      "audience_value": "10",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 37,
+      "raw_teacher": "Родион",
+      "raw_subject": "Биология",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Родион",
+      "subject": "Биология",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 38,
+      "raw_teacher": "Родион",
+      "raw_subject": "Биология",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Родион",
+      "subject": "Биология",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 39,
+      "raw_teacher": "Родион",
+      "raw_subject": "Биология",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Родион",
+      "subject": "Биология",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 40,
+      "raw_teacher": "Родион",
+      "raw_subject": "Химия",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Родион",
+      "subject": "Химия",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 41,
+      "raw_teacher": "Родион",
+      "raw_subject": "Химия",
+      "raw_grade": "10",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Родион",
+      "subject": "Химия",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 42,
+      "raw_teacher": "Родион",
+      "raw_subject": "Естествознание",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Родион",
+      "subject": "Естествознание",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 43,
+      "raw_teacher": "Андрей",
+      "raw_subject": "Физика",
+      "raw_grade": "9",
+      "raw_audience": "ОГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Андрей",
+      "subject": "Физика",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "oge",
+      "audience_value": "",
+      "tags": [
+        "oge_context"
+      ]
+    },
+    {
+      "row_number": 44,
+      "raw_teacher": "Андрей",
+      "raw_subject": "Химия",
+      "raw_grade": "9",
+      "raw_audience": "ОГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Андрей",
+      "subject": "Химия",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "oge",
+      "audience_value": "",
+      "tags": [
+        "oge_context"
+      ]
+    },
+    {
+      "row_number": 45,
+      "raw_teacher": "Андрей",
+      "raw_subject": "Естествознание",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Андрей",
+      "subject": "Естествознание",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 46,
+      "raw_teacher": "Андрей",
+      "raw_subject": "Естествознание",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Андрей",
+      "subject": "Естествознание",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 47,
+      "raw_teacher": "Сергей",
+      "raw_subject": "Пластика",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 48,
+      "raw_teacher": "Сергей",
+      "raw_subject": "Пластика",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 49,
+      "raw_teacher": "Сергей",
+      "raw_subject": "Пластика",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 50,
+      "raw_teacher": "Сергей",
+      "raw_subject": "Пластика",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 51,
+      "raw_teacher": "Сергей",
+      "raw_subject": "Пластика",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 52,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 53,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 54,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 55,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 56,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 57,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 58,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 59,
+      "raw_teacher": "Вадим",
+      "raw_subject": "Пластика",
+      "raw_grade": "11",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "по расписанию",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": [
+        "schedule_context"
+      ]
+    },
+    {
+      "row_number": 60,
+      "raw_teacher": "Ирина Анатольевна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Русский язык",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 61,
+      "raw_teacher": "Ирина Анатольевна",
+      "raw_subject": "Литература",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Литература",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 62,
+      "raw_teacher": "Ирина Анатольевна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Русский язык",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 64,
+      "raw_teacher": "Ирина Анатольевна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Русский язык",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 66,
+      "raw_teacher": "Ирина Анатольевна",
+      "raw_subject": "Литература",
+      "raw_grade": "11",
+      "raw_audience": "База",
+      "raw_shared_lesson": "отдельная группа",
+      "raw_note": "",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Литература",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "base",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 67,
+      "raw_teacher": "Елена Викторовна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 68,
+      "raw_teacher": "Елена Викторовна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 69,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Литература",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 70,
+      "raw_teacher": "Елена Викторовна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 71,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Литература",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 72,
+      "raw_teacher": "Елена Викторовна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 73,
+      "raw_teacher": "Елена Викторовна",
+      "raw_subject": "Литература",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Литература",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 74,
+      "raw_teacher": "Елена Викторовна",
+      "raw_subject": "Литература",
+      "raw_grade": "11",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "отдельная группа",
+      "raw_note": "",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Литература",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 75,
+      "raw_teacher": "Татьяна",
+      "raw_subject": "Литература",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Татьяна",
+      "subject": "Литература",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 76,
+      "raw_teacher": "Татьяна",
+      "raw_subject": "Русский язык",
+      "raw_grade": "11",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Татьяна",
+      "subject": "Русский язык",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 77,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Русский язык",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Русский язык",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 78,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Литература",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 80,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Литература",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 82,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Литература",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 83,
+      "raw_teacher": "Юлия",
+      "raw_subject": "Литература",
+      "raw_grade": "9",
+      "raw_audience": "ОГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "oge",
+      "audience_value": "",
+      "tags": [
+        "oge_context"
+      ]
+    },
+    {
+      "row_number": 84,
+      "raw_teacher": "Антон",
+      "raw_subject": "География",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 85,
+      "raw_teacher": "Антон",
+      "raw_subject": "География",
+      "raw_grade": "9-а",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 86,
+      "raw_teacher": "Антон",
+      "raw_subject": "География",
+      "raw_grade": "9-д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 87,
+      "raw_teacher": "Антон",
+      "raw_subject": "География",
+      "raw_grade": "9",
+      "raw_audience": "ОГЭ",
+      "raw_shared_lesson": "база+доп",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "oge",
+      "audience_value": "",
+      "tags": [
+        "oge_context",
+        "base_plus_additional"
+      ]
+    },
+    {
+      "row_number": 88,
+      "raw_teacher": "Антон",
+      "raw_subject": "География",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 89,
+      "raw_teacher": "Антон",
+      "raw_subject": "География",
+      "raw_grade": "11",
+      "raw_audience": "Дополнительная группа",
+      "raw_shared_lesson": "",
+      "raw_note": "только те, кто не ходит на ЕГЭ по обществознанию; занимаются с 10 классом",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "computed_schedule_audience",
+      "audience_value": "grade_without_society_ege",
+      "tags": []
+    },
+    {
+      "row_number": 90,
+      "raw_teacher": "Антон",
+      "raw_subject": "Обществознание",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 91,
+      "raw_teacher": "Антон",
+      "raw_subject": "Обществознание",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 92,
+      "raw_teacher": "Антон",
+      "raw_subject": "Обществознание",
+      "raw_grade": "9",
+      "raw_audience": "ОГЭ",
+      "raw_shared_lesson": "база+доп",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "oge",
+      "audience_value": "",
+      "tags": [
+        "oge_context",
+        "base_plus_additional"
+      ]
+    },
+    {
+      "row_number": 93,
+      "raw_teacher": "Антон",
+      "raw_subject": "История",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 94,
+      "raw_teacher": "Антон",
+      "raw_subject": "История",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 95,
+      "raw_teacher": "Антон",
+      "raw_subject": "История",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 96,
+      "raw_teacher": "Антон",
+      "raw_subject": "История",
+      "raw_grade": "9-А",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "grades": [
+        "9-А"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 97,
+      "raw_teacher": "Антон",
+      "raw_subject": "История",
+      "raw_grade": "9-Д",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "grades": [
+        "9-Д"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 98,
+      "raw_teacher": "Леонид",
+      "raw_subject": "История",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 99,
+      "raw_teacher": "Леонид",
+      "raw_subject": "История",
+      "raw_grade": "10",
+      "raw_audience": "весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 100,
+      "raw_teacher": "Леонид",
+      "raw_subject": "История",
+      "raw_grade": "11",
+      "raw_audience": "весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 101,
+      "raw_teacher": "Леонид",
+      "raw_subject": "История",
+      "raw_grade": "10",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "История ЕГЭ 10–11 база+доп",
+      "raw_note": "занимаются вместе",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context",
+        "base_plus_additional",
+        "shared_lesson"
+      ]
+    },
+    {
+      "row_number": 102,
+      "raw_teacher": "Леонид",
+      "raw_subject": "История",
+      "raw_grade": "11",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "История ЕГЭ 10–11 база+доп",
+      "raw_note": "занимаются вместе",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context",
+        "base_plus_additional",
+        "shared_lesson"
+      ]
+    },
+    {
+      "row_number": 103,
+      "raw_teacher": "Леонид",
+      "raw_subject": "Обществознание",
+      "raw_grade": "10",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 104,
+      "raw_teacher": "Леонид",
+      "raw_subject": "Обществознание",
+      "raw_grade": "10",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "База +доп",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context",
+        "base_plus_additional"
+      ]
+    },
+    {
+      "row_number": 105,
+      "raw_teacher": "Леонид",
+      "raw_subject": "Обществознание",
+      "raw_grade": "11",
+      "raw_audience": "База",
+      "raw_shared_lesson": "отдельно",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "base",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 106,
+      "raw_teacher": "Леонид",
+      "raw_subject": "Обществознание",
+      "raw_grade": "11",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "отдельно",
+      "raw_note": "",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 107,
+      "raw_teacher": "Анастасия",
+      "raw_subject": "Биология",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анастасия",
+      "subject": "Биология",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 108,
+      "raw_teacher": "Анастасия",
+      "raw_subject": "Биология",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анастасия",
+      "subject": "Биология",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 109,
+      "raw_teacher": "Анастасия",
+      "raw_subject": "Биология",
+      "raw_grade": "10",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анастасия",
+      "subject": "Биология",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 110,
+      "raw_teacher": "Тарас",
+      "raw_subject": "Информатика",
+      "raw_grade": "9",
+      "raw_audience": "База",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "base",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 111,
+      "raw_teacher": "Тарас",
+      "raw_subject": "Информатика",
+      "raw_grade": "9",
+      "raw_audience": "ОГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "grades": [
+        "9"
+      ],
+      "audience_kind": "oge",
+      "audience_value": "",
+      "tags": [
+        "oge_context"
+      ]
+    },
+    {
+      "row_number": 112,
+      "raw_teacher": "Тарас",
+      "raw_subject": "Информатика",
+      "raw_grade": "10",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "grades": [
+        "10"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 113,
+      "raw_teacher": "Тарас",
+      "raw_subject": "Информатика",
+      "raw_grade": "11",
+      "raw_audience": "ЕГЭ",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "grades": [
+        "11"
+      ],
+      "audience_kind": "ege",
+      "audience_value": "",
+      "tags": [
+        "ege_context"
+      ]
+    },
+    {
+      "row_number": 114,
+      "raw_teacher": "Лида",
+      "raw_subject": "Творчество",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 115,
+      "raw_teacher": "Лида",
+      "raw_subject": "Творчество",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 116,
+      "raw_teacher": "Лида",
+      "raw_subject": "Творчество",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 117,
+      "raw_teacher": "Лида",
+      "raw_subject": "Творчество",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 118,
+      "raw_teacher": "Лида",
+      "raw_subject": "История искусства",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 119,
+      "raw_teacher": "Лида",
+      "raw_subject": "История искусства",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 120,
+      "raw_teacher": "Лида",
+      "raw_subject": "История искусства",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 121,
+      "raw_teacher": "Лида",
+      "raw_subject": "История искусства",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 122,
+      "raw_teacher": "Лида",
+      "raw_subject": "История искусства",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 123,
+      "raw_teacher": "Марина",
+      "raw_subject": "Музыка",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Марина",
+      "subject": "Музыка",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 124,
+      "raw_teacher": "Марина",
+      "raw_subject": "Музыка",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Марина",
+      "subject": "Музыка",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 125,
+      "raw_teacher": "Ольга",
+      "raw_subject": "Тренинг",
+      "raw_grade": "5",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ольга",
+      "subject": "Тренинг",
+      "grades": [
+        "5"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 126,
+      "raw_teacher": "Ольга",
+      "raw_subject": "Тренинг",
+      "raw_grade": "6",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Ольга",
+      "subject": "Тренинг",
+      "grades": [
+        "6"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 127,
+      "raw_teacher": "Анна Елисеева",
+      "raw_subject": "Тренинг",
+      "raw_grade": "7-1",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Елисеева",
+      "subject": "Тренинг",
+      "grades": [
+        "7-1"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 128,
+      "raw_teacher": "Анна Елисеева",
+      "raw_subject": "Тренинг",
+      "raw_grade": "7-2",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Анна Елисеева",
+      "subject": "Тренинг",
+      "grades": [
+        "7-2"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    },
+    {
+      "row_number": 129,
+      "raw_teacher": "Алексей",
+      "raw_subject": "Тренинг",
+      "raw_grade": "8",
+      "raw_audience": "Весь класс",
+      "raw_shared_lesson": "",
+      "raw_note": "",
+      "teacher_name": "Алексей",
+      "subject": "Тренинг",
+      "grades": [
+        "8"
+      ],
+      "audience_kind": "whole_class",
+      "audience_value": "",
+      "tags": []
+    }
+  ],
+  "assignments": [
+    {
+      "teacher_id": "35a9b104-d966-444b-93db-468dbb3a937e",
+      "teacher_name": "Алексей",
+      "subject": "Тренинг",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A129:F129",
+      "context": {}
+    },
+    {
+      "teacher_id": "4aaa8a20-8bb1-49c4-b6d7-e7b2e3ae3b63",
+      "teacher_name": "Анастасия",
+      "subject": "Биология",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A107:F107",
+      "context": {}
+    },
+    {
+      "teacher_id": "4aaa8a20-8bb1-49c4-b6d7-e7b2e3ae3b63",
+      "teacher_name": "Анастасия",
+      "subject": "Биология",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A108:F108",
+      "context": {}
+    },
+    {
+      "teacher_id": "4aaa8a20-8bb1-49c4-b6d7-e7b2e3ae3b63",
+      "teacher_name": "Анастасия",
+      "subject": "Биология",
+      "group_id": "0f3e0897-3c8f-411b-888f-2cf9367a89c0",
+      "group_name": "instructional:биология:10:егэ",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A109:F109",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "group_id": "eeb2dbf8-a096-43ec-94a8-5fe73cab90af",
+      "group_name": "english:1",
+      "base_class_name": null,
+      "subject_subgroup": "1",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A27:F27",
+      "context": {
+        "english_group": "1",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "group_id": "60a6fbfc-4214-431f-94dc-64b414066498",
+      "group_name": "english:3",
+      "base_class_name": null,
+      "subject_subgroup": "3",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A28:F28",
+      "context": {
+        "english_group": "3",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "group_id": "7505223b-af74-4f55-a8e5-cefb302f5c81",
+      "group_name": "english:4",
+      "base_class_name": null,
+      "subject_subgroup": "4",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A29:F29",
+      "context": {
+        "english_group": "4",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "group_id": "0988997a-b9b5-459a-94b9-9131bb800c95",
+      "group_name": "english:6",
+      "base_class_name": null,
+      "subject_subgroup": "6",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A30:F30",
+      "context": {
+        "english_group": "6",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "group_id": "5b496766-fba8-4b55-8aba-e4e811320b2d",
+      "group_name": "english:7",
+      "base_class_name": null,
+      "subject_subgroup": "7",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A31:F31",
+      "context": {
+        "english_group": "7",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "subject": "Английский язык",
+      "group_id": "cac9122c-3c93-4533-9fa9-f3d7016d551b",
+      "group_name": "english:9",
+      "base_class_name": null,
+      "subject_subgroup": "9",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A32:F32",
+      "context": {
+        "english_group": "9",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "subject": "Естествознание",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A45:F45",
+      "context": {}
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "subject": "Естествознание",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A46:F46",
+      "context": {}
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "subject": "Физика",
+      "group_id": "d91c7b99-766b-4be4-8900-20464a9409bc",
+      "group_name": "instructional:физика:9:огэ",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "Учителя и группы — данные!A43:F43",
+      "context": {
+        "exam_marker": "oge"
+      }
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "subject": "Химия",
+      "group_id": "b29051a0-e0cf-4df4-a185-8accf7874886",
+      "group_name": "instructional:химия:9:огэ",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "Учителя и группы — данные!A44:F44",
+      "context": {
+        "exam_marker": "oge"
+      }
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A25:F25",
+      "context": {}
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A26:F26",
+      "context": {}
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A23:F23",
+      "context": {}
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "subject": "История искусства",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A24:F24",
+      "context": {}
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "subject": "Математика",
+      "group_id": "eecfdb15-3df0-4246-b9f9-39940a68473a",
+      "group_name": "math:11:advanced",
+      "base_class_name": "11",
+      "subject_subgroup": "Advanced",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A22:F22",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "304d9655-e18d-4873-8939-0f89c50b38db",
+      "teacher_name": "Анна Елисеева",
+      "subject": "Тренинг",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A127:F127",
+      "context": {}
+    },
+    {
+      "teacher_id": "304d9655-e18d-4873-8939-0f89c50b38db",
+      "teacher_name": "Анна Елисеева",
+      "subject": "Тренинг",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A128:F128",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A88:F88",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A93:F93",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A94:F94",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A95:F95",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A84:F84",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A85:F85",
+      "context": {
+        "base_plus_additional": true,
+        "base_fallback": "class",
+        "source_refs": [
+          "Учителя и группы — данные!A85:F85",
+          "Учителя и группы — данные!A87:F87"
+        ]
+      }
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A96:F96",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A90:F90",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A86:F86",
+      "context": {
+        "base_plus_additional": true,
+        "base_fallback": "class",
+        "source_refs": [
+          "Учителя и группы — данные!A86:F86",
+          "Учителя и группы — данные!A87:F87"
+        ]
+      }
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "История",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A97:F97",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A91:F91",
+      "context": {}
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "География",
+      "group_id": "d65d3c9a-384a-472b-9937-91e0b92986f2",
+      "group_name": "instructional:география:9:огэ",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "Учителя и группы — данные!A87:F87",
+      "context": {
+        "exam_marker": "oge"
+      }
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "group_id": "a8b40a78-4fdb-4a14-9cb4-f5473a2397a8",
+      "group_name": "instructional:обществознание:9:база",
+      "base_class_name": "9",
+      "subject_subgroup": "База",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A92:F92",
+      "context": {
+        "base_plus_additional": true
+      }
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "subject": "Обществознание",
+      "group_id": "7b8a802d-1428-4428-8ca3-59c6559743af",
+      "group_name": "instructional:обществознание:9:огэ",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "Учителя и группы — данные!A92:F92",
+      "context": {
+        "exam_marker": "oge"
+      }
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A58:F58",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A59:F59",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A52:F52",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A53:F53",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A54:F54",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A55:F55",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A56:F56",
+      "context": {}
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "subject": "Пластика",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A57:F57",
+      "context": {}
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A6:F6",
+      "context": {}
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "subject": "История",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A10:F10",
+      "context": {}
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A7:F7",
+      "context": {}
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A8:F8",
+      "context": {}
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "subject": "География",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A9:F9",
+      "context": {}
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "group_id": "fc6c6623-e25a-42b8-b70a-50a30f4050cd",
+      "group_name": "grade9-math-A",
+      "base_class_name": "9",
+      "subject_subgroup": "A",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A2:F2",
+      "context": {}
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "group_id": "551b9f55-8512-4350-b052-9211cd19454f",
+      "group_name": "grade9-math-B",
+      "base_class_name": "9",
+      "subject_subgroup": "B",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A3:F3",
+      "context": {}
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "group_id": "1e941e58-8743-417b-afc3-8110b8d6c819",
+      "group_name": "grade9-math-C",
+      "base_class_name": "9",
+      "subject_subgroup": "C",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A4:F4",
+      "context": {}
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "subject": "Математика",
+      "group_id": "b13ad375-4223-476f-9c0a-a91cedd92f57",
+      "group_name": "math:11:base",
+      "base_class_name": "11",
+      "subject_subgroup": "Base",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A5:F5",
+      "context": {
+        "exam_marker": "base"
+      }
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Литература",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A73:F73",
+      "context": {}
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A72:F72",
+      "context": {}
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A67:F67",
+      "context": {}
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A68:F68",
+      "context": {}
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Русский язык",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A70:F70",
+      "context": {}
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "subject": "Литература",
+      "group_id": "4185e5e4-964e-40a5-adb2-c8203564b7b2",
+      "group_name": "instructional:литература:11:егэ",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A74:F74",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Математика",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A15:F15",
+      "context": {}
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A17:F17",
+      "context": {}
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Математика",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A16:F16",
+      "context": {}
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A18:F18",
+      "context": {}
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A19:F19",
+      "context": {}
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "group_id": "506c7310-cf11-444a-b8f6-2425fbe607b0",
+      "group_name": "instructional:физика:10:егэ",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A20:F20",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "subject": "Физика",
+      "group_id": "549173dc-4020-4d6d-92a2-745a6c73fbfb",
+      "group_name": "instructional:физика:11:егэ",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A21:F21",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "group_id": "73fa21b5-89e6-462d-a27b-15fa90aac216",
+      "group_name": "english:10",
+      "base_class_name": null,
+      "subject_subgroup": "10",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A36:F36",
+      "context": {
+        "english_group": "10",
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "group_id": "c17fff55-513d-420f-a33a-c4686cb24009",
+      "group_name": "english:2",
+      "base_class_name": null,
+      "subject_subgroup": "2",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A33:F33",
+      "context": {
+        "english_group": "2",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "group_id": "cdd3e5b9-e73a-464b-bc56-8bafedd696ea",
+      "group_name": "english:5",
+      "base_class_name": null,
+      "subject_subgroup": "5",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A34:F34",
+      "context": {
+        "english_group": "5",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "subject": "Английский язык",
+      "group_id": "490a04d0-99a1-4f34-a176-cc57be0c3ffd",
+      "group_name": "english:8",
+      "base_class_name": null,
+      "subject_subgroup": "8",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A35:F35",
+      "context": {
+        "english_group": "8",
+        "exam_marker": null
+      }
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Литература",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A61:F61",
+      "context": {}
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Русский язык",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A60:F60",
+      "context": {}
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Русский язык",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A62:F62",
+      "context": {}
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "subject": "Русский язык",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A64:F64",
+      "context": {}
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A99:F99",
+      "context": {}
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A103:F103",
+      "context": {}
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A100:F100",
+      "context": {}
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A98:F98",
+      "context": {}
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "group_id": "560f5707-191d-42a6-8eec-fa48d8ac296a",
+      "group_name": "instructional:история:10:егэ",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A101:F101",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "История",
+      "group_id": "7d57dd77-1e47-4b4f-a59f-ea5ec12d1444",
+      "group_name": "instructional:история:11:егэ",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A102:F102",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "group_id": "6dd00ad5-47b2-4374-b096-4764917fae27",
+      "group_name": "instructional:обществознание:10:база",
+      "base_class_name": "10",
+      "subject_subgroup": "База",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A104:F104",
+      "context": {
+        "base_plus_additional": true
+      }
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "group_id": "067179f8-e322-4080-a2d6-e277da1bb3d6",
+      "group_name": "instructional:обществознание:10:угл",
+      "base_class_name": "10",
+      "subject_subgroup": "Угл",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A104:F104",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "group_id": "e3c49cd2-da0d-4c72-a899-8375bd009d3e",
+      "group_name": "instructional:обществознание:11:база",
+      "base_class_name": "11",
+      "subject_subgroup": "База",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A105:F105",
+      "context": {
+        "exam_marker": "base"
+      }
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "subject": "Обществознание",
+      "group_id": "05ce01a5-00e9-4240-8d9f-0db2fd0fc23b",
+      "group_name": "instructional:обществознание:11:угл",
+      "base_class_name": "11",
+      "subject_subgroup": "Угл",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A106:F106",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A118:F118",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A114:F114",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A119:F119",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A115:F115",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A120:F120",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A116:F116",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A121:F121",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "Творчество",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A117:F117",
+      "context": {}
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "subject": "История искусства",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A122:F122",
+      "context": {}
+    },
+    {
+      "teacher_id": "0713e82b-76b8-4ab6-8fcb-0caff6bcf4b0",
+      "teacher_name": "Марина",
+      "subject": "Музыка",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A123:F123",
+      "context": {}
+    },
+    {
+      "teacher_id": "0713e82b-76b8-4ab6-8fcb-0caff6bcf4b0",
+      "teacher_name": "Марина",
+      "subject": "Музыка",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A124:F124",
+      "context": {}
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A14:F14",
+      "context": {}
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A11:F11",
+      "context": {}
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A12:F12",
+      "context": {}
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "subject": "Математика",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A13:F13",
+      "context": {}
+    },
+    {
+      "teacher_id": "28b2638b-de6e-4641-b696-69b76dcbb3cd",
+      "teacher_name": "Ольга",
+      "subject": "Тренинг",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A125:F125",
+      "context": {}
+    },
+    {
+      "teacher_id": "28b2638b-de6e-4641-b696-69b76dcbb3cd",
+      "teacher_name": "Ольга",
+      "subject": "Тренинг",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A126:F126",
+      "context": {}
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "subject": "Естествознание",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A42:F42",
+      "context": {}
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "subject": "Биология",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A37:F37",
+      "context": {}
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "subject": "Биология",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A38:F38",
+      "context": {}
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "subject": "Биология",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A39:F39",
+      "context": {}
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "subject": "Химия",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A40:F40",
+      "context": {}
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "subject": "Химия",
+      "group_id": "69010143-5e9a-4a31-b14a-78f2848044cd",
+      "group_name": "instructional:химия:10:егэ",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A41:F41",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A47:F47",
+      "context": {}
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A48:F48",
+      "context": {}
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A49:F49",
+      "context": {}
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A50:F50",
+      "context": {}
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "subject": "Пластика",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A51:F51",
+      "context": {}
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "group_id": "7ceb1590-4f84-4c0a-8734-ff191f1d49d1",
+      "group_name": "instructional:информатика:10:егэ",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A112:F112",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "group_id": "c9c9e261-f07e-42f1-bc4f-f8466a0dff2a",
+      "group_name": "instructional:информатика:11:егэ",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source_ref": "Учителя и группы — данные!A113:F113",
+      "context": {
+        "exam_marker": "ege"
+      }
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "group_id": "e3d16803-e5f1-41e9-9b84-dc2c49124fac",
+      "group_name": "instructional:информатика:9:база",
+      "base_class_name": "9",
+      "subject_subgroup": "База",
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A110:F110",
+      "context": {
+        "exam_marker": "base"
+      }
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "subject": "Информатика",
+      "group_id": "3e85f62b-3e0a-4984-8eb2-b8874fa5b06c",
+      "group_name": "instructional:информатика:9:огэ",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "Учителя и группы — данные!A111:F111",
+      "context": {
+        "exam_marker": "oge"
+      }
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "subject": "Русский язык",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A76:F76",
+      "context": {}
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "subject": "Литература",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A75:F75",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A78:F78",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Русский язык",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A77:F77",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A80:F80",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A82:F82",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A69:F69",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source_ref": "Учителя и группы — данные!A71:F71",
+      "context": {}
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "subject": "Литература",
+      "group_id": "301ee1d4-1c4c-4f2d-99b5-37cbda18babe",
+      "group_name": "instructional:литература:9:огэ",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "Учителя и группы — данные!A83:F83",
+      "context": {
+        "exam_marker": "oge"
+      }
+    }
+  ],
+  "issues": [
+    {
+      "row_number": 66,
+      "source_ref": "Учителя и группы — данные!A66:F66",
+      "raw_values": {
+        "teacher": "Ирина Анатольевна",
+        "subject": "Литература",
+        "grade": "11",
+        "audience": "База",
+        "shared_lesson": "отдельная группа",
+        "note": ""
+      },
+      "normalized_values": {
+        "teacher": "Ирина Анатольевна",
+        "subject": "Литература",
+        "grades": [
+          "11"
+        ],
+        "audience_kind": "base",
+        "audience_value": "",
+        "tags": []
+      },
+      "candidates": [
+        "Литература:11:base"
+      ],
+      "reason": "canonical BASE / base group для 11 не найден",
+      "needs_confirmation": "подтвердить целевую canonical audience",
+      "kind": "unresolved"
+    }
+  ],
+  "computed_schedule_audiences": [
+    {
+      "row_number": 89,
+      "source_ref": "Учителя и группы — данные!A89:F89",
+      "teacher": "Антон",
+      "subject": "География",
+      "rule": "grade 11 students without Society EGE join Geography 10",
+      "raw_note": "только те, кто не ходит на ЕГЭ по обществознанию; занимаются с 10 классом"
+    }
+  ],
+  "skipped_blank_rows": [
+    63,
+    65,
+    79,
+    81
+  ],
+  "current_assignments": [
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "group_id": "fc6c6623-e25a-42b8-b70a-50a30f4050cd",
+      "group_name": "grade9-math-A",
+      "subject": "Математика",
+      "base_class_name": null,
+      "subject_subgroup": "A",
+      "exam_track": null,
+      "source": "manual_confirmation",
+      "source_ref": "journal:e413eb5b-c79d-4062-b87d-c9d1bb4f386d:9-1",
+      "active": true
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "group_id": "551b9f55-8512-4350-b052-9211cd19454f",
+      "group_name": "grade9-math-B",
+      "subject": "Математика",
+      "base_class_name": null,
+      "subject_subgroup": "B",
+      "exam_track": null,
+      "source": "manual_confirmation",
+      "source_ref": "journal:e413eb5b-c79d-4062-b87d-c9d1bb4f386d:9-2",
+      "active": true
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "group_id": "1e941e58-8743-417b-afc3-8110b8d6c819",
+      "group_name": "grade9-math-C",
+      "subject": "Математика",
+      "base_class_name": null,
+      "subject_subgroup": "C",
+      "exam_track": null,
+      "source": "manual_confirmation",
+      "source_ref": "journal:e413eb5b-c79d-4062-b87d-c9d1bb4f386d:9-3",
+      "active": true
+    },
+    {
+      "teacher_id": "35a9b104-d966-444b-93db-468dbb3a937e",
+      "teacher_name": "Алексей",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Тренинг",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A36:C36",
+      "active": true
+    },
+    {
+      "teacher_id": "4aaa8a20-8bb1-49c4-b6d7-e7b2e3ae3b63",
+      "teacher_name": "Анастасия",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Биология",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A29:C29",
+      "active": true
+    },
+    {
+      "teacher_id": "4aaa8a20-8bb1-49c4-b6d7-e7b2e3ae3b63",
+      "teacher_name": "Анастасия",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Биология",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A29:C29",
+      "active": true
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "group_id": "eeb2dbf8-a096-43ec-94a8-5fe73cab90af",
+      "group_name": "english:1",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "1",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A10:C10",
+      "active": true
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "group_id": "60a6fbfc-4214-431f-94dc-64b414066498",
+      "group_name": "english:3",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "3",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A10:C10",
+      "active": true
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "group_id": "7505223b-af74-4f55-a8e5-cefb302f5c81",
+      "group_name": "english:4",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "4",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A10:C10",
+      "active": true
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "group_id": "0988997a-b9b5-459a-94b9-9131bb800c95",
+      "group_name": "english:6",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "6",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A10:C10",
+      "active": true
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "group_id": "5b496766-fba8-4b55-8aba-e4e811320b2d",
+      "group_name": "english:7",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "7",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A10:C10",
+      "active": true
+    },
+    {
+      "teacher_id": "b89332ce-c5ee-41d3-80b2-fbfc8bd81da0",
+      "teacher_name": "Ангелина",
+      "group_id": "cac9122c-3c93-4533-9fa9-f3d7016d551b",
+      "group_name": "english:9",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "9",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A10:C10",
+      "active": true
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "Естествознание",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A17:C17",
+      "active": true
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "Естествознание",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A17:C17",
+      "active": true
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "group_id": "d91c7b99-766b-4be4-8900-20464a9409bc",
+      "group_name": "instructional:физика:9:огэ",
+      "subject": "Физика",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A15:C15",
+      "active": true
+    },
+    {
+      "teacher_id": "8b2e4013-171a-45d3-a63b-238d8ac89b5a",
+      "teacher_name": "Андрей",
+      "group_id": "b29051a0-e0cf-4df4-a185-8accf7874886",
+      "group_name": "instructional:химия:9:огэ",
+      "subject": "Химия",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A16:C16",
+      "active": true
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "История искусства",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A9:C9",
+      "active": true
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "История искусства",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A9:C9",
+      "active": true
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "История искусства",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A9:C9",
+      "active": true
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "История искусства",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A9:C9",
+      "active": true
+    },
+    {
+      "teacher_id": "32237364-b204-410e-ac1c-e783aa85a331",
+      "teacher_name": "Анна Владимировна",
+      "group_id": "eecfdb15-3df0-4246-b9f9-39940a68473a",
+      "group_name": "math:11:advanced",
+      "subject": "Математика",
+      "base_class_name": "11",
+      "subject_subgroup": "Advanced",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A8:C8",
+      "active": true
+    },
+    {
+      "teacher_id": "304d9655-e18d-4873-8939-0f89c50b38db",
+      "teacher_name": "Анна Елисеева",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Тренинг",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A35:C35",
+      "active": true
+    },
+    {
+      "teacher_id": "304d9655-e18d-4873-8939-0f89c50b38db",
+      "teacher_name": "Анна Елисеева",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Тренинг",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A35:C35",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "География",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A24:C24",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "География",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A24:C24",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "История",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A26:C26",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "История",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A26:C26",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "История",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A26:C26",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "География",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A24:C24",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "Обществознание",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A25:C25",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "Обществознание",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A25:C25",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "d65d3c9a-384a-472b-9937-91e0b92986f2",
+      "group_name": "instructional:география:9:огэ",
+      "subject": "География",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A24:C24",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "Пластика",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Пластика",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Пластика",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Пластика",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Пластика",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Пластика",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "Пластика",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "4eefa015-e866-4df6-9aff-d3d25bc304ea",
+      "teacher_name": "Вадим",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "Пластика",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A19:C19",
+      "active": true
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "География",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A3:C3",
+      "active": true
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "История",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A4:C4",
+      "active": true
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "География",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A3:C3",
+      "active": true
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "География",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A3:C3",
+      "active": true
+    },
+    {
+      "teacher_id": "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c",
+      "teacher_name": "Дмитрий К",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "География",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A3:C3",
+      "active": true
+    },
+    {
+      "teacher_id": "761ec545-ca80-4ba3-84f3-cccd74c1b5c6",
+      "teacher_name": "Дмитрий Филиппов",
+      "group_id": "b13ad375-4223-476f-9c0a-a91cedd92f57",
+      "group_name": "math:11:base",
+      "subject": "Математика",
+      "base_class_name": "11",
+      "subject_subgroup": "Base",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A2:C2",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "Литература",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "Русский язык",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Литература",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Русский язык",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "Литература",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "Русский язык",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "Литература",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "Русский язык",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Математика",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A6:C6",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Физика",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A7:C7",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Математика",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A6:C6",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Физика",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A7:C7",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Физика",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A7:C7",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "506c7310-cf11-444a-b8f6-2425fbe607b0",
+      "group_name": "instructional:физика:10:егэ",
+      "subject": "Физика",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A7:C7",
+      "active": true
+    },
+    {
+      "teacher_id": "6fd01ff4-e729-49ea-9c32-df540263de86",
+      "teacher_name": "Иван",
+      "group_id": "549173dc-4020-4d6d-92a2-745a6c73fbfb",
+      "group_name": "instructional:физика:11:егэ",
+      "subject": "Физика",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A7:C7",
+      "active": true
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "group_id": "73fa21b5-89e6-462d-a27b-15fa90aac216",
+      "group_name": "english:10",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "10",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A11:C11",
+      "active": true
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "group_id": "c17fff55-513d-420f-a33a-c4686cb24009",
+      "group_name": "english:2",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "2",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A11:C11",
+      "active": true
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "group_id": "cdd3e5b9-e73a-464b-bc56-8bafedd696ea",
+      "group_name": "english:5",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "5",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A11:C11",
+      "active": true
+    },
+    {
+      "teacher_id": "7bd9f8b3-de7a-471b-817e-21b678130380",
+      "teacher_name": "Игорь",
+      "group_id": "490a04d0-99a1-4f34-a176-cc57be0c3ffd",
+      "group_name": "english:8",
+      "subject": "Английский язык",
+      "base_class_name": null,
+      "subject_subgroup": "8",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A11:C11",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Литература",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Русский язык",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Литература",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Русский язык",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Литература",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Русский язык",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Литература",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Русский язык",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "Обществознание",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A28:C28",
+      "active": true
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "История",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A27:C27",
+      "active": true
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "group_id": "560f5707-191d-42a6-8eec-fa48d8ac296a",
+      "group_name": "instructional:история:10:егэ",
+      "subject": "История",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A27:C27",
+      "active": true
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "group_id": "7d57dd77-1e47-4b4f-a59f-ea5ec12d1444",
+      "group_name": "instructional:история:11:егэ",
+      "subject": "История",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A27:C27",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "История искусства",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A32:C32",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Творчество",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A31:C31",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "История искусства",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A32:C32",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Творчество",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A31:C31",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "История искусства",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A32:C32",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Творчество",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A31:C31",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "История искусства",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A32:C32",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Творчество",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A31:C31",
+      "active": true
+    },
+    {
+      "teacher_id": "d7894f0a-728b-40c3-a424-667e1c29752f",
+      "teacher_name": "Лида",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "История искусства",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A32:C32",
+      "active": true
+    },
+    {
+      "teacher_id": "0713e82b-76b8-4ab6-8fcb-0caff6bcf4b0",
+      "teacher_name": "Марина",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Музыка",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A33:C33",
+      "active": true
+    },
+    {
+      "teacher_id": "0713e82b-76b8-4ab6-8fcb-0caff6bcf4b0",
+      "teacher_name": "Марина",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Музыка",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A33:C33",
+      "active": true
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "Математика",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A5:C5",
+      "active": true
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Математика",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A5:C5",
+      "active": true
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Математика",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A5:C5",
+      "active": true
+    },
+    {
+      "teacher_id": "c9468cb8-4692-467b-92ea-1c5eba3ed290",
+      "teacher_name": "Мария",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Математика",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A5:C5",
+      "active": true
+    },
+    {
+      "teacher_id": "28b2638b-de6e-4641-b696-69b76dcbb3cd",
+      "teacher_name": "Ольга",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Тренинг",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A34:C34",
+      "active": true
+    },
+    {
+      "teacher_id": "28b2638b-de6e-4641-b696-69b76dcbb3cd",
+      "teacher_name": "Ольга",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Тренинг",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A34:C34",
+      "active": true
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "group_id": "92154dc1-cd61-410b-baec-374841249b6b",
+      "group_name": "10",
+      "subject": "Естествознание",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A14:C14",
+      "active": true
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Биология",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A12:C12",
+      "active": true
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Биология",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A12:C12",
+      "active": true
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Биология",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A12:C12",
+      "active": true
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Химия",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A13:C13",
+      "active": true
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Пластика",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A18:C18",
+      "active": true
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "group_id": "f2e84e06-b398-4159-9e5b-be42b5a67041",
+      "group_name": "6",
+      "subject": "Пластика",
+      "base_class_name": "6",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A18:C18",
+      "active": true
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Пластика",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A18:C18",
+      "active": true
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Пластика",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A18:C18",
+      "active": true
+    },
+    {
+      "teacher_id": "e1ac596f-345b-4c92-a063-e5a19aeef395",
+      "teacher_name": "Сергей",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Пластика",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A18:C18",
+      "active": true
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "group_id": "7ceb1590-4f84-4c0a-8734-ff191f1d49d1",
+      "group_name": "instructional:информатика:10:егэ",
+      "subject": "Информатика",
+      "base_class_name": "10",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A30:C30",
+      "active": true
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "group_id": "c9c9e261-f07e-42f1-bc4f-f8466a0dff2a",
+      "group_name": "instructional:информатика:11:егэ",
+      "subject": "Информатика",
+      "base_class_name": "11",
+      "subject_subgroup": "ЕГЭ",
+      "exam_track": "ЕГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A30:C30",
+      "active": true
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "group_id": "e3d16803-e5f1-41e9-9b84-dc2c49124fac",
+      "group_name": "instructional:информатика:9:база",
+      "subject": "Информатика",
+      "base_class_name": "9",
+      "subject_subgroup": "База",
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A30:C30",
+      "active": true
+    },
+    {
+      "teacher_id": "358f479c-5cf7-483f-a094-47b83320c373",
+      "teacher_name": "Тарас",
+      "group_id": "3e85f62b-3e0a-4984-8eb2-b8874fa5b06c",
+      "group_name": "instructional:информатика:9:огэ",
+      "subject": "Информатика",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A30:C30",
+      "active": true
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Литература",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A22:C22",
+      "active": true
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Русский язык",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A22:C22",
+      "active": true
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Литература",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A22:C22",
+      "active": true
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Русский язык",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A22:C22",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Литература",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "e71accbb-a7b7-4247-870a-7a26021d27b0",
+      "group_name": "5",
+      "subject": "Русский язык",
+      "base_class_name": "5",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Литература",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Русский язык",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Литература",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Русский язык",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "301ee1d4-1c4c-4f2d-99b5-37cbda18babe",
+      "group_name": "instructional:литература:9:огэ",
+      "subject": "Литература",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "468c238b-4071-488b-88f6-91fc769e137c",
+      "teacher_name": "Родион",
+      "group_id": "69010143-5e9a-4a31-b14a-78f2848044cd",
+      "group_name": "instructional:химия:10:егэ",
+      "subject": "Химия",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": "ЕГЭ",
+      "source": "manual_confirmation",
+      "source_ref": "manual:user_clarification:2026-09-08",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "4185e5e4-964e-40a5-adb2-c8203564b7b2",
+      "group_name": "instructional:литература:11:егэ",
+      "subject": "Литература",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": "ЕГЭ",
+      "source": "manual_confirmation",
+      "source_ref": "manual:user_clarification:2026-09-08",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "История",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "manual_confirmation",
+      "source_ref": "manual:user_clarification:2026-09-08",
+      "active": true
+    },
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "История",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "manual_confirmation",
+      "source_ref": "manual:user_clarification:2026-09-08",
+      "active": true
+    },
+    {
+      "teacher_id": "8c6b3aa0-b555-4edf-8a00-0501147ecdbf",
+      "teacher_name": "Леонид",
+      "group_id": "05ce01a5-00e9-4240-8d9f-0db2fd0fc23b",
+      "group_name": "instructional:обществознание:11:угл",
+      "subject": "Обществознание",
+      "base_class_name": "11",
+      "subject_subgroup": "Угл",
+      "exam_track": null,
+      "source": "manual_confirmation",
+      "source_ref": "manual:user_clarification:2026-09-08",
+      "active": true
+    },
+    {
+      "teacher_id": "4aaa8a20-8bb1-49c4-b6d7-e7b2e3ae3b63",
+      "teacher_name": "Анастасия",
+      "group_id": "0f3e0897-3c8f-411b-888f-2cf9367a89c0",
+      "group_name": "instructional:биология:10:егэ",
+      "subject": "Биология",
+      "base_class_name": "10",
+      "subject_subgroup": null,
+      "exam_track": "ЕГЭ",
+      "source": "manual_confirmation",
+      "source_ref": "manual:user_clarification:2026-09-08",
+      "active": true
+    }
+  ],
+  "stale_assignments": [
+    {
+      "teacher_id": "8876cefa-5451-40e6-8541-f76711dc923a",
+      "teacher_name": "Антон",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "География",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A24:C24",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Литература",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "b021cc32-b132-4842-9cf3-54d7960112ac",
+      "group_name": "9-А",
+      "subject": "Литература",
+      "base_class_name": "9-А",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "cbd8950f-5aac-4432-83a0-cff7955de049",
+      "teacher_name": "Елена Викторовна",
+      "group_id": "ac49d927-267b-4823-a2b6-37663277d3d2",
+      "group_name": "9-Д",
+      "subject": "Литература",
+      "base_class_name": "9-Д",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A21:C21",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Русский язык",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Литература",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Литература",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Литература",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A22:C22",
+      "active": true
+    },
+    {
+      "teacher_id": "d60bc7f2-6dfb-49af-aef9-413059c1c710",
+      "teacher_name": "Татьяна",
+      "group_id": "d21307fc-c59b-4dd3-89be-4838a3d9fc70",
+      "group_name": "8",
+      "subject": "Русский язык",
+      "base_class_name": "8",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A22:C22",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "824dacf3-28dd-4342-8c62-8f3a94b7337f",
+      "group_name": "7-1",
+      "subject": "Русский язык",
+      "base_class_name": "7-1",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    },
+    {
+      "teacher_id": "353477ff-84c2-40b6-90c0-a4781ada1691",
+      "teacher_name": "Юлия",
+      "group_id": "84e97d6d-f596-4dec-8053-0a98b1a39339",
+      "group_name": "7-2",
+      "subject": "Русский язык",
+      "base_class_name": "7-2",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A23:C23",
+      "active": true
+    }
+  ],
+  "manual_protected_assignments": [
+    {
+      "teacher_id": "288af97a-8353-4f83-b5cd-4e4cf515139f",
+      "teacher_name": "Ирина Анатольевна",
+      "group_id": "84cdb095-1cf6-4c91-9461-f425b6339df1",
+      "group_name": "11",
+      "subject": "Литература",
+      "base_class_name": "11",
+      "subject_subgroup": null,
+      "exam_track": null,
+      "source": "official_import",
+      "source_ref": "Учителя и группы!A20:C20",
+      "active": true,
+      "deactivation_guard": "source has unresolved audience for the same teacher/subject/grade"
+    }
+  ]
+}

@@ -40,3 +40,15 @@ The current spreadsheet `Расписание 2026/27` was inspected directly. T
 The live group parser now propagates merged headings and uses explicit block boundaries, so blank cells in one roster column do not truncate neighboring rosters. All 42 instructional groups (312 source roster records) reconcile with zero unresolved memberships. Grade 9 Math is A=5, B=11, C=12; old 9-1/9-2/9-3 runtime groups remain absent.
 
 The identity resolver uses normalized names, confirmed source observations, and Russian short-name variants with class/group context. Four confirmed duplicate pairs were merged while preserving historical memberships and source observations. Source disappearance is generic: the stale `Федя` base-list relationship was ended from the live snapshot and the orphaned imported identity was inactivated without merging it into Иващенко Фёдор. Only three missing base-class links remain for human review (Иващенко Фёдор, Нестерова Алиса, Холодова Татьяна).
+
+## Structured teacher-directory dry-run (2026-09-08)
+
+The current teacher assignment source is the structured `Учителя и группы — данные` tab in `Расписание 2026/27`, with columns `Учитель`, `Предмет`, `Класс`, `Группа / аудитория`, `Совместный урок`, and `Примечание`. The repository now has a read-only reconciliation path:
+
+```text
+python -m backend.scripts.google_sync --teacher-directory-dry-run \
+  --teacher-directory-report docs/TEACHER_DIRECTORY_DRY_RUN_2026-09-08.md \
+  --teacher-directory-json docs/TEACHER_DIRECTORY_DRY_RUN_2026-09-08.json
+```
+
+It resolves only existing canonical teacher identities, subjects, and groups; it does not create entities, change teacher assignments, or touch student memberships. `Весь класс` maps to existing class cohorts, Math 9 A/B/C and global English groups remain explicit, 10–11 shared lessons retain separate grade-specific assignments, and computed audiences such as Grade 11 Geography exclude Society EGE without becoming a membership group. The live 2026-09-08 preview is stored in the two report artifacts above; it has one unresolved audience (Literature 11 Base) and no production apply.
