@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "decision_date": "2026-09-08",
+  "confirmed_by": "human",
+  "aliases": [
+    {
+      "source_name": "Шишков Гриша",
+      "target_display_name": "Шишков Григорий",
+      "source_ref": "списки групп 26-27!F16",
+      "reason": "ручное подтверждение: один человек"
+    },
+    {
+      "source_name": "Хлопов Александр",
+      "target_display_name": "Хлопов Саша",
+      "source_ref": "списки групп 26-27!N78",
+      "reason": "ручное подтверждение: Chemistry OGE 9"
+    }
+  ],
+  "confirmed_group_assignments": [
+    {
+      "source_name": "Воронин Лаврентий",
+      "target_group_name": "7-2",
+      "source_ref": "списки групп 26-27!H7",
+      "source_refs": [
+        "списки групп 26-27!H7",
+        "Списки по классам 26/27!F5"
+      ],
+      "reason": "ручное подтверждение"
+    },
+    {
+      "source_name": "Шишков Павел",
+      "target_group_name": "7-2",
+      "source_ref": "списки групп 26-27!H16",
+      "source_refs": [
+        "списки групп 26-27!H16",
+        "Списки по классам 26/27!F25"
+      ],
+      "reason": "ручное подтверждение"
+    }
+  ],
+  "identity_status_overrides": [
+    {
+      "display_name": "Иващенко Фёдор",
+      "mode": "excluded_current_structure",
+      "reason": "ручное подтверждение: ученик больше не актуален"
+    },
+    {
+      "display_name": "Нестерова Алиса",
+      "mode": "excluded_current_structure",
+      "reason": "ручное подтверждение: ученица больше не актуальна"
+    },
+    {
+      "display_name": "Борисенко Мелания",
+      "mode": "excluded_current_structure",
+      "reason": "ручное подтверждение: ученица давно не актуальна"
+    }
+  ],
+  "known_exceptions": [
+    {
+      "display_name": "Холодова Татьяна",
+      "exception": "grade9_math_english_partition",
+      "mode": "protected_unresolved",
+      "reason": "не определять Math A/B/C и English автоматически"
+    }
+  ],
+  "identity_pending": [
+    {
+      "source_name": "Кулиш Александр",
+      "class_name": "5",
+      "source_ref": "Списки по классам 26/27!B4",
+      "reason": "актуальный roster person подтверждён, но canonical identity отсутствует; identity не создавать в read-only pass"
+    },
+    {
+      "source_name": "Воронин Лаврентий",
+      "class_name": "7",
+      "source_ref": "списки групп 26-27!H7",
+      "source_refs": [
+        "списки групп 26-27!H7",
+        "Списки по классам 26/27!F5"
+      ],
+      "reason": "ручной 7-2 mapping подтверждён, но canonical identity отсутствует; identity не создавать в read-only pass"
+    }
+  ],
+  "group_preparations": [
+    {
+      "name": "instructional:история:9:огэ",
+      "display_name": "История · 9 класс · ОГЭ",
+      "group_type": "subject_group",
+      "subject": "История",
+      "base_class_name": "9",
+      "subject_subgroup": "ОГЭ",
+      "exam_track": "ОГЭ",
+      "source_ref": "списки групп 26-27!B87",
+      "reason": "ручное подтверждение: authoritative roster является достаточным evidence"
+    }
+  ]
+}

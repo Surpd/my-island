@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Cookie, Header, HTTPException, Response
 from pydantic import BaseModel
 from datetime import date, datetime, timedelta, timezone
+import json
 
 from backend.database import Database
 from backend.services.auth import AuthError, resolve_auth
@@ -15,6 +16,10 @@ from backend.services.google_live import GoogleLiveError
 from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule
 from backend.services.teacher import journal_view
 from backend.config import get_settings
+from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
+from backend.services.student_membership_apply import StudentMembershipApplyBlocked, apply_reviewed_plan, _readback
+from backend.services.student_membership_manual_resolutions import load_manual_resolutions
+from backend.services.student_membership_reconciliation import fetch_authoritative_sources, load_production_snapshot
 
 
 class SessionPayload(BaseModel):
@@ -114,16 +119,32 @@ class JournalMappingPayload(BaseModel):
     exam_track: str | None = None
 
 
+class BrowserCodePayload(BaseModel):
+    code: str
+
+
+class ReconciliationReviewPayload(BaseModel):
+    approved: bool = True
+
+
 def create_router(database: Database) -> APIRouter:
     router = APIRouter(prefix="/api")
 
-    def authenticate(init_data: str | None, dev_auth: str | None, telegram_header: str | None = None):
+    def authenticate(init_data: str | None, dev_auth: str | None, telegram_header: str | None = None, browser_session: str | None = None):
+        browser_token = browser_session or (dev_auth.removeprefix("browser:") if dev_auth and dev_auth.startswith("browser:") else None)
+        if browser_token:
+            session = database.get_admin_browser_session(browser_token)
+            if not session:
+                raise HTTPException(status_code=401, detail="Admin browser session is invalid or expired")
+            return {"id": session["telegram_user_id"], "user_id": session["user_id"], "role": "admin", "browser_session": True}
         try:
             return resolve_auth(telegram_header or init_data, dev_auth)
         except AuthError as error:
             raise HTTPException(status_code=401, detail=str(error)) from error
 
     def authenticated_user(telegram_user: dict):
+        if telegram_user.get("browser_session"):
+            return database.get_user_by_id(telegram_user["user_id"])
         return database.find_user(telegram_user["id"])
 
     def require_role(telegram_user: dict, role: str):
@@ -131,6 +152,53 @@ def create_router(database: Database) -> APIRouter:
         if not user or not database.user_has_role(user["id"], role):
             raise HTTPException(status_code=403, detail=f"{role.capitalize()} role required")
         return user
+
+    @router.post("/admin/auth/challenge")
+    def create_admin_browser_challenge(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        code, expires_at = database.create_admin_login_challenge(actor["id"])
+        database.record_audit_event("admin_auth.challenge_created", "admin_browser_session", {"expires_at": expires_at}, actor["id"])
+        return {"code": code, "expires_at": expires_at, "single_use": True}
+
+    @router.post("/admin/auth/exchange")
+    def exchange_admin_browser_code(payload: BrowserCodePayload, response: Response):
+        consumed = database.consume_admin_login_challenge(payload.code.strip())
+        if not consumed:
+            raise HTTPException(status_code=401, detail="Admin login code is invalid, expired, or already used")
+        session_token, user_id = consumed
+        user = database.get_user_by_id(user_id)
+        if not user or not database.user_has_role(user_id, "admin"):
+            database.revoke_admin_browser_session(session_token)
+            raise HTTPException(status_code=403, detail="Admin role required")
+        settings = get_settings()
+        response.set_cookie(
+            "my_island_admin_session",
+            session_token,
+            max_age=86400 * 7,
+            httponly=True,
+            secure=settings.app_env == "production",
+            samesite="none" if settings.app_env == "production" else "lax",
+            path="/",
+        )
+        database.record_audit_event("admin_auth.login", "admin_browser_session", {"transport": "browser"}, user_id)
+        return {"state": "approved", "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]}}
+
+    @router.get("/admin/auth/session")
+    def admin_browser_session(x_dev_auth: str | None = Header(default=None), my_island_admin_session: str | None = Cookie(default=None)):
+        telegram_user = authenticate(None, x_dev_auth, browser_session=my_island_admin_session)
+        user = require_role(telegram_user, "admin")
+        return {"state": "approved", "mode": "browser" if my_island_admin_session else "dev", "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]}}
+
+    @router.post("/admin/auth/logout")
+    def admin_browser_logout(response: Response, my_island_admin_session: str | None = Cookie(default=None)):
+        if my_island_admin_session:
+            session = database.get_admin_browser_session(my_island_admin_session)
+            if session:
+                database.revoke_admin_browser_session(my_island_admin_session)
+                database.record_audit_event("admin_auth.logout", "admin_browser_session", {"transport": "browser"}, session["user_id"])
+        response.delete_cookie("my_island_admin_session", path="/")
+        return {"state": "logged_out"}
 
     def student_subject(telegram_user: dict, preview_id: str | None):
         actor = authenticated_user(telegram_user)
@@ -253,6 +321,98 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         return database.admin_overview()
+
+    @router.get("/admin/system")
+    def admin_system(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return {"health": database.system_health(), "settings": {"environment": get_settings().app_env, "database_configured": bool(get_settings().database_url), "dev_auth_enabled": get_settings().dev_auth_enabled}}
+
+    @router.get("/admin/sources")
+    def admin_sources(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return {"items": database.list_school_sources_health()}
+
+    @router.get("/admin/sources/{source_id}")
+    def admin_source_detail(source_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        detail = database.get_school_source_detail(source_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="Source was not found")
+        return detail
+
+    @router.get("/admin/groups/{group_id}")
+    def admin_group_detail(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        group = database.get_group_admin(group_id)
+        if not group:
+            raise HTTPException(status_code=404, detail="Group was not found")
+        return group
+
+    @router.get("/admin/reconciliation/student-memberships/latest")
+    def latest_student_membership_reconciliation(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return database.get_latest_reconciliation_run() or {"status": "not_run", "payload": None}
+
+    @router.get("/admin/reconciliation/student-memberships/runs/{run_id}")
+    def student_membership_reconciliation_run(run_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        run = database.get_reconciliation_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Reconciliation run was not found")
+        return run
+
+    @router.post("/admin/reconciliation/student-memberships/dry-run")
+    def student_membership_reconciliation_dry_run(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        try:
+            payload = run_live_dry_run(database, get_settings())
+        except (ReconciliationGoogleLiveError, ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        run_id = database.create_reconciliation_run(actor["id"], payload)
+        database.record_audit_event("student_membership_reconciliation.dry_run", "reconciliation_run", {"run_id": run_id, "mode": "read_only", "summary": payload.get("summary", {})}, actor["id"])
+        return {"id": run_id, "status": "ready_for_review", "payload": payload}
+
+    @router.post("/admin/reconciliation/student-memberships/runs/{run_id}/review")
+    def review_student_membership_reconciliation(run_id: str, payload: ReconciliationReviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        if not payload.approved:
+            raise HTTPException(status_code=400, detail="Use a new dry-run after rejecting a plan")
+        run = database.mark_reconciliation_reviewed(run_id, actor["id"])
+        if not run:
+            raise HTTPException(status_code=409, detail="Run is missing or is no longer reviewable")
+        database.record_audit_event("student_membership_reconciliation.reviewed", "reconciliation_run", {"run_id": run_id}, actor["id"])
+        return run
+
+    @router.post("/admin/reconciliation/student-memberships/apply")
+    def apply_student_membership_reconciliation(run_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        run = database.get_reconciliation_run(run_id)
+        if not run or run.get("status") != "approved":
+            raise HTTPException(status_code=409, detail="A reviewed reconciliation run is required")
+        try:
+            settings = get_settings()
+            source_rows, source_meta = fetch_authoritative_sources(settings)
+            snapshot = load_production_snapshot(database)
+            manual = load_manual_resolutions()
+            current_payload = run_live_dry_run(database, settings)
+            if json.dumps(current_payload.get("summary", {}), sort_keys=True) != json.dumps(run["payload"].get("summary", {}), sort_keys=True):
+                raise StudentMembershipApplyBlocked("Reviewed run is stale; run a new dry-run")
+            result = apply_reviewed_plan(database, settings, run["payload"], source_rows, source_meta, snapshot, current_payload, manual)
+            result["readback"] = _readback(database, result["teacher_before"])
+        except (ReconciliationGoogleLiveError, StudentMembershipApplyBlocked, ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        stored = database.finish_reconciliation_run(run_id, result)
+        database.record_audit_event("student_membership_reconciliation.applied", "reconciliation_run", {"run_id": run_id, "readback": result.get("readback")}, actor["id"])
+        return stored
 
     @router.get("/admin/groups")
     def admin_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

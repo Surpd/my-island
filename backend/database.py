@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
+import hashlib
+import json
 import os
+import secrets
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -139,6 +143,33 @@ CREATE TABLE IF NOT EXISTS schedule_syncs (
   validation_problems TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   archived INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS admin_login_challenges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,
+  actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS admin_browser_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS admin_reconciliation_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_user_id INTEGER REFERENCES users(id),
+  status TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  result TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  reviewed_at TEXT,
+  applied_at TEXT
 );
 CREATE TABLE IF NOT EXISTS announcements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -566,6 +597,7 @@ class Database:
             return
         with self.connection() as connection:
             connection.executescript(SCHEMA)
+            self._ensure_sqlite_schema_parity(connection)
             announcement_columns = {row["name"] for row in connection.execute("PRAGMA table_info(announcements)").fetchall()}
             for name, definition in {
                 "audience_kind": "TEXT NOT NULL DEFAULT 'all'",
@@ -609,6 +641,168 @@ class Database:
             connection.execute(
                 "INSERT OR IGNORE INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_at) SELECT id, identity_id, 'confirmed', 'legacy_backfill', 'users.identity_id', created_at FROM users WHERE identity_id IS NOT NULL"
             )
+
+    def _ensure_sqlite_schema_parity(self, connection: Any) -> None:
+        """Apply only additive compatibility changes to an existing local SQLite store.
+
+        Production/Postgres remains migration-driven. Local stores created before the
+        current SCHEMA are upgraded in place so read-only admin diagnostics do not fail
+        merely because a newer additive column is missing.
+        """
+        additions: dict[str, dict[str, str]] = {
+            "groups": {
+                "display_name": "TEXT",
+                "subject": "TEXT",
+                "base_class_name": "TEXT",
+                "subject_subgroup": "TEXT",
+                "exam_track": "TEXT",
+                "provenance_source": "TEXT",
+                "provenance_ref": "TEXT",
+                "canonical": "INTEGER NOT NULL DEFAULT 1",
+            },
+            "memberships": {
+                "source_ref": "TEXT NOT NULL DEFAULT ''",
+                "created_by": "INTEGER",
+            },
+            "identities": {"origin": "TEXT", "source_ref": "TEXT"},
+            "schedule_entries": {
+                "audience_rule": "TEXT",
+                "resolved_audience": "TEXT",
+                "teacher_identity_ids": "TEXT NOT NULL DEFAULT '[]'",
+                "source_snapshot_id": "INTEGER",
+                "archived": "INTEGER NOT NULL DEFAULT 0",
+            },
+            "schedule_syncs": {"archived": "INTEGER NOT NULL DEFAULT 0"},
+            "group_schedule_audiences": {"archived": "INTEGER NOT NULL DEFAULT 0"},
+            "announcements": {
+                "audience_kind": "TEXT NOT NULL DEFAULT 'all'",
+                "audience_ref": "TEXT",
+                "publish_at": "TEXT",
+                "starts_at": "TEXT",
+                "pinned": "INTEGER NOT NULL DEFAULT 0",
+                "author_user_id": "INTEGER",
+                "status": "TEXT NOT NULL DEFAULT 'published'",
+            },
+            "journal_results": {"journal_student_id": "INTEGER"},
+            "journal_group_mappings": {
+                "base_class_name": "TEXT",
+                "subject_subgroup": "TEXT",
+                "classroom_course_id": "INTEGER",
+                "exam_track": "TEXT",
+            },
+            "teacher_assignments": {
+                "base_class_name": "TEXT",
+                "subject_subgroup": "TEXT",
+                "classroom_course_id": "INTEGER",
+                "exam_track": "TEXT",
+            },
+        }
+        for table, columns in additions.items():
+            present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+            for name, definition in columns.items():
+                if name not in present:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        connection.execute("CREATE TABLE IF NOT EXISTS admin_login_challenges (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, consumed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        connection.execute("CREATE TABLE IF NOT EXISTS admin_browser_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, revoked_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        connection.execute("CREATE TABLE IF NOT EXISTS admin_reconciliation_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id INTEGER REFERENCES users(id), status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_at TEXT, applied_at TEXT)")
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def create_admin_login_challenge(self, actor_user_id: Any, ttl_seconds: int = 300) -> tuple[str, str]:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        with self.connection() as connection:
+            self.execute(connection, "INSERT INTO admin_login_challenges(token_hash, actor_user_id, expires_at) VALUES (?, ?, ?)", (self._token_hash(token), actor_user_id, expires_at))
+        return token, expires_at
+
+    def consume_admin_login_challenge(self, token: str, ttl_seconds: int = 86400 * 7) -> tuple[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT * FROM admin_login_challenges WHERE token_hash = ? AND consumed_at IS NULL", (self._token_hash(token),)).fetchone()
+            if not row:
+                return None
+            try:
+                expires_at = datetime.fromisoformat(str(row["expires_at"]))
+            except ValueError:
+                return None
+            if expires_at <= now:
+                return None
+            self.execute(connection, "UPDATE admin_login_challenges SET consumed_at = ? WHERE id = ?", (now.isoformat(), row["id"]))
+            session_token = secrets.token_urlsafe(48)
+            session_expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
+            self.execute(connection, "INSERT INTO admin_browser_sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)", (self._token_hash(session_token), row["actor_user_id"], session_expires))
+            return session_token, row["actor_user_id"]
+
+    def get_admin_browser_session(self, token: str) -> Any | None:
+        now = datetime.now(timezone.utc)
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT s.*, u.telegram_user_id, u.role, u.identity_id FROM admin_browser_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL", (self._token_hash(token),)).fetchone()
+            if not row:
+                return None
+            try:
+                if datetime.fromisoformat(str(row["expires_at"])) <= now:
+                    return None
+            except ValueError:
+                return None
+            self.execute(connection, "UPDATE admin_browser_sessions SET last_seen_at = ? WHERE id = ?", (now.isoformat(), row["id"]))
+            return row
+
+    def revoke_admin_browser_session(self, token: str) -> None:
+        with self.connection() as connection:
+            self.execute(connection, "UPDATE admin_browser_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL", (self._token_hash(token),))
+
+    def create_reconciliation_run(self, actor_user_id: Any, payload: dict[str, Any]) -> Any:
+        with self.connection() as connection:
+            payload_sql = "?::jsonb" if self.database_url else "?"
+            row = self.execute(connection, f"INSERT INTO admin_reconciliation_runs(actor_user_id, status, payload) VALUES (?, 'ready_for_review', {payload_sql}) RETURNING id", (actor_user_id, json.dumps(payload, ensure_ascii=False, default=str))).fetchone()
+            return row["id"]
+
+    @staticmethod
+    def _decode_json_value(value: Any) -> Any:
+        if isinstance(value, (dict, list)):
+            return value
+        if not value:
+            return value
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
+
+    def get_latest_reconciliation_run(self) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT * FROM admin_reconciliation_runs ORDER BY id DESC LIMIT 1").fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            item["payload"] = self._decode_json_value(item["payload"])
+            if item.get("result"):
+                item["result"] = self._decode_json_value(item["result"])
+            return item
+
+    def get_reconciliation_run(self, run_id: Any) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT * FROM admin_reconciliation_runs WHERE id = ?", (run_id,)).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            item["payload"] = self._decode_json_value(item["payload"])
+            if item.get("result"):
+                item["result"] = self._decode_json_value(item["result"])
+            return item
+
+    def mark_reconciliation_reviewed(self, run_id: Any, actor_user_id: Any) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            self.execute(connection, "UPDATE admin_reconciliation_runs SET status = 'approved', reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'ready_for_review'", (run_id,))
+        return self.get_reconciliation_run(run_id)
+
+    def finish_reconciliation_run(self, run_id: Any, result: dict[str, Any], status: str = "applied") -> dict[str, Any] | None:
+        with self.connection() as connection:
+            result_sql = "?::jsonb" if self.database_url else "?"
+            self.execute(connection, f"UPDATE admin_reconciliation_runs SET status = ?, result = {result_sql}, applied_at = CURRENT_TIMESTAMP WHERE id = ?", (status, json.dumps(result, ensure_ascii=False, default=str), run_id))
+        return self.get_reconciliation_run(run_id)
 
     def execute(self, connection: Any, query: str, params: tuple[Any, ...] = ()) -> Any:
         if self.database_url:
@@ -1682,6 +1876,75 @@ class Database:
                 (limit,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_school_sources_health(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            rows = self.execute(
+                connection,
+                """SELECT s.id, s.source_type, s.external_key, s.display_name, s.location_ref,
+                          s.authority_status, s.active, s.created_at, s.updated_at,
+                          sr.id AS last_run_id, sr.status AS last_run_status,
+                          sr.started_at AS last_refresh, sr.finished_at AS last_finished_at,
+                          sr.diagnostics AS last_diagnostics,
+                          ss.fingerprint AS current_fingerprint, ss.observed_at AS snapshot_observed_at,
+                          (SELECT COUNT(*) FROM school_source_records r WHERE r.snapshot_id = ss.id) AS record_count,
+                          (SELECT COUNT(*) FROM school_resolution_issues ri WHERE ri.sync_run_id = sr.id AND ri.status = 'open') AS unresolved_count,
+                          (SELECT COUNT(*) FROM school_candidate_changes cc WHERE cc.sync_run_id = sr.id AND cc.status IN ('pending','conflict','unresolved')) AS candidate_change_count
+                     FROM school_sources s
+                     LEFT JOIN school_sync_runs sr ON sr.id = (SELECT id FROM school_sync_runs x WHERE x.source_id = s.id ORDER BY x.id DESC LIMIT 1)
+                     LEFT JOIN school_source_snapshots ss ON ss.id = (SELECT id FROM school_source_snapshots x WHERE x.source_id = s.id AND x.is_last_known_valid = 1 ORDER BY x.id DESC LIMIT 1)
+                    ORDER BY s.active DESC, s.display_name""",
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                for key in ("last_diagnostics",):
+                    if item.get(key):
+                        try:
+                            item[key] = json.loads(item[key])
+                        except (TypeError, json.JSONDecodeError):
+                            pass
+                item["health"] = "error" if item.get("last_run_status") == "failed" else "attention" if (item.get("unresolved_count") or item.get("candidate_change_count")) else "healthy"
+                result.append(item)
+            return result
+
+    def get_school_source_detail(self, source_id: Any) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT * FROM school_sources WHERE id = ?", (source_id,)).fetchone()
+            if not source:
+                return None
+            runs = self.execute(connection, "SELECT * FROM school_sync_runs WHERE source_id = ? ORDER BY id DESC LIMIT 20", (source_id,)).fetchall()
+            snapshots = self.execute(connection, "SELECT id, sync_run_id, previous_snapshot_id, fingerprint, observed_at, effective_from, effective_until, status, is_last_known_valid, created_at FROM school_source_snapshots WHERE source_id = ? ORDER BY id DESC LIMIT 20", (source_id,)).fetchall()
+            records = self.execute(connection, """SELECT r.id, r.snapshot_id, r.record_key, r.source_ref, r.change_kind, r.parse_status, r.created_at
+                                                   FROM school_source_records r JOIN school_source_snapshots ss ON ss.id = r.snapshot_id
+                                                  WHERE ss.source_id = ? ORDER BY r.id DESC LIMIT 200""", (source_id,)).fetchall()
+            issues = self.execute(connection, "SELECT id, sync_run_id, source_record_id, candidate_change_id, issue_type, status, details, evidence, resolution, created_at, resolved_at FROM school_resolution_issues WHERE sync_run_id IN (SELECT id FROM school_sync_runs WHERE source_id = ?) ORDER BY id DESC LIMIT 200", (source_id,)).fetchall()
+            mappings = self.execute(connection, "SELECT id, external_key, mapping_type, identity_id, group_id, classroom_course_id, canonical_value, status, manually_confirmed, valid_from, valid_until, supersedes_mapping_id, created_at, updated_at FROM school_source_mappings WHERE source_id = ? ORDER BY id DESC LIMIT 200", (source_id,)).fetchall()
+            return {"source": dict(source), "runs": [dict(row) for row in runs], "snapshots": [dict(row) for row in snapshots], "records": [dict(row) for row in records], "issues": [dict(row) for row in issues], "mappings": [dict(row) for row in mappings]}
+
+    def get_group_admin(self, group_id: Any) -> dict[str, Any] | None:
+        groups = self.list_groups_admin()
+        group = next((item for item in groups if str(item.get("id")) == str(group_id)), None)
+        if not group:
+            return None
+        group["history"] = []
+        return group
+
+    def system_health(self) -> dict[str, Any]:
+        with self.connection() as connection:
+            tables = ["users", "identities", "groups", "memberships", "school_sources", "school_sync_runs", "school_candidate_changes", "school_resolution_issues", "audit_log"]
+            counts = {}
+            for table in tables:
+                counts[table] = int(self.execute(connection, f"SELECT COUNT(*) AS value FROM {table}").fetchone()["value"])
+            required = {"groups": {"display_name", "canonical"}, "schedule_syncs": {"archived"}, "schedule_entries": {"archived", "resolved_audience"}}
+            schema = {}
+            for table, names in required.items():
+                if self.database_url:
+                    columns = {row["column_name"] for row in self.execute(connection, "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %s", (table,)).fetchall()}
+                else:
+                    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+                schema[table] = {"ok": names.issubset(columns), "required": sorted(names)}
+            return {"environment": "local_sqlite" if not self.database_url else "postgres", "database": "configured", "counts": counts, "schema": schema, "schema_status": "current" if all(item["ok"] for item in schema.values()) else "attention"}
 
     def admin_overview(self) -> dict[str, int]:
         with self.connection() as connection:

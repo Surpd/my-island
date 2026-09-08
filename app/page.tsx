@@ -1814,6 +1814,17 @@ function AdminApp({
       setLoading(false);
     }
   }, []);
+  const issueBrowserLoginCode = useCallback(async () => {
+    try {
+      const result = await api<{ code: string; expires_at: string }>(
+        '/api/admin/auth/challenge',
+        { method: 'POST' },
+      );
+      setMessage(`Одноразовый код для browser Admin: ${result.code}. Действует до ${result.expires_at}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Не удалось создать browser login code');
+    }
+  }, []);
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -3166,6 +3177,9 @@ function AdminApp({
               <BookOpen size={16} /> В режим учителя
             </button>
           )}
+          <button className="outline-button admin-mode-switch" onClick={() => void issueBrowserLoginCode()}>
+            <ExternalLink size={16} /> Код для браузера
+          </button>
           <button
             className="icon-button icon-button--dark"
             onClick={() => void load()}
