@@ -44,6 +44,7 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             database.create_membership(base["id"], stale["id"], "student", "official_import", "base!A2")
             with database.connection() as connection:
                 connection.execute("UPDATE identities SET status = 'inactive' WHERE id = ?", (stale["id"],))
+                connection.execute("UPDATE groups SET canonical = 0 WHERE id = ?", (exam["id"],))
 
             people = database.list_people_library(kind="student")
             self.assertEqual([item["display_name"] for item in people], ["Тестова Алиса"])
@@ -59,6 +60,7 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             self.assertEqual([item["name"] for item in person["instructional_memberships"]], ["9-А · Биология · ОГЭ", "grade9-math-A"])
             self.assertEqual(len(database.list_people_library(kind="student", class_name="9-А")), 1)
             self.assertEqual(len(database.list_people_library(kind="student", group_id=instructional["id"])), 1)
+            self.assertNotIn(exam["id"], {item["id"] for item in database.list_groups_admin()})
 
             group = next(item for item in database.list_groups_admin() if item["id"] == instructional["id"])
             self.assertEqual([item["display_name"] for item in group["students"]], ["Тестова Алиса"])

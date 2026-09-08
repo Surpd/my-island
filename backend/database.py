@@ -1456,6 +1456,7 @@ class Database:
                         AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE) AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                       LEFT JOIN teacher_assignments ta ON ta.group_id = g.id AND ta.active IS TRUE
                         AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                     WHERE g.canonical IS TRUE
                     GROUP BY g.id, g.name, g.group_type
                     ORDER BY g.group_type, g.name""",
             ).fetchall()
