@@ -336,7 +336,7 @@ def create_router(database: Database) -> APIRouter:
         require_role(telegram_user, "admin")
         if kind not in {None, "student", "teacher"}:
             raise HTTPException(status_code=400, detail="kind must be student or teacher")
-        return {"items": database.list_people_library(kind=kind, query=q, class_name=class_name, group_id=group_id)}
+        return {"items": database.list_people_library_summary(kind=kind, query=q, class_name=class_name, group_id=group_id)}
 
     @router.get("/admin/people/{identity_id}")
     def admin_person(identity_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -440,7 +440,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        return {"items": database.list_groups_admin()}
+        return {"items": database.list_groups_admin_summary()}
 
     @router.get("/admin/groups/{group_id}")
     def admin_group_detail(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
