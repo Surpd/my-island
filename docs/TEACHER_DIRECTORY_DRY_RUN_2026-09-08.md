@@ -13,7 +13,7 @@ Mode: read-only; no teacher assignments or student memberships were changed.
 | unmatched_teacher | 0 |
 | matched_subject | 124 |
 | unmatched_subject | 0 |
-| matched_audience | 124 |
+| matched_audience | 123 |
 | unresolved_audience | 1 |
 | proposed_create_assignments | 11 |
 | proposed_update_assignments | 0 |

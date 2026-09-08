@@ -399,6 +399,7 @@ def build_teacher_reconciliation_plan(
                 manual_missing.append(item)
     plan.stale_assignments = stale
     plan.manual_protected_assignments = manual_missing
+    audience_issue_count = sum(1 for issue in plan.issues if issue.kind in {"unresolved", "conflict"})
     counts = {
         "rows_read": max(0, len(values) - 1),
         "normalized_rows": len(rows),
@@ -406,7 +407,7 @@ def build_teacher_reconciliation_plan(
         "unmatched_teacher": sum(1 for issue in plan.issues if issue.kind == "unmatched_teacher"),
         "matched_subject": sum(1 for row in rows if _key(row.subject) in subjects),
         "unmatched_subject": sum(1 for issue in plan.issues if issue.kind == "unmatched_subject"),
-        "matched_audience": len(desired),
+        "matched_audience": max(0, len(rows) - audience_issue_count),
         "unresolved_audience": sum(1 for issue in plan.issues if issue.kind in {"unresolved", "conflict"}),
         "proposed_create_assignments": len(desired_keys - current_keys),
         "proposed_update_assignments": 0,
