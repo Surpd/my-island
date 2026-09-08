@@ -54,6 +54,8 @@ function routeFromLocation() {
   if (typeof window === 'undefined') return '/admin';
   const hashRoute = window.location.hash.replace(/^#/, '');
   if (hashRoute.startsWith('/admin')) return hashRoute.split('?')[0] || '/admin';
+  const pathRoute = window.location.pathname.replace(/\/$/, '') || '/admin';
+  if (pathRoute === '/admin' || pathRoute.startsWith('/admin/')) return pathRoute;
   return '/admin';
 }
 
