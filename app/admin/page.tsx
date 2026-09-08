@@ -50,8 +50,11 @@ function localDevAuth() {
   return window.location.hostname === 'localhost' && query.get('role') === 'admin' ? 'admin:1' : null;
 }
 
-function preserveDevQuery(href: string) {
-  return localDevAuth() ? `${href}?role=admin` : href;
+function routeFromLocation() {
+  if (typeof window === 'undefined') return '/admin';
+  const hashRoute = window.location.hash.replace(/^#/, '');
+  if (hashRoute.startsWith('/admin')) return hashRoute.split('?')[0] || '/admin';
+  return '/admin';
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -101,13 +104,18 @@ function Loading() {
 function useRoute() {
   const [path, setPath] = useState('/admin');
   useEffect(() => {
-    const update = () => setPath(window.location.pathname || '/admin');
+    const update = () => setPath(routeFromLocation());
     update();
     window.addEventListener('popstate', update);
-    return () => window.removeEventListener('popstate', update);
+    window.addEventListener('hashchange', update);
+    return () => {
+      window.removeEventListener('popstate', update);
+      window.removeEventListener('hashchange', update);
+    };
   }, []);
   const navigate = (href: string) => {
-    window.history.pushState({}, '', preserveDevQuery(href));
+    const search = window.location.search;
+    window.history.pushState({}, '', `/admin${search}#${href}`);
     window.dispatchEvent(new PopStateEvent('popstate'));
     window.scrollTo({ top: 0, behavior: 'instant' });
   };
