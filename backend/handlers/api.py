@@ -206,7 +206,14 @@ def create_router(database: Database) -> APIRouter:
             name, value = response.raw_headers[-1]
             response.raw_headers[-1] = (name, value + b"; Partitioned")
         database.record_audit_event("admin_auth.login", "admin_browser_session", {"transport": "browser"}, user_id)
-        return {"state": "approved", "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]}}
+        return {
+            "state": "approved",
+            "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]},
+            # The HttpOnly cookie remains the primary transport. This browser-origin
+            # fallback is needed for hosted sites that block
+            # cross-site cookies; the frontend keeps it in sessionStorage only.
+            "browser_session_token": session_token,
+        }
 
     @router.get("/admin/auth/session")
     def admin_browser_session(x_dev_auth: str | None = Header(default=None), my_island_admin_session: str | None = Cookie(default=None)):

@@ -18,7 +18,7 @@ app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), al
 @app.middleware("http")
 async def forward_admin_browser_session(request, call_next):
     """Keep the session HttpOnly while making it available to existing handlers."""
-    token = request.cookies.get("my_island_admin_session")
+    token = request.cookies.get("my_island_admin_session") or request.headers.get("X-Admin-Browser-Session")
     if token and not request.headers.get("X-Dev-Auth"):
         headers = list(request.scope.get("headers", []))
         headers.append((b"x-dev-auth", f"browser:{token}".encode("ascii")))

@@ -63,6 +63,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const dev = localDevAuth();
   if (dev) headers.set('X-Dev-Auth', dev);
+  if (typeof window !== 'undefined') {
+    const browserSession = window.sessionStorage.getItem('my_island_admin_session');
+    if (browserSession) headers.set('X-Admin-Browser-Session', browserSession);
+  }
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -133,7 +137,8 @@ function Login({ onLoggedIn }: { onLoggedIn: (session: Session) => void }) {
     setBusy(true);
     setError('');
     try {
-      const result = await api<{ user: Session }>('/api/admin/auth/exchange', { method: 'POST', body: JSON.stringify({ code }) });
+      const result = await api<{ user: Session; browser_session_token?: string }>('/api/admin/auth/exchange', { method: 'POST', body: JSON.stringify({ code }) });
+      if (result.browser_session_token) window.sessionStorage.setItem('my_island_admin_session', result.browser_session_token);
       onLoggedIn(result.user);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Код не принят');
@@ -283,7 +288,7 @@ export default function AdminPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   useEffect(() => { api<{ user: Session }>('/api/admin/auth/session').then((result) => setSession(result.user)).catch(() => setSession(null)).finally(() => setChecking(false)); }, []);
-  const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); setSession(null); };
+  const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); setSession(null); };
   if (checking) return <main className="admin-login"><Loading /></main>;
   if (!session) return <Login onLoggedIn={setSession} />;
   return <div className="admin-console"><Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main className="admin-console-main"><Header path={path} navigate={navigate} session={session} /><AppContent path={path} navigate={navigate} /></main></div>;
