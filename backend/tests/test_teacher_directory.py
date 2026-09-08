@@ -66,6 +66,26 @@ class TeacherDirectoryTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT COUNT(*) AS c FROM memberships WHERE identity_id=? AND active IS TRUE", (student["id"],)).fetchone()["c"], 1)
                 self.assertEqual(connection.execute("SELECT COUNT(*) AS c FROM teacher_assignments WHERE active IS TRUE", ()).fetchone()["c"], 2)
 
+    def test_teacher_my_groups_and_reverse_lookup_use_existing_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "school.db"))
+            database.initialize()
+            teacher = database.create_identity("teacher", "Учитель Тестов")
+            student = database.create_identity("student", "Ученик Тестов", "5")
+            group = database.create_group("5", "class")
+            database.create_membership(group["id"], student["id"], "student", "official_import", "base!A1")
+            user = database.get_or_create_user(991, "teacher")
+            with database.connection() as connection:
+                connection.execute("UPDATE users SET identity_id = ? WHERE id = ?", (teacher["id"], user["id"]))
+            database.set_teacher_assignment(teacher["id"], group["id"], "Математика", True, user["id"], base_class_name="5")
+            groups = database.list_teacher_groups(user["id"])
+            self.assertEqual(len(groups), 1)
+            self.assertEqual(groups[0]["name"], "5")
+            self.assertEqual(groups[0]["subject"], "Математика")
+            self.assertEqual(groups[0]["student_count"], 1)
+            admin_group = database.list_groups_admin()[0]
+            self.assertEqual(admin_group["teacher_assignments"][0]["teacher_name"], "Учитель Тестов")
+
 
 if __name__ == "__main__":
     unittest.main()
