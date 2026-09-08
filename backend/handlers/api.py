@@ -197,6 +197,14 @@ def create_router(database: Database) -> APIRouter:
             samesite="none" if settings.app_env == "production" else "lax",
             path="/",
         )
+        # ChatGPT-hosted Sites call the Render API cross-site. Partitioned cookies
+        # keep the HttpOnly session available in browsers that block unpartitioned
+        # third-party cookies. Starlette only exposes this flag on Python 3.14+;
+        # append the attribute explicitly so the current Render runtime remains
+        # supported.
+        if settings.app_env == "production" and response.raw_headers and response.raw_headers[-1][0] == b"set-cookie":
+            name, value = response.raw_headers[-1]
+            response.raw_headers[-1] = (name, value + b"; Partitioned")
         database.record_audit_event("admin_auth.login", "admin_browser_session", {"transport": "browser"}, user_id)
         return {"state": "approved", "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]}}
 
@@ -359,15 +367,6 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=404, detail="Source was not found")
         return detail
 
-    @router.get("/admin/groups/{group_id}")
-    def admin_group_detail(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        require_role(telegram_user, "admin")
-        group = database.get_group_admin(group_id)
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        return group
-
     @router.get("/admin/reconciliation/student-memberships/latest")
     def latest_student_membership_reconciliation(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -435,6 +434,15 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         return {"items": database.list_groups_admin()}
+
+    @router.get("/admin/groups/{group_id}")
+    def admin_group_detail(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        group = database.get_group_admin(group_id)
+        if not group:
+            raise HTTPException(status_code=404, detail="Group was not found")
+        return group
 
     @router.get("/admin/audit")
     def admin_audit(limit: int = 50, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

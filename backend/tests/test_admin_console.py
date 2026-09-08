@@ -2,7 +2,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from backend.database import Database
+from backend.handlers.api import create_router
 
 
 class AdminConsoleDatabaseTests(unittest.TestCase):
@@ -40,6 +43,14 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         self.assertEqual(run["status"], "ready_for_review")
         reviewed = self.database.mark_reconciliation_reviewed(run_id, self.user_id)
         self.assertEqual(reviewed["status"], "approved")
+
+    def test_admin_group_collection_route_is_not_captured_by_detail_route(self):
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        response = TestClient(app).get("/api/admin/groups", headers={"X-Dev-Auth": "admin:1"})
+        self.assertNotEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":
