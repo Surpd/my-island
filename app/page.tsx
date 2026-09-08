@@ -1714,7 +1714,7 @@ function AdminApp({
 }: {
   onLogout: () => void;
   onBackToTeacher?: () => void;
-  onPreview: (userId: string) => void;
+  onPreview: (userId: string) => Promise<void>;
 }) {
   const [data, setData] = useState<AdminData | null>(null);
   const [section, setSection] = useState<AdminSection>('overview');
@@ -2371,7 +2371,11 @@ function AdminApp({
                     selectedUser.identity_id && (
                       <button
                         className="preview-button"
-                        onClick={() => onPreview(displayValue(selectedUser.id))}
+                        onClick={() =>
+                          void onPreview(displayValue(selectedUser.id)).catch((error) =>
+                            setMessage(error instanceof Error ? error.message : 'Экран ученика не открылся'),
+                          )
+                        }
                       >
                         <UserRound size={16} /> Посмотреть как ученик
                       </button>
@@ -3435,14 +3439,25 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [authKey, load]);
   const startPreview = async (userId: string) => {
-    const preview = await api<{ id: string; target: { display_name: string } }>(
-      '/api/admin/student-previews',
-      { method: 'POST', body: JSON.stringify({ target_user_id: userId }) },
-    );
-    activeStudentPreviewId = preview.id;
-    setPreviewTarget(preview.target.display_name);
-    setData(await loadStudentData());
-    setSection('student-preview');
+    try {
+      const preview = await api<{ id: string; target: { display_name: string } }>(
+        '/api/admin/student-previews',
+        { method: 'POST', body: JSON.stringify({ target_user_id: userId }) },
+      );
+      activeStudentPreviewId = preview.id;
+      setPreviewTarget(preview.target.display_name);
+      // Load the target through the preview header before switching screens. If
+      // any one of the student endpoints rejects, do not leave a half-open
+      // preview token behind in the admin session.
+      const next = await loadStudentData();
+      setData(next);
+      setSection('student-preview');
+    } catch (error) {
+      activeStudentPreviewId = '';
+      setPreviewTarget('');
+      setData(null);
+      throw error;
+    }
   };
   const exitPreview = async () => {
     if (activeStudentPreviewId)
@@ -3480,7 +3495,7 @@ export default function Home() {
   )
     return (
       <AdminApp
-        onPreview={(id) => void startPreview(id)}
+        onPreview={(id) => startPreview(id)}
         onBackToTeacher={
           session.user.roles.includes('teacher')
             ? () => void openTeacher()

@@ -9,6 +9,7 @@ from backend.services.google_live import GoogleLiveClient, GoogleLiveError, Goog
 from backend.services.google_oauth import google_config
 from backend.services.google_sheets import import_school_schedule_tabs
 from backend.services.journal_import import sync_journal_values
+from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 
 
 CURRENT_JOURNAL_FOLDER_ID = "1u7LS5hjyiTRe4fgUoEqRB4T9c02Nq18L"
@@ -102,3 +103,20 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
         raise
     database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "subject": subject, **counts})
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": subject, "counts": counts}
+
+
+def refresh_teacher_directory(database: Database, settings: Settings) -> dict[str, Any]:
+    """Read the authoritative teacher-assignment tab and reconcile only teachers."""
+    client, _ = _client(settings)
+    spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
+    metadata = client.spreadsheet(spreadsheet_id)
+    title = str((metadata.get("properties") or {}).get("title", ""))
+    tabs = [str((sheet.get("properties") or {}).get("title", "")) for sheet in metadata.get("sheets") or []]
+    sheet_title = _resolve_sheet_title(tabs, SHEET_NAME)
+    if not sheet_title:
+        raise GoogleLiveError(f"Teacher directory tab {SHEET_NAME} was not found in {title}")
+    escaped_title = sheet_title.replace("'", "''")
+    values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:D")
+    result = sync_teacher_directory(database, values, spreadsheet_id=spreadsheet_id, spreadsheet_title=title)
+    database.record_audit_event("teacher_directory_sync.success", "teacher_directory", {"spreadsheet_id": spreadsheet_id, **result})
+    return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "sheet_title": sheet_title, **result}
