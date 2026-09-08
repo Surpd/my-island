@@ -42,6 +42,7 @@ class Settings:
     google_oauth_redirect_uri: str | None
     google_oauth_refresh_token: str | None
     telegram_bootstrap_user_ids: tuple[int, ...] = ()
+    telegram_webhook_secret: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -50,6 +51,7 @@ class Settings:
             app_env=os.getenv("APP_ENV", "development").lower(),
             dev_auth_enabled=os.getenv("DEV_AUTH_ENABLED", "false").lower() == "true",
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
             database_url=os.getenv("DATABASE_URL") or None,
             database_path=os.getenv("DATABASE_PATH", "data/my-island.db"),
             cors_origins=origins,

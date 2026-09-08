@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Cookie, Header, HTTPException, Response
+from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from datetime import date, datetime, timedelta, timezone
 import json
+import hmac
 
 from backend.database import Database
 from backend.services.auth import AuthError, resolve_auth
@@ -20,6 +21,7 @@ from backend.services.student_membership_reconciliation import run_live_dry_run,
 from backend.services.student_membership_apply import StudentMembershipApplyBlocked, apply_reviewed_plan, _readback
 from backend.services.student_membership_manual_resolutions import load_manual_resolutions
 from backend.services.student_membership_reconciliation import fetch_authoritative_sources, load_production_snapshot
+from backend.services.telegram_admin_bot import handle_admin_code_update
 
 
 class SessionPayload(BaseModel):
@@ -160,6 +162,20 @@ def create_router(database: Database) -> APIRouter:
         code, expires_at = database.create_admin_login_challenge(actor["id"])
         database.record_audit_event("admin_auth.challenge_created", "admin_browser_session", {"expires_at": expires_at}, actor["id"])
         return {"code": code, "expires_at": expires_at, "single_use": True}
+
+    @router.post("/telegram/webhook")
+    async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token")):
+        settings = get_settings()
+        if not settings.telegram_webhook_secret or not x_telegram_bot_api_secret_token or not hmac.compare_digest(
+            x_telegram_bot_api_secret_token, settings.telegram_webhook_secret
+        ):
+            raise HTTPException(status_code=403, detail="Telegram webhook is not authorized")
+        try:
+            update = await request.json()
+        except Exception as error:
+            raise HTTPException(status_code=400, detail="Telegram update must be valid JSON") from error
+        handle_admin_code_update(database, update, settings.telegram_bot_token)
+        return {"ok": True}
 
     @router.post("/admin/auth/exchange")
     def exchange_admin_browser_code(payload: BrowserCodePayload, response: Response):
