@@ -11,10 +11,10 @@ from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
 from backend.services.google_oauth import google_config
 from backend.services.google_sheets import import_school_schedule_tabs
-from backend.services.google_sync_service import refresh_teacher_directory, refresh_teacher_directory_dry_run
+from backend.services.google_sync_service import refresh_teacher_directory, refresh_teacher_directory_dry_run, refresh_teacher_directory_reconciliation_apply
 
 
-def run(write: bool, teacher_directory: bool = False, teacher_directory_dry_run: bool = False, report_path: str | None = None, json_path: str | None = None) -> int:
+def run(write: bool, teacher_directory: bool = False, teacher_directory_dry_run: bool = False, teacher_directory_reconcile_apply: bool = False, report_path: str | None = None, json_path: str | None = None) -> int:
     settings = get_settings()
     store = GoogleTokenStore()
     token = store.load()
@@ -43,6 +43,12 @@ def run(write: bool, teacher_directory: bool = False, teacher_directory_dry_run:
             payload = {key: value for key, value in result.items() if key != "report"}
             Path(json_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
         print(json.dumps({"mode": result["mode"], "spreadsheet_id": result["spreadsheet_id"], "sheet_title": result["sheet_title"], "counts": result["counts"], "report_path": report_path, "json_path": json_path}, ensure_ascii=True))
+        return 0
+    if teacher_directory_reconcile_apply:
+        if not write:
+            raise ValueError("--teacher-directory-reconcile-apply requires --write")
+        database = Database(settings.database_path, settings.database_url)
+        print(json.dumps(refresh_teacher_directory_reconciliation_apply(database, settings), ensure_ascii=False, default=str))
         return 0
     values_by_tab = client.sheet_values_many(spreadsheet_id, [f"{name}!A:Z" for name in visible_tabs])
     schedule_tabs = list(zip(visible_tabs, values_by_tab))
@@ -88,11 +94,12 @@ if __name__ == "__main__":
     parser.add_argument("--write", action="store_true", help="write normalized data to configured DATABASE_URL")
     parser.add_argument("--teacher-directory", action="store_true", help="sync the authoritative Учителя и группы tab")
     parser.add_argument("--teacher-directory-dry-run", action="store_true", help="read-only reconciliation preview for Учителя и группы — данные")
+    parser.add_argument("--teacher-directory-reconcile-apply", action="store_true", help="apply guarded reconciliation for Учителя и группы — данные")
     parser.add_argument("--teacher-directory-report", help="write the human-readable dry-run report to this path")
     parser.add_argument("--teacher-directory-json", help="write the machine-readable dry-run plan to this path")
     try:
         args = parser.parse_args()
-        raise SystemExit(run(args.write, args.teacher_directory, args.teacher_directory_dry_run, args.teacher_directory_report, args.teacher_directory_json))
+        raise SystemExit(run(args.write, args.teacher_directory, args.teacher_directory_dry_run, args.teacher_directory_reconcile_apply, args.teacher_directory_report, args.teacher_directory_json))
     except (GoogleLiveError, ValueError, RuntimeError) as error:
         print(f"Google sync blocked: {error}", file=sys.stderr)
         raise SystemExit(1) from error

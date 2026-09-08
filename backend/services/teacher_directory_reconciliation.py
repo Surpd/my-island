@@ -80,6 +80,7 @@ class TeacherReconciliationPlan:
     skipped_blank_rows: list[int] = field(default_factory=list)
     current_assignments: list[Mapping[str, Any]] = field(default_factory=list)
     stale_assignments: list[Mapping[str, Any]] = field(default_factory=list)
+    duplicate_assignments: list[Mapping[str, Any]] = field(default_factory=list)
     manual_protected_assignments: list[Mapping[str, Any]] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
 
@@ -93,6 +94,7 @@ class TeacherReconciliationPlan:
             "skipped_blank_rows": self.skipped_blank_rows,
             "current_assignments": [dict(item) for item in self.current_assignments],
             "stale_assignments": [dict(item) for item in self.stale_assignments],
+            "duplicate_assignments": [dict(item) for item in self.duplicate_assignments],
             "manual_protected_assignments": [dict(item) for item in self.manual_protected_assignments],
         }
 
@@ -376,6 +378,7 @@ def build_teacher_reconciliation_plan(
     desired_keys = set(desired)
     current_keys = set(current_by_key)
     stale: list[Mapping[str, Any]] = []
+    duplicates: list[Mapping[str, Any]] = []
     manual_missing: list[Mapping[str, Any]] = []
     unresolved_scope = {
         (_key(issue.normalized_values.get("teacher")), _key(issue.normalized_values.get("subject")), str(grade))
@@ -385,6 +388,10 @@ def build_teacher_reconciliation_plan(
     }
     for key, items in current_by_key.items():
         if key in desired_keys:
+            if len(items) > 1:
+                ranked = sorted(items, key=lambda item: (0 if item.get("source") in {"manual_confirmation", "admin_override"} else 1, str(item.get("id", ""))))
+                survivor_id = ranked[0].get("id")
+                duplicates.extend({**dict(item), "duplicate_of_id": survivor_id} for item in ranked[1:])
             continue
         for item in items:
             source = str(item.get("source", ""))
@@ -398,6 +405,7 @@ def build_teacher_reconciliation_plan(
             elif source == "manual_confirmation" or source == "admin_override":
                 manual_missing.append(item)
     plan.stale_assignments = stale
+    plan.duplicate_assignments = duplicates
     plan.manual_protected_assignments = manual_missing
     audience_issue_count = sum(1 for issue in plan.issues if issue.kind in {"unresolved", "conflict"})
     counts = {
@@ -411,7 +419,8 @@ def build_teacher_reconciliation_plan(
         "unresolved_audience": sum(1 for issue in plan.issues if issue.kind in {"unresolved", "conflict"}),
         "proposed_create_assignments": len(desired_keys - current_keys),
         "proposed_update_assignments": 0,
-        "proposed_deactivate_assignments": len(stale),
+        "proposed_deactivate_assignments": len(stale) + len(duplicates),
+        "duplicate_active_assignments": len(duplicates),
         "manual_assignments_needing_confirmation": len(manual_missing),
         "unchanged_assignments": len(desired_keys & current_keys),
         "computed_schedule_audiences": len(plan.computed_schedule_audiences),
@@ -446,6 +455,12 @@ def render_teacher_reconciliation_report(plan: TeacherReconciliationPlan, *, spr
     for item in plan.stale_assignments:
         lines.append(f"| {item.get('teacher_name', '—')} | {item.get('subject', '—')} | {item.get('group_name', '—')} | {item.get('source', '—')} | {item.get('source_ref', '—')} |")
     if not plan.stale_assignments:
+        lines.append("None.")
+    lines.extend(["", "## Exact duplicate active assignments", "", "| Teacher | Subject | Current audience | Duplicate id | Survivor id |", "| --- | --- | --- | --- | --- |"])
+    if plan.duplicate_assignments:
+        for item in plan.duplicate_assignments:
+            lines.append(f"| {item.get('teacher_name', '—')} | {item.get('subject', '—')} | {item.get('group_name', '—')} | {item.get('id', '—')} | {item.get('duplicate_of_id', '—')} |")
+    else:
         lines.append("None.")
     if plan.manual_protected_assignments:
         lines.extend(["", "Assignments protected from automatic deactivation because the same source relationship is unresolved:", "", "| Teacher | Subject | Current audience | Source | Source row | Guard |", "| --- | --- | --- | --- | --- | --- |"])
