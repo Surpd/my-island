@@ -1838,6 +1838,8 @@ class Database:
                         existing_member["source_refs"] = sorted(set(existing_member["source_refs"] + member["source_refs"]))
                 group["students"] = list(students_by_id.values())
                 group["teacher_assignments"] = [dict(item) for item in assignments]
+                group["student_count"] = int(group.get("member_count") or len(group["students"]))
+                group["teacher_count"] = int(group.get("teacher_count") or len(group["teacher_assignments"]))
                 group["relationship_kind"] = (
                     "base_class" if row["group_type"] == "class"
                     else "exam_profile" if row["group_type"] == "exam_track"
