@@ -2384,7 +2384,7 @@ class Database:
 
     def schedule_v1_issues(self, issue_type: str | None = None, week_start: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            query = "SELECT * FROM school_resolution_issues WHERE (issue_type LIKE 'schedule%' OR issue_type='unknown_schedule_tab') AND sync_run_id IN (SELECT sync_run_id FROM school_source_snapshots WHERE is_last_known_valid IS TRUE AND source_id IN (SELECT id FROM school_sources WHERE source_type='schedule'))"; params: list[Any] = []
+            query = "SELECT * FROM school_resolution_issues WHERE (substr(issue_type,1,8)='schedule' OR issue_type='unknown_schedule_tab') AND sync_run_id IN (SELECT sync_run_id FROM school_source_snapshots WHERE is_last_known_valid IS TRUE AND source_id IN (SELECT id FROM school_sources WHERE source_type='schedule'))"; params: list[Any] = []
             if issue_type: query += " AND issue_type=?"; params.append(issue_type)
             if status: query += " AND status=?"; params.append(status)
             query += " ORDER BY id DESC LIMIT 500"
