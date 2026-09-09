@@ -129,6 +129,12 @@ const ruLabels: Record<string, string> = {
   subject_group: 'учебная группа', instructional_group: 'учебная группа', selection_fact: 'экзамен / профиль',
   multiple_active_base_classes: 'несколько активных базовых классов', read_only: 'только просмотр',
   google_sheet: 'Google Таблица', official_school_data: 'официальные школьные данные',
+  manual_review: 'ручная проверка', non_boolean_selection: 'неоднозначный выбор', base_split: 'разделение базового класса',
+  ambiguous_teacher_headers: 'неоднозначные заголовки учителей', students_without_base_class: 'ученики без базового класса',
+  teacher_assignment_unresolved: 'неразрешённое назначение учителя', person: 'человек', group: 'группа', membership: 'членство',
+  create: 'создать', update: 'обновить', end: 'завершить', map: 'сопоставить', configuration_missing: 'не настроено',
+  reauthorization_required: 'нужна повторная авторизация', connected: 'подключено', instructional_group_list: 'списки учебных групп',
+  base_class_list: 'списки базовых классов', exam_profile_list: 'списки экзаменов и профилей', other: 'другой источник',
 };
 
 const fieldLabels: Record<string, string> = {
