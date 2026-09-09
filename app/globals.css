@@ -1855,6 +1855,8 @@ button {
 .admin-metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .admin-metric, .admin-panel { border: 1px solid #dfeaec; border-radius: 13px; background: #fff; box-shadow: 0 7px 20px rgb(25 63 72 / 4%); }
 .admin-metric { min-height: 105px; padding: 16px; }
+.admin-metric--clickable { width: 100%; border: 1px solid #dfeaec; text-align: left; cursor: pointer; font: inherit; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.admin-metric--clickable:hover { border-color: #73b8b2; box-shadow: 0 10px 24px rgb(25 63 72 / 10%); transform: translateY(-1px); }
 .admin-metric span, .admin-metric small { display: block; color: #789099; font-size: 10px; }
 .admin-metric strong { display: block; margin: 10px 0 4px; color: #183c48; font-size: 24px; }
 .admin-two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
@@ -1888,6 +1890,9 @@ button {
 .admin-search { display: flex; align-items: center; gap: 8px; flex: 1; min-height: 40px; padding: 0 12px; border: 1px solid #dce8ea; border-radius: 9px; background: #fff; color: #779098; }
 .admin-search input, .admin-toolbar select, .admin-login-card input { width: 100%; border: 0; outline: 0; background: transparent; color: #294c56; font: inherit; font-size: 12px; }
 .admin-toolbar select { width: 180px; padding: 0 12px; border: 1px solid #dce8ea; border-radius: 9px; background: white; }
+.admin-inline-stat--clickable { border: 0; border-radius: 9px; background: #f6f9f9; cursor: pointer; font: inherit; text-align: left; }
+.admin-inline-stat--clickable:hover { background: #eaf6f4; }
+.admin-json-cell { max-width: 360px; white-space: normal; word-break: break-word; }
 .admin-table-panel { padding: 0; overflow: hidden; }
 .admin-table-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #e3ecee; color: #748990; font-size: 10px; }
 .admin-table-wrap { overflow: auto; }

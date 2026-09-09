@@ -1323,6 +1323,8 @@ class Database:
         query: str | None = None,
         class_name: str | None = None,
         group_id: str | None = None,
+        has_issues: bool | None = None,
+        protected: bool | None = None,
     ) -> list[dict[str, Any]]:
         """Return the collection projection without per-person database round trips.
 
@@ -1354,6 +1356,10 @@ class Database:
                 "AND (gm.valid_until IS NULL OR gm.valid_until >= CURRENT_DATE))"
             )
             params.append(group_id)
+        if has_issues is True:
+            clauses.append("EXISTS (SELECT 1 FROM school_resolution_issues ri WHERE ri.status = 'open' AND CAST(ri.details AS TEXT) LIKE '%' || i.display_name || '%')")
+        elif has_issues is False:
+            clauses.append("NOT EXISTS (SELECT 1 FROM school_resolution_issues ri WHERE ri.status = 'open' AND CAST(ri.details AS TEXT) LIKE '%' || i.display_name || '%')")
 
         with self.connection() as connection:
             identities = [
@@ -1368,6 +1374,21 @@ class Database:
             ]
             if not identities:
                 return []
+
+            latest_reconciliation = self.execute(
+                connection,
+                "SELECT payload FROM admin_reconciliation_runs ORDER BY id DESC LIMIT 1",
+            ).fetchone()
+            protected_identity_ids: set[str] = set()
+            if latest_reconciliation:
+                payload = self._decode_json_value(latest_reconciliation["payload"])
+                for assignment in (payload.get("assignments", []) if isinstance(payload, dict) else []):
+                    if isinstance(assignment, dict) and assignment.get("action") == "PROTECTED" and assignment.get("identity_id") is not None:
+                        protected_identity_ids.add(str(assignment["identity_id"]))
+            if protected is not None:
+                identities = [item for item in identities if (str(item["id"]) in protected_identity_ids) == protected]
+                if not identities:
+                    return []
 
             identity_ids = [item["id"] for item in identities]
             placeholders = ",".join("?" for _ in identity_ids)
@@ -1455,8 +1476,28 @@ class Database:
                     "homerooms": [],
                     "unresolved": [],
                     "unresolved_count": unresolved_count,
+                    "protected_case": str(identity["id"]) in protected_identity_ids,
                 })
             return result
+
+    def list_people_filter_options(self) -> dict[str, list[dict[str, Any]]]:
+        with self.connection() as connection:
+            classes = self.execute(
+                connection,
+                """SELECT DISTINCT class_name AS value FROM identities
+                    WHERE status = 'active' AND class_name IS NOT NULL AND trim(class_name) <> ''
+                    ORDER BY class_name""",
+            ).fetchall()
+            groups = self.execute(
+                connection,
+                """SELECT id, name, display_name, group_type, base_class_name, subject
+                     FROM groups WHERE canonical IS TRUE
+                    ORDER BY COALESCE(display_name, name), name""",
+            ).fetchall()
+            return {
+                "classes": [{"value": row["value"], "label": row["value"]} for row in classes],
+                "groups": [dict(row) for row in groups],
+            }
 
     def list_schedule_explanations_for_user(self, user_id: Any, lesson_date: str, end_date: str | None = None) -> list[dict[str, Any]]:
         entries = [dict(row) for row in self.list_schedule_entries_for_user(user_id, lesson_date, end_date)]
@@ -2074,7 +2115,7 @@ class Database:
                           (SELECT COUNT(*) FROM school_candidate_changes cc WHERE cc.sync_run_id = sr.id AND cc.status IN ('pending','conflict','unresolved')) AS candidate_change_count
                      FROM school_sources s
                      LEFT JOIN school_sync_runs sr ON sr.id = (SELECT id FROM school_sync_runs x WHERE x.source_id = s.id ORDER BY x.id DESC LIMIT 1)
-                     LEFT JOIN school_source_snapshots ss ON ss.id = (SELECT id FROM school_source_snapshots x WHERE x.source_id = s.id AND x.is_last_known_valid = 1 ORDER BY x.id DESC LIMIT 1)
+                     LEFT JOIN school_source_snapshots ss ON ss.id = (SELECT id FROM school_source_snapshots x WHERE x.source_id = s.id AND x.is_last_known_valid IS TRUE ORDER BY x.id DESC LIMIT 1)
                     ORDER BY s.active DESC, s.display_name""",
             ).fetchall()
             result = []
@@ -2104,6 +2145,102 @@ class Database:
             mappings = self.execute(connection, "SELECT id, external_key, mapping_type, identity_id, group_id, classroom_course_id, canonical_value, status, manually_confirmed, valid_from, valid_until, supersedes_mapping_id, created_at, updated_at FROM school_source_mappings WHERE source_id = ? ORDER BY id DESC LIMIT 200", (source_id,)).fetchall()
             return {"source": dict(source), "runs": [dict(row) for row in runs], "snapshots": [dict(row) for row in snapshots], "records": [dict(row) for row in records], "issues": [dict(row) for row in issues], "mappings": [dict(row) for row in mappings]}
 
+    def list_resolution_issues(
+        self,
+        status: str | None = None,
+        issue_type: str | None = None,
+        source_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1 = 1"]
+        params: list[Any] = []
+        if status:
+            clauses.append("ri.status = ?")
+            params.append(status)
+        if issue_type:
+            clauses.append("ri.issue_type = ?")
+            params.append(issue_type)
+        if source_id:
+            clauses.append("sr.source_id = ?")
+            params.append(source_id)
+        params.append(max(1, min(limit, 500)))
+        with self.connection() as connection:
+            rows = self.execute(
+                connection,
+                f"""SELECT ri.id, ri.sync_run_id, ri.source_record_id, ri.candidate_change_id,
+                              ri.issue_type, ri.status, ri.details, ri.evidence, ri.resolution,
+                              ri.created_at, ri.resolved_at,
+                              ss.id AS source_id, ss.display_name AS source_name,
+                              sr.status AS sync_status, sr.finished_at AS sync_finished_at,
+                              rec.record_key AS source_record_key,
+                              cc.status AS candidate_status, cc.entity_type, cc.natural_key
+                         FROM school_resolution_issues ri
+                         LEFT JOIN school_sync_runs sr ON sr.id = ri.sync_run_id
+                         LEFT JOIN school_sources ss ON ss.id = sr.source_id
+                         LEFT JOIN school_source_records rec ON rec.id = ri.source_record_id
+                         LEFT JOIN school_candidate_changes cc ON cc.id = ri.candidate_change_id
+                        WHERE {' AND '.join(clauses)}
+                        ORDER BY CASE ri.status WHEN 'open' THEN 0 WHEN 'resolved' THEN 1 ELSE 2 END,
+                                 ri.created_at DESC, ri.id DESC LIMIT ?""",
+                tuple(params),
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                for key in ("details", "evidence", "resolution"):
+                    item[key] = self._decode_json_value(item.get(key))
+                result.append(item)
+            return result
+
+    def list_candidate_changes(
+        self,
+        status: str | None = None,
+        entity_type: str | None = None,
+        source_id: str | None = None,
+        sync_run_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clauses = ["1 = 1"]
+        params: list[Any] = []
+        if status:
+            clauses.append("cc.status = ?")
+            params.append(status)
+        if entity_type:
+            clauses.append("cc.entity_type = ?")
+            params.append(entity_type)
+        if source_id:
+            clauses.append("sr.source_id = ?")
+            params.append(source_id)
+        if sync_run_id:
+            clauses.append("cc.sync_run_id = ?")
+            params.append(sync_run_id)
+        params.append(max(1, min(limit, 500)))
+        with self.connection() as connection:
+            rows = self.execute(
+                connection,
+                f"""SELECT cc.id, cc.sync_run_id, cc.source_record_id, cc.change_type,
+                              cc.entity_type, cc.natural_key, cc.proposed_payload, cc.evidence,
+                              cc.status, cc.manual_decision, cc.decision_at, cc.applied_at, cc.created_at,
+                              ss.id AS source_id, ss.display_name AS source_name,
+                              sr.status AS sync_status, sr.finished_at AS sync_finished_at,
+                              rec.record_key AS source_record_key
+                         FROM school_candidate_changes cc
+                         LEFT JOIN school_sync_runs sr ON sr.id = cc.sync_run_id
+                         LEFT JOIN school_sources ss ON ss.id = sr.source_id
+                         LEFT JOIN school_source_records rec ON rec.id = cc.source_record_id
+                        WHERE {' AND '.join(clauses)}
+                        ORDER BY CASE cc.status WHEN 'pending' THEN 0 WHEN 'unresolved' THEN 1 WHEN 'conflict' THEN 2 ELSE 3 END,
+                                 cc.created_at DESC, cc.id DESC LIMIT ?""",
+                tuple(params),
+            ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                for key in ("proposed_payload", "evidence"):
+                    item[key] = self._decode_json_value(item.get(key))
+                result.append(item)
+            return result
+
     def get_group_admin(self, group_id: Any) -> dict[str, Any] | None:
         groups = self.list_groups_admin()
         group = next((item for item in groups if str(item.get("id")) == str(group_id)), None)
@@ -2126,9 +2263,15 @@ class Database:
                 else:
                     columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
                 schema[table] = {"ok": names.issubset(columns), "required": sorted(names)}
-            return {"environment": "local_sqlite" if not self.database_url else "postgres", "database": "configured", "counts": counts, "schema": schema, "schema_status": "current" if all(item["ok"] for item in schema.values()) else "attention"}
+            candidate_counts = {}
+            for status in ("pending", "approved", "rejected", "applied", "unresolved", "conflict"):
+                candidate_counts[status] = int(self.execute(connection, "SELECT COUNT(*) AS value FROM school_candidate_changes WHERE status = ?", (status,)).fetchone()["value"])
+            issue_counts = {}
+            for status in ("open", "resolved", "ignored"):
+                issue_counts[status] = int(self.execute(connection, "SELECT COUNT(*) AS value FROM school_resolution_issues WHERE status = ?", (status,)).fetchone()["value"])
+            return {"environment": "local_sqlite" if not self.database_url else "postgres", "database": "configured", "counts": counts, "semantics": {"candidate_changes": {"total": counts["school_candidate_changes"], "by_status": candidate_counts, "historical": candidate_counts["applied"], "active": candidate_counts["pending"] + candidate_counts["approved"] + candidate_counts["conflict"] + candidate_counts["unresolved"]}, "resolution_issues": {"total": counts["school_resolution_issues"], "by_status": issue_counts, "active": issue_counts["open"], "historical": issue_counts["resolved"] + issue_counts["ignored"]}}, "schema": schema, "schema_status": "current" if all(item["ok"] for item in schema.values()) else "attention"}
 
-    def admin_overview(self) -> dict[str, int]:
+    def admin_overview(self) -> dict[str, Any]:
         with self.connection() as connection:
             queries = {
                 "pending_claims": "SELECT COUNT(*) AS value FROM identity_claims WHERE status = 'pending'",
@@ -2139,7 +2282,32 @@ class Database:
                 "unlinked_accounts": "SELECT COUNT(*) AS value FROM users WHERE identity_id IS NULL",
                 "identity_conflicts": "SELECT COUNT(*) AS value FROM identity_claims WHERE status = 'identity_conflict'",
             }
-            return {name: int(self.execute(connection, sql).fetchone()["value"]) for name, sql in queries.items()}
+            result = {name: int(self.execute(connection, sql).fetchone()["value"]) for name, sql in queries.items()}
+            for key, sql in {
+                "canonical_students": "SELECT COUNT(*) AS value FROM identities WHERE kind = 'student' AND status = 'active'",
+                "canonical_teachers": "SELECT COUNT(*) AS value FROM identities WHERE kind = 'teacher' AND status = 'active'",
+                "app_accounts": "SELECT COUNT(*) AS value FROM users",
+                "active_issues": "SELECT COUNT(*) AS value FROM school_resolution_issues WHERE status = 'open'",
+                "resolved_issues": "SELECT COUNT(*) AS value FROM school_resolution_issues WHERE status = 'resolved'",
+                "candidate_changes_total": "SELECT COUNT(*) AS value FROM school_candidate_changes",
+                "candidate_changes_historical": "SELECT COUNT(*) AS value FROM school_candidate_changes WHERE status = 'applied'",
+                "candidate_changes_unresolved": "SELECT COUNT(*) AS value FROM school_candidate_changes WHERE status = 'unresolved'",
+                "candidate_changes_pending": "SELECT COUNT(*) AS value FROM school_candidate_changes WHERE status IN ('pending','approved','conflict')",
+                "source_count": "SELECT COUNT(*) AS value FROM school_sources",
+                "sync_runs_total": "SELECT COUNT(*) AS value FROM school_sync_runs",
+            }.items():
+                result[key] = int(self.execute(connection, sql).fetchone()["value"])
+            latest_sync = self.execute(connection, "SELECT MAX(finished_at) AS value FROM school_sync_runs WHERE status = 'applied'").fetchone()["value"]
+            result["last_successful_sync"] = latest_sync
+            latest_run = self.execute(connection, "SELECT status, created_at, payload FROM admin_reconciliation_runs ORDER BY id DESC LIMIT 1").fetchone()
+            result["last_reconciliation_status"] = latest_run["status"] if latest_run else "not_run"
+            result["last_reconciliation_at"] = latest_run["created_at"] if latest_run else None
+            result["protected_cases"] = 0
+            if latest_run:
+                payload = self._decode_json_value(latest_run["payload"])
+                summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+                result["protected_cases"] = int(summary.get("PROTECTED", 0) or 0)
+            return result
 
     def get_teacher_profile(self, user_id: Any) -> dict[str, Any] | None:
         with self.connection() as connection:

@@ -331,12 +331,18 @@ def create_router(database: Database) -> APIRouter:
         return {"items": database.list_users_with_groups()}
 
     @router.get("/admin/people")
-    def admin_people(kind: str | None = None, q: str | None = None, class_name: str | None = None, group_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_people(kind: str | None = None, q: str | None = None, class_name: str | None = None, group_id: str | None = None, has_issues: bool | None = None, protected: bool | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         if kind not in {None, "student", "teacher"}:
             raise HTTPException(status_code=400, detail="kind must be student or teacher")
-        return {"items": database.list_people_library_summary(kind=kind, query=q, class_name=class_name, group_id=group_id)}
+        return {"items": database.list_people_library_summary(kind=kind, query=q, class_name=class_name, group_id=group_id, has_issues=has_issues, protected=protected)}
+
+    @router.get("/admin/people/filters")
+    def admin_people_filters(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return database.list_people_filter_options()
 
     @router.get("/admin/people/{identity_id}")
     def admin_person(identity_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -357,13 +363,33 @@ def create_router(database: Database) -> APIRouter:
     def admin_system(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        return {"health": database.system_health(), "settings": {"environment": get_settings().app_env, "database_configured": bool(get_settings().database_url), "dev_auth_enabled": get_settings().dev_auth_enabled}}
+        settings = get_settings()
+        google_configured = all((settings.google_oauth_client_id, settings.google_oauth_client_secret, settings.google_oauth_redirect_uri))
+        google_token_present = bool(settings.google_oauth_refresh_token)
+        google_status = "connected" if google_configured and google_token_present else "reauthorization_required" if google_configured else "configuration_missing"
+        return {"health": database.system_health(), "settings": {"environment": settings.app_env, "database_configured": bool(settings.database_url), "dev_auth_enabled": settings.dev_auth_enabled, "google": {"status": google_status, "configuration_present": google_configured, "refresh_token_present": google_token_present, "message": "Google-соединение готово для синхронизации" if google_status == "connected" else "Необходимо повторно авторизовать Google-соединение" if google_status == "reauthorization_required" else "Google OAuth ещё не настроен"}}}
 
     @router.get("/admin/sources")
     def admin_sources(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         return {"items": database.list_school_sources_health()}
+
+    @router.get("/admin/issues")
+    def admin_issues(status: str | None = None, issue_type: str | None = None, source_id: str | None = None, limit: int = 200, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        if status not in {None, "open", "resolved", "ignored"}:
+            raise HTTPException(status_code=400, detail="status must be open, resolved or ignored")
+        return {"items": database.list_resolution_issues(status=status, issue_type=issue_type, source_id=source_id, limit=limit)}
+
+    @router.get("/admin/candidates")
+    def admin_candidates(status: str | None = None, entity_type: str | None = None, source_id: str | None = None, sync_run_id: str | None = None, limit: int = 200, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        if status not in {None, "pending", "approved", "rejected", "applied", "unresolved", "conflict"}:
+            raise HTTPException(status_code=400, detail="Unsupported candidate change status")
+        return {"items": database.list_candidate_changes(status=status, entity_type=entity_type, source_id=source_id, sync_run_id=sync_run_id, limit=limit)}
 
     @router.get("/admin/sources/{source_id}")
     def admin_source_detail(source_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
