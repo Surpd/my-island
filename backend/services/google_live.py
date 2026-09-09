@@ -162,6 +162,23 @@ class GoogleLiveClient:
             {"fields": "spreadsheetId,properties.title,sheets(properties,merges)"},
         )
 
+    def sheet_grid_range(self, spreadsheet_id: str, title: str, a1_range: str = "A1:V200") -> dict[str, Any]:
+        escaped = title.replace("'", "''")
+        return self.get(
+            "https://sheets.googleapis.com/", f"v4/spreadsheets/{quote(spreadsheet_id, safe='')}",
+            {
+                "includeGridData": "true",
+                "ranges": f"'{escaped}'!{a1_range}",
+                "fields": (
+                    "spreadsheetId,properties.title,"
+                    "sheets(properties(sheetId,title,hidden),merges,"
+                    "data(startRow,startColumn,rowData(values("
+                    "formattedValue,userEnteredValue,effectiveValue,note,"
+                    "userEnteredFormat,effectiveFormat))))"
+                ),
+            },
+        )
+
     def sheet_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
         values = self.sheet_values_many(spreadsheet_id, [range_name])
         return values[0] if values else []

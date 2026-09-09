@@ -94,6 +94,55 @@ CREATE TABLE IF NOT EXISTS schedule_entries (
   source_snapshot_id INTEGER,
   archived INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS schedule_lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_snapshot_id INTEGER NOT NULL REFERENCES school_source_snapshots(id) ON DELETE CASCADE,
+  source_record_id INTEGER REFERENCES school_source_records(id) ON DELETE SET NULL,
+  record_key TEXT NOT NULL,
+  sheet_id TEXT,
+  tab_title TEXT,
+  version_kind TEXT NOT NULL DEFAULT 'weekly',
+  week_start TEXT,
+  week_end TEXT,
+  weekday INTEGER,
+  lesson_date TEXT,
+  start_time TEXT,
+  end_time TEXT,
+  subject TEXT NOT NULL DEFAULT '',
+  teacher_hint TEXT NOT NULL DEFAULT '',
+  room TEXT NOT NULL DEFAULT '',
+  audience TEXT NOT NULL DEFAULT '',
+  activity_type TEXT NOT NULL DEFAULT 'lesson',
+  lesson_kind TEXT NOT NULL DEFAULT 'lesson',
+  modifiers TEXT NOT NULL DEFAULT '{}',
+  resolution_status TEXT NOT NULL DEFAULT 'UNRESOLVED',
+  resolved_identity_ids TEXT NOT NULL DEFAULT '[]',
+  resolved_group_ids TEXT NOT NULL DEFAULT '[]',
+  confidence REAL,
+  evidence TEXT NOT NULL DEFAULT '{}',
+  source_cell TEXT,
+  source_color TEXT,
+  merge_data TEXT,
+  baseline_record_key TEXT,
+  baseline_data TEXT,
+  diff_status TEXT,
+  issue_reason TEXT,
+  diagnostics TEXT NOT NULL DEFAULT '{}',
+  raw_payload TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(source_snapshot_id, record_key)
+);
+CREATE TABLE IF NOT EXISTS schedule_source_tabs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES school_sources(id) ON DELETE CASCADE,
+  sheet_id TEXT NOT NULL, title TEXT NOT NULL, classification TEXT NOT NULL,
+  week_start TEXT, week_end TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_id, sheet_id)
+);
+CREATE INDEX IF NOT EXISTS schedule_lessons_snapshot_idx ON schedule_lessons(source_snapshot_id, lesson_date, start_time);
+CREATE INDEX IF NOT EXISTS schedule_lessons_status_idx ON schedule_lessons(resolution_status);
+CREATE INDEX IF NOT EXISTS schedule_lessons_week_status_idx ON schedule_lessons(source_snapshot_id, version_kind, week_start, resolution_status);
+CREATE INDEX IF NOT EXISTS schedule_lessons_diff_idx ON schedule_lessons(source_snapshot_id, diff_status);
+CREATE INDEX IF NOT EXISTS schedule_source_tabs_source_week_idx ON schedule_source_tabs(source_id, classification, week_start);
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
@@ -674,6 +723,16 @@ class Database:
             },
             "schedule_syncs": {"archived": "INTEGER NOT NULL DEFAULT 0"},
             "group_schedule_audiences": {"archived": "INTEGER NOT NULL DEFAULT 0"},
+            "schedule_lessons": {
+                "source_record_id": "INTEGER REFERENCES school_source_records(id) ON DELETE SET NULL",
+                "sheet_id": "TEXT", "tab_title": "TEXT", "version_kind": "TEXT NOT NULL DEFAULT 'weekly'",
+                "week_start": "TEXT", "week_end": "TEXT", "weekday": "INTEGER",
+                "teacher_hint": "TEXT NOT NULL DEFAULT ''", "room": "TEXT NOT NULL DEFAULT ''",
+                "activity_type": "TEXT NOT NULL DEFAULT 'lesson'", "modifiers": "TEXT NOT NULL DEFAULT '{}'",
+                "confidence": "REAL", "evidence": "TEXT NOT NULL DEFAULT '{}'", "source_cell": "TEXT",
+                "source_color": "TEXT", "merge_data": "TEXT", "baseline_record_key": "TEXT",
+                "baseline_data": "TEXT", "diff_status": "TEXT", "issue_reason": "TEXT",
+            },
             "announcements": {
                 "audience_kind": "TEXT NOT NULL DEFAULT 'all'",
                 "audience_ref": "TEXT",
@@ -2238,6 +2297,106 @@ class Database:
                 item = dict(row)
                 for key in ("proposed_payload", "evidence"):
                     item[key] = self._decode_json_value(item.get(key))
+                result.append(item)
+            return result
+
+    def schedule_v1_overview(self) -> dict[str, Any]:
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT id, display_name, external_key, location_ref, authority_status, configuration FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
+            snapshot = self.execute(connection, "SELECT id, sync_run_id, fingerprint, observed_at, status FROM school_source_snapshots WHERE source_id=? AND is_last_known_valid IS TRUE ORDER BY id DESC LIMIT 1", (source["id"],)).fetchone() if source else None
+            tabs = [dict(x) for x in self.execute(connection, "SELECT sheet_id,title,classification,week_start,week_end FROM schedule_source_tabs WHERE source_id=? ORDER BY title", (source["id"],)).fetchall()] if source else []
+            lesson_rows = self.execute(connection, "SELECT week_start,resolution_status,diff_status,modifiers FROM schedule_lessons WHERE source_snapshot_id=? AND version_kind='weekly'", (snapshot["id"],)).fetchall() if snapshot else []
+            week_counts: dict[str, int] = {}
+            status_counts: dict[str, int] = {}
+            diff_counts: dict[str, int] = {}
+            for row in lesson_rows:
+                status_counts[str(row["resolution_status"])] = status_counts.get(str(row["resolution_status"]), 0) + 1
+                diff_counts[str(row["diff_status"])] = diff_counts.get(str(row["diff_status"]), 0) + 1
+                modifiers = self._decode_json_value(row["modifiers"]) or {}
+                if row["week_start"] and row["resolution_status"] != "NON_LESSON" and not modifiers.get("synthetic_cancelled"):
+                    key = str(row["week_start"]); week_counts[key] = week_counts.get(key, 0) + 1
+            weeks = [{"week_start": key, "lessons": value} for key, value in sorted(week_counts.items(), reverse=True)]
+            issue_count = int(self.execute(connection, "SELECT COUNT(*) AS n FROM school_resolution_issues WHERE sync_run_id=? AND status='open'", (snapshot["sync_run_id"],)).fetchone()["n"]) if snapshot else 0
+            summary = {"lessons": sum(int(x["lessons"]) for x in weeks), "issues": issue_count,
+                       "resolved": status_counts.get("RESOLVED", 0), "warning": status_counts.get("WARNING", 0),
+                       "unresolved": status_counts.get("UNRESOLVED", 0), "conflict": status_counts.get("CONFLICT", 0),
+                       "special_event": status_counts.get("SPECIAL_EVENT", 0), "non_lesson": status_counts.get("NON_LESSON", 0),
+                       "added": diff_counts.get("ADDED", 0), "changed": diff_counts.get("MODIFIED", 0) + diff_counts.get("REPLACED", 0),
+                       "removed": diff_counts.get("CANCELLED", 0), "same": diff_counts.get("SAME_AS_BASELINE", 0),
+                       "diffs": diff_counts}
+            last_sync = self.execute(connection, "SELECT id,status,finished_at,diagnostics FROM school_sync_runs WHERE source_id=? ORDER BY id DESC LIMIT 1", (source["id"],)).fetchone() if source else None
+            source_item = dict(source) if source else None
+            if source_item:
+                source_item["name"] = source_item["display_name"]
+                source_item["spreadsheet_title"] = source_item["display_name"]
+                template = next((tab for tab in tabs if tab["classification"] == "template"), None)
+                source_item["template"] = template["title"] if template else None
+                source_item["configuration"] = self._decode_json_value(source_item.get("configuration"))
+            return {"source": source_item, "snapshot": dict(snapshot) if snapshot else None, "tabs": tabs, "weeks": weeks,
+                    "summary": summary, "last_sync": last_sync["finished_at"] if last_sync else None,
+                    "last_sync_detail": {**dict(last_sync), "diagnostics": self._decode_json_value(last_sync["diagnostics"])} if last_sync else None,
+                    "auth_state": "connected" if source else "not_configured"}
+
+    def schedule_v1_tabs(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT id FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
+            return [dict(row) for row in self.execute(connection, "SELECT sheet_id,title,classification,week_start,week_end,updated_at FROM schedule_source_tabs WHERE source_id=? ORDER BY title", (source["id"],)).fetchall()] if source else []
+
+    def schedule_v1_weeks(self) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            snapshot = self.execute(connection, "SELECT id FROM school_source_snapshots WHERE is_last_known_valid IS TRUE AND source_id IN (SELECT id FROM school_sources WHERE source_type='schedule') ORDER BY id DESC LIMIT 1").fetchone()
+            return [dict(row) for row in self.execute(connection, "SELECT week_start,COUNT(*) AS lessons FROM schedule_lessons WHERE source_snapshot_id=? AND version_kind='weekly' GROUP BY week_start ORDER BY week_start DESC", (snapshot["id"],)).fetchall()] if snapshot else []
+
+    def schedule_v1_lessons(self, status: str | None = None, week_start: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            query = "SELECT * FROM schedule_lessons WHERE version_kind='weekly'"; params: list[Any] = []
+            query += " AND source_snapshot_id IN (SELECT id FROM school_source_snapshots WHERE is_last_known_valid IS TRUE)"
+            if status: query += " AND resolution_status=?"; params.append(status)
+            if week_start: query += " AND week_start=?"; params.append(week_start)
+            if lesson_type: query += " AND (lesson_kind=? OR activity_type=?)"; params.extend([lesson_type, lesson_type])
+            query += " ORDER BY lesson_date, start_time, id"
+            rows = [dict(row) for row in self.execute(connection, query, tuple(params)).fetchall()]
+            identity_rows = self.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher'").fetchall()
+            group_rows = self.execute(connection, "SELECT id,COALESCE(display_name,name) AS name FROM groups").fetchall()
+            identities = {str(row["id"]): row["display_name"] for row in identity_rows}
+            groups = {str(row["id"]): row["name"] for row in group_rows}
+            result = []
+            for item in rows:
+                for key in ("resolved_identity_ids", "resolved_group_ids", "modifiers", "evidence", "merge_data", "baseline_data", "diagnostics", "raw_payload"):
+                    item[key] = self._decode_json_value(item.get(key))
+                teacher_ids = [str(value) for value in (item.get("resolved_identity_ids") or [])]
+                group_ids = [str(value) for value in (item.get("resolved_group_ids") or [])]
+                if teacher_id and str(teacher_id) not in teacher_ids:
+                    continue
+                if group_id and str(group_id) not in group_ids and str(group_id).casefold().strip() != str(item.get("audience") or "").casefold().strip():
+                    continue
+                item.update({"status": item["resolution_status"], "teacher_id": teacher_ids[0] if len(teacher_ids) == 1 else None,
+                             "teacher_name": identities.get(teacher_ids[0]) if len(teacher_ids) == 1 else item.get("teacher_hint"),
+                             "teacher": identities.get(teacher_ids[0]) if len(teacher_ids) == 1 else item.get("teacher_hint"),
+                             "group_id": group_ids[0] if len(group_ids) == 1 else None,
+                             "group_name": groups.get(group_ids[0]) if len(group_ids) == 1 else item.get("audience"),
+                             "raw_text": (item.get("raw_payload") or {}).get("raw_text", ""), "cell": item.get("source_cell"),
+                             "color": item.get("source_color"), "parsed": {"subject": item.get("subject"), "teacher_hint": item.get("teacher_hint"), "room": item.get("room"), "activity_type": item.get("activity_type"), "modifiers": item.get("modifiers")},
+                             "resolved": {"teacher_ids": teacher_ids, "group_ids": group_ids}, "baseline": item.get("baseline_data"),
+                             "diff": item.get("diff_status"), "issue": item.get("issue_reason")})
+                result.append(item)
+            return result
+
+    def schedule_v1_issues(self, issue_type: str | None = None, week_start: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            query = "SELECT * FROM school_resolution_issues WHERE (issue_type LIKE 'schedule%' OR issue_type='unknown_schedule_tab') AND sync_run_id IN (SELECT sync_run_id FROM school_source_snapshots WHERE is_last_known_valid IS TRUE AND source_id IN (SELECT id FROM school_sources WHERE source_type='schedule'))"; params: list[Any] = []
+            if issue_type: query += " AND issue_type=?"; params.append(issue_type)
+            if status: query += " AND status=?"; params.append(status)
+            query += " ORDER BY id DESC LIMIT 500"
+            result = []
+            for row in self.execute(connection, query, tuple(params)).fetchall():
+                item = dict(row)
+                item["detail"] = self._decode_json_value(item.get("details"))
+                item["evidence"] = self._decode_json_value(item.get("evidence"))
+                if week_start and str((item["detail"] or {}).get("week_start") or "") != str(week_start):
+                    continue
+                item["reason"] = (item["detail"] or {}).get("reason")
+                item["title"] = (item["detail"] or {}).get("subject") or item.get("issue_type")
                 result.append(item)
             return result
 

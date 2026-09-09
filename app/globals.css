@@ -1890,6 +1890,11 @@ button {
 .admin-search { display: flex; align-items: center; gap: 8px; flex: 1; min-height: 40px; padding: 0 12px; border: 1px solid #dce8ea; border-radius: 9px; background: #fff; color: #779098; }
 .admin-search input, .admin-toolbar select, .admin-login-card input { width: 100%; border: 0; outline: 0; background: transparent; color: #294c56; font: inherit; font-size: 12px; }
 .admin-toolbar select { width: 180px; padding: 0 12px; border: 1px solid #dce8ea; border-radius: 9px; background: white; }
+.admin-schedule-filters { flex-wrap: wrap; }
+.admin-schedule-filters select { flex: 1 1 150px; width: auto; min-height: 40px; }
+.admin-schedule-workspace { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .7fr); gap: 16px; align-items: start; }
+.admin-schedule-detail { position: sticky; top: 16px; }
+.admin-schedule-detail .admin-detail-list small { white-space: pre-wrap; }
 .admin-inline-stat--clickable { border: 0; border-radius: 9px; background: #f6f9f9; cursor: pointer; font: inherit; text-align: left; }
 .admin-inline-stat--clickable:hover { background: #eaf6f4; }
 .admin-json-cell { max-width: 360px; white-space: normal; word-break: break-word; }
@@ -1934,7 +1939,7 @@ button {
 .admin-login-card small { color: #84979c; font-size: 10px; line-height: 1.45; }
 .admin-form-error { padding: 9px; border-radius: 8px; background: #fff0ee; color: #9a4943; font-size: 11px; }
 @media (max-width: 980px) { .admin-console { grid-template-columns: 214px minmax(0, 1fr); } .admin-console-main { padding: 0 24px 42px; } .admin-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .admin-console { display: block; } .admin-console-sidebar { position: sticky; z-index: 4; top: 0; height: auto; padding: 12px; } .admin-console-brand { margin-bottom: 10px; } .admin-console-sidebar nav { display: flex; overflow-x: auto; } .admin-console-sidebar nav button { width: auto; min-width: max-content; } .admin-console-sidebar nav button svg:last-child, .admin-console-sidebar__footer { display: none; } .admin-console-main { padding: 0 14px 32px; } .admin-console-header { min-height: 106px; padding: 20px 0; } .admin-console-header__meta { display: none; } .admin-two-col { grid-template-columns: 1fr; } .admin-page-actions, .admin-toolbar { align-items: stretch; flex-direction: column; } .admin-toolbar select { width: 100%; min-height: 40px; } .admin-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .admin-identity-card { align-items: flex-start; flex-wrap: wrap; } .admin-identity-card__meta { width: 100%; margin-left: 64px; text-align: left; } }
+@media (max-width: 720px) { .admin-console { display: block; } .admin-console-sidebar { position: sticky; z-index: 4; top: 0; height: auto; padding: 12px; } .admin-console-brand { margin-bottom: 10px; } .admin-console-sidebar nav { display: flex; overflow-x: auto; } .admin-console-sidebar nav button { width: auto; min-width: max-content; } .admin-console-sidebar nav button svg:last-child, .admin-console-sidebar__footer { display: none; } .admin-console-main { padding: 0 14px 32px; } .admin-console-header { min-height: 106px; padding: 20px 0; } .admin-console-header__meta { display: none; } .admin-two-col, .admin-schedule-workspace { grid-template-columns: 1fr; } .admin-schedule-detail { position: static; } .admin-page-actions, .admin-toolbar { align-items: stretch; flex-direction: column; } .admin-toolbar select { width: 100%; min-height: 40px; } .admin-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .admin-identity-card { align-items: flex-start; flex-wrap: wrap; } .admin-identity-card__meta { width: 100%; margin-left: 64px; text-align: left; } }
 @media (max-width: 380px) {
   .brand-subtitle {
     display: none;

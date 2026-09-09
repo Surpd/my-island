@@ -13,8 +13,8 @@ from backend.services.admin import (
     add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
     map_schedule_scope, override_membership, publish_information,
 )
-from backend.services.google_live import GoogleLiveError
-from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule
+from backend.services.google_live import GoogleLiveError, GoogleTokenStore
+from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule_v1
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -555,9 +555,30 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         try:
-            return refresh_schedule(database, get_settings(), week_start)
+            return refresh_schedule_v1(database, get_settings())
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @router.get("/admin/schedule/overview")
+    def admin_schedule_overview(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        result = database.schedule_v1_overview()
+        settings = get_settings()
+        if not settings.google_sheets_spreadsheet_id:
+            result["auth_state"] = "missing_spreadsheet_id"
+        elif not GoogleTokenStore().has_refresh_token():
+            result["auth_state"] = "missing_google_token"
+        return result
+
+    @router.get("/admin/schedule/lessons")
+    def admin_schedule_lessons(week_start: str | None = None, status: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return {"items": database.schedule_v1_lessons(status=status, week_start=week_start, teacher_id=teacher_id, group_id=group_id, lesson_type=lesson_type)}
+
+    @router.get("/admin/schedule/issues")
+    def admin_schedule_issues(week_start: str | None = None, status: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return {"items": database.schedule_v1_issues(week_start=week_start, status=status)}
 
     @router.get("/admin/classroom/syncs")
     def admin_classroom_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

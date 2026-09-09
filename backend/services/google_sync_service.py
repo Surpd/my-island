@@ -12,6 +12,7 @@ from backend.services.google_sheets import import_school_schedule_tabs
 from backend.services.journal_import import sync_journal_values
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
+from backend.services.schedule_pipeline import classify_tab, looks_like_schedule_matrix, refresh_schedule_pipeline
 
 
 CURRENT_JOURNAL_FOLDER_ID = "1u7LS5hjyiTRe4fgUoEqRB4T9c02Nq18L"
@@ -196,6 +197,37 @@ def refresh_schedule(database: Database, settings: Settings, week_start: str | N
         return_stats=True,
     )
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "stats": result}
+
+
+def refresh_schedule_v1(database: Database, settings: Settings) -> dict[str, Any]:
+    """Refresh Schedule Integration v1 through the School Data lifecycle."""
+    spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
+    if not spreadsheet_id:
+        return {"status": "blocked", "auth_state": "missing_spreadsheet_id", "error": "GOOGLE_SHEETS_SPREADSHEET_ID is required"}
+    if not GoogleTokenStore().has_refresh_token():
+        return {"status": "blocked", "auth_state": "missing_google_token", "error": "Authorize Google OAuth and store a refresh token before refreshing schedule"}
+    client, _ = _client(settings)
+    metadata = client.spreadsheet(spreadsheet_id)
+    spreadsheet_title = str((metadata.get("properties") or {}).get("title", ""))
+    visible = [sheet for sheet in metadata.get("sheets") or [] if not (sheet.get("properties") or {}).get("hidden")]
+    visible_titles = [str((sheet.get("properties") or {}).get("title", "")) for sheet in visible]
+    plain_ranges = [f"'{title.replace(chr(39), chr(39) * 2)}'!A1:V200" for title in visible_titles]
+    plain_values = client.sheet_values_many(spreadsheet_id, plain_ranges)
+    tabs = []
+    for sheet, values in zip(visible, plain_values):
+        props = sheet.get("properties") or {}
+        tab_title = str(props.get("title", ""))
+        schedule_like = looks_like_schedule_matrix(values)
+        if classify_tab(tab_title, schedule_like=schedule_like) == "irrelevant":
+            continue
+        grid = client.sheet_grid_range(spreadsheet_id, tab_title, "A1:V200")
+        grid_sheet = (grid.get("sheets") or [{}])[0]
+        data = (grid_sheet.get("data") or [{}])[0]
+        rows = []
+        for row in data.get("rowData") or []:
+            rows.append([value for value in (row.get("values") or [])])
+        tabs.append({"sheet_id": props.get("sheetId"), "title": tab_title, "merges": sheet.get("merges") or grid_sheet.get("merges") or [], "values": rows})
+    return refresh_schedule_pipeline(database, spreadsheet_id, spreadsheet_title, tabs)
 
 
 def refresh_classroom(database: Database, settings: Settings) -> dict[str, Any]:
