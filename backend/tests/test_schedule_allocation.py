@@ -15,7 +15,7 @@ class ScheduleAllocationTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_explicit_groups_complement_lunch_and_membership_conflict(self):
+    def test_explicit_groups_and_membership_conflict_without_lunch_projection(self):
         with self.database.connection() as connection:
             source = connection.execute("INSERT INTO school_sources(source_type,external_key,display_name) VALUES ('schedule','test','Test') RETURNING id").fetchone()[0]
             run = connection.execute("INSERT INTO school_sync_runs(source_id,mode,status,idempotency_key) VALUES (?,'incremental','applied','run') RETURNING id", (source,)).fetchone()[0]
@@ -41,11 +41,9 @@ class ScheduleAllocationTests(unittest.TestCase):
             result = rebuild_schedule_allocations(self.database, connection, snapshot)
             self.assertEqual(result["slots"], 1)
             rows = connection.execute("SELECT student_identity_id,allocation_kind,status,reason FROM schedule_student_allocations ORDER BY student_identity_id").fetchall()
-            self.assertEqual(len(rows), 4)
+            self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["status"], "conflict")
             self.assertEqual(rows[1]["reason"], "explicit membership")
-            self.assertEqual(rows[2]["reason"], "contextual lunch")
-            self.assertEqual(rows[3]["allocation_kind"], "lunch")
 
 
 if __name__ == "__main__":

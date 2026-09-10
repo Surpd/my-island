@@ -145,7 +145,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         merged = raw_payload.get("merged_audiences") if isinstance(raw_payload, Mapping) else []
         grades = {_grade(row.get("audience"))}
         grades.update(_grade(value) for value in (merged or []))
-        if not (row.get("modifiers") or {}).get("synthetic_cancelled") and row.get("activity_type") != "cancelled":
+        if not (row.get("modifiers") or {}).get("synthetic_cancelled") and row.get("activity_type") not in {"cancelled", "nonlesson"}:
             for grade in sorted(grades & valid_grades):
                 slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
 
@@ -177,13 +177,9 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 activity_rules[lesson_id] = {"kind": "pending", "groups": group_ids, "students": set(), "reason": ""}
 
         pending_lessons = [lesson for lesson in lessons if activity_rules[str(lesson["id"])]["kind"] == "pending" and lesson.get("activity_type") != "nonlesson"]
-        lunches = [lesson for lesson in lessons if lesson.get("activity_type") == "nonlesson"]
-        if explicit_count and len(pending_lessons) == 1 and not lunches:
+        if explicit_count and len(pending_lessons) == 1:
             rule = activity_rules[str(pending_lessons[0]["id"])]
             rule.update({"kind": "complement", "reason": "complement"})
-        if lunches and any(lesson.get("activity_type") != "nonlesson" for lesson in lessons):
-            if len(lunches) == 1 and not any(rule["kind"] == "complement" for rule in activity_rules.values()):
-                activity_rules[str(lunches[0]["id"])].update({"kind": "complement", "reason": "contextual lunch"})
 
         for lesson in lessons:
             lesson_id = str(lesson["id"])
@@ -248,8 +244,8 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
 
     for gap in pending_gaps:
         later = any(value > gap["time"] for value in assigned_later.get((gap["day"], gap["student"]), []))
-        reason = "window" if later else "end of day"
-        allocations.append({**gap, "kind": "window" if later else "end_of_day", "status": "assigned", "reason": reason, "provenance": {"reason": reason}})
+        if later:
+            allocations.append({**gap, "kind": "window", "status": "assigned", "reason": "window", "provenance": {"reason": "window"}})
 
     audience_params = []
     for item in audience_rows.values():
