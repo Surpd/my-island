@@ -1,10 +1,12 @@
 import copy
+import json
 import os
 import tempfile
 import unittest
+from uuid import uuid4
 
 from backend.database import Database
-from backend.services.schedule_pipeline import classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, refresh_schedule_pipeline
+from backend.services.schedule_pipeline import _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, refresh_schedule_pipeline
 
 
 def cell(value: str, color: dict | None = None) -> dict:
@@ -27,6 +29,11 @@ def matrix(*, weekly: bool, changed_teacher: bool = False, room: str = "каб.1
 
 
 class ScheduleIntegrationTests(unittest.TestCase):
+    def test_postgres_json_serializes_resolved_uuid_values(self):
+        identity_id = uuid4()
+        payload = _json(Database(database_url="postgresql://unused"), {"resolved_identity_ids": [identity_id]})
+        self.assertEqual(json.loads(payload.dumps(payload.obj)), {"resolved_identity_ids": [str(identity_id)]})
+
     def test_russian_title_and_tab_classification(self):
         self.assertEqual(parse_date_range("7-11 Сентября 2026"), ("2026-09-07", "2026-09-11"))
         self.assertEqual(parse_date_range("14 - 18.09", 2026), ("2026-09-14", "2026-09-18"))

@@ -447,10 +447,13 @@ def _resolve_lesson(lesson: dict[str, Any], identities: Sequence[Mapping[str, An
 
 
 def _json(database: Database, value: Any) -> Any:
+    def dumps(payload: Any) -> str:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
     if database.database_url:
         from psycopg.types.json import Jsonb
-        return Jsonb(value)
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return Jsonb(value, dumps=dumps)
+    return dumps(value)
 
 
 def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadsheet_title: str,
