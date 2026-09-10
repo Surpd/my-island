@@ -6,6 +6,7 @@ import unittest
 from uuid import uuid4
 
 from backend.database import Database
+from backend.services.google_sheets import _parse_lesson_semantics
 from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, recalculate_current_schedule, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
 
 
@@ -29,6 +30,13 @@ def matrix(*, weekly: bool, changed_teacher: bool = False, room: str = "каб.1
 
 
 class ScheduleIntegrationTests(unittest.TestCase):
+    def test_history_of_art_and_numbered_english_group_parsing(self):
+        history = _parse_lesson_semantics("История искусств Анна\nкаб.8", "7-1")
+        english = _parse_lesson_semantics("Англ группа 2 Игорь\nкаб.12", "6")
+        self.assertEqual(history["subject"], "История искусств")
+        self.assertEqual(english["subject"], "Английский")
+        self.assertEqual(english["subject_subgroup"], "2")
+
     def test_postgres_json_serializes_resolved_uuid_values(self):
         identity_id = uuid4()
         payload = _json(Database(database_url="postgresql://unused"), {"resolved_identity_ids": [identity_id]})

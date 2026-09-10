@@ -2501,10 +2501,10 @@ class Database:
                     activity = next((item for item in slot["activities"] if str(item["lesson_id"]) == str(row["lesson_id"])), None)
                     if activity:
                         activity["students"].append(student); activity["student_count"] += 1
-                else:
+                elif row["allocation_kind"] == "window":
                     activity = next((item for item in slot["activities"] if item.get("synthetic_kind") == row["allocation_kind"]), None)
                     if not activity:
-                        activity = {"lesson_id": None, "subject": "Окно" if row["allocation_kind"] == "window" else "Конец учебного дня",
+                        activity = {"lesson_id": None, "subject": "Окно / ожидание",
                                     "activity_type": row["allocation_kind"], "audience_kind": row["allocation_kind"], "rule_reason": row["reason"],
                                     "status": "resolved", "students": [], "student_count": 0, "synthetic_kind": row["allocation_kind"]}
                         slot["activities"].append(activity)
@@ -2525,6 +2525,7 @@ class Database:
                            sa.status,sa.reason,sa.provenance,sl.subject,sl.teacher_hint,sl.room
                       FROM schedule_student_allocations sa LEFT JOIN schedule_lessons sl ON sl.id=sa.lesson_id
                      WHERE sa.source_snapshot_id=? AND sa.week_start=? AND sa.student_identity_id=?
+                       AND sa.allocation_kind IN ('lesson','window') AND sa.status='assigned'
                      ORDER BY sa.lesson_date,sa.start_time""", (snapshot["id"], week_start, student_id)).fetchall()]
                 for item in student_preview:
                     item["provenance"] = self._decode_json_value(item.get("provenance")) or {}

@@ -41,6 +41,13 @@ def _norm(value: Any) -> str:
     return " ".join(re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold()).split())
 
 
+def _subject_norm(value: Any) -> str:
+    normalized = _norm(value)
+    if normalized in {"история искусства", "история искусств"}:
+        return "история искусств"
+    return normalized
+
+
 def _school_year(spreadsheet_title: str, tab_title: str) -> int:
     match = re.search(r"(?<!\d)(20\d{2})\s*/\s*\d{2}(?!\d)", f"{spreadsheet_title} {tab_title}")
     return int(match.group(1)) if match else date.today().year
@@ -355,7 +362,7 @@ def _explicit_teacher_candidates(raw_text: str, teacher_hint: str, identities: S
 def _group_candidates(lesson: Mapping[str, Any], groups: Sequence[Mapping[str, Any]], group_mappings: Mapping[str, list[str]]) -> list[str]:
     audience = _norm(lesson.get("audience"))
     mapped = set(group_mappings.get(audience, []))
-    subject = _norm(lesson.get("subject"))
+    subject = _subject_norm(lesson.get("subject"))
     modifiers = lesson.get("modifiers") or {}
     subgroup = _norm(modifiers.get("subject_subgroup"))
     exam_track = _norm(modifiers.get("exam_track"))
@@ -369,7 +376,7 @@ def _group_candidates(lesson: Mapping[str, Any], groups: Sequence[Mapping[str, A
     if len(exact_classes) == 1:
         mapped.add(str(exact_classes[0]["id"]))
         return sorted(mapped)
-    narrowed = [group for group in direct if (not subject or not group.get("subject") or _norm(group.get("subject")) == subject)
+    narrowed = [group for group in direct if (not subject or not group.get("subject") or _subject_norm(group.get("subject")) == subject)
                 and (not subgroup or _norm(group.get("subject_subgroup")) == subgroup)
                 and (not exam_track or _norm(group.get("exam_track")) == exam_track)]
     if len(narrowed) == 1:
@@ -437,10 +444,10 @@ def _resolve_lesson(lesson: dict[str, Any], identities: Sequence[Mapping[str, An
     evidence: dict[str, Any] = {"resolver_version": RECONCILIATION_VERSION, "text_teacher_candidates": teacher_ids, "group_candidates": group_ids}
     assignment_ids: list[str] = []
     if len(group_ids) == 1:
-        subject = _norm(lesson.get("subject"))
+        subject = _subject_norm(lesson.get("subject"))
         assignment_ids = sorted({str(item["teacher_identity_id"]) for item in assignments
                                  if str(item.get("group_id")) == group_ids[0]
-                                 and (not item.get("subject") or _norm(item.get("subject")) == subject)})
+                                 and (not item.get("subject") or _subject_norm(item.get("subject")) == subject)})
         if assignment_ids:
             evidence["teacher_assignment_candidates"] = assignment_ids
         if not teacher_ids and len(assignment_ids) == 1:

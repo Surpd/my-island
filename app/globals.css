@@ -1945,6 +1945,14 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .schedule-preview > div { display: grid; grid-template-columns: 150px minmax(160px, 1fr) 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid #e5edef; color: #607b82; font-size: 10px; }
 .schedule-preview strong { color: #294e57; }
 .schedule-slot-list { display: grid; gap: 8px; margin-top: 16px; }
+.schedule-class-week { display: grid; grid-template-columns: repeat(5, minmax(190px, 1fr)); gap: 10px; margin-top: 16px; overflow-x: auto; }
+.schedule-class-day { min-width: 190px; padding: 10px; border-radius: 12px; background: #f4f8f8; }
+.schedule-class-day > header { display: flex; justify-content: space-between; align-items: baseline; color: #244852; text-transform: capitalize; }
+.schedule-class-day > header span { color: #789097; font-size: 10px; }
+.schedule-class-day .schedule-slot-list { margin-top: 9px; }
+.schedule-class-day .schedule-slot > summary { align-items: flex-start; flex-wrap: wrap; padding: 10px; }
+.schedule-class-day .schedule-slot > summary span { flex: 1 1 120px; line-height: 1.45; }
+.schedule-class-day .schedule-slot > summary b { margin-left: 24px; }
 .schedule-slot { border: 1px solid #dde9ea; border-radius: 10px; background: #fbfdfd; }
 .schedule-slot--unassigned { border-color: #edc887; }
 .schedule-slot--conflict { border-color: #e4aaa2; }

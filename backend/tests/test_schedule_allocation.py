@@ -25,6 +25,30 @@ class ScheduleAllocationTests(unittest.TestCase):
         self.assertEqual(group_ids, ["seven"])
         self.assertEqual(reason, "explicit membership")
 
+    def test_english_one_two_line_is_projected_to_both_grades(self):
+        with self.database.connection() as connection:
+            source = connection.execute("INSERT INTO school_sources(source_type,external_key,display_name) VALUES ('schedule','english-line','English line') RETURNING id").fetchone()[0]
+            run = connection.execute("INSERT INTO school_sync_runs(source_id,mode,status,idempotency_key) VALUES (?,'incremental','applied','english-line') RETURNING id", (source,)).fetchone()[0]
+            snapshot = connection.execute("INSERT INTO school_source_snapshots(source_id,sync_run_id,fingerprint,observed_at,status,is_last_known_valid) VALUES (?,?,'english-line',CURRENT_TIMESTAMP,'valid',1) RETURNING id", (source, run)).fetchone()[0]
+            classes = {grade: connection.execute("INSERT INTO groups(name,display_name,group_type,base_class_name,canonical) VALUES (?,?, 'class',?,1) RETURNING id", (grade, grade, grade)).fetchone()[0] for grade in ('5', '6')}
+            english = {number: connection.execute("INSERT INTO groups(name,display_name,group_type,subject,subject_subgroup,canonical) VALUES (?,?, 'subject_group','Английский язык',?,1) RETURNING id", (f'english:{number}', f'English {number}', number)).fetchone()[0] for number in ('1', '2')}
+            students = {}
+            for grade in ('5', '6'):
+                for number in ('1', '2'):
+                    student = connection.execute("INSERT INTO identities(kind,display_name,status) VALUES ('student',?,'active') RETURNING id", (f'{grade}-{number}',)).fetchone()[0]
+                    students[(grade, number)] = student
+                    connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (classes[grade], student))
+                    connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (english[number], student))
+            for number, audience, cell in (('1', '5', 'B3'), ('2', '6', 'D3')):
+                connection.execute("""INSERT INTO schedule_lessons(source_snapshot_id,record_key,version_kind,week_start,lesson_date,start_time,end_time,subject,audience,activity_type,lesson_kind,modifiers,resolution_status,source_cell,raw_payload)
+                    VALUES (?,?,'weekly','2026-09-07','2026-09-07','10:55','11:40','Английский',?,'lesson','lesson',?,'WARNING',?,?)""",
+                    (snapshot, f'english-{number}', audience, '{"subject_subgroup":"' + number + '"}', cell, '{"source_column":1}'))
+            result = rebuild_schedule_allocations(self.database, connection, snapshot)
+            self.assertEqual(result["slots"], 2)
+            rows = connection.execute("SELECT grade_scope,student_identity_id,allocation_kind,status FROM schedule_student_allocations ORDER BY grade_scope,student_identity_id").fetchall()
+            self.assertEqual(len(rows), 4)
+            self.assertTrue(all(row["allocation_kind"] == "lesson" and row["status"] == "assigned" for row in rows))
+
     def test_explicit_groups_and_membership_conflict_without_lunch_projection(self):
         with self.database.connection() as connection:
             source = connection.execute("INSERT INTO school_sources(source_type,external_key,display_name) VALUES ('schedule','test','Test') RETURNING id").fetchone()[0]

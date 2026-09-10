@@ -131,7 +131,7 @@ def _parse_lesson_semantics(value: object, audience: str, fallback: LessonSemant
     if subgroup_match:
         subject_subgroup = subgroup_match.group(1).upper().replace("А", "A").replace("В", "B").replace("С", "C")
     else:
-        english_match = re.search(r"\bангл(?:ийский)?\s+(\d{1,2})\b", first, re.IGNORECASE)
+        english_match = re.search(r"\bангл(?:ийский)?\s+(?:(?:группа|гр)\.?\s*)?(\d{1,2})\b", first, re.IGNORECASE)
         if english_match and not audience.startswith("10") and not audience.startswith("11"):
             subject_subgroup = english_match.group(1)
 
@@ -144,6 +144,7 @@ def _parse_lesson_semantics(value: object, audience: str, fallback: LessonSemant
         (r"^обществознание\b|^общество\b|^обществ\b", "Обществознание"),
         (r"^литература\b|^литер\b", "Литература"),
         (r"^русский\b|^рус\b", "Русский язык"),
+        (r"^история\s+искусств(?:а)?\b", "История искусств"),
         (r"^история\b", "История"),
         (r"^физика\b|^физ\b", "Физика"),
         (r"^химия\b|^хим\b", "Химия"),

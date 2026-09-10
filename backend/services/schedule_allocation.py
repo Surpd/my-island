@@ -20,7 +20,10 @@ def _norm(value: Any) -> str:
 
 def _subject(value: Any) -> str:
     normalized = _norm(value)
-    return normalized.removesuffix(" язык")
+    normalized = normalized.removesuffix(" язык")
+    if normalized in {"история искусства", "история искусств"}:
+        return "история искусств"
+    return normalized
 
 
 def _grade(value: Any) -> str:
@@ -170,6 +173,15 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         merged = raw_payload.get("merged_audiences") if isinstance(raw_payload, Mapping) else []
         grades = {_grade(row.get("audience"))}
         grades.update(_grade(value) for value in (merged or []))
+        modifiers = row.get("modifiers") or {}
+        # English groups 1/2 are one cross-grade 5–6 line in the source
+        # (written as "1/2" and "2/1" in the two physical columns).  Both
+        # canonical groups must therefore participate in both grade slots;
+        # membership still decides the individual assignment.
+        if (_subject(row.get("subject")) == "английский"
+                and _norm(modifiers.get("subject_subgroup")) in {"1", "2"}
+                and grades & {"5", "6"}):
+            grades.update({"5", "6"})
         if not (row.get("modifiers") or {}).get("synthetic_cancelled") and row.get("activity_type") not in {"cancelled", "nonlesson"}:
             for grade in sorted(grades & valid_grades):
                 slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
