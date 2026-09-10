@@ -15,6 +15,7 @@ from backend.services.admin import (
 )
 from backend.services.google_live import GoogleLiveError, GoogleTokenStore
 from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule_v1
+from backend.services.schedule_pipeline import reconcile_current_schedule, schedule_reconciliation_view
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -127,6 +128,13 @@ class BrowserCodePayload(BaseModel):
 
 class ReconciliationReviewPayload(BaseModel):
     approved: bool = True
+
+
+class ScheduleMappingPayload(BaseModel):
+    mapping_type: str
+    external_key: str
+    target_id: str | None = None
+    canonical_value: str | None = None
 
 
 def create_router(database: Database) -> APIRouter:
@@ -560,9 +568,9 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @router.get("/admin/schedule/overview")
-    def admin_schedule_overview(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        result = database.schedule_v1_overview()
+        result = database.schedule_v1_overview(week_start=week_start)
         settings = get_settings()
         if not settings.google_sheets_spreadsheet_id:
             result["auth_state"] = "missing_spreadsheet_id"
@@ -579,6 +587,36 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_issues(week_start: str | None = None, status: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         return {"items": database.schedule_v1_issues(week_start=week_start, status=status)}
+
+    @router.get("/admin/schedule/reconciliation")
+    def admin_schedule_reconciliation(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return schedule_reconciliation_view(database, week_start=week_start)
+
+    @router.post("/admin/schedule/mappings")
+    def admin_schedule_save_mapping(payload: ScheduleMappingPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        actor = authenticated_user(telegram_user)
+        try:
+            mapping = database.save_schedule_v1_mapping(payload.mapping_type, payload.external_key, target_id=payload.target_id,
+                                                        canonical_value=payload.canonical_value, actor_user_id=actor["id"] if actor else None)
+            reconcile_current_schedule(database)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        database.record_audit_event("schedule_mapping.confirmed", "school_source_mapping", {"mapping_id": mapping["id"], "mapping_type": payload.mapping_type, "external_key": payload.external_key}, actor["id"] if actor else None)
+        return {"mapping": mapping, "reconciliation": schedule_reconciliation_view(database)}
+
+    @router.delete("/admin/schedule/mappings/{mapping_id}")
+    def admin_schedule_retire_mapping(mapping_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        actor = authenticated_user(telegram_user)
+        if not database.retire_schedule_v1_mapping(mapping_id):
+            raise HTTPException(status_code=404, detail="Schedule mapping was not found")
+        reconcile_current_schedule(database)
+        database.record_audit_event("schedule_mapping.retired", "school_source_mapping", {"mapping_id": mapping_id}, actor["id"] if actor else None)
+        return {"ok": True, "reconciliation": schedule_reconciliation_view(database)}
 
     @router.get("/admin/classroom/syncs")
     def admin_classroom_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

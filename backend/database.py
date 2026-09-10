@@ -2300,24 +2300,30 @@ class Database:
                 result.append(item)
             return result
 
-    def schedule_v1_overview(self) -> dict[str, Any]:
+    def schedule_v1_overview(self, week_start: str | None = None) -> dict[str, Any]:
         with self.connection() as connection:
             source = self.execute(connection, "SELECT id, display_name, external_key, location_ref, authority_status, configuration FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
             snapshot = self.execute(connection, "SELECT id, sync_run_id, fingerprint, observed_at, status FROM school_source_snapshots WHERE source_id=? AND is_last_known_valid IS TRUE ORDER BY id DESC LIMIT 1", (source["id"],)).fetchone() if source else None
             tabs = [dict(x) for x in self.execute(connection, "SELECT sheet_id,title,classification,week_start,week_end FROM schedule_source_tabs WHERE source_id=? ORDER BY title", (source["id"],)).fetchall()] if source else []
             lesson_rows = self.execute(connection, "SELECT week_start,resolution_status,diff_status,modifiers FROM schedule_lessons WHERE source_snapshot_id=? AND version_kind='weekly'", (snapshot["id"],)).fetchall() if snapshot else []
             week_counts: dict[str, int] = {}
-            status_counts: dict[str, int] = {}
-            diff_counts: dict[str, int] = {}
             for row in lesson_rows:
-                status_counts[str(row["resolution_status"])] = status_counts.get(str(row["resolution_status"]), 0) + 1
-                diff_counts[str(row["diff_status"])] = diff_counts.get(str(row["diff_status"]), 0) + 1
                 modifiers = self._decode_json_value(row["modifiers"]) or {}
                 if row["week_start"] and row["resolution_status"] != "NON_LESSON" and not modifiers.get("synthetic_cancelled"):
                     key = str(row["week_start"]); week_counts[key] = week_counts.get(key, 0) + 1
             weeks = [{"week_start": key, "lessons": value} for key, value in sorted(week_counts.items(), reverse=True)]
-            issue_count = int(self.execute(connection, "SELECT COUNT(*) AS n FROM school_resolution_issues WHERE sync_run_id=? AND status='open'", (snapshot["sync_run_id"],)).fetchone()["n"]) if snapshot else 0
-            summary = {"lessons": sum(int(x["lessons"]) for x in weeks), "issues": issue_count,
+            selected_week = str(week_start or (weeks[0]["week_start"] if weeks else ""))
+            selected_rows = [row for row in lesson_rows if str(row["week_start"] or "") == selected_week] if selected_week else []
+            status_counts: dict[str, int] = {}
+            diff_counts: dict[str, int] = {}
+            for row in selected_rows:
+                status_counts[str(row["resolution_status"])] = status_counts.get(str(row["resolution_status"]), 0) + 1
+                diff_counts[str(row["diff_status"])] = diff_counts.get(str(row["diff_status"]), 0) + 1
+            # Keep the headline issue count aligned with the selected week just
+            # like the four status counters.  The underlying issue journal still
+            # retains every week in the snapshot.
+            issue_count = sum(status_counts.get(key, 0) for key in ("WARNING", "UNRESOLVED", "CONFLICT"))
+            summary = {"lessons": week_counts.get(selected_week, 0), "issues": issue_count,
                        "resolved": status_counts.get("RESOLVED", 0), "warning": status_counts.get("WARNING", 0),
                        "unresolved": status_counts.get("UNRESOLVED", 0), "conflict": status_counts.get("CONFLICT", 0),
                        "special_event": status_counts.get("SPECIAL_EVENT", 0), "non_lesson": status_counts.get("NON_LESSON", 0),
@@ -2332,7 +2338,7 @@ class Database:
                 template = next((tab for tab in tabs if tab["classification"] == "template"), None)
                 source_item["template"] = template["title"] if template else None
                 source_item["configuration"] = self._decode_json_value(source_item.get("configuration"))
-            return {"source": source_item, "snapshot": dict(snapshot) if snapshot else None, "tabs": tabs, "weeks": weeks,
+            return {"source": source_item, "snapshot": dict(snapshot) if snapshot else None, "tabs": tabs, "weeks": weeks, "selected_week": selected_week or None,
                     "summary": summary, "last_sync": last_sync["finished_at"] if last_sync else None,
                     "last_sync_detail": {**dict(last_sync), "diagnostics": self._decode_json_value(last_sync["diagnostics"])} if last_sync else None,
                     "auth_state": "connected" if source else "not_configured"}
@@ -2399,6 +2405,60 @@ class Database:
                 item["title"] = (item["detail"] or {}).get("subject") or item.get("issue_type")
                 result.append(item)
             return result
+
+    def schedule_v1_mapping_context(self) -> dict[str, Any]:
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT id FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
+            if not source:
+                return {"mappings": [], "teachers": [], "groups": []}
+            rows = self.execute(connection, """SELECT m.id,m.external_key,m.mapping_type,m.identity_id,m.group_id,m.canonical_value,m.status,
+                       m.manually_confirmed,m.valid_from,m.valid_until,m.created_at,m.updated_at,m.supersedes_mapping_id,
+                       i.display_name AS identity_name,COALESCE(g.display_name,g.name) AS group_name
+                  FROM school_source_mappings m
+                  LEFT JOIN identities i ON i.id=m.identity_id
+                  LEFT JOIN groups g ON g.id=m.group_id
+                 WHERE m.source_id=? ORDER BY (m.valid_until IS NULL) DESC,m.updated_at DESC,m.created_at DESC""", (source["id"],)).fetchall()
+            teachers = self.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active' ORDER BY display_name").fetchall()
+            groups = self.execute(connection, "SELECT id,COALESCE(display_name,name) AS name,group_type,subject,base_class_name,subject_subgroup,exam_track FROM groups WHERE canonical IS TRUE ORDER BY COALESCE(display_name,name)").fetchall()
+            return {"mappings": [dict(row) for row in rows], "teachers": [dict(row) for row in teachers], "groups": [dict(row) for row in groups]}
+
+    def save_schedule_v1_mapping(self, mapping_type: str, external_key: str, *, target_id: Any | None = None,
+                                 canonical_value: str | None = None, actor_user_id: Any | None = None) -> dict[str, Any]:
+        if mapping_type not in {"identity", "group", "subject"}:
+            raise ValueError("Unsupported schedule mapping type")
+        key = external_key.strip()
+        if not key:
+            raise ValueError("Schedule mapping key is required")
+        target_column = "identity_id" if mapping_type == "identity" else "group_id" if mapping_type == "group" else "canonical_value"
+        target_value = (canonical_value or "").strip() if mapping_type == "subject" else target_id
+        if not target_value:
+            raise ValueError("Schedule mapping target is required")
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT id FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
+            if not source:
+                raise ValueError("Schedule source is not configured")
+            if mapping_type == "identity" and not self.execute(connection, "SELECT id FROM identities WHERE id=? AND kind='teacher' AND status='active'", (target_value,)).fetchone():
+                raise ValueError("Selected teacher was not found")
+            if mapping_type == "group" and not self.execute(connection, "SELECT id FROM groups WHERE id=? AND canonical IS TRUE", (target_value,)).fetchone():
+                raise ValueError("Selected group was not found")
+            current = self.execute(connection, "SELECT * FROM school_source_mappings WHERE source_id=? AND mapping_type=? AND LOWER(TRIM(external_key))=LOWER(?) AND valid_until IS NULL AND status<>'revoked' ORDER BY id DESC LIMIT 1", (source["id"], mapping_type, key)).fetchone()
+            if current and str(current[target_column] or "") == str(target_value):
+                return dict(current)
+            if current:
+                self.execute(connection, "UPDATE school_source_mappings SET valid_until=CURRENT_DATE,updated_at=CURRENT_TIMESTAMP WHERE id=?", (current["id"],))
+            evidence = json.dumps({"source": "admin_schedule_reconciliation", "external_key": key}, ensure_ascii=False)
+            evidence_sql = "?::jsonb" if self.database_url else "?"
+            columns = {"identity_id": None, "group_id": None, "canonical_value": None}
+            columns[target_column] = target_value
+            row = self.execute(connection, f"""INSERT INTO school_source_mappings(source_id,external_key,mapping_type,identity_id,group_id,canonical_value,status,manually_confirmed,evidence,created_by,supersedes_mapping_id)
+                VALUES (?,?,?,?,?,?,'confirmed',TRUE,{evidence_sql},?,?) RETURNING *""",
+                (source["id"], key, mapping_type, columns["identity_id"], columns["group_id"], columns["canonical_value"], evidence, actor_user_id, current["id"] if current else None)).fetchone()
+            return dict(row)
+
+    def retire_schedule_v1_mapping(self, mapping_id: Any) -> bool:
+        with self.connection() as connection:
+            row = self.execute(connection, "UPDATE school_source_mappings SET valid_until=CURRENT_DATE,updated_at=CURRENT_TIMESTAMP WHERE id=? AND valid_until IS NULL RETURNING id", (mapping_id,)).fetchone()
+            return bool(row)
 
     def get_group_admin(self, group_id: Any) -> dict[str, Any] | None:
         groups = self.list_groups_admin()

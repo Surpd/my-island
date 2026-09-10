@@ -6,7 +6,7 @@ import unittest
 from uuid import uuid4
 
 from backend.database import Database
-from backend.services.schedule_pipeline import _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, refresh_schedule_pipeline
+from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_view
 
 
 def cell(value: str, color: dict | None = None) -> dict:
@@ -39,6 +39,34 @@ class ScheduleIntegrationTests(unittest.TestCase):
         self.assertEqual(parse_date_range("14 - 18.09", 2026), ("2026-09-14", "2026-09-18"))
         self.assertEqual(classify_tab("7-11 Сентября"), "weekly")
         self.assertEqual(classify_tab("2026/27 Шаблон"), "template")
+
+    def test_partial_week_compares_only_dates_covered_by_tab(self):
+        baseline = [{"slot_key": "mon", "weekday": 0}, {"slot_key": "wed", "weekday": 2}, {"slot_key": "sat", "weekday": 5}]
+        covered = _baseline_for_date_range(baseline, ("2026-09-02", "2026-09-04"))
+        self.assertEqual([item["slot_key"] for item in covered], ["wed"])
+        self.assertEqual([item["change"] for item in diff_template_week(covered, [])], ["CANCELLED"])
+        self.assertEqual(_date_for_weekday(("2026-09-02", "2026-09-04"), 2), "2026-09-02")
+
+    def test_persistent_teacher_mapping_reconciles_current_and_future_snapshots(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "schedule.db")); database.initialize()
+            with database.connection() as connection:
+                teacher_id = connection.execute("INSERT INTO identities(kind,display_name,status) VALUES ('teacher','Андрей','active') RETURNING id").fetchone()[0]
+                connection.execute("INSERT INTO groups(name,display_name,group_type,canonical) VALUES ('9-А','9-А','class',1)")
+            template = {"sheet_id": 10, "title": "2026/27 шаблон", "values": matrix(weekly=False), "merges": []}
+            weekly = {"sheet_id": 20, "title": "7-11 Сентября", "values": matrix(weekly=True), "merges": []}
+            weekly["values"][2][1]["formattedValue"] = "Матем АнК\nкаб.1"
+            refresh_schedule_pipeline(database, "spreadsheet", "Расписание 2026/27", [template, weekly])
+            group = next(item for item in schedule_reconciliation_view(database, "2026-09-07")["issue_groups"] if item["external_key"] == "АнК")
+            self.assertEqual(group["mapping_type"], "identity")
+            database.save_schedule_v1_mapping("identity", "АнК", target_id=teacher_id)
+            reconcile_current_schedule(database)
+            reconciled = next(item for item in database.schedule_v1_lessons(week_start="2026-09-07") if item["source_cell"] == "B3")
+            self.assertEqual(reconciled["resolution_status"], "RESOLVED")
+            changed = copy.deepcopy(weekly); changed["values"][2][1]["formattedValue"] = "Матем АнК\nкаб.2"
+            refresh_schedule_pipeline(database, "spreadsheet", "Расписание 2026/27", [template, changed])
+            future = next(item for item in database.schedule_v1_lessons(week_start="2026-09-07") if item["source_cell"] == "B3")
+            self.assertEqual(future["teacher_id"], str(teacher_id))
 
     def test_real_matrix_shape_parses_blank_owned_column_and_template_weekday(self):
         tab = {"sheet_id": 17, "title": "2026/27 шаблон", "values": matrix(weekly=False),

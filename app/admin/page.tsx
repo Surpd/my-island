@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
+import { ScheduleAdmin } from '@/components/schedule-admin';
 
 type RecordValue = Record<string, any>;
 type Session = { id: string | number; role: string; identity_id?: string | number | null };
@@ -432,7 +433,7 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   if (path.startsWith('/admin/sources/')) return <Sources id={path.split('/').pop()} navigate={navigate} />;
   if (path === '/admin/sources') return <Sources navigate={navigate} />;
   if (path === '/admin/reconciliation' || path.startsWith('/admin/reconciliation/')) return <Reconciliation />;
-  if (path === '/admin/schedule') return <Schedule />;
+  if (path === '/admin/schedule') return <ScheduleAdmin api={api} />;
   if (path === '/admin/journals') return <Journals />;
   if (path === '/admin/audit') return <Audit />;
   if (path === '/admin/system') return <System navigate={navigate} />;

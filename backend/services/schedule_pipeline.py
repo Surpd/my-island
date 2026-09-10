@@ -303,6 +303,23 @@ def diff_template_week(baseline: Iterable[Mapping[str, Any]], weekly: Iterable[M
     return result
 
 
+def _baseline_for_date_range(baseline: Iterable[Mapping[str, Any]], date_range: tuple[str, str] | None) -> list[Mapping[str, Any]]:
+    if not date_range:
+        return list(baseline)
+    start = date.fromisoformat(date_range[0])
+    end = date.fromisoformat(date_range[1])
+    covered_weekdays = {(start + timedelta(days=offset)).weekday() for offset in range((end - start).days + 1)}
+    return [item for item in baseline if item.get("weekday") in covered_weekdays]
+
+
+def _date_for_weekday(date_range: tuple[str, str] | None, weekday: int) -> str | None:
+    if not date_range:
+        return None
+    start = date.fromisoformat(date_range[0])
+    candidate = start + timedelta(days=(weekday - start.weekday()) % 7)
+    return candidate.isoformat() if candidate <= date.fromisoformat(date_range[1]) else None
+
+
 def _identity_aliases(identity: Mapping[str, Any]) -> set[str]:
     words = _norm(identity.get("display_name")).split()
     aliases = {_norm(identity.get("display_name"))}
@@ -339,6 +356,11 @@ def _group_candidates(lesson: Mapping[str, Any], groups: Sequence[Mapping[str, A
         names = {_norm(group.get("name")), _norm(group.get("display_name")), _norm(group.get("base_class_name"))}
         if audience and audience in names:
             direct.append(group)
+    exact_classes = [group for group in direct if _norm(group.get("group_type")) in {"class", "base class", "base_class"}
+                     and audience in {_norm(group.get("name")), _norm(group.get("display_name")), _norm(group.get("base_class_name"))}]
+    if len(exact_classes) == 1:
+        mapped.add(str(exact_classes[0]["id"]))
+        return sorted(mapped)
     narrowed = [group for group in direct if (not subject or not group.get("subject") or _norm(group.get("subject")) == subject)
                 and (not subgroup or _norm(group.get("subject_subgroup")) == subgroup)
                 and (not exam_track or _norm(group.get("exam_track")) == exam_track)]
@@ -409,6 +431,10 @@ def _resolve_lesson(lesson: dict[str, Any], identities: Sequence[Mapping[str, An
             teacher_ids = sorted(set(teacher_ids) & set(assignment_ids))
             evidence["teacher_resolution"] = "text_plus_teacher_assignment"
     color = str(lesson.get("source_color") or "")
+    persistent_color_ids = identity_mappings.get(_norm(f"color:{color}"), []) if color else []
+    if persistent_color_ids:
+        teacher_ids = sorted(set(teacher_ids) | set(persistent_color_ids))
+        evidence["teacher_resolution"] = "persistent_color_mapping"
     color_signal = color_map.get(color)
     conflict_reason = ""
     if color_signal:
@@ -454,6 +480,92 @@ def _json(database: Database, value: Any) -> Any:
         from psycopg.types.json import Jsonb
         return Jsonb(value, dumps=dumps)
     return dumps(value)
+
+
+def schedule_reconciliation_view(database: Database, week_start: str | None = None) -> dict[str, Any]:
+    lessons = database.schedule_v1_lessons(week_start=week_start)
+    buckets: dict[tuple[str, str], dict[str, Any]] = {}
+    actionable = {"WARNING", "UNRESOLVED", "CONFLICT"}
+    for lesson in lessons:
+        status = str(lesson.get("resolution_status") or "")
+        if status not in actionable:
+            continue
+        resolved = lesson.get("resolved") or {}
+        teacher_ids = list(resolved.get("teacher_ids") or [])
+        group_ids = list(resolved.get("group_ids") or [])
+        reason = str(lesson.get("issue_reason") or "")
+        teacher_problem = len(teacher_ids) != 1 or "conflict" in reason.casefold()
+        group_problem = len(group_ids) != 1
+        decisions: list[tuple[str, str, str, str]] = []
+        if teacher_problem:
+            teacher_hint = str(lesson.get("teacher_hint") or "").strip()
+            source_color = str(lesson.get("source_color") or "").strip()
+            external_key = teacher_hint or (f"color:{source_color}" if source_color else "")
+            if external_key:
+                decisions.append(("identity", external_key, f"Преподаватель: {teacher_hint or 'обозначение цветом'}", "Выберите преподавателя для этого обозначения."))
+        if group_problem and str(lesson.get("audience") or "").strip():
+            audience = str(lesson["audience"]).strip()
+            decisions.append(("group", audience, f"Группа: {audience}", "Выберите канонический класс или учебную группу."))
+        for mapping_type, external_key, title, description in decisions:
+            key = (mapping_type, _norm(external_key))
+            bucket = buckets.setdefault(key, {"mapping_type": mapping_type, "external_key": external_key, "title": title,
+                                              "description": description, "count": 0, "statuses": Counter(), "examples": [],
+                                              "candidate_ids": set(), "technical": {"reasons": set(), "colors": set()}})
+            bucket["count"] += 1
+            bucket["statuses"][status] += 1
+            evidence = lesson.get("evidence") or {}
+            candidate_key = "text_teacher_candidates" if mapping_type == "identity" else "group_candidates"
+            bucket["candidate_ids"].update(str(value) for value in evidence.get(candidate_key, []) if value)
+            if len(bucket["examples"]) < 4:
+                bucket["examples"].append({"date": lesson.get("lesson_date"), "time": lesson.get("start_time"),
+                                            "subject": lesson.get("subject"), "audience": lesson.get("audience"),
+                                            "teacher_hint": lesson.get("teacher_hint"), "tab": lesson.get("tab_title"),
+                                            "cell": lesson.get("source_cell")})
+            if reason:
+                bucket["technical"]["reasons"].add(reason)
+            if lesson.get("source_color"):
+                bucket["technical"]["colors"].add(str(lesson["source_color"]))
+    groups = []
+    for bucket in buckets.values():
+        bucket["statuses"] = dict(bucket["statuses"])
+        bucket["candidate_ids"] = sorted(bucket["candidate_ids"])
+        bucket["technical"] = {key: sorted(value) for key, value in bucket["technical"].items()}
+        groups.append(bucket)
+    groups.sort(key=lambda item: (-int(item["count"]), str(item["mapping_type"]), str(item["title"])))
+    return {"issue_groups": groups, **database.schedule_v1_mapping_context()}
+
+
+def reconcile_current_schedule(database: Database) -> dict[str, Any]:
+    """Rebuild the derived resolution projection after an admin mapping change."""
+    with database.connection() as connection:
+        source = database.execute(connection, "SELECT id FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
+        snapshot = database.execute(connection, "SELECT id,sync_run_id FROM school_source_snapshots WHERE source_id=? AND is_last_known_valid IS TRUE ORDER BY id DESC LIMIT 1", (source["id"],)).fetchone() if source else None
+        if not snapshot:
+            return database.schedule_v1_overview()
+        identities = [dict(row) for row in database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()]
+        groups = [dict(row) for row in database.execute(connection, "SELECT id,name,display_name,group_type,subject,base_class_name,subject_subgroup,exam_track FROM groups WHERE canonical IS TRUE").fetchall()]
+        mappings = [dict(row) for row in database.execute(connection, """SELECT external_key,mapping_type,identity_id,group_id,canonical_value,evidence
+            FROM school_source_mappings WHERE source_id=? AND status='confirmed' AND valid_until IS NULL""", (source["id"],)).fetchall()]
+        assignments = [dict(row) for row in database.execute(connection, "SELECT teacher_identity_id,group_id,subject FROM teacher_assignments WHERE active IS TRUE").fetchall()]
+        identity_mappings, _, _ = _mapping_indexes(mappings)
+        rows = [dict(row) for row in database.execute(connection, "SELECT * FROM schedule_lessons WHERE source_snapshot_id=?", (snapshot["id"],)).fetchall()]
+        raw_lessons = []
+        for row in rows:
+            raw = database._decode_json_value(row.get("raw_payload")) or {}
+            raw_lessons.append({**raw, "id": row["id"], "source_record_id": row.get("source_record_id")})
+        color_map = _color_evidence(raw_lessons, identities, identity_mappings)
+        database.execute(connection, "DELETE FROM school_resolution_issues WHERE sync_run_id=? AND issue_type IN ('schedule_warning','schedule_unresolved','schedule_conflict')", (snapshot["sync_run_id"],))
+        for raw in raw_lessons:
+            lesson = _resolve_lesson(raw, identities, groups, mappings, assignments, color_map)
+            database.execute(connection, """UPDATE schedule_lessons SET subject=?,resolution_status=?,resolved_identity_ids=?,resolved_group_ids=?,confidence=?,evidence=?,issue_reason=?,raw_payload=? WHERE id=?""",
+                             (lesson.get("subject", ""), lesson["resolution_status"], _json(database, lesson["resolved_identity_ids"]), _json(database, lesson["resolved_group_ids"]),
+                              lesson["confidence"], _json(database, lesson["evidence"]), lesson["issue_reason"], _json(database, {key: value for key, value in lesson.items() if key != "raw_cell"}), raw["id"]))
+            if lesson["resolution_status"] in {"WARNING", "UNRESOLVED", "CONFLICT"}:
+                database.execute(connection, "INSERT INTO school_resolution_issues(sync_run_id,source_record_id,issue_type,details,evidence) VALUES (?,?,?,?,?)",
+                                 (snapshot["sync_run_id"], lesson.get("source_record_id"), f"schedule_{lesson['resolution_status'].casefold()}",
+                                  _json(database, {"reason": lesson["issue_reason"], "week_start": lesson.get("week_start"), "cell": lesson.get("source_cell"), "subject": lesson.get("subject")}),
+                                  _json(database, lesson["evidence"])))
+    return database.schedule_v1_overview()
 
 
 def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadsheet_title: str,
@@ -552,7 +664,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
             for lesson in tab["lessons"]:
                 lesson["source_record_id"] = record_ids.get(lesson["record_key"])
             if tab["classification"] == "weekly":
-                weekly_diffs = diff_template_week(template_by_slot.values(), tab["lessons"])
+                weekly_diffs = diff_template_week(_baseline_for_date_range(template_by_slot.values(), tab["date_range"]), tab["lessons"])
                 for diff in weekly_diffs:
                     if diff["weekly"] is not None:
                         item = dict(diff["weekly"])
@@ -561,7 +673,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
                         item = {**base, "record_key": f"{tab['sheet_id']}:cancelled:{base['slot_key']}", "sheet_id": tab["sheet_id"],
                                 "tab_title": tab["title"], "week_start": tab["date_range"][0] if tab["date_range"] else None,
                                 "week_end": tab["date_range"][1] if tab["date_range"] else None,
-                                "lesson_date": (date.fromisoformat(tab["date_range"][0]) + timedelta(days=int(base["weekday"]))).isoformat() if tab["date_range"] else None,
+                                "lesson_date": _date_for_weekday(tab["date_range"], int(base["weekday"])),
                                 "raw_text": "", "activity_type": "cancelled", "source_cell": None,
                                 "modifiers": {**(base.get("modifiers") or {}), "synthetic_cancelled": True}}
                     item["diff_status"] = diff["change"]
