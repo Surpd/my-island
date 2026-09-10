@@ -33,11 +33,23 @@ def _resolve_sheet_title(titles: list[str], requested: str) -> str | None:
 
 
 def _client(settings: Settings) -> tuple[GoogleLiveClient, str]:
+    config = google_config(settings)
+    missing_config = [
+        name
+        for name, value in (
+            ("GOOGLE_OAUTH_CLIENT_ID", config.client_id),
+            ("GOOGLE_OAUTH_CLIENT_SECRET", config.client_secret),
+            ("GOOGLE_OAUTH_REDIRECT_URI", config.redirect_uri),
+        )
+        if not value
+    ]
+    if missing_config:
+        raise GoogleLiveError(f"Google OAuth configuration is missing: {', '.join(missing_config)}")
     store = GoogleTokenStore()
     token = store.load()
     if not token or not token.get("refresh_token"):
         raise GoogleLiveError("Stored Google refresh token is required")
-    client = GoogleLiveClient(google_config(settings), token, store)
+    client = GoogleLiveClient(config, token, store)
     account = client.userinfo()
     email = str(account.get("email", "")).strip()
     if not email:
