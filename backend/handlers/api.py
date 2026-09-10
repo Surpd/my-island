@@ -132,9 +132,15 @@ class ReconciliationReviewPayload(BaseModel):
 
 class ScheduleMappingPayload(BaseModel):
     mapping_type: str
-    external_key: str
+    external_key: str = ""
     target_id: str | None = None
     canonical_value: str | None = None
+    decision_type: str | None = None
+    group_ids: list[str] | None = None
+    lesson_id: str | None = None
+    week_start: str | None = None
+    grade_scope: str | None = None
+    persistent: bool = False
 
 
 def create_router(database: Database) -> APIRouter:
@@ -623,8 +629,18 @@ def create_router(database: Database) -> APIRouter:
         require_role(telegram_user, "admin")
         actor = authenticated_user(telegram_user)
         try:
-            mapping = database.save_schedule_v1_mapping(payload.mapping_type, payload.external_key, target_id=payload.target_id,
-                                                        canonical_value=payload.canonical_value, actor_user_id=actor["id"] if actor else None)
+            external_key = payload.external_key
+            canonical_value = payload.canonical_value
+            if payload.mapping_type == "audience_rule" and payload.decision_type:
+                if not payload.persistent:
+                    if not payload.lesson_id or not payload.week_start or not payload.grade_scope:
+                        raise ValueError("Для решения по конкретному случаю нужны slot, неделя и параллель")
+                    external_key = f"case:{payload.lesson_id}:{payload.week_start}:{payload.grade_scope}"
+                decision = {"decision_type": payload.decision_type, "group_ids": payload.group_ids or [],
+                            "lesson_id": payload.lesson_id, "week_start": payload.week_start, "grade_scope": payload.grade_scope}
+                canonical_value = json.dumps(decision, ensure_ascii=False)
+            mapping = database.save_schedule_v1_mapping(payload.mapping_type, external_key, target_id=payload.target_id,
+                                                        canonical_value=canonical_value, actor_user_id=actor["id"] if actor else None)
             reconcile_current_schedule(database)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error

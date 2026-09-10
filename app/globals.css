@@ -1971,6 +1971,10 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .schedule-slot-grid li { display: flex; justify-content: space-between; gap: 8px; }
 .schedule-audience-decision { display: grid !important; gap: 7px !important; margin-top: 10px; }
 .schedule-audience-decision select { width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid #d7e5e7; border-radius: 7px; background: white; color: #315660; font: inherit; font-size: 10px; }
+.schedule-audience-decision select[multiple] { min-height: 84px; }
+.schedule-audience-decision p { margin: 0; color: #315660; font-size: 11px; line-height: 1.45; }
+.schedule-persistent-choice { display: flex !important; align-items: center; gap: 7px; font-size: 11px; color: #315660; }
+.schedule-persistent-choice input { width: auto !important; min-height: auto !important; }
 .schedule-allocation-alert { display: grid; gap: 4px; margin: 0 12px 12px; padding: 10px; border-radius: 8px; background: #fff5e8; color: #885c28; font-size: 10px; }
 .schedule-allocation-alert--conflict { background: #fff0ee; color: #93473f; }
 .admin-inline-stat--clickable { border: 0; border-radius: 9px; background: #f6f9f9; cursor: pointer; font: inherit; text-align: left; }

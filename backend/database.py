@@ -2517,8 +2517,8 @@ class Database:
                 WHERE sa.source_snapshot_id=? AND sa.week_start=? ORDER BY i.display_name""", (snapshot["id"], week_start)).fetchall()]
             teacher_choices = [dict(row) for row in self.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active' ORDER BY display_name").fetchall()]
             group_choices = [dict(row) for row in self.execute(connection, """SELECT id,COALESCE(display_name,name) AS display_name,
-                subject,base_class_name,subject_subgroup,exam_track FROM groups
-                WHERE canonical IS TRUE AND group_type<>'class' ORDER BY COALESCE(display_name,name)""").fetchall()]
+                group_type,subject,base_class_name,subject_subgroup,exam_track FROM groups
+                WHERE canonical IS TRUE ORDER BY COALESCE(display_name,name)""").fetchall()]
             student_preview = []
             if student_id:
                 student_preview = [dict(row) for row in self.execute(connection, """SELECT sa.lesson_date,sa.start_time,sa.end_time,sa.allocation_kind,
@@ -2576,8 +2576,22 @@ class Database:
                     rule = json.loads(str(target_value))
                 except json.JSONDecodeError as error:
                     raise ValueError("Audience rule must be valid JSON") from error
-                if not isinstance(rule, dict) or not rule.get("group_id") or not self.execute(connection, "SELECT id FROM groups WHERE id=? AND canonical IS TRUE", (rule.get("group_id"),)).fetchone():
+                if not isinstance(rule, dict):
+                    raise ValueError("Audience rule must be an object")
+                decision_type = str(rule.get("decision_type") or "canonical_group")
+                allowed = {"canonical_group", "groups", "group", "base_class", "parallel", "complement", "window", "no_lesson", "source_context", "ignore_source"}
+                if decision_type not in allowed:
+                    raise ValueError("Unsupported audience decision")
+                group_ids = list(rule.get("group_ids") or [])
+                if rule.get("group_id") and not group_ids:
+                    group_ids = [rule["group_id"]]
+                if decision_type in {"canonical_group", "groups", "group", "base_class"} and not group_ids:
                     raise ValueError("Audience rule target group was not found")
+                if group_ids:
+                    placeholders = ",".join("?" for _ in group_ids)
+                    found = self.execute(connection, f"SELECT COUNT(*) AS value FROM groups WHERE canonical IS TRUE AND id IN ({placeholders})", tuple(group_ids)).fetchone()
+                    if int(found["value"] or 0) != len(set(str(value) for value in group_ids)):
+                        raise ValueError("Audience rule target group was not found")
             current = self.execute(connection, "SELECT * FROM school_source_mappings WHERE source_id=? AND mapping_type=? AND LOWER(TRIM(external_key))=LOWER(?) AND valid_until IS NULL AND status<>'revoked' ORDER BY id DESC LIMIT 1", (source["id"], mapping_type, key)).fetchone()
             if current and str(current[target_column] or "") == str(target_value):
                 return dict(current)

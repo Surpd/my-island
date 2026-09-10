@@ -24,6 +24,11 @@ function formatDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('ru-RU');
 }
 
+function mappingScope(mapping: Item) {
+  if (mapping.mapping_type !== 'audience_rule') return 'Используется в следующих sync и неделях';
+  return String(mapping.external_key || '').startsWith('case:') ? 'Только сохранённый конкретный slot' : 'Повторяющиеся случаи (сохранено явно администратором)';
+}
+
 export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const [overview, setOverview] = useState<Item | null>(null);
   const [lessons, setLessons] = useState<Item[]>([]);
@@ -38,7 +43,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const [grade, setGrade] = useState('9');
   const [studentPreview, setStudentPreview] = useState('');
   const [teacherPreview, setTeacherPreview] = useState('');
-  const [audienceDecisions, setAudienceDecisions] = useState<Record<string, string>>({});
+  const [audienceDecisions, setAudienceDecisions] = useState<Record<string, { decision_type: string; group_ids: string[]; persistent: boolean }>>({});
 
   const loadAllocation = async (selectedWeek: string, selectedGrade = grade, student = studentPreview, teacher = teacherPreview) => {
     if (!selectedWeek) return;
@@ -149,14 +154,21 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
     finally { setBusy(''); }
   };
 
-  const saveAudienceRule = async (activity: Item) => {
-    const key = String(activity.provenance?.audience_key || '');
-    const groupId = audienceDecisions[key] || '';
-    if (!key || !groupId) return;
+  const audienceCaseKey = (activity: Item) => `${activity.lesson_id || 'slot'}:${activity.lesson_date || week}:${activity.grade_scope || grade}`;
+  const audienceDecisionFor = (activity: Item) => audienceDecisions[audienceCaseKey(activity)] || { decision_type: 'canonical_group', group_ids: [], persistent: false };
+  const decisionLabel: Record<string, string> = {
+    canonical_group: 'Конкретная группа', groups: 'Несколько групп', base_class: 'Весь базовый класс',
+    parallel: 'Вся параллель', complement: 'Все остальные после уже назначенных', window: 'Окно / урока нет', source_context: 'Только контекст источника',
+  };
+  const saveAudienceDecision = async (activity: Item) => {
+    const key = audienceCaseKey(activity);
+    const decision = audienceDecisionFor(activity);
+    const needsGroups = ['canonical_group', 'groups', 'base_class'].includes(decision.decision_type);
+    if (needsGroups && !decision.group_ids.length) { setError('Выберите группу или группы для этого решения.'); return; }
     setBusy(`audience:${key}`); setError('');
     try {
-      await api('/api/admin/schedule/mappings', { method: 'POST', body: JSON.stringify({ mapping_type: 'audience_rule', external_key: key, canonical_value: JSON.stringify({ group_id: groupId }) }) });
-      setMessage('Правило аудитории сохранено и будет применяться в следующих неделях.');
+      await api('/api/admin/schedule/mappings', { method: 'POST', body: JSON.stringify({ mapping_type: 'audience_rule', external_key: String(activity.provenance?.audience_key || ''), decision_type: decision.decision_type, group_ids: decision.group_ids, lesson_id: activity.lesson_id, week_start: activity.week_start || week, grade_scope: activity.grade_scope || grade, persistent: decision.persistent }) });
+      setMessage(decision.persistent ? 'Решение сохранено как отдельное правило для повторяющихся случаев.' : 'Решение сохранено только для этого конкретного slot.');
       setAudienceDecisions((current) => { const next = { ...current }; delete next[key]; return next; });
       await loadAllocation(week, grade);
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось сохранить правило аудитории'); }
@@ -207,7 +219,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
     </section>
     <section className="admin-panel">
       <div className="admin-panel__heading"><div><p className="admin-eyebrow">ПОСТОЯННЫЕ ПРАВИЛА</p><h2>Mappings и aliases</h2></div><span>{activeMappings.length}</span></div>
-      {activeMappings.length ? <div className="schedule-mapping-list">{activeMappings.map((mapping: Item) => <div className="schedule-mapping-row" key={mapping.id}><div><strong>{mapping.external_key}</strong><span>{mapping.mapping_type === 'identity' ? 'Преподаватель' : mapping.mapping_type === 'group' ? 'Группа' : mapping.mapping_type === 'audience_rule' ? 'Правило аудитории' : 'Предмет'} → {mapping.identity_name || mapping.group_name || mapping.canonical_value}</span><small>Используется во всех следующих sync, snapshots и неделях</small></div><button className="admin-button admin-button--quiet" disabled={busy === `retire:${mapping.id}`} onClick={() => void retireMapping(mapping)}><Trash2 size={14} />Отключить</button></div>)}</div> : <p className="admin-empty">Сохранённых правил пока нет.</p>}
+      {activeMappings.length ? <div className="schedule-mapping-list">{activeMappings.map((mapping: Item) => <div className="schedule-mapping-row" key={mapping.id}><div><strong>{mapping.mapping_type === 'audience_rule' ? 'Решение аудитории' : mapping.external_key}</strong><span>{mapping.mapping_type === 'identity' ? 'Преподаватель' : mapping.mapping_type === 'group' ? 'Группа' : mapping.mapping_type === 'audience_rule' ? 'Правило аудитории' : 'Предмет'} → {mapping.identity_name || mapping.group_name || mapping.canonical_value}</span><small>{mappingScope(mapping)}</small>{mapping.mapping_type === 'audience_rule' ? <details><summary>Техническая область</summary><code>{mapping.external_key}</code></details> : null}</div><button className="admin-button admin-button--quiet" disabled={busy === `retire:${mapping.id}`} onClick={() => void retireMapping(mapping)}><Trash2 size={14} />Отключить</button></div>)}</div> : <p className="admin-empty">Сохранённых правил пока нет.</p>}
     </section>
     <section className="admin-panel schedule-allocation-qa">
       <div className="admin-panel__heading"><div><p className="admin-eyebrow">ПРОВЕРКА РАСПИСАНИЯ КЛАССА</p><h2>{grade} класс · неделя {week}</h2><p>Откройте проблемный или интересующий слот, чтобы увидеть группы, учеников и источник решения.</p></div><Users size={20} /></div>
@@ -226,8 +238,11 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
       <div className="schedule-class-week">{classDays.map(([day, slots]) => <section className="schedule-class-day" key={day}><header><strong>{new Intl.DateTimeFormat('ru-RU', { weekday: 'long' }).format(new Date(`${day}T12:00:00`))}</strong><span>{day.slice(8)}.{day.slice(5, 7)}</span></header><div className="schedule-slot-list">{slots.map((slot: Item) => <details className={`schedule-slot schedule-slot--${slot.status}`} key={`${slot.lesson_date}-${slot.start_time}-${slot.grade}`}>
         <summary><Clock3 size={15} /><strong>{String(slot.start_time).slice(0, 5)}</strong><span>{(slot.activities || []).filter((item: Item) => item.audience_kind !== 'duplicate').map((item: Item) => `${item.subject}${item.group_names?.length ? ` · ${item.group_names.join(', ')}` : ''}`).join(' / ') || 'Нет урока'}</span>{slot.unassigned?.length ? <b>{slot.unassigned.length} без назначения</b> : null}{slot.conflicts?.length ? <b>{slot.conflicts.length} конфликтов</b> : null}<ChevronDown size={15} /></summary>
         <div className="schedule-slot-grid">{(slot.activities || []).map((activity: Item, index: number) => {
-          const audienceKey = String(activity.provenance?.audience_key || '');
-          return <article key={`${activity.lesson_id || activity.synthetic_kind}-${index}`}><div><strong>{activity.subject}</strong><span>{activity.teacher_hint || activity.activity_type}</span></div><b>{activity.student_count || 0}</b><small>{activity.rule_reason}</small><details><summary>Ученики и причины</summary><ul>{(activity.students || []).map((student: Item) => <li key={student.id}><span>{student.name}</span><small>{student.reason}</small></li>)}</ul></details>{activity.status === 'ambiguous' && audienceKey ? <div className="schedule-audience-decision"><select value={audienceDecisions[audienceKey] || ''} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [audienceKey]: event.target.value }))}><option value="">Выбрать canonical группу…</option>{(allocation.groups || []).map((groupItem: Item) => <option key={groupItem.id} value={groupItem.id}>{groupItem.display_name}</option>)}</select><button className="admin-button admin-button--primary" disabled={!audienceDecisions[audienceKey] || busy === `audience:${audienceKey}`} onClick={() => void saveAudienceRule(activity)}>Сохранить правило</button></div> : null}</article>;
+          const caseKey = audienceCaseKey(activity);
+          const decision = audienceDecisionFor(activity);
+          const selectedGroups = (allocation.groups || []).filter((groupItem: Item) => decision.group_ids.includes(String(groupItem.id)));
+          const needsGroups = ['canonical_group', 'groups', 'base_class'].includes(decision.decision_type);
+          return <article key={`${activity.lesson_id || activity.synthetic_kind}-${index}`}><div><strong>{activity.subject}</strong><span>{activity.teacher_hint || activity.activity_type}</span></div><b>{activity.student_count || 0}</b><small>{activity.rule_reason}</small><details><summary>Ученики и причины</summary><ul>{(activity.students || []).map((student: Item) => <li key={student.id}><span>{student.name}</span><small>{student.reason}</small></li>)}</ul></details>{activity.status === 'ambiguous' ? <div className="schedule-audience-decision"><label>Как понимать аудиторию<select value={decision.decision_type} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [caseKey]: { ...decision, decision_type: event.target.value, group_ids: ['canonical_group','groups','base_class'].includes(event.target.value) ? decision.group_ids : [] } }))}><option value="canonical_group">{decisionLabel.canonical_group}</option><option value="groups">{decisionLabel.groups}</option><option value="base_class">{decisionLabel.base_class}</option><option value="parallel">{decisionLabel.parallel}</option><option value="complement">{decisionLabel.complement}</option><option value="window">{decisionLabel.window}</option><option value="source_context">{decisionLabel.source_context}</option></select></label>{needsGroups ? <label>{decision.decision_type === 'base_class' ? 'Выберите базовый класс' : 'Выберите группу или группы'}<select multiple={decision.decision_type === 'groups'} value={decision.decision_type === 'groups' ? decision.group_ids : (decision.group_ids[0] || '')} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [caseKey]: { ...decision, group_ids: decision.decision_type === 'groups' ? Array.from(event.target.selectedOptions).map((option) => option.value) : [event.target.value] } }))}>{(allocation.groups || []).filter((groupItem: Item) => decision.decision_type !== 'base_class' || groupItem.group_type === 'class').map((groupItem: Item) => <option key={groupItem.id} value={groupItem.id}>{groupItem.display_name}</option>)}</select></label> : null}<p>Это решение будет применено к: {activity.lesson_date || week}, {String(activity.start_time || '').slice(0, 5)}, «{activity.subject}», {activity.source_cell ? `исходная ячейка ${activity.source_cell}` : 'этому slot'}.</p><label className="schedule-persistent-choice"><input type="checkbox" checked={decision.persistent} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [caseKey]: { ...decision, persistent: event.target.checked } }))} /> Сохранить также для повторяющихся случаев</label><button className="admin-button admin-button--primary" disabled={(needsGroups && !decision.group_ids.length) || busy === `audience:${caseKey}`} onClick={() => void saveAudienceDecision(activity)}>{busy === `audience:${caseKey}` ? 'Сохраняем…' : 'Сохранить решение'}</button>{selectedGroups.length ? <small>Выбрано: {selectedGroups.map((groupItem: Item) => groupItem.display_name).join(', ')}</small> : null}</div> : null}</article>;
         })}</div>
         {slot.unassigned?.length ? <div className="schedule-allocation-alert"><strong>Unassigned</strong>{slot.unassigned.map((student: Item) => <span key={student.id}>{student.name} — {student.reason}</span>)}</div> : null}
         {slot.conflicts?.length ? <div className="schedule-allocation-alert schedule-allocation-alert--conflict"><strong>Conflicts</strong>{slot.conflicts.map((student: Item) => <span key={student.id}>{student.name} — {(student.conflicting_activities || []).join(' ↔ ') || 'пересечение memberships'}</span>)}</div> : null}

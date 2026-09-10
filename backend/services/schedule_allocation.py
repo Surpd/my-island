@@ -51,14 +51,35 @@ def _allocation_key(lesson: Mapping[str, Any], grade: str) -> str:
     return "allocation:" + "|".join(_norm(value) for value in parts)
 
 
+_SOURCE_CONTEXT_SUBJECTS = {"обед", "обед перерыв", "перерыв", "обед break"}
+
+
+def _is_source_context(lesson: Mapping[str, Any]) -> bool:
+    if lesson.get("activity_type") in {"nonlesson", "cancelled"}:
+        return True
+    subject = _subject(lesson.get("subject"))
+    raw_text = str((lesson.get("raw_payload") or {}).get("raw_text") or "").strip()
+    return subject in _SOURCE_CONTEXT_SUBJECTS or raw_text in {"🥨", "🍽️"}
+
+
+def _case_key(lesson: Mapping[str, Any], grade: str) -> tuple[str, str, str]:
+    return (str(lesson.get("id") or ""), str(lesson.get("week_start") or ""), str(grade))
+
+
 def _candidate_groups(
     lesson: Mapping[str, Any], grade: str, groups: Sequence[Mapping[str, Any]],
     group_members: Mapping[str, set[str]], universe: set[str], assignments: Sequence[Mapping[str, Any]],
-    manual_rules: Mapping[str, str],
+    manual_rules: Mapping[str, Mapping[str, Any]],
 ) -> tuple[list[str], str]:
     manual = manual_rules.get(_norm(_allocation_key(lesson, grade)))
     if manual:
-        return [manual], "manual/admin mapping"
+        decision_type = str(manual.get("decision_type") or "canonical_group")
+        if decision_type in {"canonical_group", "groups", "group"}:
+            group_ids = [str(value) for value in (manual.get("group_ids") or []) if value]
+            if not group_ids and manual.get("group_id"):
+                group_ids = [str(manual["group_id"])]
+            if group_ids:
+                return group_ids, "manual/admin decision"
     modifiers = lesson.get("modifiers") or {}
     subgroup = _norm(modifiers.get("subject_subgroup"))
     exam = _norm(modifiers.get("exam_track"))
@@ -142,11 +163,24 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
     source = database.execute(connection, "SELECT source_id FROM school_source_snapshots WHERE id=?", (snapshot_id,)).fetchone()
     mapping_rows = database.execute(connection, """SELECT external_key,canonical_value FROM school_source_mappings
         WHERE source_id=? AND mapping_type='audience_rule' AND status='confirmed' AND valid_until IS NULL""", (source["source_id"],)).fetchall() if source else []
-    manual_rules: dict[str, str] = {}
+    manual_rules: dict[str, dict[str, Any]] = {}
+    manual_case_rules: dict[tuple[str, str, str], dict[str, Any]] = {}
     for mapping in mapping_rows:
         value = database._decode_json_value(mapping["canonical_value"])
-        if isinstance(value, dict) and value.get("group_id"):
-            manual_rules[_norm(mapping["external_key"])] = str(value["group_id"])
+        if not isinstance(value, dict):
+            continue
+        if value.get("group_id") and not value.get("group_ids"):
+            value = {**value, "decision_type": value.get("decision_type") or "canonical_group", "group_ids": [value["group_id"]]}
+        external_key = str(mapping["external_key"] or "")
+        if external_key.startswith("case:"):
+            parts = external_key.split(":", 3)
+            lesson_id = str(value.get("lesson_id") or (parts[1] if len(parts) > 1 else ""))
+            week = str(value.get("week_start") or (parts[2] if len(parts) > 2 else ""))
+            grade = str(value.get("grade_scope") or (parts[3] if len(parts) > 3 else ""))
+            if lesson_id and grade:
+                manual_case_rules[(lesson_id, week, grade)] = value
+        else:
+            manual_rules[_norm(external_key)] = value
 
     student_names = {str(item["id"]): str(item["display_name"]) for item in students}
     group_by_id = {str(group["id"]): group for group in groups}
@@ -182,7 +216,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 and _norm(modifiers.get("subject_subgroup")) in {"1", "2"}
                 and grades & {"5", "6"}):
             grades.update({"5", "6"})
-        if not (row.get("modifiers") or {}).get("synthetic_cancelled") and row.get("activity_type") not in {"cancelled", "nonlesson"}:
+        if not (row.get("modifiers") or {}).get("synthetic_cancelled") and not _is_source_context(row):
             for grade in sorted(grades & valid_grades):
                 slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
 
@@ -209,13 +243,35 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         explicit_count = 0
         for lesson in lessons:
             lesson_id = str(lesson["id"])
+            decision = manual_case_rules.get(_case_key(lesson, grade)) or manual_rules.get(_norm(_allocation_key(lesson, grade)))
+            decision_type = str((decision or {}).get("decision_type") or "")
+            if decision_type in {"window", "no_lesson", "source_context", "ignore_source"}:
+                activity_rules[lesson_id] = {"kind": "ignored", "groups": [], "students": set(), "reason": decision_type}
+                continue
+            if decision_type == "parallel":
+                activity_rules[lesson_id] = {"kind": "class", "groups": [str(group["id"]) for group in base_groups], "students": set(universe), "reason": "manual/admin decision"}
+                explicit_count += 1
+                continue
+            if decision_type == "base_class":
+                selected = [str(value) for value in (decision or {}).get("group_ids", []) if value]
+                if not selected:
+                    audience = _norm(lesson.get("audience"))
+                    selected = [str(group["id"]) for group in base_groups if _norm(group.get("base_class_name") or group.get("name")) == audience]
+                if selected:
+                    activity_rules[lesson_id] = {"kind": "class", "groups": selected, "students": set().union(*(group_members.get(group_id, set()) for group_id in selected)), "reason": "manual/admin decision"}
+                    explicit_count += 1
+                    continue
+            if decision_type == "complement":
+                activity_rules[lesson_id] = {"kind": "complement", "groups": [], "students": set(), "reason": "manual complement"}
+                explicit_count += 1
+                continue
             if lesson.get("activity_type") == "digital_track":
                 activity_rules[lesson_id] = {"kind": "class", "groups": [str(group["id"]) for group in base_groups], "students": set(universe), "reason": "structural digital track"}
                 explicit_count += 1
                 continue
             group_ids, reason = _candidate_groups(lesson, grade, groups, group_members, universe, assignments, manual_rules)
-            if len(group_ids) == 1:
-                activity_rules[lesson_id] = {"kind": "group", "groups": group_ids, "students": group_members.get(group_ids[0], set()) & universe, "reason": reason}
+            if group_ids:
+                activity_rules[lesson_id] = {"kind": "group" if len(group_ids) == 1 else "group_set", "groups": group_ids, "students": set().union(*(group_members.get(group_id, set()) for group_id in group_ids)) & universe, "reason": reason}
                 explicit_count += 1
             else:
                 activity_rules[lesson_id] = {"kind": "pending", "groups": group_ids, "students": set(), "reason": ""}
@@ -226,10 +282,10 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             payload = lesson.get("raw_payload") or {}
             if lesson.get("activity_type") == "digital_track":
                 semantic_key = ("digital_track", grade)
-            elif rule["kind"] in {"group", "class"}:
+            elif rule["kind"] in {"group", "group_set", "class"}:
                 semantic_key = (tuple(sorted(rule.get("groups", []))), _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), lesson.get("activity_type"))
             elif rule["kind"] == "pending":
-                semantic_key = ("pending", _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), _norm(lesson.get("room")), _norm(payload.get("raw_text") if isinstance(payload, Mapping) else ""))
+                semantic_key = ("pending", _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), _norm(lesson.get("room")), _norm(lesson.get("audience")))
             else:
                 continue
             if semantic_key in seen_activity_keys:
@@ -239,6 +295,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 seen_activity_keys[semantic_key] = lesson_id
 
         pending_lessons = [lesson for lesson in lessons if activity_rules[str(lesson["id"])]["kind"] == "pending" and lesson.get("activity_type") != "nonlesson"]
+        pending_lessons = [lesson for lesson in pending_lessons if not _is_source_context(lesson)]
         if explicit_count and len(pending_lessons) == 1:
             rule = activity_rules[str(pending_lessons[0]["id"])]
             rule.update({"kind": "complement", "reason": "complement"})
@@ -300,7 +357,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             candidates = []
             for lesson in lessons:
                 lesson_id = str(lesson["id"]); rule = activity_rules[lesson_id]
-                if rule["kind"] in {"group", "class"} and student_id in rule["students"]:
+                if rule["kind"] in {"group", "group_set", "class"} and student_id in rule["students"]:
                     candidates.append((lesson, rule))
             if len(candidates) > 1:
                 allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": None,
