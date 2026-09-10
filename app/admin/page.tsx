@@ -74,7 +74,11 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (dev) headers.set('X-Dev-Auth', dev);
   if (typeof window !== 'undefined') {
     const browserSession = window.sessionStorage.getItem('my_island_admin_session');
-    if (browserSession) headers.set('X-Admin-Browser-Session', browserSession);
+    // The API's auth resolver accepts browser sessions through the existing
+    // X-Dev-Auth transport using the explicit browser: prefix. Keeping the
+    // transport aligned here makes hosted Sites work even when third-party
+    // cookies are unavailable.
+    if (browserSession) headers.set('X-Dev-Auth', `browser:${browserSession}`);
   }
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response: Response;
