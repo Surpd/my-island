@@ -385,7 +385,7 @@ function Schedule() {
   useEffect(() => { load(''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!state.loading && state.overview) load(week); }, [status, teacher, group, lessonType]); // eslint-disable-line react-hooks/exhaustive-deps
   const refresh = async () => { setBusy(true); setAction(''); try { const result = await api<RecordValue>('/api/admin/schedule/refresh', { method: 'POST' }); const blocked = result.status === 'blocked' || result.ok === false; setAction(blocked ? String(result.message || 'Синхронизация заблокирована настройками источника') : 'Расписание обновлено'); setState((current) => ({ ...current, overview: result, error: undefined })); if (!blocked) load(week); } catch (error) { setState((current) => ({ ...current, error })); } finally { setBusy(false); } };
-  if (state.loading) return <Loading />; if (state.error) return <ErrorState error={state.error} onRetry={() => load(week)} />;
+  if (state.loading) return <Loading />; if (state.error && !state.overview) return <ErrorState error={state.error} onRetry={() => load(week)} />;
   if (state.missing) return <section className="admin-panel"><div className="admin-callout admin-callout--muted"><Activity size={16} /><span>Operational API расписания ещё не доступен в этом окружении. Требуются `/overview`, `/lessons` и `/issues`.</span></div></section>;
   const overview = state.overview || {};
   const summary = overview.summary || {};

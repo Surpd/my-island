@@ -508,7 +508,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
             previous_records = {str(row["record_key"]): (str(row["fingerprint"]), str(row["source_ref"])) for row in rows}
             database.execute(connection, "UPDATE school_source_snapshots SET is_last_known_valid=FALSE,status='superseded' WHERE id=?", (previous["id"],))
         snapshot = database.execute(connection, """INSERT INTO school_source_snapshots(source_id,sync_run_id,previous_snapshot_id,fingerprint,observed_at,raw_payload,structural_payload,status,is_last_known_valid)
-            VALUES (?,?,?,?,CURRENT_TIMESTAMP,?,?,'valid',1) RETURNING id""",
+            VALUES (?,?,?,?,CURRENT_TIMESTAMP,?,?,'valid',TRUE) RETURNING id""",
             (source_id, run_id, previous["id"] if previous else None, source_fingerprint, _json(database, snapshot_payload), _json(database, snapshot_payload))).fetchone()
         snapshot_id = snapshot["id"]
         identities = [dict(row) for row in database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()]
