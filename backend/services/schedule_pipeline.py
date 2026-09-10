@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from backend.database import Database
 from backend.services.google_sheets import _parse_lesson_semantics
+from backend.services.schedule_allocation import rebuild_schedule_allocations
 
 
 _MONTHS = {
@@ -596,6 +597,7 @@ def reconcile_current_schedule(database: Database) -> dict[str, Any]:
                                  (snapshot["sync_run_id"], lesson.get("source_record_id"), f"schedule_{lesson['resolution_status'].casefold()}",
                                   _json(database, {"reason": lesson["issue_reason"], "week_start": lesson.get("week_start"), "cell": lesson.get("source_cell"), "subject": lesson.get("subject")}),
                                   _json(database, lesson["evidence"])))
+        rebuild_schedule_allocations(database, connection, snapshot["id"])
     return database.schedule_v1_overview()
 
 
@@ -806,6 +808,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
         diagnostics = {"snapshot_id": snapshot_id, "parsed_weekly_lessons": sum(len(tab["lessons"]) for tab in relevant if tab["classification"] == "weekly"),
                        "template_lessons": len(template_by_slot), "materialized": len(materialized), "issues": issue_count,
                        "resolution": dict(counts), "diffs": dict(diffs), "color_mappings": color_map}
+        diagnostics["student_allocation"] = rebuild_schedule_allocations(database, connection, snapshot_id)
         database.execute(connection, "UPDATE school_sync_runs SET status='applied',finished_at=CURRENT_TIMESTAMP,diagnostics=? WHERE id=?", (_json(database, diagnostics), run_id))
         return _overview_result(database, connection, source_id, snapshot_id, run_id, "applied", diagnostics)
 

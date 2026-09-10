@@ -603,6 +603,20 @@ def create_router(database: Database) -> APIRouter:
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         return schedule_reconciliation_view(database, week_start=week_start)
 
+    @router.get("/admin/schedule/allocation-qa")
+    def admin_schedule_allocation_qa(week_start: str, grade: str | None = None, student_id: str | None = None,
+                                     teacher_id: str | None = None, init_data: str | None = None,
+                                     x_dev_auth: str | None = Header(default=None),
+                                     x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            date.fromisoformat(week_start)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="week_start must be an ISO date") from error
+        if grade and grade not in {"5", "6", "7", "8", "9", "10", "11"}:
+            raise HTTPException(status_code=400, detail="grade must be between 5 and 11")
+        return database.schedule_allocation_qa(week_start, grade, student_id, teacher_id)
+
     @router.post("/admin/schedule/mappings")
     def admin_schedule_save_mapping(payload: ScheduleMappingPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)

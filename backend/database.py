@@ -143,6 +143,42 @@ CREATE INDEX IF NOT EXISTS schedule_lessons_status_idx ON schedule_lessons(resol
 CREATE INDEX IF NOT EXISTS schedule_lessons_week_status_idx ON schedule_lessons(source_snapshot_id, version_kind, week_start, resolution_status);
 CREATE INDEX IF NOT EXISTS schedule_lessons_diff_idx ON schedule_lessons(source_snapshot_id, diff_status);
 CREATE INDEX IF NOT EXISTS schedule_source_tabs_source_week_idx ON schedule_source_tabs(source_id, classification, week_start);
+CREATE TABLE IF NOT EXISTS schedule_lesson_audiences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_snapshot_id INTEGER NOT NULL REFERENCES school_source_snapshots(id) ON DELETE CASCADE,
+  lesson_id INTEGER NOT NULL REFERENCES schedule_lessons(id) ON DELETE CASCADE,
+  week_start TEXT,
+  lesson_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  grade_scope TEXT NOT NULL,
+  audience_kind TEXT NOT NULL,
+  resolved_group_ids TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL,
+  rule_reason TEXT NOT NULL,
+  provenance TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(source_snapshot_id, lesson_id)
+);
+CREATE TABLE IF NOT EXISTS schedule_student_allocations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_snapshot_id INTEGER NOT NULL REFERENCES school_source_snapshots(id) ON DELETE CASCADE,
+  week_start TEXT,
+  lesson_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  end_time TEXT,
+  grade_scope TEXT NOT NULL,
+  student_identity_id INTEGER NOT NULL REFERENCES identities(id),
+  lesson_id INTEGER REFERENCES schedule_lessons(id) ON DELETE CASCADE,
+  allocation_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  provenance TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(source_snapshot_id, lesson_date, start_time, grade_scope, student_identity_id)
+);
+CREATE INDEX IF NOT EXISTS schedule_lesson_audiences_slot_idx ON schedule_lesson_audiences(source_snapshot_id, week_start, lesson_date, start_time, grade_scope);
+CREATE INDEX IF NOT EXISTS schedule_lesson_audiences_lesson_idx ON schedule_lesson_audiences(lesson_id);
+CREATE INDEX IF NOT EXISTS schedule_student_allocations_slot_idx ON schedule_student_allocations(source_snapshot_id, week_start, lesson_date, start_time, grade_scope, status);
+CREATE INDEX IF NOT EXISTS schedule_student_allocations_student_idx ON schedule_student_allocations(student_identity_id, lesson_date, start_time);
+CREATE INDEX IF NOT EXISTS schedule_student_allocations_lesson_idx ON schedule_student_allocations(lesson_id);
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
@@ -2407,6 +2443,89 @@ class Database:
                 result.append(item)
             return result
 
+    def schedule_allocation_qa(self, week_start: str, grade: str | None = None,
+                               student_id: str | None = None, teacher_id: str | None = None) -> dict[str, Any]:
+        with self.connection() as connection:
+            snapshot = self.execute(connection, """SELECT id FROM school_source_snapshots
+                WHERE is_last_known_valid IS TRUE AND source_id IN
+                  (SELECT id FROM school_sources WHERE source_type='schedule')
+                ORDER BY id DESC LIMIT 1""").fetchone()
+            if not snapshot:
+                return {"summary": {"slots": 0, "complete": 0, "with_unassigned": 0, "with_conflicts": 0},
+                        "slots": [], "students": [], "teachers": [], "groups": [], "student_preview": [], "teacher_preview": []}
+            params: list[Any] = [snapshot["id"], week_start]
+            grade_clause = ""
+            if grade:
+                grade_clause = " AND grade_scope=?"; params.append(grade)
+            audience_rows = [dict(row) for row in self.execute(connection, f"""SELECT sla.*,sl.subject,sl.teacher_hint,sl.room,
+                       sl.activity_type,sl.source_cell,sl.audience,sl.resolved_identity_ids
+                  FROM schedule_lesson_audiences sla JOIN schedule_lessons sl ON sl.id=sla.lesson_id
+                 WHERE sla.source_snapshot_id=? AND sla.week_start=?{grade_clause}
+                 ORDER BY sla.lesson_date,sla.start_time,sla.grade_scope,sl.source_cell,sl.id""", tuple(params)).fetchall()]
+            allocation_rows = [dict(row) for row in self.execute(connection, f"""SELECT sa.*,i.display_name AS student_name,
+                       sl.subject,sl.teacher_hint,sl.room,sl.activity_type,sl.source_cell
+                  FROM schedule_student_allocations sa JOIN identities i ON i.id=sa.student_identity_id
+                  LEFT JOIN schedule_lessons sl ON sl.id=sa.lesson_id
+                 WHERE sa.source_snapshot_id=? AND sa.week_start=?{grade_clause}
+                 ORDER BY sa.lesson_date,sa.start_time,sa.grade_scope,i.display_name""", tuple(params)).fetchall()]
+            slots: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for row in audience_rows:
+                key = (str(row["lesson_date"]), str(row["start_time"]), str(row["grade_scope"]))
+                slot = slots.setdefault(key, {"lesson_date": key[0], "start_time": key[1], "grade": key[2],
+                                              "activities": [], "unassigned": [], "conflicts": [], "students": 0})
+                for json_key in ("resolved_group_ids", "provenance", "resolved_identity_ids"):
+                    row[json_key] = self._decode_json_value(row.get(json_key)) or ([] if json_key != "provenance" else {})
+                slot["activities"].append({**row, "students": [], "student_count": 0})
+            for row in allocation_rows:
+                key = (str(row["lesson_date"]), str(row["start_time"]), str(row["grade_scope"]))
+                slot = slots.setdefault(key, {"lesson_date": key[0], "start_time": key[1], "grade": key[2],
+                                              "activities": [], "unassigned": [], "conflicts": [], "students": 0})
+                row["provenance"] = self._decode_json_value(row.get("provenance")) or {}
+                student = {"id": str(row["student_identity_id"]), "name": row["student_name"], "reason": row["reason"],
+                           "allocation_kind": row["allocation_kind"], "provenance": row["provenance"]}
+                slot["students"] += 1
+                if row["status"] == "unassigned":
+                    slot["unassigned"].append(student)
+                elif row["status"] == "conflict":
+                    slot["conflicts"].append(student)
+                elif row.get("lesson_id"):
+                    activity = next((item for item in slot["activities"] if str(item["lesson_id"]) == str(row["lesson_id"])), None)
+                    if activity:
+                        activity["students"].append(student); activity["student_count"] += 1
+                else:
+                    activity = next((item for item in slot["activities"] if item.get("synthetic_kind") == row["allocation_kind"]), None)
+                    if not activity:
+                        activity = {"lesson_id": None, "subject": "Окно" if row["allocation_kind"] == "window" else "Конец учебного дня",
+                                    "activity_type": row["allocation_kind"], "audience_kind": row["allocation_kind"], "rule_reason": row["reason"],
+                                    "status": "resolved", "students": [], "student_count": 0, "synthetic_kind": row["allocation_kind"]}
+                        slot["activities"].append(activity)
+                    activity["students"].append(student); activity["student_count"] += 1
+            slot_list = list(slots.values())
+            for slot in slot_list:
+                slot["status"] = "conflict" if slot["conflicts"] else "unassigned" if slot["unassigned"] else "complete"
+            student_choices = [dict(row) for row in self.execute(connection, """SELECT DISTINCT i.id,i.display_name
+                FROM schedule_student_allocations sa JOIN identities i ON i.id=sa.student_identity_id
+                WHERE sa.source_snapshot_id=? AND sa.week_start=? ORDER BY i.display_name""", (snapshot["id"], week_start)).fetchall()]
+            teacher_choices = [dict(row) for row in self.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active' ORDER BY display_name").fetchall()]
+            group_choices = [dict(row) for row in self.execute(connection, """SELECT id,COALESCE(display_name,name) AS display_name,
+                subject,base_class_name,subject_subgroup,exam_track FROM groups
+                WHERE canonical IS TRUE AND group_type<>'class' ORDER BY COALESCE(display_name,name)""").fetchall()]
+            student_preview = []
+            if student_id:
+                student_preview = [dict(row) for row in self.execute(connection, """SELECT sa.lesson_date,sa.start_time,sa.end_time,sa.allocation_kind,
+                           sa.status,sa.reason,sa.provenance,sl.subject,sl.teacher_hint,sl.room
+                      FROM schedule_student_allocations sa LEFT JOIN schedule_lessons sl ON sl.id=sa.lesson_id
+                     WHERE sa.source_snapshot_id=? AND sa.week_start=? AND sa.student_identity_id=?
+                     ORDER BY sa.lesson_date,sa.start_time""", (snapshot["id"], week_start, student_id)).fetchall()]
+                for item in student_preview:
+                    item["provenance"] = self._decode_json_value(item.get("provenance")) or {}
+            teacher_preview = self.schedule_v1_lessons(week_start=week_start, teacher_id=teacher_id) if teacher_id else []
+            return {"summary": {"slots": len(slot_list), "complete": sum(1 for slot in slot_list if slot["status"] == "complete"),
+                                "with_unassigned": sum(1 for slot in slot_list if slot["unassigned"]),
+                                "with_conflicts": sum(1 for slot in slot_list if slot["conflicts"])},
+                    "slots": slot_list, "students": student_choices, "teachers": teacher_choices, "groups": group_choices,
+                    "student_preview": student_preview, "teacher_preview": teacher_preview}
+
     def schedule_v1_mapping_context(self) -> dict[str, Any]:
         with self.connection() as connection:
             source = self.execute(connection, "SELECT id FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
@@ -2425,13 +2544,13 @@ class Database:
 
     def save_schedule_v1_mapping(self, mapping_type: str, external_key: str, *, target_id: Any | None = None,
                                  canonical_value: str | None = None, actor_user_id: Any | None = None) -> dict[str, Any]:
-        if mapping_type not in {"identity", "group", "subject"}:
+        if mapping_type not in {"identity", "group", "subject", "audience_rule"}:
             raise ValueError("Unsupported schedule mapping type")
         key = external_key.strip()
         if not key:
             raise ValueError("Schedule mapping key is required")
         target_column = "identity_id" if mapping_type == "identity" else "group_id" if mapping_type == "group" else "canonical_value"
-        target_value = (canonical_value or "").strip() if mapping_type == "subject" else target_id
+        target_value = (canonical_value or "").strip() if mapping_type in {"subject", "audience_rule"} else target_id
         if not target_value:
             raise ValueError("Schedule mapping target is required")
         with self.connection() as connection:
@@ -2442,6 +2561,13 @@ class Database:
                 raise ValueError("Selected teacher was not found")
             if mapping_type == "group" and not self.execute(connection, "SELECT id FROM groups WHERE id=? AND canonical IS TRUE", (target_value,)).fetchone():
                 raise ValueError("Selected group was not found")
+            if mapping_type == "audience_rule":
+                try:
+                    rule = json.loads(str(target_value))
+                except json.JSONDecodeError as error:
+                    raise ValueError("Audience rule must be valid JSON") from error
+                if not isinstance(rule, dict) or not rule.get("group_id") or not self.execute(connection, "SELECT id FROM groups WHERE id=? AND canonical IS TRUE", (rule.get("group_id"),)).fetchone():
+                    raise ValueError("Audience rule target group was not found")
             current = self.execute(connection, "SELECT * FROM school_source_mappings WHERE source_id=? AND mapping_type=? AND LOWER(TRIM(external_key))=LOWER(?) AND valid_until IS NULL AND status<>'revoked' ORDER BY id DESC LIMIT 1", (source["id"], mapping_type, key)).fetchone()
             if current and str(current[target_column] or "") == str(target_value):
                 return dict(current)

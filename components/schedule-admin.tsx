@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Clock3, RefreshCw, ShieldCheck, Trash2, Users } from 'lucide-react';
 
 type Item = Record<string, any>;
 type AdminApi = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -34,6 +34,19 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [decisions, setDecisions] = useState<Record<string, string>>({});
+  const [allocation, setAllocation] = useState<Item>({ summary: {}, slots: [], students: [], teachers: [], student_preview: [], teacher_preview: [] });
+  const [grade, setGrade] = useState('9');
+  const [studentPreview, setStudentPreview] = useState('');
+  const [teacherPreview, setTeacherPreview] = useState('');
+  const [audienceDecisions, setAudienceDecisions] = useState<Record<string, string>>({});
+
+  const loadAllocation = async (selectedWeek: string, selectedGrade = grade, student = studentPreview, teacher = teacherPreview) => {
+    if (!selectedWeek) return;
+    const query = new URLSearchParams({ week_start: selectedWeek, grade: selectedGrade });
+    if (student) query.set('student_id', student);
+    if (teacher) query.set('teacher_id', teacher);
+    setAllocation(await api<Item>(`/api/admin/schedule/allocation-qa?${query}`));
+  };
 
   const loadWeek = async (selectedWeek: string, selectedStatus = status) => {
     setError('');
@@ -57,7 +70,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
       const initial = await api<Item>('/api/admin/schedule/overview');
       const selectedWeek = String(initial.selected_week || initial.weeks?.[0]?.week_start || '');
       setWeek(selectedWeek);
-      await loadWeek(selectedWeek, '');
+      await Promise.all([loadWeek(selectedWeek, ''), loadAllocation(selectedWeek, '9', '', '')]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось загрузить расписание');
     } finally { setBusy(''); }
@@ -74,7 +87,21 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
 
   const selectWeek = async (nextWeek: string) => {
     setWeek(nextWeek); setBusy('filter');
-    try { await loadWeek(nextWeek, status); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить неделю'); }
+    try { await Promise.all([loadWeek(nextWeek, status), loadAllocation(nextWeek)]); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить неделю'); }
+    finally { setBusy(''); }
+  };
+
+  const selectGrade = async (nextGrade: string) => {
+    setGrade(nextGrade); setBusy('allocation');
+    try { await loadAllocation(week, nextGrade); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить распределение'); }
+    finally { setBusy(''); }
+  };
+
+  const selectPreview = async (kind: 'student' | 'teacher', value: string) => {
+    if (kind === 'student') setStudentPreview(value); else setTeacherPreview(value);
+    setBusy('allocation');
+    try { await loadAllocation(week, grade, kind === 'student' ? value : studentPreview, kind === 'teacher' ? value : teacherPreview); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось построить preview'); }
     finally { setBusy(''); }
   };
 
@@ -122,6 +149,20 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
     finally { setBusy(''); }
   };
 
+  const saveAudienceRule = async (activity: Item) => {
+    const key = String(activity.provenance?.audience_key || '');
+    const groupId = audienceDecisions[key] || '';
+    if (!key || !groupId) return;
+    setBusy(`audience:${key}`); setError('');
+    try {
+      await api('/api/admin/schedule/mappings', { method: 'POST', body: JSON.stringify({ mapping_type: 'audience_rule', external_key: key, canonical_value: JSON.stringify({ group_id: groupId }) }) });
+      setMessage('Правило аудитории сохранено и будет применяться в следующих неделях.');
+      setAudienceDecisions((current) => { const next = { ...current }; delete next[key]; return next; });
+      await loadAllocation(week, grade);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось сохранить правило аудитории'); }
+    finally { setBusy(''); }
+  };
+
   const summary = overview?.summary || {};
   const activeMappings = useMemo(() => (reconciliation.mappings || []).filter((item: Item) => !item.valid_until), [reconciliation.mappings]);
   const issueGroups = useMemo(() => (reconciliation.issue_groups || []).filter((item: Item) => !status || Number(item.statuses?.[status] || 0) > 0), [reconciliation.issue_groups, status]);
@@ -158,7 +199,31 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
     </section>
     <section className="admin-panel">
       <div className="admin-panel__heading"><div><p className="admin-eyebrow">ПОСТОЯННЫЕ ПРАВИЛА</p><h2>Mappings и aliases</h2></div><span>{activeMappings.length}</span></div>
-      {activeMappings.length ? <div className="schedule-mapping-list">{activeMappings.map((mapping: Item) => <div className="schedule-mapping-row" key={mapping.id}><div><strong>{mapping.external_key}</strong><span>{mapping.mapping_type === 'identity' ? 'Преподаватель' : mapping.mapping_type === 'group' ? 'Группа' : 'Предмет'} → {mapping.identity_name || mapping.group_name || mapping.canonical_value}</span><small>Используется во всех следующих sync, snapshots и неделях</small></div><button className="admin-button admin-button--quiet" disabled={busy === `retire:${mapping.id}`} onClick={() => void retireMapping(mapping)}><Trash2 size={14} />Отключить</button></div>)}</div> : <p className="admin-empty">Сохранённых правил пока нет.</p>}
+      {activeMappings.length ? <div className="schedule-mapping-list">{activeMappings.map((mapping: Item) => <div className="schedule-mapping-row" key={mapping.id}><div><strong>{mapping.external_key}</strong><span>{mapping.mapping_type === 'identity' ? 'Преподаватель' : mapping.mapping_type === 'group' ? 'Группа' : mapping.mapping_type === 'audience_rule' ? 'Правило аудитории' : 'Предмет'} → {mapping.identity_name || mapping.group_name || mapping.canonical_value}</span><small>Используется во всех следующих sync, snapshots и неделях</small></div><button className="admin-button admin-button--quiet" disabled={busy === `retire:${mapping.id}`} onClick={() => void retireMapping(mapping)}><Trash2 size={14} />Отключить</button></div>)}</div> : <p className="admin-empty">Сохранённых правил пока нет.</p>}
+    </section>
+    <section className="admin-panel schedule-allocation-qa">
+      <div className="admin-panel__heading"><div><p className="admin-eyebrow">STUDENT ALLOCATION QA</p><h2>Аудитория уроков по временным слотам</h2><p>Составы берутся из canonical memberships. Schedule не создаёт и не изменяет memberships.</p></div><Users size={20} /></div>
+      <div className="schedule-allocation-summary">
+        <div><strong>{Number(allocation.summary?.complete || 0)}</strong><span>Распределены полностью</span></div>
+        <div><strong>{Number(allocation.summary?.with_unassigned || 0)}</strong><span>С Unassigned</span></div>
+        <div><strong>{Number(allocation.summary?.with_conflicts || 0)}</strong><span>С Conflicts</span></div>
+      </div>
+      <div className="schedule-filter-row schedule-allocation-filters">
+        <label>Параллель<select value={grade} onChange={(event) => void selectGrade(event.target.value)}>{['5','6','7','8','9','10','11'].map((value) => <option key={value} value={value}>{value} класс</option>)}</select></label>
+        <label>Preview ученика<select value={studentPreview} onChange={(event) => void selectPreview('student', event.target.value)}><option value="">Выберите ученика…</option>{(allocation.students || []).map((item: Item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
+        <label>Preview преподавателя<select value={teacherPreview} onChange={(event) => void selectPreview('teacher', event.target.value)}><option value="">Выберите преподавателя…</option>{(allocation.teachers || []).map((item: Item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
+      </div>
+      {studentPreview ? <div className="schedule-preview"><h3>Неделя ученика</h3>{(allocation.student_preview || []).map((item: Item, index: number) => <div key={`${item.lesson_date}-${item.start_time}-${index}`}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.subject || (item.allocation_kind === 'window' ? 'Окно / ожидание' : item.allocation_kind === 'end_of_day' ? 'Конец учебного дня' : item.allocation_kind)}</strong><small>{item.reason}</small></div>)}</div> : null}
+      {teacherPreview ? <div className="schedule-preview"><h3>Неделя преподавателя</h3>{(allocation.teacher_preview || []).map((item: Item) => <div key={item.id}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.subject}</strong><small>{item.audience} · {item.room || 'кабинет не указан'}</small></div>)}</div> : null}
+      <div className="schedule-slot-list">{(allocation.slots || []).map((slot: Item) => <details className={`schedule-slot schedule-slot--${slot.status}`} key={`${slot.lesson_date}-${slot.start_time}-${slot.grade}`}>
+        <summary><Clock3 size={15} /><strong>{slot.lesson_date} · {slot.start_time}</strong><span>{slot.activities?.length || 0} активностей · {slot.students} учеников</span>{slot.unassigned?.length ? <b>{slot.unassigned.length} Unassigned</b> : null}{slot.conflicts?.length ? <b>{slot.conflicts.length} Conflicts</b> : null}<ChevronDown size={15} /></summary>
+        <div className="schedule-slot-grid">{(slot.activities || []).map((activity: Item, index: number) => {
+          const audienceKey = String(activity.provenance?.audience_key || '');
+          return <article key={`${activity.lesson_id || activity.synthetic_kind}-${index}`}><div><strong>{activity.subject}</strong><span>{activity.teacher_hint || activity.activity_type}</span></div><b>{activity.student_count || 0}</b><small>{activity.rule_reason}</small><details><summary>Ученики и причины</summary><ul>{(activity.students || []).map((student: Item) => <li key={student.id}><span>{student.name}</span><small>{student.reason}</small></li>)}</ul></details>{activity.status === 'ambiguous' && audienceKey ? <div className="schedule-audience-decision"><select value={audienceDecisions[audienceKey] || ''} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [audienceKey]: event.target.value }))}><option value="">Выбрать canonical группу…</option>{(allocation.groups || []).map((groupItem: Item) => <option key={groupItem.id} value={groupItem.id}>{groupItem.display_name}</option>)}</select><button className="admin-button admin-button--primary" disabled={!audienceDecisions[audienceKey] || busy === `audience:${audienceKey}`} onClick={() => void saveAudienceRule(activity)}>Сохранить правило</button></div> : null}</article>;
+        })}</div>
+        {slot.unassigned?.length ? <div className="schedule-allocation-alert"><strong>Unassigned</strong>{slot.unassigned.map((student: Item) => <span key={student.id}>{student.name} — {student.reason}</span>)}</div> : null}
+        {slot.conflicts?.length ? <div className="schedule-allocation-alert schedule-allocation-alert--conflict"><strong>Conflicts</strong>{slot.conflicts.map((student: Item) => <span key={student.id}>{student.name} — пересечение memberships</span>)}</div> : null}
+      </details>)}</div>
     </section>
     <section className="admin-panel admin-table-panel">
       <div className="admin-table-meta"><span>{lessons.length} уроков по выбранному фильтру</span><span>Weekly имеет приоритет для дат {week}</span></div>
