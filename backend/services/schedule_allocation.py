@@ -136,10 +136,18 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
     group_by_id = {str(group["id"]): group for group in groups}
     class_groups = [group for group in groups if _norm(group.get("group_type")) == "class"]
     slot_rows: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    valid_grades = {"5", "6", "7", "8", "9", "10", "11"}
     for row in rows:
-        grade = _grade(row.get("audience"))
-        if grade in {"5", "6", "7", "8", "9", "10", "11"} and not (row.get("modifiers") or {}).get("synthetic_cancelled") and row.get("activity_type") != "cancelled":
-            slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
+        # A merged cell can represent a joint lesson for more than one
+        # parallel (for example 5+6). Materialize the same source lesson in
+        # each affected grade slot; the raw lesson itself remains immutable.
+        raw_payload = row.get("raw_payload") or {}
+        merged = raw_payload.get("merged_audiences") if isinstance(raw_payload, Mapping) else []
+        grades = {_grade(row.get("audience"))}
+        grades.update(_grade(value) for value in (merged or []))
+        if not (row.get("modifiers") or {}).get("synthetic_cancelled") and row.get("activity_type") != "cancelled":
+            for grade in sorted(grades & valid_grades):
+                slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
 
     allocations: list[dict[str, Any]] = []
     audience_rows: list[dict[str, Any]] = []
@@ -184,10 +192,14 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 continue
             audience = str(lesson.get("audience") or "")
             siblings = [item for item in lessons if str(item.get("audience") or "") == audience and item.get("activity_type") != "nonlesson"]
-            direct_class = next((group for group in base_groups if _norm(group.get("base_class_name") or group.get("name")) == _norm(audience)), None)
-            if direct_class and len(siblings) == 1:
-                rule.update({"kind": "class", "groups": [str(direct_class["id"])], "students": group_members.get(str(direct_class["id"]), set()), "reason": "explicit membership"})
-            elif lesson.get("activity_type") == "combined" and direct_class:
+            merged_names = [str(value) for value in ((lesson.get("raw_payload") or {}).get("merged_audiences") or [])]
+            merged_names = [value for value in merged_names if _grade(value) == grade]
+            merged_classes = [group for group in base_groups if any(_norm(group.get("base_class_name") or group.get("name")) == _norm(value) for value in [audience, *merged_names])]
+            direct_class = next((group for group in merged_classes if _norm(group.get("base_class_name") or group.get("name")) == _norm(audience)), None)
+            if merged_classes and (len(siblings) == 1 or len(merged_classes) > 1 or lesson.get("activity_type") == "combined"):
+                group_ids = [str(group["id"]) for group in merged_classes]
+                rule.update({"kind": "class", "groups": group_ids, "students": set().union(*(group_members.get(group_id, set()) for group_id in group_ids)), "reason": "explicit membership"})
+            elif direct_class and len(siblings) == 1:
                 rule.update({"kind": "class", "groups": [str(direct_class["id"])], "students": group_members.get(str(direct_class["id"]), set()), "reason": "explicit membership"})
             else:
                 rule.update({"kind": "ambiguous", "reason": "ambiguous lesson audience"})
