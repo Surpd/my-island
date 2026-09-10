@@ -2462,6 +2462,8 @@ class Database:
                   FROM schedule_lesson_audiences sla JOIN schedule_lessons sl ON sl.id=sla.lesson_id
                  WHERE sla.source_snapshot_id=? AND sla.week_start=?{grade_clause}
                  ORDER BY sla.lesson_date,sla.start_time,sla.grade_scope,sl.source_cell,sl.id""", tuple(params)).fetchall()]
+            group_names = {str(row["id"]): row["display_name"] for row in self.execute(connection, "SELECT id,COALESCE(display_name,name) AS display_name FROM groups WHERE canonical IS TRUE").fetchall()}
+            lesson_labels: dict[str, str] = {}
             allocation_rows = [dict(row) for row in self.execute(connection, f"""SELECT sa.*,i.display_name AS student_name,
                        sl.subject,sl.teacher_hint,sl.room,sl.activity_type,sl.source_cell
                   FROM schedule_student_allocations sa JOIN identities i ON i.id=sa.student_identity_id
@@ -2475,7 +2477,11 @@ class Database:
                                               "activities": [], "unassigned": [], "conflicts": [], "students": 0})
                 for json_key in ("resolved_group_ids", "provenance", "resolved_identity_ids"):
                     row[json_key] = self._decode_json_value(row.get(json_key)) or ([] if json_key != "provenance" else {})
-                slot["activities"].append({**row, "students": [], "student_count": 0})
+                label = str(row.get("subject") or row.get("activity_type") or "Активность")
+                if row.get("audience"):
+                    label = f"{label} ({row['audience']})"
+                lesson_labels[str(row["lesson_id"])] = label
+                slot["activities"].append({**row, "group_names": [group_names.get(str(group_id), str(group_id)) for group_id in row["resolved_group_ids"]], "students": [], "student_count": 0})
             for row in allocation_rows:
                 key = (str(row["lesson_date"]), str(row["start_time"]), str(row["grade_scope"]))
                 slot = slots.setdefault(key, {"lesson_date": key[0], "start_time": key[1], "grade": key[2],
@@ -2483,6 +2489,9 @@ class Database:
                 row["provenance"] = self._decode_json_value(row.get("provenance")) or {}
                 student = {"id": str(row["student_identity_id"]), "name": row["student_name"], "reason": row["reason"],
                            "allocation_kind": row["allocation_kind"], "provenance": row["provenance"]}
+                if row["status"] == "conflict":
+                    candidate_ids = row["provenance"].get("candidate_lesson_ids") or []
+                    student["conflicting_activities"] = [lesson_labels.get(str(lesson_id), str(lesson_id)) for lesson_id in candidate_ids]
                 slot["students"] += 1
                 if row["status"] == "unassigned":
                     slot["unassigned"].append(student)
