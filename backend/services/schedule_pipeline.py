@@ -28,6 +28,7 @@ _DATE = re.compile(r"^\s*(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\s*$")
 _ROOM_LINE = re.compile(r"^(?:каб(?:инет)?\.?\s*.*|зал\b.*|ауд\.?\s*.*)$", re.IGNORECASE)
 _NON_LESSON = ("🥨", "обед", "перемена", "окно", "нет урока", "выходной")
 _SPECIAL = ("экскурс", "поездк", "мероприят", "праздник", "линейк", "спектак", "встреча")
+RECONCILIATION_VERSION = 2
 
 
 def fingerprint(value: Any) -> str:
@@ -415,7 +416,7 @@ def _resolve_lesson(lesson: dict[str, Any], identities: Sequence[Mapping[str, An
         lesson["subject"] = subject_mappings[_norm(lesson["subject"])]
     teacher_ids = _explicit_teacher_candidates(lesson.get("raw_text", ""), lesson.get("teacher_hint", ""), identities, identity_mappings)
     group_ids = _group_candidates(lesson, groups, group_mappings)
-    evidence: dict[str, Any] = {"text_teacher_candidates": teacher_ids, "group_candidates": group_ids}
+    evidence: dict[str, Any] = {"resolver_version": RECONCILIATION_VERSION, "text_teacher_candidates": teacher_ids, "group_candidates": group_ids}
     assignment_ids: list[str] = []
     if len(group_ids) == 1:
         subject = _norm(lesson.get("subject"))
@@ -566,6 +567,21 @@ def reconcile_current_schedule(database: Database) -> dict[str, Any]:
                                   _json(database, {"reason": lesson["issue_reason"], "week_start": lesson.get("week_start"), "cell": lesson.get("source_cell"), "subject": lesson.get("subject")}),
                                   _json(database, lesson["evidence"])))
     return database.schedule_v1_overview()
+
+
+def schedule_reconciliation_needs_refresh(database: Database) -> bool:
+    """Return true once when a stored snapshot predates the current resolver."""
+    with database.connection() as connection:
+        row = database.execute(connection, """SELECT sl.evidence FROM schedule_lessons sl
+            WHERE sl.source_snapshot_id IN (
+                SELECT id FROM school_source_snapshots
+                WHERE is_last_known_valid IS TRUE
+                  AND source_id IN (SELECT id FROM school_sources WHERE source_type='schedule')
+            ) ORDER BY sl.id LIMIT 1""").fetchone()
+        if not row:
+            return False
+        evidence = database._decode_json_value(row["evidence"]) or {}
+        return int(evidence.get("resolver_version") or 0) < RECONCILIATION_VERSION
 
 
 def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadsheet_title: str,

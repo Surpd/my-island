@@ -6,7 +6,7 @@ import unittest
 from uuid import uuid4
 
 from backend.database import Database
-from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_view
+from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
 
 
 def cell(value: str, color: dict | None = None) -> dict:
@@ -57,6 +57,7 @@ class ScheduleIntegrationTests(unittest.TestCase):
             weekly = {"sheet_id": 20, "title": "7-11 Сентября", "values": matrix(weekly=True), "merges": []}
             weekly["values"][2][1]["formattedValue"] = "Матем АнК\nкаб.1"
             refresh_schedule_pipeline(database, "spreadsheet", "Расписание 2026/27", [template, weekly])
+            self.assertFalse(schedule_reconciliation_needs_refresh(database))
             group = next(item for item in schedule_reconciliation_view(database, "2026-09-07")["issue_groups"] if item["external_key"] == "АнК")
             self.assertEqual(group["mapping_type"], "identity")
             database.save_schedule_v1_mapping("identity", "АнК", target_id=teacher_id)

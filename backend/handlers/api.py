@@ -15,7 +15,7 @@ from backend.services.admin import (
 )
 from backend.services.google_live import GoogleLiveError, GoogleTokenStore
 from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule_v1
-from backend.services.schedule_pipeline import reconcile_current_schedule, schedule_reconciliation_view
+from backend.services.schedule_pipeline import reconcile_current_schedule, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -570,6 +570,8 @@ def create_router(database: Database) -> APIRouter:
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if schedule_reconciliation_needs_refresh(database):
+            reconcile_current_schedule(database)
         result = database.schedule_v1_overview(week_start=week_start)
         settings = get_settings()
         if not settings.google_sheets_spreadsheet_id:
