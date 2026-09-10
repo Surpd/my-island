@@ -203,9 +203,11 @@ def refresh_schedule_v1(database: Database, settings: Settings) -> dict[str, Any
     """Refresh Schedule Integration v1 through the School Data lifecycle."""
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
     if not spreadsheet_id:
-        return {"status": "blocked", "auth_state": "missing_spreadsheet_id", "error": "GOOGLE_SHEETS_SPREADSHEET_ID is required"}
+        reason = "GOOGLE_SHEETS_SPREADSHEET_ID is required"
+        return {"status": "blocked", "auth_state": "missing_spreadsheet_id", "error": reason, "message": reason}
     if not GoogleTokenStore().has_refresh_token():
-        return {"status": "blocked", "auth_state": "missing_google_token", "error": "Authorize Google OAuth and store a refresh token before refreshing schedule"}
+        reason = "Authorize Google OAuth and store a refresh token before refreshing schedule"
+        return {"status": "blocked", "auth_state": "missing_google_token", "error": reason, "message": reason}
     client, _ = _client(settings)
     metadata = client.spreadsheet(spreadsheet_id)
     spreadsheet_title = str((metadata.get("properties") or {}).get("title", ""))
