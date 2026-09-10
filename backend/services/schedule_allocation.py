@@ -267,10 +267,13 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         VALUES (?,?,?,?,?,?,?,?,?,?,?)"""
     allocation_sql = """INSERT INTO schedule_student_allocations(source_snapshot_id,week_start,lesson_date,start_time,end_time,grade_scope,student_identity_id,lesson_id,allocation_kind,status,reason,provenance)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"""
-    if audience_params:
-        connection.executemany(audience_sql.replace("?", "%s") if database.database_url else audience_sql, audience_params)
-    if allocation_params:
-        connection.executemany(allocation_sql.replace("?", "%s") if database.database_url else allocation_sql, allocation_params)
+    if audience_params or allocation_params:
+        cursor = connection.cursor()
+        if audience_params:
+            cursor.executemany(audience_sql.replace("?", "%s") if database.database_url else audience_sql, audience_params)
+        if allocation_params:
+            cursor.executemany(allocation_sql.replace("?", "%s") if database.database_url else allocation_sql, allocation_params)
+        cursor.close()
     slot_status: dict[tuple[str, str, str], dict[str, int]] = defaultdict(lambda: {"unassigned": 0, "conflict": 0})
     for item in allocations:
         if item["status"] in {"unassigned", "conflict"}:
