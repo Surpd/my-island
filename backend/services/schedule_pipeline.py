@@ -550,6 +550,19 @@ def reconcile_current_schedule(database: Database) -> dict[str, Any]:
         assignments = [dict(row) for row in database.execute(connection, "SELECT teacher_identity_id,group_id,subject FROM teacher_assignments WHERE active IS TRUE").fetchall()]
         identity_mappings, _, _ = _mapping_indexes(mappings)
         rows = [dict(row) for row in database.execute(connection, "SELECT * FROM schedule_lessons WHERE source_snapshot_id=?", (snapshot["id"],)).fetchall()]
+        # Older snapshots may contain synthetic cancellations for baseline
+        # weekdays that a partial tab (for example 2–4 September) never covered.
+        # Remove those derived rows while preserving source records and history.
+        filtered_rows: list[dict[str, Any]] = []
+        for row in rows:
+            modifiers = database._decode_json_value(row.get("modifiers")) or {}
+            if modifiers.get("synthetic_cancelled") and _date_for_weekday(
+                (str(row.get("week_start")), str(row.get("week_end"))), int(row.get("weekday") or 0)
+            ) is None:
+                database.execute(connection, "DELETE FROM schedule_lessons WHERE id=?", (row["id"],))
+                continue
+            filtered_rows.append(row)
+        rows = filtered_rows
         raw_lessons = []
         for row in rows:
             raw = database._decode_json_value(row.get("raw_payload")) or {}
