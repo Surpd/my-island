@@ -251,18 +251,26 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         reason = "window" if later else "end of day"
         allocations.append({**gap, "kind": "window" if later else "end_of_day", "status": "assigned", "reason": reason, "provenance": {"reason": reason}})
 
+    audience_params = []
     for item in audience_rows.values():
         lesson = item["lesson"]
-        database.execute(connection, """INSERT INTO schedule_lesson_audiences(source_snapshot_id,lesson_id,week_start,lesson_date,start_time,grade_scope,audience_kind,resolved_group_ids,status,rule_reason,provenance)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (snapshot_id, lesson["id"], lesson.get("week_start"), lesson["lesson_date"], lesson["start_time"], item["grade"], item["kind"],
+        audience_params.append((snapshot_id, lesson["id"], lesson.get("week_start"), lesson["lesson_date"], lesson["start_time"], item["grade"], item["kind"],
             _json(database, item["groups"]), item["status"], item["reason"], _json(database, {"reason": item["reason"], "audience_key": item["key"]})))
     end_times = {str(row["id"]): row.get("end_time") for row in rows}
     week_by_day = {str(row.get("lesson_date")): row.get("week_start") for row in rows}
+    allocation_params = []
     for item in allocations:
         lesson_id = item["lesson"]["id"] if item.get("lesson") else None
-        database.execute(connection, """INSERT INTO schedule_student_allocations(source_snapshot_id,week_start,lesson_date,start_time,end_time,grade_scope,student_identity_id,lesson_id,allocation_kind,status,reason,provenance)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (snapshot_id, item["lesson"].get("week_start") if item.get("lesson") else week_by_day.get(item["day"]),
+        allocation_params.append((snapshot_id, item["lesson"].get("week_start") if item.get("lesson") else week_by_day.get(item["day"]),
             item["day"], item["time"], end_times.get(str(lesson_id)), item["grade"], item["student"], lesson_id, item["kind"], item["status"], item["reason"], _json(database, item["provenance"])))
+    audience_sql = """INSERT INTO schedule_lesson_audiences(source_snapshot_id,lesson_id,week_start,lesson_date,start_time,grade_scope,audience_kind,resolved_group_ids,status,rule_reason,provenance)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)"""
+    allocation_sql = """INSERT INTO schedule_student_allocations(source_snapshot_id,week_start,lesson_date,start_time,end_time,grade_scope,student_identity_id,lesson_id,allocation_kind,status,reason,provenance)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"""
+    if audience_params:
+        connection.executemany(audience_sql.replace("?", "%s") if database.database_url else audience_sql, audience_params)
+    if allocation_params:
+        connection.executemany(allocation_sql.replace("?", "%s") if database.database_url else allocation_sql, allocation_params)
     slot_status: dict[tuple[str, str, str], dict[str, int]] = defaultdict(lambda: {"unassigned": 0, "conflict": 0})
     for item in allocations:
         if item["status"] in {"unassigned", "conflict"}:
