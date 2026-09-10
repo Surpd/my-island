@@ -60,6 +60,19 @@ def _candidate_groups(
     subgroup = _norm(modifiers.get("subject_subgroup"))
     exam = _norm(modifiers.get("exam_track"))
     subject = _subject(lesson.get("subject"))
+    if subject == "английский" and subgroup:
+        numbered = []
+        for group in groups:
+            if _norm(group.get("group_type")) == "class" or _subject(group.get("subject")) != subject:
+                continue
+            match = re.search(r"(?:^|\s)(\d+)\s*$", _norm(group.get("name") or group.get("display_name")))
+            if match and match.group(1) == subgroup:
+                numbered.append(str(group["id"]))
+        if len(numbered) == 1:
+            # Numeric English labels are authoritative identifiers. Resolve
+            # them before dated-member filtering so an archived week cannot
+            # silently fall back to a different teacher-owned group.
+            return numbered, "explicit membership"
     candidates = []
     for group in groups:
         group_id = str(group["id"])
@@ -75,10 +88,6 @@ def _candidate_groups(
         exact = [str(group["id"]) for group in candidates if _subject(group.get("subject")) == subject]
         return exact, "explicit membership" if len(exact) == 1 else ""
     if subgroup:
-        if subject == "английский":
-            numbered = [str(group["id"]) for group in candidates if _norm(group.get("name")) == f"english {subgroup}"]
-            if len(numbered) == 1:
-                return numbered, "explicit membership"
         exact = [str(group["id"]) for group in candidates if _norm(group.get("subject_subgroup")) == subgroup]
         if len(exact) == 1:
             return exact, "explicit membership"
@@ -223,6 +232,20 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             rule.update({"kind": "complement", "reason": "complement"})
             complement_slot_keys.add((lesson_day, start_time, grade))
 
+        # A structural column is evidence for a base-class audience only when
+        # that class has one remaining activity in the slot.  Cross-class
+        # instructional groups are allocated first; if several companion
+        # activities remain, interpreting any of them as the complement would
+        # be a guess and must stay in admin review.
+        structural_pending_counts: dict[str, int] = defaultdict(int)
+        if not explicit_count:
+            for pending in pending_lessons:
+                payload = pending.get("raw_payload") or {}
+                column = payload.get("source_column") if isinstance(payload, Mapping) else None
+                structural_audience = structural_columns.get(column) if isinstance(column, int) else None
+                if structural_audience and _grade(structural_audience) == grade:
+                    structural_pending_counts[_norm(structural_audience)] += 1
+
         for lesson in lessons:
             lesson_id = str(lesson["id"])
             rule = activity_rules[lesson_id]
@@ -234,19 +257,17 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             structural_audience = structural_columns.get(column) if isinstance(column, int) else None
             if structural_audience and _grade(structural_audience) == grade:
                 audience = structural_audience
-                structural_slot_keys.add((lesson_day, start_time, grade))
             siblings = [item for item in lessons if str(item.get("audience") or "") == audience and item.get("activity_type") != "nonlesson"]
             merged_names = [str(value) for value in ((lesson.get("raw_payload") or {}).get("merged_audiences") or [])]
             merged_names = [value for value in merged_names if _grade(value) == grade]
             merged_classes = [group for group in base_groups if any(_norm(group.get("base_class_name") or group.get("name")) == _norm(value) for value in [audience, *merged_names])]
             direct_class = next((group for group in merged_classes if _norm(group.get("base_class_name") or group.get("name")) == _norm(audience)), None)
-            if direct_class and structural_audience:
+            if direct_class and structural_audience and not explicit_count and structural_pending_counts[_norm(structural_audience)] == 1:
                 rule.update({"kind": "class", "groups": [str(direct_class["id"])], "students": group_members.get(str(direct_class["id"]), set()), "reason": "structural column"})
+                structural_slot_keys.add((lesson_day, start_time, grade))
             elif merged_classes and (len(siblings) == 1 or len(merged_classes) > 1 or lesson.get("activity_type") == "combined"):
                 group_ids = [str(group["id"]) for group in merged_classes]
                 rule.update({"kind": "class", "groups": group_ids, "students": set().union(*(group_members.get(group_id, set()) for group_id in group_ids)), "reason": "explicit membership"})
-            elif direct_class and len(siblings) == 1:
-                rule.update({"kind": "class", "groups": [str(direct_class["id"])], "students": group_members.get(str(direct_class["id"]), set()), "reason": "explicit membership"})
             else:
                 rule.update({"kind": "ambiguous", "reason": "ambiguous lesson audience"})
 

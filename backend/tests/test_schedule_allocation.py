@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from backend.database import Database
-from backend.services.schedule_allocation import rebuild_schedule_allocations
+from backend.services.schedule_allocation import _candidate_groups, rebuild_schedule_allocations
 
 
 class ScheduleAllocationTests(unittest.TestCase):
@@ -14,6 +14,16 @@ class ScheduleAllocationTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_english_number_is_authoritative_without_active_members(self):
+        groups = [
+            {"id": "six", "name": "english:6", "display_name": "Английский · группа 6", "group_type": "subject_group", "subject": "Английский язык", "base_class_name": None, "subject_subgroup": "6"},
+            {"id": "seven", "name": "english:7", "display_name": "Английский · группа 7", "group_type": "subject_group", "subject": "Английский язык", "base_class_name": None, "subject_subgroup": "7"},
+        ]
+        lesson = {"subject": "Английский", "modifiers": {"subject_subgroup": "7"}, "activity_type": "lesson"}
+        group_ids, reason = _candidate_groups(lesson, "9", groups, {"six": {"student"}, "seven": set()}, {"student"}, [], {})
+        self.assertEqual(group_ids, ["seven"])
+        self.assertEqual(reason, "explicit membership")
 
     def test_explicit_groups_and_membership_conflict_without_lunch_projection(self):
         with self.database.connection() as connection:
