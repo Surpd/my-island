@@ -706,7 +706,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
             previous_records = {str(row["record_key"]): (str(row["fingerprint"]), str(row["source_ref"])) for row in old_records}
             existing_record_ids = {str(row["record_key"]): row["id"] for row in old_records}
             database.execute(connection, "DELETE FROM schedule_lessons WHERE source_snapshot_id=?", (snapshot_id,))
-            database.execute(connection, "DELETE FROM school_resolution_issues WHERE sync_run_id=? AND LEFT(issue_type, 9) = 'schedule_'", (target["sync_run_id"],))
+            database.execute(connection, "DELETE FROM school_resolution_issues WHERE sync_run_id=? AND SUBSTR(issue_type, 1, 9) = 'schedule_'", (target["sync_run_id"],))
             issue_run_id = target["sync_run_id"]
         else:
             issue_run_id = run_id
