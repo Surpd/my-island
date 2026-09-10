@@ -101,7 +101,7 @@ def lesson_kind(raw_text: str) -> str:
         return "special_event"
     if "курс" in text and "выбор" in text or "электив" in text:
         return "course_choice"
-    if "цифров" in text and "трек" in text:
+    if "цифров" in text and "трек" in text or any(token in text for token in ("программирован", "машинная графика", "медиамастерская", "шум медиамастерская")):
         return "digital_track"
     if "клуб" in text or "круж" in text or "внеуроч" in text or raw_text.strip().startswith("⚪"):
         return "extracurricular"

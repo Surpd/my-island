@@ -75,6 +75,10 @@ def _candidate_groups(
         exact = [str(group["id"]) for group in candidates if _subject(group.get("subject")) == subject]
         return exact, "explicit membership" if len(exact) == 1 else ""
     if subgroup:
+        if subject == "английский":
+            numbered = [str(group["id"]) for group in candidates if _norm(group.get("name")) == f"english {subgroup}"]
+            if len(numbered) == 1:
+                return numbered, "explicit membership"
         exact = [str(group["id"]) for group in candidates if _norm(group.get("subject_subgroup")) == subgroup]
         if len(exact) == 1:
             return exact, "explicit membership"
@@ -135,6 +139,18 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
     student_names = {str(item["id"]): str(item["display_name"]) for item in students}
     group_by_id = {str(group["id"]): group for group in groups}
     class_groups = [group for group in groups if _norm(group.get("group_type")) == "class"]
+    structural_columns: dict[int, str] = {}
+    column_evidence: dict[int, set[str]] = defaultdict(set)
+    class_names = {_norm(group.get("base_class_name") or group.get("name")): str(group.get("base_class_name") or group.get("name")) for group in class_groups}
+    for row in rows:
+        payload = row.get("raw_payload") or {}
+        column = payload.get("source_column") if isinstance(payload, Mapping) else None
+        audience_name = _norm(row.get("audience"))
+        if isinstance(column, int) and audience_name in class_names:
+            column_evidence[column].add(class_names[audience_name])
+    for column, names in column_evidence.items():
+        if len(names) == 1:
+            structural_columns[column] = next(iter(names))
     slot_rows: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     valid_grades = {"5", "6", "7", "8", "9", "10", "11"}
     for row in rows:
@@ -153,6 +169,9 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
     audience_rows: dict[str, dict[str, Any]] = {}
     pending_gaps: list[dict[str, Any]] = []
     assigned_later: dict[tuple[str, str], list[str]] = defaultdict(list)
+    dedup_slot_keys: set[tuple[str, str, str]] = set()
+    structural_slot_keys: set[tuple[str, str, str]] = set()
+    complement_slot_keys: set[tuple[str, str, str]] = set()
 
     for (lesson_day, start_time, grade), lessons in sorted(slot_rows.items()):
         excluded = {(str(item["identity_id"]), str(item["group_id"])) for item in overrides if _active_on(item, lesson_day)}
@@ -169,6 +188,10 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         explicit_count = 0
         for lesson in lessons:
             lesson_id = str(lesson["id"])
+            if lesson.get("activity_type") == "digital_track":
+                activity_rules[lesson_id] = {"kind": "class", "groups": [str(group["id"]) for group in base_groups], "students": set(universe), "reason": "structural digital track"}
+                explicit_count += 1
+                continue
             group_ids, reason = _candidate_groups(lesson, grade, groups, group_members, universe, assignments, manual_rules)
             if len(group_ids) == 1:
                 activity_rules[lesson_id] = {"kind": "group", "groups": group_ids, "students": group_members.get(group_ids[0], set()) & universe, "reason": reason}
@@ -176,10 +199,29 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             else:
                 activity_rules[lesson_id] = {"kind": "pending", "groups": group_ids, "students": set(), "reason": ""}
 
+        seen_activity_keys: dict[tuple[Any, ...], str] = {}
+        for lesson in lessons:
+            lesson_id = str(lesson["id"]); rule = activity_rules[lesson_id]
+            payload = lesson.get("raw_payload") or {}
+            if lesson.get("activity_type") == "digital_track":
+                semantic_key = ("digital_track", grade)
+            elif rule["kind"] in {"group", "class"}:
+                semantic_key = (tuple(sorted(rule.get("groups", []))), _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), lesson.get("activity_type"))
+            elif rule["kind"] == "pending":
+                semantic_key = ("pending", _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), _norm(lesson.get("room")), _norm(payload.get("raw_text") if isinstance(payload, Mapping) else ""))
+            else:
+                continue
+            if semantic_key in seen_activity_keys:
+                rule.update({"kind": "duplicate", "students": set(), "reason": "duplicate canonical activity", "duplicate_of": seen_activity_keys[semantic_key]})
+                dedup_slot_keys.add((lesson_day, start_time, grade))
+            else:
+                seen_activity_keys[semantic_key] = lesson_id
+
         pending_lessons = [lesson for lesson in lessons if activity_rules[str(lesson["id"])]["kind"] == "pending" and lesson.get("activity_type") != "nonlesson"]
         if explicit_count and len(pending_lessons) == 1:
             rule = activity_rules[str(pending_lessons[0]["id"])]
             rule.update({"kind": "complement", "reason": "complement"})
+            complement_slot_keys.add((lesson_day, start_time, grade))
 
         for lesson in lessons:
             lesson_id = str(lesson["id"])
@@ -187,12 +229,20 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             if rule["kind"] != "pending":
                 continue
             audience = str(lesson.get("audience") or "")
+            payload = lesson.get("raw_payload") or {}
+            column = payload.get("source_column") if isinstance(payload, Mapping) else None
+            structural_audience = structural_columns.get(column) if isinstance(column, int) else None
+            if structural_audience and _grade(structural_audience) == grade:
+                audience = structural_audience
+                structural_slot_keys.add((lesson_day, start_time, grade))
             siblings = [item for item in lessons if str(item.get("audience") or "") == audience and item.get("activity_type") != "nonlesson"]
             merged_names = [str(value) for value in ((lesson.get("raw_payload") or {}).get("merged_audiences") or [])]
             merged_names = [value for value in merged_names if _grade(value) == grade]
             merged_classes = [group for group in base_groups if any(_norm(group.get("base_class_name") or group.get("name")) == _norm(value) for value in [audience, *merged_names])]
             direct_class = next((group for group in merged_classes if _norm(group.get("base_class_name") or group.get("name")) == _norm(audience)), None)
-            if merged_classes and (len(siblings) == 1 or len(merged_classes) > 1 or lesson.get("activity_type") == "combined"):
+            if direct_class and structural_audience:
+                rule.update({"kind": "class", "groups": [str(direct_class["id"])], "students": group_members.get(str(direct_class["id"]), set()), "reason": "structural column"})
+            elif merged_classes and (len(siblings) == 1 or len(merged_classes) > 1 or lesson.get("activity_type") == "combined"):
                 group_ids = [str(group["id"]) for group in merged_classes]
                 rule.update({"kind": "class", "groups": group_ids, "students": set().union(*(group_members.get(group_id, set()) for group_id in group_ids)), "reason": "explicit membership"})
             elif direct_class and len(siblings) == 1:
@@ -277,4 +327,5 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
     return {"slots": len(slot_rows), "complete_slots": len(slot_rows) - len(slot_status),
             "unassigned_slots": sum(1 for value in slot_status.values() if value["unassigned"]),
             "conflict_slots": sum(1 for value in slot_status.values() if value["conflict"]),
-            "allocations": len(allocations), "students": len(student_names)}
+            "allocations": len(allocations), "students": len(student_names), "dedup_slots": len(dedup_slot_keys),
+            "structural_column_slots": len(structural_slot_keys), "complement_slots": len(complement_slot_keys)}
