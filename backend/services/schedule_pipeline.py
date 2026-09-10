@@ -100,6 +100,8 @@ def lesson_kind(raw_text: str) -> str:
         return "special_event"
     if "курс" in text and "выбор" in text or "электив" in text:
         return "course_choice"
+    if "цифров" in text and "трек" in text:
+        return "digital_track"
     if "клуб" in text or "круж" in text or "внеуроч" in text or raw_text.strip().startswith("⚪"):
         return "extracurricular"
     if "классн" in text and "час" in text or re.search(r"\bкл\s*час\b", text):
@@ -201,7 +203,11 @@ def _parse_cell(raw_text: str, audience: str) -> dict[str, Any]:
         "delivery_mode": parsed.get("delivery_mode") or ("online" if kind == "online" else ""),
         "parser_diagnostics": parsed.get("parse_diagnostics") or "",
     }
-    if kind == "nonlesson":
+    if kind == "course_choice":
+        subject = "Курс по выбору"
+    elif kind == "digital_track":
+        subject = "Цифровой трек"
+    elif kind == "nonlesson":
         subject = "Обед / перерыв" if raw_text.strip() == "🥨" else (parsed.get("subject") or raw_text.strip())
     else:
         subject = parsed.get("subject") or raw_text.splitlines()[0].strip()
@@ -412,6 +418,17 @@ def _resolve_lesson(lesson: dict[str, Any], identities: Sequence[Mapping[str, An
                     mappings: Sequence[Mapping[str, Any]], assignments: Sequence[Mapping[str, Any]],
                     color_map: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     identity_mappings, group_mappings, subject_mappings = _mapping_indexes(mappings)
+    kind = lesson.get("activity_type")
+    if kind == "extracurricular":
+        return {**lesson, "subject": lesson.get("subject") or lesson.get("raw_text", ""),
+                "resolved_identity_ids": [], "resolved_group_ids": [], "resolution_status": "EXCLUDED",
+                "confidence": 1.0, "evidence": {"resolver_version": RECONCILIATION_VERSION, "business_rule": "extracurricular_excluded"},
+                "issue_reason": ""}
+    if kind in {"course_choice", "digital_track"}:
+        canonical_subject = "Курс по выбору" if kind == "course_choice" else "Цифровой трек"
+        return {**lesson, "subject": canonical_subject, "resolved_identity_ids": [], "resolved_group_ids": [],
+                "resolution_status": "RESOLVED", "confidence": 1.0,
+                "evidence": {"resolver_version": RECONCILIATION_VERSION, "business_rule": f"{kind}_canonical"}, "issue_reason": ""}
     if _norm(lesson.get("subject")) in subject_mappings:
         lesson["subject"] = subject_mappings[_norm(lesson["subject"])]
     teacher_ids = _explicit_teacher_candidates(lesson.get("raw_text", ""), lesson.get("teacher_hint", ""), identities, identity_mappings)
@@ -597,8 +614,39 @@ def schedule_reconciliation_needs_refresh(database: Database) -> bool:
         return int(evidence.get("resolver_version") or 0) < RECONCILIATION_VERSION
 
 
+def recalculate_current_schedule(database: Database) -> dict[str, Any]:
+    """Reparse and rematerialize the latest raw snapshot without creating one."""
+    with database.connection() as connection:
+        source = database.execute(connection, "SELECT id,display_name,location_ref FROM school_sources WHERE source_type='schedule' ORDER BY id DESC LIMIT 1").fetchone()
+        snapshot = database.execute(connection, "SELECT id,raw_payload FROM school_source_snapshots WHERE source_id=? AND is_last_known_valid IS TRUE ORDER BY id DESC LIMIT 1", (source["id"],)).fetchone() if source else None
+        if not source or not snapshot:
+            return {"status": "blocked", "message": "No saved Schedule snapshot is available", "created_snapshot": False}
+        payload = database._decode_json_value(snapshot["raw_payload"]) or []
+    tabs: list[dict[str, Any]] = []
+    for item in payload:
+        cells = item.get("cells") or []
+        coordinates = [str(cell.get("source_cell") or "") for cell in cells]
+        max_row = max((int(match.group(1)) for coordinate in coordinates if (match := re.search(r"(\d+)$", coordinate))), default=1)
+        max_col = max((sum((ord(char) - 64) * (26 ** index) for index, char in enumerate(reversed(re.match(r"^[A-Z]+", coordinate or "A").group(0)))) for coordinate in coordinates if re.match(r"^[A-Z]+", coordinate)), default=1)
+        values = [[{} for _ in range(max_col)] for _ in range(max_row)]
+        for cell in cells:
+            coordinate = str(cell.get("source_cell") or "")
+            match = re.match(r"^([A-Z]+)(\d+)$", coordinate)
+            if not match:
+                continue
+            col = sum((ord(char) - 64) * (26 ** index) for index, char in enumerate(reversed(match.group(1)))) - 1
+            row = int(match.group(2)) - 1
+            values[row][col] = cell.get("raw_cell") or {"formattedValue": cell.get("raw_text") or ""}
+        tabs.append({"sheet_id": item.get("sheet_id"), "title": item.get("title", ""), "values": values, "merges": item.get("merges") or []})
+    result = refresh_schedule_pipeline(database, str(source["location_ref"] or ""), str(source["display_name"] or "Расписание"), tabs, recalculate_snapshot_id=snapshot["id"])
+    result["created_snapshot"] = False
+    result["recalculated_snapshot_id"] = snapshot["id"]
+    return result
+
+
 def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadsheet_title: str,
-                              tabs: Sequence[Mapping[str, Any]], *, actor: Any | None = None) -> dict[str, Any]:
+                              tabs: Sequence[Mapping[str, Any]], *, actor: Any | None = None,
+                              recalculate_snapshot_id: Any | None = None) -> dict[str, Any]:
     """Persist an immutable snapshot and materialize current template/weekly lessons."""
     year = _school_year(spreadsheet_title, "")
     prepared: list[dict[str, Any]] = []
@@ -623,9 +671,10 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
             (f"google_sheets:{spreadsheet_id}:schedule", spreadsheet_title, spreadsheet_id, _json(database, {"spreadsheet_id": spreadsheet_id}))).fetchone()
         source_id = source["id"]
         previous = database.execute(connection, "SELECT id,fingerprint FROM school_source_snapshots WHERE source_id=? AND is_last_known_valid IS TRUE ORDER BY id DESC LIMIT 1", (source_id,)).fetchone()
+        run_mode = "full_reparse" if recalculate_snapshot_id is not None else "incremental"
         run = database.execute(connection, """INSERT INTO school_sync_runs(source_id,mode,status,idempotency_key,diagnostics)
-            VALUES (?,'incremental','started',?,?) RETURNING id""",
-            (source_id, f"{source_fingerprint}:{datetime.now(timezone.utc).isoformat(timespec='microseconds')}", _json(database, {"tabs": len(relevant)}))).fetchone()
+            VALUES (?,?,'started',?,?) RETURNING id""",
+            (source_id, run_mode, f"{run_mode}:{source_fingerprint}:{datetime.now(timezone.utc).isoformat(timespec='microseconds')}", _json(database, {"tabs": len(relevant)}))).fetchone()
         run_id = run["id"]
         for tab in prepared:
             if not tab["sheet_id"]:
@@ -635,11 +684,11 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
                 VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(source_id,sheet_id) DO UPDATE SET title=excluded.title,
                 classification=excluded.classification,week_start=excluded.week_start,week_end=excluded.week_end,updated_at=CURRENT_TIMESTAMP""",
                 (source_id, tab["sheet_id"], tab["title"], tab["classification"], start, end))
-        if previous and str(previous["fingerprint"]) == source_fingerprint:
+        if recalculate_snapshot_id is None and previous and str(previous["fingerprint"]) == source_fingerprint:
             database.execute(connection, "UPDATE school_sync_runs SET status='applied',finished_at=CURRENT_TIMESTAMP,diagnostics=? WHERE id=?",
                              (_json(database, {"status": "unchanged", "snapshot_id": previous["id"]}), run_id))
             return _overview_result(database, connection, source_id, previous["id"], run_id, "unchanged")
-        reusable = database.execute(connection, "SELECT id FROM school_source_snapshots WHERE source_id=? AND fingerprint=? ORDER BY id DESC LIMIT 1", (source_id, source_fingerprint)).fetchone()
+        reusable = None if recalculate_snapshot_id is not None else database.execute(connection, "SELECT id FROM school_source_snapshots WHERE source_id=? AND fingerprint=? ORDER BY id DESC LIMIT 1", (source_id, source_fingerprint)).fetchone()
         if reusable:
             database.execute(connection, "UPDATE school_source_snapshots SET is_last_known_valid=FALSE,status='superseded' WHERE source_id=? AND is_last_known_valid IS TRUE", (source_id,))
             database.execute(connection, "UPDATE school_source_snapshots SET is_last_known_valid=TRUE,status='valid' WHERE id=?", (reusable["id"],))
@@ -647,14 +696,29 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
                              (_json(database, {"status": "reused_snapshot", "snapshot_id": reusable["id"]}), run_id))
             return _overview_result(database, connection, source_id, reusable["id"], run_id, "unchanged")
         previous_records: dict[str, tuple[str, str]] = {}
-        if previous:
+        existing_record_ids: dict[str, Any] = {}
+        if recalculate_snapshot_id is not None:
+            target = database.execute(connection, "SELECT id,sync_run_id,raw_payload FROM school_source_snapshots WHERE id=? AND source_id=?", (recalculate_snapshot_id, source_id)).fetchone()
+            if not target:
+                raise ValueError("Schedule snapshot was not found")
+            snapshot_id = target["id"]
+            old_records = database.execute(connection, "SELECT id,record_key,fingerprint,source_ref FROM school_source_records WHERE snapshot_id=?", (snapshot_id,)).fetchall()
+            previous_records = {str(row["record_key"]): (str(row["fingerprint"]), str(row["source_ref"])) for row in old_records}
+            existing_record_ids = {str(row["record_key"]): row["id"] for row in old_records}
+            database.execute(connection, "DELETE FROM schedule_lessons WHERE source_snapshot_id=?", (snapshot_id,))
+            database.execute(connection, "DELETE FROM school_resolution_issues WHERE sync_run_id=? AND issue_type LIKE 'schedule_%'", (target["sync_run_id"],))
+            issue_run_id = target["sync_run_id"]
+        else:
+            issue_run_id = run_id
+        if previous and recalculate_snapshot_id is None:
             rows = database.execute(connection, "SELECT record_key,fingerprint,source_ref FROM school_source_records WHERE snapshot_id=?", (previous["id"],)).fetchall()
             previous_records = {str(row["record_key"]): (str(row["fingerprint"]), str(row["source_ref"])) for row in rows}
             database.execute(connection, "UPDATE school_source_snapshots SET is_last_known_valid=FALSE,status='superseded' WHERE id=?", (previous["id"],))
-        snapshot = database.execute(connection, """INSERT INTO school_source_snapshots(source_id,sync_run_id,previous_snapshot_id,fingerprint,observed_at,raw_payload,structural_payload,status,is_last_known_valid)
-            VALUES (?,?,?,?,CURRENT_TIMESTAMP,?,?,'valid',TRUE) RETURNING id""",
-            (source_id, run_id, previous["id"] if previous else None, source_fingerprint, _json(database, snapshot_payload), _json(database, snapshot_payload))).fetchone()
-        snapshot_id = snapshot["id"]
+        if recalculate_snapshot_id is None:
+            snapshot = database.execute(connection, """INSERT INTO school_source_snapshots(source_id,sync_run_id,previous_snapshot_id,fingerprint,observed_at,raw_payload,structural_payload,status,is_last_known_valid)
+                VALUES (?,?,?,?,CURRENT_TIMESTAMP,?,?,'valid',TRUE) RETURNING id""",
+                (source_id, run_id, previous["id"] if previous else None, source_fingerprint, _json(database, snapshot_payload), _json(database, snapshot_payload))).fetchone()
+            snapshot_id = snapshot["id"]
         identities = [dict(row) for row in database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()]
         groups = [dict(row) for row in database.execute(connection, "SELECT id,name,display_name,group_type,subject,base_class_name,subject_subgroup,exam_track FROM groups WHERE canonical IS TRUE").fetchall()]
         mappings = [dict(row) for row in database.execute(connection, """SELECT external_key,mapping_type,identity_id,group_id,canonical_value,evidence
@@ -673,7 +737,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
         for tab in relevant:
             if tab["classification"] == "unknown" and tab["schedule_like"]:
                 database.execute(connection, "INSERT INTO school_resolution_issues(sync_run_id,issue_type,details,evidence) VALUES (?,'schedule_tab_period_unresolved',?,?)",
-                                 (run_id, _json(database, {"title": tab["title"], "sheet_id": tab["sheet_id"]}), _json(database, {"schedule_like": True})))
+                                 (issue_run_id, _json(database, {"title": tab["title"], "sheet_id": tab["sheet_id"]}), _json(database, {"schedule_like": True})))
                 issue_count += 1
             lesson_coordinates = {lesson["record_key"] for lesson in tab["lessons"]}
             for cell in tab["grid_cells"]:
@@ -685,6 +749,9 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
                 current_record_keys.add(record_key)
                 old = previous_records.get(record_key)
                 change_kind = "new" if old is None else "unchanged" if old[0] == record_fingerprint else "changed"
+                if recalculate_snapshot_id is not None:
+                    record_ids[record_key] = existing_record_ids.get(record_key)
+                    continue
                 record = database.execute(connection, """INSERT INTO school_source_records(snapshot_id,record_key,fingerprint,source_ref,change_kind,parse_status,raw_payload,structural_payload)
                     VALUES (?,?,?,?,?,?,?,?) RETURNING id""", (snapshot_id, record_key, record_fingerprint,
                     f"{tab['title']}!{cell['source_cell']}", change_kind, "validated" if record_key in lesson_coordinates else "structural",
@@ -712,10 +779,11 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
             elif tab["classification"] == "template":
                 for lesson in tab["lessons"]:
                     materialized.append({**lesson, "diff_status": "BASELINE", "baseline_record_key": None, "baseline_data": None})
-        for old_key, (old_fingerprint, old_ref) in previous_records.items():
-            if old_key not in current_record_keys:
-                database.execute(connection, """INSERT INTO school_source_records(snapshot_id,record_key,fingerprint,source_ref,change_kind,parse_status,raw_payload,structural_payload)
-                    VALUES (?,?,?,?, 'deleted','validated','{}','{}')""", (snapshot_id, old_key, old_fingerprint, old_ref))
+        if recalculate_snapshot_id is None:
+            for old_key, (old_fingerprint, old_ref) in previous_records.items():
+                if old_key not in current_record_keys:
+                    database.execute(connection, """INSERT INTO school_source_records(snapshot_id,record_key,fingerprint,source_ref,change_kind,parse_status,raw_payload,structural_payload)
+                        VALUES (?,?,?,?, 'deleted','validated','{}','{}')""", (snapshot_id, old_key, old_fingerprint, old_ref))
         counts: Counter[str] = Counter()
         diffs: Counter[str] = Counter()
         for raw_lesson in materialized:
@@ -731,7 +799,7 @@ def refresh_schedule_pipeline(database: Database, spreadsheet_id: str, spreadshe
                 _json(database, lesson.get("baseline_data")) if lesson.get("baseline_data") else None, lesson.get("diff_status"), lesson.get("issue_reason"), _json(database, {key: value for key, value in lesson.items() if key != "raw_cell"})))
             if lesson["resolution_status"] in {"WARNING", "UNRESOLVED", "CONFLICT"}:
                 database.execute(connection, "INSERT INTO school_resolution_issues(sync_run_id,source_record_id,issue_type,details,evidence) VALUES (?,?,?,?,?)",
-                                 (run_id, lesson.get("source_record_id"), f"schedule_{lesson['resolution_status'].casefold()}",
+                                 (issue_run_id, lesson.get("source_record_id"), f"schedule_{lesson['resolution_status'].casefold()}",
                                   _json(database, {"reason": lesson["issue_reason"], "week_start": lesson.get("week_start"), "cell": lesson.get("source_cell"), "subject": lesson.get("subject")}),
                                   _json(database, lesson["evidence"])))
                 issue_count += 1

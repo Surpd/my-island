@@ -2309,7 +2309,7 @@ class Database:
             week_counts: dict[str, int] = {}
             for row in lesson_rows:
                 modifiers = self._decode_json_value(row["modifiers"]) or {}
-                if row["week_start"] and row["resolution_status"] != "NON_LESSON" and not modifiers.get("synthetic_cancelled"):
+                if row["week_start"] and row["resolution_status"] not in {"NON_LESSON", "EXCLUDED"} and not modifiers.get("synthetic_cancelled"):
                     key = str(row["week_start"]); week_counts[key] = week_counts.get(key, 0) + 1
             weeks = [{"week_start": key, "lessons": value} for key, value in sorted(week_counts.items(), reverse=True)]
             selected_week = str(week_start or (weeks[0]["week_start"] if weeks else ""))
@@ -2327,6 +2327,7 @@ class Database:
                        "resolved": status_counts.get("RESOLVED", 0), "warning": status_counts.get("WARNING", 0),
                        "unresolved": status_counts.get("UNRESOLVED", 0), "conflict": status_counts.get("CONFLICT", 0),
                        "special_event": status_counts.get("SPECIAL_EVENT", 0), "non_lesson": status_counts.get("NON_LESSON", 0),
+                       "excluded": status_counts.get("EXCLUDED", 0),
                        "added": diff_counts.get("ADDED", 0), "changed": diff_counts.get("MODIFIED", 0) + diff_counts.get("REPLACED", 0),
                        "removed": diff_counts.get("CANCELLED", 0), "same": diff_counts.get("SAME_AS_BASELINE", 0),
                        "diffs": diff_counts}
@@ -2355,7 +2356,7 @@ class Database:
 
     def schedule_v1_lessons(self, status: str | None = None, week_start: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            query = "SELECT * FROM schedule_lessons WHERE version_kind='weekly'"; params: list[Any] = []
+            query = "SELECT * FROM schedule_lessons WHERE version_kind='weekly' AND resolution_status <> 'EXCLUDED'"; params: list[Any] = []
             query += " AND source_snapshot_id IN (SELECT id FROM school_source_snapshots WHERE is_last_known_valid IS TRUE)"
             if status: query += " AND resolution_status=?"; params.append(status)
             if week_start: query += " AND week_start=?"; params.append(week_start)

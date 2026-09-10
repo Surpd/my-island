@@ -6,7 +6,7 @@ import unittest
 from uuid import uuid4
 
 from backend.database import Database
-from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
+from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, recalculate_current_schedule, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
 
 
 def cell(value: str, color: dict | None = None) -> dict:
@@ -68,6 +68,20 @@ class ScheduleIntegrationTests(unittest.TestCase):
             refresh_schedule_pipeline(database, "spreadsheet", "Расписание 2026/27", [template, changed])
             future = next(item for item in database.schedule_v1_lessons(week_start="2026-09-07") if item["source_cell"] == "B3")
             self.assertEqual(future["teacher_id"], str(teacher_id))
+
+    def test_recalculate_reuses_raw_snapshot_and_applies_business_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "schedule.db")); database.initialize()
+            template = {"sheet_id": 10, "title": "2026/27 шаблон", "values": matrix(weekly=False), "merges": []}
+            weekly = {"sheet_id": 20, "title": "7-11 Сентября", "values": matrix(weekly=True), "merges": []}
+            weekly["values"][2][1]["formattedValue"] = "Курс по выбору: Внутренний курс\nЛюбой преподаватель"
+            weekly["values"][3][1]["formattedValue"] = "Кружок робототехники\nЛюбой преподаватель"
+            first = refresh_schedule_pipeline(database, "spreadsheet", "Расписание 2026/27", [template, weekly])
+            recalculated = recalculate_current_schedule(database)
+            self.assertFalse(recalculated["created_snapshot"])
+            self.assertEqual(recalculated["recalculated_snapshot_id"], first["snapshot_id"])
+            self.assertEqual(database.schedule_v1_lessons(week_start="2026-09-07")[0]["subject"], "Курс по выбору")
+            self.assertFalse(any("Кружок" in str(item.get("subject")) for item in database.schedule_v1_lessons(week_start="2026-09-07")))
 
     def test_real_matrix_shape_parses_blank_owned_column_and_template_weekday(self):
         tab = {"sheet_id": 17, "title": "2026/27 шаблон", "values": matrix(weekly=False),

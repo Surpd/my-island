@@ -15,7 +15,7 @@ from backend.services.admin import (
 )
 from backend.services.google_live import GoogleLiveError, GoogleTokenStore
 from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule_v1
-from backend.services.schedule_pipeline import reconcile_current_schedule, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
+from backend.services.schedule_pipeline import recalculate_current_schedule, reconcile_current_schedule, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -566,6 +566,14 @@ def create_router(database: Database) -> APIRouter:
             return refresh_schedule_v1(database, get_settings())
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @router.post("/admin/schedule/recalculate")
+    def admin_schedule_recalculate(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        result = recalculate_current_schedule(database)
+        database.record_audit_event("schedule.recalculated", "school_source_snapshot", {"created_snapshot": False, "snapshot_id": result.get("recalculated_snapshot_id")}, actor["id"] if actor else None)
+        return result
 
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

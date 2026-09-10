@@ -88,6 +88,16 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
     finally { setBusy(''); }
   };
 
+  const recalculate = async () => {
+    setBusy('recalculate'); setError(''); setMessage('');
+    try {
+      const result = await api<Item>('/api/admin/schedule/recalculate', { method: 'POST' });
+      if (result.status === 'blocked') setMessage(String(result.message || 'Нет сохранённого snapshot для пересчёта'));
+      else { setMessage('Производные данные пересчитаны по последнему snapshot. Новый snapshot Google не создан.'); await bootstrap(); }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось пересчитать расписание'); }
+    finally { setBusy(''); }
+  };
+
   const saveDecision = async (group: Item) => {
     const key = `${group.mapping_type}:${group.external_key}`;
     const target = decisions[key] || '';
@@ -123,7 +133,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   return <div className="admin-stack schedule-reconciliation">
     <div className="admin-page-actions">
       <div><strong>Сверка расписания</strong><p>Шаблон — baseline. Каждая недельная вкладка показывает только изменения для своих дат.</p></div>
-      <div className="admin-button-row"><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={15} className={busy === 'refresh' ? 'admin-spin' : ''} />{busy === 'refresh' ? 'Обновляем…' : 'Обновить из источника'}</button><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void loadWeek(week)}>Перечитать</button></div>
+      <div className="admin-button-row"><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={15} className={busy === 'refresh' ? 'admin-spin' : ''} />{busy === 'refresh' ? 'Проверяем Google…' : 'Обновить из источника'}</button><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void recalculate()}><RefreshCw size={15} className={busy === 'recalculate' ? 'admin-spin' : ''} />{busy === 'recalculate' ? 'Пересчитываем…' : 'Пересчитать правила'}</button><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void loadWeek(week)}>Перечитать</button></div>
     </div>
     {error ? <div className="admin-error"><AlertTriangle size={17} /><div><strong>Не удалось выполнить действие</strong><p>{error}</p></div></div> : null}
     {message ? <div className="admin-callout admin-callout--safe"><CheckCircle2 size={16} /><span>{message}</span></div> : null}
