@@ -150,7 +150,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
 
     allocations: list[dict[str, Any]] = []
-    audience_rows: list[dict[str, Any]] = []
+    audience_rows: dict[str, dict[str, Any]] = {}
     pending_gaps: list[dict[str, Any]] = []
     assigned_later: dict[tuple[str, str], list[str]] = defaultdict(list)
 
@@ -208,8 +208,14 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         for lesson in lessons:
             lesson_id = str(lesson["id"]); rule = activity_rules[lesson_id]
             audience_status = "ambiguous" if rule["kind"] == "ambiguous" else "resolved"
-            audience_rows.append({"lesson": lesson, "grade": grade, "kind": rule["kind"], "groups": rule.get("groups", []), "status": audience_status,
-                                  "reason": rule["reason"], "key": _allocation_key(lesson, grade)})
+            existing = audience_rows.get(lesson_id)
+            if existing:
+                grades = set(str(existing["grade"]).split(",")) | {grade}
+                existing["grade"] = ",".join(sorted(grades, key=lambda value: int(value) if value.isdigit() else value))
+                existing["groups"] = sorted(set(existing.get("groups", [])) | set(rule.get("groups", [])))
+            else:
+                audience_rows[lesson_id] = {"lesson": lesson, "grade": grade, "kind": rule["kind"], "groups": rule.get("groups", []), "status": audience_status,
+                                            "reason": rule["reason"], "key": _allocation_key(lesson, grade)}
 
         for student_id in sorted(universe):
             candidates = []
@@ -245,7 +251,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         reason = "window" if later else "end of day"
         allocations.append({**gap, "kind": "window" if later else "end_of_day", "status": "assigned", "reason": reason, "provenance": {"reason": reason}})
 
-    for item in audience_rows:
+    for item in audience_rows.values():
         lesson = item["lesson"]
         database.execute(connection, """INSERT INTO schedule_lesson_audiences(source_snapshot_id,lesson_id,week_start,lesson_date,start_time,grade_scope,audience_kind,resolved_group_ids,status,rule_reason,provenance)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (snapshot_id, lesson["id"], lesson.get("week_start"), lesson["lesson_date"], lesson["start_time"], item["grade"], item["kind"],
