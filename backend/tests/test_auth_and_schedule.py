@@ -65,6 +65,7 @@ class AuthTests(unittest.TestCase):
                 identity = connection.execute("INSERT INTO identities(kind, display_name, class_name) VALUES ('student', 'Preview Student', '9-Д') RETURNING id").fetchone()[0]
                 student = connection.execute("INSERT INTO users(telegram_user_id, role, identity_id) VALUES (701, 'student', ?) RETURNING id", (identity,)).fetchone()[0]
             database.ensure_bootstrap_roles(701, ("student",))
+            self.assertEqual(database.get_user_by_id(f"identity:{identity}")["id"], student)
             preview = database.create_student_preview(admin["id"], student, "2099-01-01 10:00:00", "2099-01-01 11:00:00")
             self.assertIsNotNone(database.get_active_student_preview(preview["id"], admin["id"]))
             self.assertIsNone(database.get_active_student_preview(preview["id"], student))

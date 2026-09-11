@@ -6,7 +6,7 @@ import os
 import re
 import secrets
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -1025,6 +1025,16 @@ class Database:
 
     def get_user_by_id(self, user_id: Any) -> Any | None:
         with self.connection() as connection:
+            # Older Admin clients may still send the directory identity key
+            # while their cached bundle is being refreshed. Resolve it to the
+            # linked application account before binding the Postgres UUID.
+            if isinstance(user_id, str) and user_id.startswith("identity:"):
+                identity_id = user_id.removeprefix("identity:")
+                return self.execute(
+                    connection,
+                    "SELECT * FROM users WHERE identity_id = ?",
+                    (identity_id,),
+                ).fetchone()
             return self.execute(connection, "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
     def create_claim(self, user_id: Any, identity_id: Any, requested_role: str) -> Any:
@@ -1113,6 +1123,144 @@ class Database:
                     ORDER BY se.start_time, se.subject, se.source_coordinate""",
                 (user_id, lesson_date, end_date, lesson_date),
             ).fetchall()
+
+    def student_schedule_projection(self, user_id: Any, start_day: str, end_day: str | None = None) -> dict[str, Any]:
+        """Return the allocated, student-facing schedule contract.
+
+        This is intentionally derived from schedule_student_allocations, not
+        from raw markers or audience heuristics. Provenance is kept out of the
+        response so the mobile client only consumes presentation state.
+        """
+        finish = end_day or start_day
+        with self.connection() as connection:
+            profile = self.get_student_profile(user_id)
+            if not profile:
+                return {"student": None, "days": [], "day_blocks": []}
+            identity_id = profile["user"]["identity_id"]
+            snapshot = self.execute(connection, """SELECT id FROM school_source_snapshots
+                WHERE is_last_known_valid IS TRUE AND source_id IN
+                  (SELECT id FROM school_sources WHERE source_type='schedule')
+                ORDER BY id DESC LIMIT 1""").fetchone()
+            days: dict[str, dict[str, Any]] = {}
+            cursor = date.fromisoformat(start_day)
+            last = date.fromisoformat(finish)
+            while cursor <= last:
+                key = cursor.isoformat()
+                days[key] = {"date": key, "state": "scheduled", "items": []}
+                cursor += timedelta(days=1)
+            if not snapshot:
+                return {"student": dict(profile["user"]), "days": list(days.values()), "items": [], "day_blocks": []}
+
+            rows = [dict(row) for row in self.execute(connection, """SELECT sa.lesson_date,sa.start_time,sa.end_time,
+                       sa.allocation_kind,sa.status,sa.reason,sa.provenance,sa.lesson_id,
+                       sl.subject,sl.teacher_hint,sl.room,sl.audience,sl.activity_type,
+                       sl.lesson_kind,sl.resolved_group_ids
+                  FROM schedule_student_allocations sa
+                  LEFT JOIN schedule_lessons sl ON sl.id=sa.lesson_id
+                 WHERE sa.source_snapshot_id=? AND sa.student_identity_id=?
+                   AND sa.lesson_date BETWEEN ? AND ?
+                 ORDER BY sa.lesson_date,sa.start_time""", (snapshot["id"], identity_id, start_day, finish)).fetchall()]
+            group_names = {str(row["id"]): row["display_name"] for row in self.execute(
+                connection, "SELECT id,COALESCE(display_name,name) AS display_name FROM groups").fetchall()}
+
+            def decoded(value: Any, fallback: Any) -> Any:
+                value = self._decode_json_value(value)
+                return value if value is not None else fallback
+
+            real_slots: dict[str, set[str]] = {}
+            for row in rows:
+                if row["allocation_kind"] == "lesson" and row["status"] == "assigned":
+                    real_slots.setdefault(str(row["lesson_date"]), set()).add(str(row["start_time"]))
+                elif row["allocation_kind"] == "conflict" or row["status"] == "conflict":
+                    real_slots.setdefault(str(row["lesson_date"]), set()).add(str(row["start_time"]))
+
+            for row in rows:
+                day = days.get(str(row["lesson_date"]))
+                if not day:
+                    continue
+                provenance = decoded(row.get("provenance"), {})
+                kind = str(row.get("allocation_kind") or "no_lesson")
+                item: dict[str, Any] = {
+                    "date": str(row["lesson_date"]),
+                    "slot": {"start": row.get("start_time"), "end": row.get("end_time")},
+                    "state": "conflict" if kind == "conflict" or row.get("status") in {"conflict", "unassigned"} else kind,
+                    "canonical_title": row.get("subject") if kind == "lesson" else None,
+                    "room": row.get("room") if kind == "lesson" else None,
+                    "teacher": row.get("teacher_hint") if kind == "lesson" and row.get("teacher_hint") else None,
+                    "group_context": None,
+                }
+                if kind == "lesson":
+                    groups = decoded(row.get("resolved_group_ids"), []) or provenance.get("group_ids", [])
+                    item["group_context"] = [group_names.get(str(group), str(group)) for group in groups] or None
+                elif kind == "no_lesson":
+                    date_slots = real_slots.get(str(row["lesson_date"]), set())
+                    later = any(slot > str(row["start_time"]) for slot in date_slots)
+                    earlier = any(slot < str(row["start_time"]) for slot in date_slots)
+                    reason = "break" if earlier and later else ("before_first_lesson" if later else "end_of_day")
+                    item["no_lesson"] = {"reason": reason}
+                elif kind == "conflict" or row.get("status") in {"conflict", "unassigned"}:
+                    candidate_ids = [str(value) for value in (provenance.get("candidate_lesson_ids") or provenance.get("activity_ids") or [])]
+                    alternatives = []
+                    if candidate_ids:
+                        marks = ",".join("?" for _ in candidate_ids)
+                        alternatives = [dict(value) for value in self.execute(connection, f"""SELECT id,subject,teacher_hint,room,audience
+                            FROM schedule_lessons WHERE id IN ({marks}) ORDER BY id""", tuple(candidate_ids)).fetchall()]
+                    item["canonical_title"] = None
+                    item["conflict"] = {
+                        "state": "unresolved",
+                        "label": "Уточняется",
+                        "alternatives": [{"lesson_id": str(value["id"]), "title": value["subject"],
+                                          "teacher": value["teacher_hint"] or None, "room": value["room"] or None,
+                                          "group_context": value["audience"] or None} for value in alternatives],
+                    }
+                day["items"].append(item)
+
+            # Special events are not ordinary lessons and therefore do not
+            # participate in allocation. Match them through active student
+            # memberships and schedule audiences for the current snapshot.
+            event_rows = self.execute(connection, """SELECT DISTINCT sl.lesson_date,sl.start_time,sl.end_time,
+                       sl.subject,sl.teacher_hint,sl.room,sl.audience,sl.activity_type,sl.lesson_kind,sl.raw_payload
+                  FROM schedule_lessons sl
+                  JOIN group_schedule_audiences ga ON ga.audience=sl.audience AND ga.archived IS FALSE
+                  JOIN memberships m ON m.group_id=ga.group_id AND m.identity_id=? AND m.active IS TRUE
+                 WHERE sl.source_snapshot_id=? AND sl.activity_type='special_event'
+                   AND sl.lesson_date BETWEEN ? AND ?
+                 ORDER BY sl.lesson_date,sl.start_time""", (identity_id, snapshot["id"], start_day, finish)).fetchall()
+            for row in event_rows:
+                day = days.get(str(row["lesson_date"]))
+                if day:
+                    day["items"].append({"date": str(row["lesson_date"]),
+                        "slot": {"start": row["start_time"], "end": row["end_time"]},
+                        "state": "special_event", "canonical_title": None, "room": row["room"] or None,
+                        "teacher": row["teacher_hint"] or None, "group_context": row["audience"] or None,
+                        "special_event": {"kind": "school_event", "title": row["subject"], "metadata": {"activity_type": row["activity_type"]}}})
+
+            day_blocks: list[dict[str, Any]] = []
+            grade = _schedule_grade(dict(profile["user"]).get("class_name"))
+            for day in days.values():
+                if grade in {"10", "11"} and date.fromisoformat(day["date"]).weekday() == 4:
+                    day["state"] = "special"
+                    day["special"] = {"kind": "sdep", "title": "SDEP", "description": "Самостоятельная работа весь учебный день."}
+                    day_blocks.append({"lesson_date": day["date"], "kind": "sdep", "label": "SDEP"})
+                    day["items"] = []
+                day["items"].sort(key=lambda value: (str(value["slot"]["start"] or ""), str(value["state"])))
+            # Keep a small flat compatibility view for the existing shell;
+            # mobile clients should use days/items above.
+            flat_items = []
+            for day in days.values():
+                for item in day["items"]:
+                    flat_items.append({
+                        "lesson_date": item["date"], "start_time": item["slot"]["start"],
+                        "end_time": item["slot"]["end"],
+                        "subject": item.get("canonical_title") or (
+                            item.get("special_event", {}).get("title") if item["state"] == "special_event"
+                            else " / ".join(value["title"] for value in item.get("conflict", {}).get("alternatives", []))
+                            if item["state"] == "conflict" else "Нет урока"),
+                        "teacher": item.get("teacher"), "room": item.get("room"),
+                        "state": item["state"], "no_lesson": item.get("no_lesson"),
+                        "conflict": item.get("conflict"), "special_event": item.get("special_event"),
+                    })
+            return {"student": dict(profile["user"]), "days": list(days.values()), "items": flat_items, "day_blocks": day_blocks}
 
     def get_student_profile(self, user_id: Any) -> Any | None:
         with self.connection() as connection:
