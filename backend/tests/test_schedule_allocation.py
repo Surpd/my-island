@@ -72,6 +72,9 @@ class ScheduleAllocationTests(unittest.TestCase):
                 connection.execute("""INSERT INTO schedule_lessons(source_snapshot_id,record_key,version_kind,week_start,lesson_date,start_time,end_time,subject,audience,activity_type,lesson_kind,modifiers,resolution_status,source_cell)
                     VALUES (?,?, 'weekly','2026-09-07','2026-09-07','09:00','09:45',?,'9-А',?,?,?,'RESOLVED',?)""",
                     (snapshot, key, subject, kind, kind, modifiers, cell))
+            pretzel = connection.execute("""INSERT INTO schedule_lessons(source_snapshot_id,record_key,version_kind,week_start,lesson_date,start_time,end_time,subject,audience,activity_type,lesson_kind,modifiers,resolution_status,source_cell,raw_payload)
+                VALUES (?,?,'weekly','2026-09-07','2026-09-07','09:00','09:45','🥨','9-А','lesson','lesson','{}','RESOLVED','E4',?) RETURNING id""",
+                (snapshot, "pretzel", '{"raw_text":"🥨"}')).fetchone()[0]
             result = rebuild_schedule_allocations(self.database, connection, snapshot)
             self.assertEqual(result["slots"], 1)
             rows = connection.execute("SELECT student_identity_id,allocation_kind,status,reason FROM schedule_student_allocations ORDER BY student_identity_id").fetchall()
@@ -80,6 +83,8 @@ class ScheduleAllocationTests(unittest.TestCase):
             self.assertEqual(rows[1]["reason"], "explicit membership")
             self.assertTrue(all(row["allocation_kind"] in {"lesson", "no_lesson", "conflict"} for row in rows))
             self.assertEqual(sum(1 for row in rows if row["allocation_kind"] == "no_lesson"), 2)
+            self.assertFalse(connection.execute("SELECT 1 FROM schedule_lesson_audiences WHERE lesson_id=?", (pretzel,)).fetchone())
+            self.assertFalse(connection.execute("SELECT 1 FROM schedule_student_allocations WHERE lesson_id=?", (pretzel,)).fetchone())
 
 
 if __name__ == "__main__":
