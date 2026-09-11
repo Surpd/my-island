@@ -270,8 +270,8 @@ def create_router(database: Database) -> APIRouter:
             if not actor or not database.user_has_role(actor["id"], "admin"):
                 raise HTTPException(status_code=403, detail="Admin role required for student preview")
             preview = database.get_active_student_preview(preview_id, actor["id"])
-            target = database.get_user_by_id(preview["target_user_id"]) if preview else None
-            if not target or not target["identity_id"] or not database.user_has_role(target["id"], "student"):
+            target = database.get_student_identity(preview["target_identity_id"]) if preview and preview["target_identity_id"] else (database.get_user_by_id(preview["target_user_id"]) if preview else None)
+            if not target or not target["identity_id"] or target["kind"] != "student":
                 raise HTTPException(status_code=403, detail="Student preview is invalid or expired")
             return target
         if not actor or not actor["identity_id"] or not database.user_has_role(actor["id"], "student"):
@@ -310,8 +310,10 @@ def create_router(database: Database) -> APIRouter:
             date.fromisoformat(requested_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
-        sdep = _sdep_block(requested_day, _student_grade(database.get_student_profile(user["id"])))
-        schedule = [] if sdep else [dict(row) for row in database.list_schedule_entries_for_user(user["id"], requested_day)]
+        projection = database.student_schedule_projection(user["id"], requested_day)
+        day = next((item for item in projection["days"] if item["date"] == requested_day), None)
+        sdep = day.get("special") if day and day.get("special", {}).get("kind") == "sdep" else None
+        schedule = [] if sdep else [item for item in projection.get("items", []) if item.get("lesson_date") == requested_day]
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": schedule, "day_block": sdep, "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
 
     @router.get("/student/grades")
@@ -341,19 +343,8 @@ def create_router(database: Database) -> APIRouter:
                 date.fromisoformat(end_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
-        profile = database.get_student_profile(user["id"])
-        grade = _student_grade(profile)
-        items = [dict(row) for row in database.list_schedule_entries_for_user(user["id"], start_day, end_day)]
-        day_blocks = []
-        cursor = date.fromisoformat(start_day)
-        finish = date.fromisoformat(end_day or start_day)
-        while cursor <= finish:
-            block = _sdep_block(cursor.isoformat(), grade)
-            if block:
-                day_blocks.append(block)
-                items = [item for item in items if str(item.get("lesson_date")) != block["lesson_date"]]
-            cursor += timedelta(days=1)
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": items, "day_blocks": day_blocks}
+        projection = database.student_schedule_projection(user["id"], start_day, end_day)
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", **projection}
 
     @router.get("/student/profile")
     def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
@@ -821,14 +812,17 @@ def create_router(database: Database) -> APIRouter:
     def start_student_preview(payload: StudentPreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         reviewer = require_role(actor, "admin")
-        target = database.get_user_by_id(payload.target_user_id)
-        if not target or not target["identity_id"] or not database.user_has_role(target["id"], "student"):
-            raise HTTPException(status_code=400, detail="Only an approved student can be previewed")
+        identity_id = payload.target_user_id.removeprefix("identity:") if payload.target_user_id.startswith("identity:") else None
+        target_user = None if identity_id else database.get_user_by_id(payload.target_user_id)
+        target = database.get_student_identity(identity_id or (target_user["identity_id"] if target_user else ""))
+        if not target or not target["identity_id"] or target["kind"] != "student":
+            raise HTTPException(status_code=400, detail="Only a student identity can be previewed")
         created_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
         expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-        preview = database.create_student_preview(reviewer["id"], target["id"], created_at, expires_at)
+        target_user_id = target_user["id"] if target_user else reviewer["id"]
+        preview = database.create_student_preview(reviewer["id"], target_user_id, created_at, expires_at, target_identity_id=target["identity_id"])
         profile = database.get_student_profile(target["id"])
-        return {"id": preview["id"], "expires_at": preview["expires_at"], "target": {"id": target["id"], "display_name": profile["user"]["display_name"] if profile else "Ученик", "class_name": profile["user"]["class_name"] if profile else None}}
+        return {"id": preview["id"], "expires_at": preview["expires_at"], "target": {"id": target["id"], "display_name": profile["user"]["display_name"] if profile else target["display_name"], "class_name": profile["user"]["class_name"] if profile else target["class_name"]}}
 
     @router.post("/admin/student-previews/{preview_id}/end")
     def end_student_preview(preview_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

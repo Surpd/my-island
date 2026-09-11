@@ -71,6 +71,13 @@ class AuthTests(unittest.TestCase):
             self.assertIsNone(database.get_active_student_preview(preview["id"], student))
             self.assertTrue(database.end_student_preview(preview["id"], admin["id"]))
             self.assertIsNone(database.get_active_student_preview(preview["id"], admin["id"]))
+            with database.connection() as connection:
+                unlinked_identity = connection.execute("INSERT INTO identities(kind, display_name, class_name) VALUES ('student', 'Unlinked Student', '11') RETURNING id").fetchone()[0]
+            virtual = database.get_student_identity(unlinked_identity)
+            self.assertEqual(virtual["id"], f"identity:{unlinked_identity}")
+            self.assertEqual(database.get_student_profile(virtual["id"])["user"]["display_name"], "Unlinked Student")
+            virtual_preview = database.create_student_preview(admin["id"], admin["id"], "2099-01-01 10:00:00", "2099-01-01 11:00:00", target_identity_id=unlinked_identity)
+            self.assertEqual(database.get_active_student_preview(virtual_preview["id"], admin["id"])["target_identity_id"], unlinked_identity)
 
 
 class ScheduleTests(unittest.TestCase):

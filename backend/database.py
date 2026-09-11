@@ -230,6 +230,10 @@ CREATE TABLE IF NOT EXISTS student_preview_sessions (
   expires_at TEXT NOT NULL,
   ended_at TEXT
 );
+CREATE TABLE IF NOT EXISTS student_preview_targets (
+  preview_id TEXT PRIMARY KEY REFERENCES student_preview_sessions(id) ON DELETE CASCADE,
+  identity_id INTEGER NOT NULL REFERENCES identities(id) ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS user_roles_user_idx ON user_roles(user_id);
 CREATE INDEX IF NOT EXISTS account_identity_links_status_idx ON account_identity_links(status, created_at);
 CREATE INDEX IF NOT EXISTS student_preview_actor_active_idx ON student_preview_sessions(actor_user_id, expires_at);
@@ -978,7 +982,7 @@ class Database:
             self.execute(connection, "UPDATE users SET role = ? WHERE id = ?", (primary_role, user_id))
             return [str(row["role"]) for row in self.execute(connection, "SELECT role FROM user_roles WHERE user_id = ? ORDER BY role", (user_id,)).fetchall()]
 
-    def create_student_preview(self, actor_user_id: Any, target_user_id: Any, created_at: str, expires_at: str) -> Any:
+    def create_student_preview(self, actor_user_id: Any, target_user_id: Any, created_at: str, expires_at: str, target_identity_id: Any | None = None) -> Any:
         import json
         import uuid
         preview_id = str(uuid.uuid4())
@@ -988,18 +992,20 @@ class Database:
                 "INSERT INTO student_preview_sessions(id, actor_user_id, target_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
                 (preview_id, actor_user_id, target_user_id, created_at, expires_at),
             )
+            if target_identity_id is not None:
+                self.execute(connection, "INSERT INTO student_preview_targets(preview_id, identity_id) VALUES (?, ?)", (preview_id, target_identity_id))
             self.execute(
                 connection,
                 "INSERT INTO audit_log(actor_user_id, action, entity_type, details) VALUES (?, ?, ?, ?)",
                 (actor_user_id, "student_preview.started", "student_preview", json.dumps({"preview_id": preview_id})),
             )
-            return self.execute(connection, "SELECT * FROM student_preview_sessions WHERE id = ?", (preview_id,)).fetchone()
+            return self.execute(connection, "SELECT s.*, t.identity_id AS target_identity_id FROM student_preview_sessions s LEFT JOIN student_preview_targets t ON t.preview_id = s.id WHERE s.id = ?", (preview_id,)).fetchone()
 
     def get_active_student_preview(self, preview_id: str, actor_user_id: Any) -> Any | None:
         with self.connection() as connection:
             return self.execute(
                 connection,
-                "SELECT * FROM student_preview_sessions WHERE id = ? AND actor_user_id = ? AND ended_at IS NULL AND expires_at > CURRENT_TIMESTAMP",
+                "SELECT s.*, t.identity_id AS target_identity_id FROM student_preview_sessions s LEFT JOIN student_preview_targets t ON t.preview_id = s.id WHERE s.id = ? AND s.actor_user_id = ? AND s.ended_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP",
                 (preview_id, actor_user_id),
             ).fetchone()
 
@@ -1264,14 +1270,25 @@ class Database:
 
     def get_student_profile(self, user_id: Any) -> Any | None:
         with self.connection() as connection:
-            user = self.execute(
-                connection,
-                """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name, i.kind
-                     FROM users u LEFT JOIN identities i ON i.id = u.identity_id
-                    WHERE u.id = ? AND u.identity_id IS NOT NULL
-                      AND (u.role = 'student' OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role = 'student'))""",
-                (user_id,),
-            ).fetchone()
+            user = None
+            if isinstance(user_id, str) and user_id.startswith("identity:"):
+                identity_id = user_id.removeprefix("identity:")
+                user = self.execute(
+                    connection,
+                    """SELECT ? AS id, NULL AS telegram_user_id, 'student' AS role, i.id AS identity_id,
+                              i.display_name, i.class_name, i.kind
+                         FROM identities i WHERE i.id = ? AND i.kind = 'student'""",
+                    (user_id, identity_id),
+                ).fetchone()
+            else:
+                user = self.execute(
+                    connection,
+                    """SELECT u.id, u.telegram_user_id, u.role, u.identity_id, i.display_name, i.class_name, i.kind
+                         FROM users u LEFT JOIN identities i ON i.id = u.identity_id
+                        WHERE u.id = ? AND u.identity_id IS NOT NULL
+                          AND (u.role = 'student' OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role = 'student'))""",
+                    (user_id,),
+                ).fetchone()
             if not user:
                 return None
             groups = self.execute(
@@ -1905,6 +1922,9 @@ class Database:
 
     def list_official_grades_for_user(self, user_id: Any) -> list[Any]:
         with self.connection() as connection:
+            if isinstance(user_id, str) and user_id.startswith("identity:"):
+                return self.execute(connection, """SELECT g.subject, g.graded_on, g.value, g.grade_type, g.weight, g.comment, g.source
+                   FROM official_grades g WHERE g.identity_id = ? ORDER BY g.graded_on DESC, g.id DESC""", (user_id.removeprefix("identity:"),)).fetchall()
             return self.execute(
                 connection,
                 """SELECT g.subject, g.graded_on, g.value, g.grade_type, g.weight, g.comment, g.source
@@ -1985,6 +2005,14 @@ class Database:
 
     def list_classroom_coursework_for_user(self, user_id: Any) -> list[Any]:
         with self.connection() as connection:
+            if isinstance(user_id, str) and user_id.startswith("identity:"):
+                return self.execute(connection, """SELECT cw.external_coursework_id, cw.title, cw.description, cw.due_at, cw.alternate_link, cw.state,
+                          cw.work_type, cw.max_points, cw.update_time, c.external_course_id, c.title AS course_title
+                     FROM classroom_coursework cw JOIN classroom_courses c ON c.id = cw.course_id
+                     JOIN memberships m ON m.group_id = c.group_id AND m.active IS TRUE
+                     WHERE m.identity_id = ? AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                       AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                    ORDER BY cw.due_at NULLS LAST, cw.id DESC""", (user_id.removeprefix("identity:"),)).fetchall()
             return self.execute(
                 connection,
                 """SELECT cw.external_coursework_id, cw.title, cw.description, cw.due_at, cw.alternate_link, cw.state,
@@ -2002,6 +2030,11 @@ class Database:
 
     def list_classroom_submissions_for_user(self, user_id: Any) -> list[Any]:
         with self.connection() as connection:
+            if isinstance(user_id, str) and user_id.startswith("identity:"):
+                return self.execute(connection, """SELECT s.external_submission_id, s.external_student_id, s.state, s.assigned_grade, s.draft_grade, s.late,
+                          cw.external_coursework_id, cw.title
+                     FROM classroom_student_submissions s JOIN classroom_coursework cw ON cw.id = s.coursework_id
+                    WHERE s.identity_id = ? ORDER BY s.updated_at DESC""", (user_id.removeprefix("identity:"),)).fetchall()
             return self.execute(
                 connection,
                 """SELECT s.external_submission_id, s.external_student_id, s.state, s.assigned_grade, s.draft_grade, s.late,
@@ -2035,6 +2068,13 @@ class Database:
     def get_identity(self, identity_id: Any) -> Any | None:
         with self.connection() as connection:
             return self.execute(connection, "SELECT * FROM identities WHERE id = ?", (identity_id,)).fetchone()
+
+    def get_student_identity(self, identity_id: Any) -> Any | None:
+        with self.connection() as connection:
+            return self.execute(connection, """SELECT COALESCE(CAST(u.id AS TEXT), 'identity:' || CAST(i.id AS TEXT)) AS id,
+                       u.telegram_user_id, 'student' AS role, i.id AS identity_id, i.display_name, i.class_name, i.kind
+                  FROM identities i LEFT JOIN users u ON u.identity_id = i.id
+                 WHERE i.id = ? AND i.kind = 'student'""", (identity_id,)).fetchone()
 
     def get_group(self, group_id: Any) -> Any | None:
         with self.connection() as connection:
