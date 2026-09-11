@@ -222,8 +222,6 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
 
     allocations: list[dict[str, Any]] = []
     audience_rows: dict[str, dict[str, Any]] = {}
-    pending_gaps: list[dict[str, Any]] = []
-    assigned_later: dict[tuple[str, str], list[str]] = defaultdict(list)
     dedup_slot_keys: set[tuple[str, str, str]] = set()
     structural_slot_keys: set[tuple[str, str, str]] = set()
     complement_slot_keys: set[tuple[str, str, str]] = set()
@@ -245,8 +243,8 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             lesson_id = str(lesson["id"])
             decision = manual_case_rules.get(_case_key(lesson, grade)) or manual_rules.get(_norm(_allocation_key(lesson, grade)))
             decision_type = str((decision or {}).get("decision_type") or "")
-            if decision_type in {"window", "no_lesson", "source_context", "ignore_source"}:
-                activity_rules[lesson_id] = {"kind": "ignored", "groups": [], "students": set(), "reason": decision_type}
+            if decision_type in {"window", "no_lesson", "source_context", "ignore_source", "end_of_day", "skip", "lunch", "break"}:
+                activity_rules[lesson_id] = {"kind": "ignored", "groups": [], "students": set(), "reason": "no_lesson"}
                 continue
             if decision_type == "parallel":
                 activity_rules[lesson_id] = {"kind": "class", "groups": [str(group["id"]) for group in base_groups], "students": set(universe), "reason": "manual/admin decision"}
@@ -366,26 +364,21 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             elif len(candidates) == 1:
                 lesson, rule = candidates[0]
                 allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": lesson,
-                                    "kind": "lunch" if lesson.get("activity_type") == "nonlesson" else "lesson", "status": "assigned", "reason": rule["reason"],
+                                    "kind": "lesson", "status": "assigned", "reason": rule["reason"],
                                     "provenance": {"reason": rule["reason"], "group_ids": rule.get("groups", []), "audience_key": _allocation_key(lesson, grade)}})
-                assigned_later[(lesson_day, student_id)].append(start_time)
             elif len(complement_ids) == 1:
                 lesson = next(item for item in lessons if str(item["id"]) == complement_ids[0]); reason = activity_rules[complement_ids[0]]["reason"]
                 allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": lesson,
-                                    "kind": "lunch" if lesson.get("activity_type") == "nonlesson" else "lesson", "status": "assigned", "reason": reason,
+                                    "kind": "lesson", "status": "assigned", "reason": reason,
                                     "provenance": {"reason": reason, "excluded_lesson_ids": [str(item[0]["id"]) for item in candidates], "audience_key": _allocation_key(lesson, grade)}})
-                assigned_later[(lesson_day, student_id)].append(start_time)
             elif any(rule["kind"] == "ambiguous" for rule in activity_rules.values()):
                 allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": None,
                                     "kind": "unassigned", "status": "unassigned", "reason": "ambiguous lesson audience",
                                     "provenance": {"reason": "ambiguous lesson audience", "activity_ids": [str(item["id"]) for item in lessons]}})
             else:
-                pending_gaps.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": None})
-
-    for gap in pending_gaps:
-        later = any(value > gap["time"] for value in assigned_later.get((gap["day"], gap["student"]), []))
-        if later:
-            allocations.append({**gap, "kind": "window", "status": "assigned", "reason": "window", "provenance": {"reason": "window"}})
+                allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": None,
+                                    "kind": "no_lesson", "status": "assigned", "reason": "no_lesson",
+                                    "provenance": {"reason": "no_lesson"}})
 
     audience_params = []
     for item in audience_rows.values():

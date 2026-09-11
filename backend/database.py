@@ -2501,10 +2501,10 @@ class Database:
                     activity = next((item for item in slot["activities"] if str(item["lesson_id"]) == str(row["lesson_id"])), None)
                     if activity:
                         activity["students"].append(student); activity["student_count"] += 1
-                elif row["allocation_kind"] == "window":
+                elif row["allocation_kind"] == "no_lesson":
                     activity = next((item for item in slot["activities"] if item.get("synthetic_kind") == row["allocation_kind"]), None)
                     if not activity:
-                        activity = {"lesson_id": None, "subject": "Окно / ожидание",
+                        activity = {"lesson_id": None, "subject": "Нет урока",
                                     "activity_type": row["allocation_kind"], "audience_kind": row["allocation_kind"], "rule_reason": row["reason"],
                                     "status": "resolved", "students": [], "student_count": 0, "synthetic_kind": row["allocation_kind"]}
                         slot["activities"].append(activity)
@@ -2525,7 +2525,7 @@ class Database:
                            sa.status,sa.reason,sa.provenance,sl.subject,sl.teacher_hint,sl.room
                       FROM schedule_student_allocations sa LEFT JOIN schedule_lessons sl ON sl.id=sa.lesson_id
                      WHERE sa.source_snapshot_id=? AND sa.week_start=? AND sa.student_identity_id=?
-                       AND sa.allocation_kind IN ('lesson','window') AND sa.status='assigned'
+                       AND sa.allocation_kind IN ('lesson','no_lesson') AND sa.status='assigned'
                      ORDER BY sa.lesson_date,sa.start_time""", (snapshot["id"], week_start, student_id)).fetchall()]
                 for item in student_preview:
                     item["provenance"] = self._decode_json_value(item.get("provenance")) or {}
@@ -2579,7 +2579,7 @@ class Database:
                 if not isinstance(rule, dict):
                     raise ValueError("Audience rule must be an object")
                 decision_type = str(rule.get("decision_type") or "canonical_group")
-                allowed = {"canonical_group", "groups", "group", "base_class", "parallel", "complement", "window", "no_lesson", "source_context", "ignore_source"}
+                allowed = {"canonical_group", "groups", "group", "base_class", "parallel", "complement", "window", "no_lesson", "source_context", "ignore_source", "end_of_day", "skip", "lunch", "break"}
                 if decision_type not in allowed:
                     raise ValueError("Unsupported audience decision")
                 group_ids = list(rule.get("group_ids") or [])

@@ -75,9 +75,11 @@ class ScheduleAllocationTests(unittest.TestCase):
             result = rebuild_schedule_allocations(self.database, connection, snapshot)
             self.assertEqual(result["slots"], 1)
             rows = connection.execute("SELECT student_identity_id,allocation_kind,status,reason FROM schedule_student_allocations ORDER BY student_identity_id").fetchall()
-            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(rows), 4)
             self.assertEqual(rows[0]["status"], "conflict")
             self.assertEqual(rows[1]["reason"], "explicit membership")
+            self.assertTrue(all(row["allocation_kind"] in {"lesson", "no_lesson", "conflict"} for row in rows))
+            self.assertEqual(sum(1 for row in rows if row["allocation_kind"] == "no_lesson"), 2)
 
 
 if __name__ == "__main__":
