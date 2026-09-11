@@ -45,6 +45,15 @@ def _active_on(row: Mapping[str, Any], day: str) -> bool:
     return (not start or start <= day) and (not end or end >= day)
 
 
+def _is_sdep_day(day: str, grade: str) -> bool:
+    if grade not in {"10", "11"}:
+        return False
+    try:
+        return date.fromisoformat(str(day)).weekday() == 4
+    except ValueError:
+        return False
+
+
 def _allocation_key(lesson: Mapping[str, Any], grade: str) -> str:
     modifiers = lesson.get("modifiers") or {}
     parts = [grade, lesson.get("subject"), lesson.get("teacher_hint"), modifiers.get("subject_subgroup"), modifiers.get("exam_track")]
@@ -218,6 +227,11 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             grades.update({"5", "6"})
         if not (row.get("modifiers") or {}).get("synthetic_cancelled") and not _is_source_context(row):
             for grade in sorted(grades & valid_grades):
+                if _is_sdep_day(str(row["lesson_date"]), grade):
+                    # Friday is an SDEP day for grades 10–11. Keep the source
+                    # lesson immutable, but do not project its activities into
+                    # slot-level audience/allocation data.
+                    continue
                 slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
 
     allocations: list[dict[str, Any]] = []

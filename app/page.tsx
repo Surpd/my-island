@@ -77,6 +77,13 @@ type Lesson = {
   delivery_mode?: string | null;
   source_coordinate?: string | null;
 };
+type StudentDayBlock = {
+  lesson_date: string;
+  kind: 'sdep';
+  label: string;
+  title: string;
+  description: string;
+};
 type Homework = {
   external_coursework_id: string;
   title: string;
@@ -137,10 +144,12 @@ type Session = {
 type ApiData = {
   today: {
     schedule: Lesson[];
+    day_block?: StudentDayBlock | null;
     homework: Homework[];
     announcements: Information[];
   };
   schedule: Lesson[];
+  scheduleDayBlocks: StudentDayBlock[];
   homework: Homework[];
   profile: Profile;
 };
@@ -460,7 +469,7 @@ function Topbar({
   );
 }
 
-function scheduleStartingDay(schedule: Lesson[]) {
+function scheduleStartingDay(schedule: Lesson[], dayBlocks: StudentDayBlock[] = []) {
   const today = isoDate(new Date());
   const relevant = schedule
     .map((lesson) => lesson.lesson_date)
@@ -468,13 +477,13 @@ function scheduleStartingDay(schedule: Lesson[]) {
     .sort();
   return (
     relevant[0] ||
-    schedule.map((lesson) => lesson.lesson_date).sort()[0] ||
+    [...schedule.map((lesson) => lesson.lesson_date), ...dayBlocks.map((block) => block.lesson_date)].sort()[0] ||
     today
   );
 }
 
-function SchedulePanel({ schedule }: { schedule: Lesson[] }) {
-  const initial = scheduleStartingDay(schedule);
+function SchedulePanel({ schedule, dayBlocks = [] }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[] }) {
+  const initial = scheduleStartingDay(schedule, dayBlocks);
   const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
   const days = Array.from({ length: 5 }, (_, index) =>
@@ -515,7 +524,12 @@ function SchedulePanel({ schedule }: { schedule: Lesson[] }) {
         <strong>{formatDate(selectedDay, true)}</strong>
         <span>{entries.length} занятий</span>
       </div>
-      {entries.length ? (
+      {dayBlocks.some((block) => block.lesson_date === selectedDay) ? (
+        <div className="sdep-card">
+          <strong>SDEP</strong>
+          <span>Самостоятельная работа весь учебный день.</span>
+        </div>
+      ) : entries.length ? (
         <div className="lesson-stack">
           {entries.map((lesson) => (
             <LessonRow
@@ -834,12 +848,14 @@ function SpatialSheet({
 
 function TodaySheet({
   lessons,
+  dayBlock,
   homework = [],
   information = [],
   teacher = false,
   onOpen,
 }: {
   lessons: Lesson[];
+  dayBlock?: StudentDayBlock | null;
   homework?: Homework[];
   information?: Information[];
   teacher?: boolean;
@@ -868,13 +884,17 @@ function TodaySheet({
         <IslandIcon name="schedule" size={20} />
         <span>
           <small>
-            {next
+            {dayBlock
+              ? 'Самостоятельная работа'
+              : next
               ? `${next.start_time} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
               : 'Учебный день'}
           </small>
-          <strong>{next?.subject || 'Сегодня без занятий'}</strong>
+          <strong>{dayBlock ? 'SDEP' : next?.subject || 'Сегодня без занятий'}</strong>
           <em>
-            {next
+            {dayBlock
+              ? dayBlock.description
+              : next
               ? [next.room, scopeMarker(next)].filter(Boolean).join(' · ') ||
                 'Детали уточняются'
               : 'Можно заглянуть в расписание'}
@@ -900,7 +920,12 @@ function TodaySheet({
   );
   const full = (
     <div className="today-expanded">
-      {sorted.length ? (
+      {dayBlock ? (
+        <div className="today-sdep-line">
+          <IslandIcon name="schedule" size={18} />
+          <span><strong>SDEP</strong><small>Самостоятельная работа весь учебный день</small></span>
+        </div>
+      ) : sorted.length ? (
         sorted
           .slice(0, 5)
           .map((lesson) => (
@@ -1151,7 +1176,7 @@ function StudentApp({
       peek={contextualPeek}
     >
       {selectedId === 'schedule' ? (
-        <SchedulePanel schedule={data.schedule} />
+        <SchedulePanel schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} />
       ) : selectedId === 'homework' ? (
         <HomeworkPanel homework={data.homework} />
       ) : selectedId === 'information' ? (
@@ -1176,6 +1201,7 @@ function StudentApp({
           contextual || (
             <TodaySheet
               lessons={data.today.schedule}
+              dayBlock={data.today.day_block}
               homework={data.today.homework}
               information={data.today.announcements}
               onOpen={(next) => open(next as StudentView)}
@@ -3370,7 +3396,7 @@ export default function Home() {
     const end = isoDate(addDays(new Date(), 6));
     const [day, schedule, homework, profile] = await Promise.all([
       api<ApiData['today']>(`/api/student/today?day=${today}`),
-      api<{ items: Lesson[] }>(
+      api<{ items: Lesson[]; day_blocks?: StudentDayBlock[] }>(
         `/api/student/schedule?start_day=${today}&end_day=${end}`,
       ),
       api<{ items: Homework[] }>('/api/student/homework'),
@@ -3379,6 +3405,7 @@ export default function Home() {
     return {
       today: day,
       schedule: schedule.items,
+      scheduleDayBlocks: schedule.day_blocks || [],
       homework: homework.items,
       profile,
     };
