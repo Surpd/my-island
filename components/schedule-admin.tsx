@@ -39,7 +39,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [decisions, setDecisions] = useState<Record<string, string>>({});
-  const [allocation, setAllocation] = useState<Item>({ summary: {}, slots: [], students: [], teachers: [], student_preview: [], teacher_preview: [] });
+  const [allocation, setAllocation] = useState<Item>({ summary: {}, slots: [], day_blocks: [], students: [], teachers: [], groups: [], student_preview: [], student_day_blocks: [], teacher_preview: [] });
   const [grade, setGrade] = useState('9');
   const [studentPreview, setStudentPreview] = useState('');
   const [teacherPreview, setTeacherPreview] = useState('');
@@ -184,8 +184,12 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
       const day = String(slot.lesson_date || '');
       grouped.set(day, [...(grouped.get(day) || []), slot]);
     }
+    for (const block of allocation.day_blocks || []) {
+      const day = String(block.lesson_date || '');
+      if (day) grouped.set(day, grouped.get(day) || []);
+    }
     return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right));
-  }, [allocation.slots]);
+  }, [allocation.slots, allocation.day_blocks]);
   const choicesFor = (group: Item) => group.mapping_type === 'identity' ? reconciliation.teachers || [] : reconciliation.groups || [];
 
   if (!overview && busy === 'load') return <div className="admin-loading"><RefreshCw className="admin-spin" size={18} />Загружаем расписание…</div>;
@@ -233,9 +237,9 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
         <label>Preview ученика<select value={studentPreview} onChange={(event) => void selectPreview('student', event.target.value)}><option value="">Выберите ученика…</option>{(allocation.students || []).map((item: Item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
         <label>Preview преподавателя<select value={teacherPreview} onChange={(event) => void selectPreview('teacher', event.target.value)}><option value="">Выберите преподавателя…</option>{(allocation.teachers || []).map((item: Item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
       </div>
-      {studentPreview ? <div className="schedule-preview"><h3>Неделя ученика</h3>{(allocation.student_preview || []).map((item: Item, index: number) => <div key={`${item.lesson_date}-${item.start_time}-${index}`}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.allocation_kind === 'no_lesson' || !item.subject ? 'Нет урока' : item.subject}</strong></div>)}</div> : null}
+      {studentPreview ? <div className="schedule-preview"><h3>Неделя ученика</h3>{(allocation.student_day_blocks || []).map((item: Item) => <div className="schedule-preview__day-block" key={`sdep-${item.lesson_date}`}><span>{item.lesson_date}</span><strong>SDEP</strong><small>Самостоятельная работа весь день</small></div>)}{(allocation.student_preview || []).map((item: Item, index: number) => <div key={`${item.lesson_date}-${item.start_time}-${index}`}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.allocation_kind === 'no_lesson' || !item.subject ? 'Нет урока' : item.subject}</strong></div>)}</div> : null}
       {teacherPreview ? <div className="schedule-preview"><h3>Неделя преподавателя</h3>{(allocation.teacher_preview || []).map((item: Item) => <div key={item.id}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.subject}</strong><small>{item.audience} · {item.room || 'кабинет не указан'}</small></div>)}</div> : null}
-      <div className="schedule-class-week">{classDays.map(([day, slots]) => <section className="schedule-class-day" key={day}><header><strong>{new Intl.DateTimeFormat('ru-RU', { weekday: 'long' }).format(new Date(`${day}T12:00:00`))}</strong><span>{day.slice(8)}.{day.slice(5, 7)}</span></header><div className="schedule-slot-list">{slots.map((slot: Item) => <details className={`schedule-slot schedule-slot--${slot.status}`} key={`${slot.lesson_date}-${slot.start_time}-${slot.grade}`}>
+      <div className="schedule-class-week">{classDays.map(([day, slots]) => <section className="schedule-class-day" key={day}><header><strong>{new Intl.DateTimeFormat('ru-RU', { weekday: 'long' }).format(new Date(`${day}T12:00:00`))}</strong><span>{day.slice(8)}.{day.slice(5, 7)}</span></header>{(allocation.day_blocks || []).filter((block: Item) => block.lesson_date === day).map((block: Item) => <div className="schedule-day-rule" key={`${block.kind}-${block.lesson_date}-${block.grade}`}><strong>SDEP</strong><span>{block.rule}</span><details><summary>Исходные ячейки</summary><ul>{(block.raw_activities || []).map((raw: Item, index: number) => <li key={`${raw.source_cell || 'raw'}-${index}`}>{raw.source_cell || 'ячейка'} · {raw.subject || 'без названия'} · {raw.audience || 'без класса'}</li>)}</ul></details></div>)}<div className="schedule-slot-list">{slots.map((slot: Item) => <details className={`schedule-slot schedule-slot--${slot.status}`} key={`${slot.lesson_date}-${slot.start_time}-${slot.grade}`}>
         <summary><Clock3 size={15} /><strong>{String(slot.start_time).slice(0, 5)}</strong><span>{(slot.activities || []).filter((item: Item) => item.audience_kind !== 'duplicate').map((item: Item) => `${item.subject}${item.group_names?.length ? ` · ${item.group_names.join(', ')}` : ''}`).join(' / ') || 'Нет урока'}</span>{slot.unassigned?.length ? <b>{slot.unassigned.length} без назначения</b> : null}{slot.conflicts?.length ? <b>{slot.conflicts.length} конфликтов</b> : null}<ChevronDown size={15} /></summary>
         <div className="schedule-slot-grid">{(slot.activities || []).map((activity: Item, index: number) => {
           const caseKey = audienceCaseKey(activity);

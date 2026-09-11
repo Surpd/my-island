@@ -3,12 +3,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+
+def _schedule_grade(value: Any) -> str:
+    match = re.match(r"\s*(\d{1,2})", str(value or ""))
+    return match.group(1) if match else ""
+
+
+def _schedule_row_matches_grade(row: dict[str, Any], grade: str) -> bool:
+    payload = row.get("raw_payload") or {}
+    values = [row.get("audience")]
+    if isinstance(payload, dict):
+        values.extend(payload.get("merged_audiences") or [])
+    return any(_schedule_grade(value) == grade for value in values)
 
 
 SCHEMA = """
@@ -2452,7 +2466,7 @@ class Database:
                 ORDER BY id DESC LIMIT 1""").fetchone()
             if not snapshot:
                 return {"summary": {"slots": 0, "complete": 0, "with_unassigned": 0, "with_conflicts": 0},
-                        "slots": [], "students": [], "teachers": [], "groups": [], "student_preview": [], "teacher_preview": []}
+                        "slots": [], "day_blocks": [], "students": [], "teachers": [], "groups": [], "student_preview": [], "student_day_blocks": [], "teacher_preview": []}
             params: list[Any] = [snapshot["id"], week_start]
             grade_clause = ""
             if grade:
@@ -2530,11 +2544,44 @@ class Database:
                 for item in student_preview:
                     item["provenance"] = self._decode_json_value(item.get("provenance")) or {}
             teacher_preview = self.schedule_v1_lessons(week_start=week_start, teacher_id=teacher_id) if teacher_id else []
+            # SDEP is a day-level product rule: Friday is self-directed work
+            # for grades 10–11. Source activities remain visible as provenance,
+            # but never enter slot allocation or student lesson/no_lesson rows.
+            sdep_grades = [grade] if grade in {"10", "11"} else ([] if grade else ["10", "11"])
+            try:
+                week_date = datetime.fromisoformat(str(week_start)).date()
+                friday = week_date + timedelta(days=(4 - week_date.weekday()) % 7)
+            except ValueError:
+                friday = None
+            day_blocks: list[dict[str, Any]] = []
+            if friday:
+                raw_rows = [dict(row) for row in self.execute(connection, """SELECT lesson_date,start_time,end_time,subject,audience,activity_type,source_cell,raw_payload
+                    FROM schedule_lessons WHERE source_snapshot_id=? AND version_kind='weekly' AND week_start=? AND lesson_date=?
+                    ORDER BY start_time,id""", (snapshot["id"], week_start, friday.isoformat())).fetchall()]
+                for raw_row in raw_rows:
+                    raw_row["raw_payload"] = self._decode_json_value(raw_row.get("raw_payload")) or {}
+                for sdep_grade in sdep_grades:
+                    day_blocks.append({
+                        "lesson_date": friday.isoformat(),
+                        "grade": sdep_grade,
+                        "kind": "sdep",
+                        "label": "SDEP",
+                        "rule": "Пятница — самостоятельная работа (SDEP)",
+                        "raw_activities": [
+                            {"subject": row.get("subject"), "audience": row.get("audience"),
+                             "activity_type": row.get("activity_type"), "source_cell": row.get("source_cell"),
+                             "start_time": row.get("start_time"), "end_time": row.get("end_time"),
+                             "raw_payload": row.get("raw_payload")}
+                            for row in raw_rows if _schedule_row_matches_grade(row, sdep_grade)
+                        ],
+                    })
+            student_day_blocks = [item for item in day_blocks if student_id and str(item["grade"]) == str(grade)]
             return {"summary": {"slots": len(slot_list), "complete": sum(1 for slot in slot_list if slot["status"] == "complete"),
                                 "with_unassigned": sum(1 for slot in slot_list if slot["unassigned"]),
-                                "with_conflicts": sum(1 for slot in slot_list if slot["conflicts"])},
-                    "slots": slot_list, "students": student_choices, "teachers": teacher_choices, "groups": group_choices,
-                    "student_preview": student_preview, "teacher_preview": teacher_preview}
+                                "with_conflicts": sum(1 for slot in slot_list if slot["conflicts"]),
+                                "sdep_days": len(day_blocks)},
+                    "slots": slot_list, "day_blocks": day_blocks, "students": student_choices, "teachers": teacher_choices, "groups": group_choices,
+                    "student_preview": student_preview, "student_day_blocks": student_day_blocks, "teacher_preview": teacher_preview}
 
     def schedule_v1_mapping_context(self) -> dict[str, Any]:
         with self.connection() as connection:

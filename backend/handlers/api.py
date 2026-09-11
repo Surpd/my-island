@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from datetime import date, datetime, timedelta, timezone
 import json
 import hmac
+import re
 
 from backend.database import Database
 from backend.services.auth import AuthError, resolve_auth
@@ -33,6 +34,24 @@ class SessionPayload(BaseModel):
 class ClaimPayload(BaseModel):
     identity_id: str
     role: str = "student"
+
+
+def _student_grade(profile: dict | None) -> str:
+    user = (profile or {}).get("user") or {}
+    class_name = user.get("class_name") if hasattr(user, "get") else None
+    match = re.match(r"\s*(\d{1,2})", str(class_name or ""))
+    return match.group(1) if match else ""
+
+
+def _sdep_block(day: str, grade: str) -> dict | None:
+    if grade not in {"10", "11"}:
+        return None
+    try:
+        if date.fromisoformat(day).weekday() != 4:
+            return None
+    except ValueError:
+        return None
+    return {"lesson_date": day, "kind": "sdep", "label": "SDEP", "title": "SDEP", "description": "Самостоятельная работа весь учебный день."}
 
 
 class ReviewPayload(BaseModel):
@@ -291,7 +310,9 @@ def create_router(database: Database) -> APIRouter:
             date.fromisoformat(requested_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], requested_day)], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
+        sdep = _sdep_block(requested_day, _student_grade(database.get_student_profile(user["id"])))
+        schedule = [] if sdep else [dict(row) for row in database.list_schedule_entries_for_user(user["id"], requested_day)]
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": schedule, "day_block": sdep, "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
 
     @router.get("/student/grades")
     def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
@@ -320,7 +341,19 @@ def create_router(database: Database) -> APIRouter:
                 date.fromisoformat(end_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_schedule_entries_for_user(user["id"], start_day, end_day)]}
+        profile = database.get_student_profile(user["id"])
+        grade = _student_grade(profile)
+        items = [dict(row) for row in database.list_schedule_entries_for_user(user["id"], start_day, end_day)]
+        day_blocks = []
+        cursor = date.fromisoformat(start_day)
+        finish = date.fromisoformat(end_day or start_day)
+        while cursor <= finish:
+            block = _sdep_block(cursor.isoformat(), grade)
+            if block:
+                day_blocks.append(block)
+                items = [item for item in items if str(item.get("lesson_date")) != block["lesson_date"]]
+            cursor += timedelta(days=1)
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": items, "day_blocks": day_blocks}
 
     @router.get("/student/profile")
     def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
