@@ -1893,16 +1893,28 @@ class Database:
             visibility = ""
             params: tuple[Any, ...] = ()
             if user_id is not None and role:
-                visibility = """AND (
-                    a.audience_kind = 'all' OR a.audience_kind = ?
-                    OR (a.audience_kind = 'group' AND EXISTS (
-                        SELECT 1 FROM memberships m JOIN users u ON u.identity_id = m.identity_id
-                          WHERE u.id = ? AND m.active IS TRUE AND CAST(m.group_id AS TEXT) = a.audience_ref
-                            AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
-                            AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
-                    ))
-                )"""
-                params = (role, user_id)
+                if isinstance(user_id, str) and user_id.startswith("identity:"):
+                    visibility = """AND (
+                        a.audience_kind = 'all' OR a.audience_kind = ?
+                        OR (a.audience_kind = 'group' AND EXISTS (
+                            SELECT 1 FROM memberships m
+                              WHERE m.identity_id = ? AND m.active IS TRUE AND CAST(m.group_id AS TEXT) = a.audience_ref
+                                AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                                AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                        ))
+                    )"""
+                    params = (role, user_id.removeprefix("identity:"))
+                else:
+                    visibility = """AND (
+                        a.audience_kind = 'all' OR a.audience_kind = ?
+                        OR (a.audience_kind = 'group' AND EXISTS (
+                            SELECT 1 FROM memberships m JOIN users u ON u.identity_id = m.identity_id
+                              WHERE u.id = ? AND m.active IS TRUE AND CAST(m.group_id AS TEXT) = a.audience_ref
+                                AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
+                                AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                        ))
+                    )"""
+                    params = (role, user_id)
             return self.execute(
                 connection,
                 f"""SELECT a.id, a.title, a.body, a.audience, a.audience_kind, a.audience_ref,
