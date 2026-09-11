@@ -2678,6 +2678,103 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .context-sheet .sheet-full .panel-refresh {
   margin-top: 10px;
 }
+
+/* Student Schedule v1: a light, glanceable schedule layer inside the island sheet. */
+.schedule-focus-peek {
+  display: grid;
+  gap: 8px;
+}
+.schedule-focus-peek__lead,
+.student-schedule-lesson,
+.student-schedule-conflict,
+.student-schedule-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #e0ebe6;
+  border-radius: 15px;
+  background: #f7fbf8;
+}
+.schedule-focus-peek__icon,
+.student-schedule-conflict__mark,
+.student-schedule-event__mark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: #e6f0e9;
+  color: #35615c;
+}
+.schedule-focus-peek__lead > div,
+.student-schedule-lesson > div,
+.student-schedule-conflict > div,
+.student-schedule-event > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.schedule-focus-peek__lead small,
+.student-schedule-conflict small,
+.student-schedule-event small {
+  color: #6d817d;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.schedule-focus-peek__lead strong,
+.student-schedule-lesson strong,
+.student-schedule-conflict strong,
+.student-schedule-event strong {
+  overflow: hidden;
+  color: var(--navy);
+  font-size: 13px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+.schedule-focus-peek__lead span,
+.student-schedule-lesson span,
+.student-schedule-conflict span,
+.student-schedule-event span {
+  overflow: hidden;
+  color: #6d817d;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-focus-peek__queue {
+  display: flex;
+  gap: 5px;
+  overflow: hidden;
+  padding: 0 2px;
+}
+.schedule-focus-peek__queue span {
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px 7px;
+  border-radius: 8px;
+  background: #eef5f0;
+  color: #58736f;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-focus-peek__queue b { margin-right: 4px; color: #315650; }
+.student-schedule-stack { display: grid; gap: 7px; }
+.student-schedule-lesson time { width: 39px; flex: 0 0 auto; padding-top: 2px; color: #9c5436; font-size: 11px; font-weight: 800; }
+.student-schedule-conflict { border-color: #e6d9bf; background: #fff9ed; }
+.student-schedule-conflict__mark { background: #f4e7c8; color: #8b6334; font-weight: 900; }
+.student-schedule-event { border-color: #d5e0ec; background: #f1f7fb; }
+.student-schedule-event__mark { background: #dceaf4; color: #35627a; }
+.student-schedule-gap { display: flex; align-items: center; gap: 8px; padding: 2px 10px; color: #849793; font-size: 10px; }
+.student-schedule-gap span { width: 39px; height: 1px; background: #d6e2dc; }
+.student-schedule-sdep { display: grid; gap: 5px; padding: 18px 15px; border: 1px solid #d9e5df; border-radius: 17px; background: #edf6ef; }
+.student-schedule-sdep strong { color: #315c52; font-family: Georgia, serif; font-size: 21px; }
+.student-schedule-sdep span { color: #5b756f; font-size: 11px; }
 .panel-intro h2 {
   font-size: 25px;
 }

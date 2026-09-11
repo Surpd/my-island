@@ -84,6 +84,29 @@ type StudentDayBlock = {
   title: string;
   description: string;
 };
+type StudentScheduleItem = {
+  date: string;
+  slot: { start: string; end?: string | null };
+  state: 'lesson' | 'no_lesson' | 'conflict' | 'special_event';
+  canonical_title?: string | null;
+  room?: string | null;
+  teacher?: string | null;
+  group_context?: string[] | string | null;
+  no_lesson?: { reason?: 'before_first_lesson' | 'break' | 'end_of_day' };
+  conflict?: { state: string; label: string; alternatives: Array<{ title: string; teacher?: string | null; room?: string | null }> };
+  special_event?: { kind: string; title: string; metadata?: Record<string, unknown> };
+};
+type StudentScheduleDay = {
+  date: string;
+  state: 'scheduled' | 'special';
+  items: StudentScheduleItem[];
+  special?: { kind: 'sdep'; title: string; description?: string };
+};
+type StudentScheduleProjection = {
+  days: StudentScheduleDay[];
+  items: Lesson[];
+  day_blocks: StudentDayBlock[];
+};
 type Homework = {
   external_coursework_id: string;
   title: string;
@@ -149,6 +172,7 @@ type ApiData = {
     announcements: Information[];
   };
   schedule: Lesson[];
+  scheduleProjection: StudentScheduleProjection;
   scheduleDayBlocks: StudentDayBlock[];
   homework: Homework[];
   profile: Profile;
@@ -469,29 +493,38 @@ function Topbar({
   );
 }
 
-function scheduleStartingDay(schedule: Lesson[], dayBlocks: StudentDayBlock[] = []) {
+function scheduleStartingDay(days: StudentScheduleDay[]) {
   const today = isoDate(new Date());
-  const relevant = schedule
-    .map((lesson) => lesson.lesson_date)
+  const relevant = days
+    .map((day) => day.date)
     .filter((day) => day >= today)
     .sort();
-  return (
-    relevant[0] ||
-    [...schedule.map((lesson) => lesson.lesson_date), ...dayBlocks.map((block) => block.lesson_date)].sort()[0] ||
-    today
-  );
+  return relevant[0] || days.map((day) => day.date).sort()[0] || today;
 }
 
-function SchedulePanel({ schedule, dayBlocks = [] }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[] }) {
-  const initial = scheduleStartingDay(schedule, dayBlocks);
+function ScheduleItemRow({ item }: { item: StudentScheduleItem }) {
+  if (item.state === 'special_event') {
+    return <article className="student-schedule-event"><span className="student-schedule-event__mark">✦</span><div><small>Событие</small><strong>{item.special_event?.title}</strong><span>{[item.slot.start, item.slot.end].filter(Boolean).join('–')} {item.room ? `· ${item.room}` : ''}</span></div></article>;
+  }
+  if (item.state === 'conflict') {
+    const title = item.conflict?.alternatives.map((alternative) => alternative.title).join(' / ') || 'Расписание уточняется';
+    return <article className="student-schedule-conflict"><span className="student-schedule-conflict__mark">?</span><div><small>Уточняется</small><strong>{title}</strong><span>{item.slot.start}{item.slot.end ? `–${item.slot.end}` : ''}</span></div></article>;
+  }
+  if (item.state !== 'lesson') return null;
+  const context = Array.isArray(item.group_context) ? item.group_context.join(' · ') : item.group_context;
+  return <article className="student-schedule-lesson"><time>{item.slot.start}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{[item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span></div></article>;
+}
+
+function StudentSchedulePanel({ projection }: { projection: StudentScheduleProjection }) {
+  const initial = scheduleStartingDay(projection.days);
   const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
   const days = Array.from({ length: 5 }, (_, index) =>
     isoDate(addDays(monday, index)),
   );
-  const entries = schedule
-    .filter((lesson) => lesson.lesson_date === selectedDay)
-    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const day = projection.days.find((item) => item.date === selectedDay);
+  const visibleItems = day?.items.filter((item) => item.state !== 'no_lesson' || item.no_lesson?.reason === 'break') || [];
+  const hasLessons = day?.items.some((item) => item.state === 'lesson' || item.state === 'conflict' || item.state === 'special_event');
   return (
     <div className="section-panel">
       <div className="panel-intro">
@@ -501,7 +534,7 @@ function SchedulePanel({ schedule, dayBlocks = [] }: { schedule: Lesson[]; dayBl
         <div>
           <p className="eyebrow">Неделя</p>
           <h2>Расписание</h2>
-          <p>Только подтверждённые занятия вашего учебного контура.</p>
+          <p>Ваш день — коротко и без лишних пустых слотов.</p>
         </div>
       </div>
       <div className="day-picker">
@@ -522,31 +555,49 @@ function SchedulePanel({ schedule, dayBlocks = [] }: { schedule: Lesson[]; dayBl
       </div>
       <div className="panel-date">
         <strong>{formatDate(selectedDay, true)}</strong>
-        <span>{entries.length} занятий</span>
+        <span>{hasLessons ? `${day?.items.filter((item) => item.state === 'lesson').length || 0} занятий` : 'Учебный день'}</span>
       </div>
-      {dayBlocks.some((block) => block.lesson_date === selectedDay) ? (
-        <div className="sdep-card">
-          <strong>SDEP</strong>
-          <span>Самостоятельная работа весь учебный день.</span>
-        </div>
-      ) : entries.length ? (
-        <div className="lesson-stack">
-          {entries.map((lesson) => (
-            <LessonRow
-              key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}-${lesson.source_coordinate}`}
-              lesson={lesson}
-            />
-          ))}
+      {day?.special?.kind === 'sdep' ? <div className="student-schedule-sdep"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : hasLessons ? (
+        <div className="student-schedule-stack">
+          {visibleItems.map((item, index) => item.state === 'no_lesson' ? <div className="student-schedule-gap" key={`${item.date}-${item.slot.start}-${index}`}><span />Перерыв</div> : <ScheduleItemRow item={item} key={`${item.date}-${item.slot.start}-${item.state}-${index}`} />)}
         </div>
       ) : (
         <EmptyState
           icon={CalendarDays}
           title="Занятий нет"
-          detail="Для этого дня нет подтверждённых записей."
+          detail="Учебный день уже закончился или занятий не запланировано."
         />
       )}
     </div>
   );
+}
+
+function SchedulePanel({ schedule, dayBlocks = [] }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[] }) {
+  const initial = schedule.map((lesson) => lesson.lesson_date).sort()[0] || dayBlocks.map((block) => block.lesson_date).sort()[0] || isoDate(new Date());
+  const [selectedDay, setSelectedDay] = useState(initial);
+  const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
+  const days = Array.from({ length: 5 }, (_, index) => isoDate(addDays(monday, index)));
+  const entries = schedule.filter((lesson) => lesson.lesson_date === selectedDay).sort((a, b) => a.start_time.localeCompare(b.start_time));
+  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{dayBlocks.some((block) => block.lesson_date === selectedDay) ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." />}</div>;
+}
+
+function ScheduleFocusPeek({ projection }: { projection: StudentScheduleProjection }) {
+  const today = projection.days.find((day) => day.date === isoDate(new Date()));
+  const items = today?.items.filter((item) => item.state !== 'no_lesson').sort((a, b) => a.slot.start.localeCompare(b.slot.start)) || [];
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const next = items.find((item) => {
+    const [hours, mins] = item.slot.start.split(':').map(Number);
+    return hours * 60 + mins >= minutes;
+  });
+  const current = items.find((item) => {
+    const [hours, mins] = item.slot.start.split(':').map(Number);
+    const [endHours, endMins] = (item.slot.end || item.slot.start).split(':').map(Number);
+    return hours * 60 + mins <= minutes && endHours * 60 + endMins > minutes;
+  });
+  const anchor = current || next;
+  const remaining = items.filter((item) => !anchor || item.slot.start >= anchor.slot.start).slice(0, 3);
+  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || 'Учебный день закончен'}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${anchor.slot.start}${anchor.slot.end ? `–${anchor.slot.end}` : ''}${anchor.room ? ` · ${anchor.room}` : ''}` : 'На сегодня всё'}</span></div></div>{remaining.length > 1 && <div className="schedule-focus-peek__queue">{remaining.slice(0, 3).map((item, index) => <span key={`${item.slot.start}-${index}`}><b>{item.slot.start}</b>{item.state === 'conflict' ? 'Уточняется' : item.state === 'special_event' ? item.special_event?.title : item.canonical_title}</span>)}</div>}</div>;
 }
 function HomeworkPanel({ homework }: { homework: Homework[] }) {
   return (
@@ -1113,31 +1164,13 @@ function StudentApp({
     ...location,
     icon: location.id,
   }));
-  const nextLesson = [...data.schedule]
-    .filter((lesson) => lesson.lesson_date >= isoDate(new Date()))
-    .sort((a, b) =>
-      `${a.lesson_date}${a.start_time}`.localeCompare(
-        `${b.lesson_date}${b.start_time}`,
-      ),
-    )[0];
   const nextHomework = [...data.homework].sort((a, b) =>
     (a.due_at || '9999').localeCompare(b.due_at || '9999'),
   )[0];
   const latestInfo = data.today.announcements[0];
   const contextualPeek =
     selectedId === 'schedule' ? (
-      <SheetSummary
-        icon="schedule"
-        label={
-          nextLesson ? formatDate(nextLesson.lesson_date, true) : 'Расписание'
-        }
-        value={
-          nextLesson
-            ? `${nextLesson.start_time} · ${nextLesson.subject}`
-            : 'Ближайших занятий нет'
-        }
-        detail={nextLesson?.room || undefined}
-      />
+      <ScheduleFocusPeek projection={data.scheduleProjection} />
     ) : selectedId === 'homework' ? (
       <SheetSummary
         icon="homework"
@@ -1176,7 +1209,7 @@ function StudentApp({
       peek={contextualPeek}
     >
       {selectedId === 'schedule' ? (
-        <SchedulePanel schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} />
+        <StudentSchedulePanel projection={data.scheduleProjection} />
       ) : selectedId === 'homework' ? (
         <HomeworkPanel homework={data.homework} />
       ) : selectedId === 'information' ? (
@@ -3396,7 +3429,7 @@ export default function Home() {
     const end = isoDate(addDays(new Date(), 6));
     const [day, schedule, homework, profile] = await Promise.all([
       api<ApiData['today']>(`/api/student/today?day=${today}`),
-      api<{ items: Lesson[]; day_blocks?: StudentDayBlock[] }>(
+      api<StudentScheduleProjection & { items: Lesson[] }>(
         `/api/student/schedule?start_day=${today}&end_day=${end}`,
       ),
       api<{ items: Homework[] }>('/api/student/homework'),
@@ -3405,6 +3438,7 @@ export default function Home() {
     return {
       today: day,
       schedule: schedule.items,
+      scheduleProjection: schedule,
       scheduleDayBlocks: schedule.day_blocks || [],
       homework: homework.items,
       profile,
