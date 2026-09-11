@@ -57,6 +57,7 @@ type TeacherView =
   | null;
 type AdminSection =
   | 'overview'
+  | 'preview'
   | 'people'
   | 'structure'
   | 'schedule'
@@ -1690,6 +1691,7 @@ const adminNav: Array<{
     includes: ['overview'],
   },
   { id: 'people', label: 'Люди', icon: Users, includes: ['people'] },
+  { id: 'preview', label: 'Предпросмотр ученика', icon: UserRound, includes: ['preview'] },
   { id: 'structure', label: 'Школа', icon: Network, includes: ['structure'] },
   {
     id: 'integrations',
@@ -1780,6 +1782,7 @@ function AdminApp({
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [query, setQuery] = useState('');
+  const [previewQuery, setPreviewQuery] = useState('');
   const [peopleFilter, setPeopleFilter] = useState<
     'all' | 'student' | 'teacher' | 'admin' | 'unmatched'
   >('all');
@@ -1992,6 +1995,14 @@ function AdminApp({
       }) || [],
     [catalogUsers, peopleClassFilter, peopleFilter, peopleGroupFilter, query],
   );
+  const previewStudents = useMemo(
+    () => catalogUsers.filter((user) => {
+      const roles = Array.isArray(user.roles) ? user.roles : [];
+      return user.identity_kind === 'student' && user.identity_id && roles.includes('student') && user.has_account !== false &&
+        `${displayValue(user.display_name)} ${personBaseClass(user)}`.toLowerCase().includes(previewQuery.toLowerCase());
+    }),
+    [catalogUsers, previewQuery],
+  );
   const structureGroups = useMemo(
     () =>
       data?.groups.filter((group) => {
@@ -2128,6 +2139,30 @@ function AdminApp({
   };
   const content = () => {
     if (!data) return null;
+    if (section === 'preview')
+      return (
+        <>
+          <AdminHeading
+            eyebrow="Только чтение"
+            title="Предпросмотр ученика"
+            detail="Откройте настоящий Student Campus с identity выбранного ученика. Ваши роли и профиль не изменятся."
+          />
+          <section className="work-card student-preview-picker">
+            <label className="admin-search student-preview-picker__search">
+              <Search size={16} />
+              <input value={previewQuery} onChange={(event) => setPreviewQuery(event.target.value)} placeholder="Найти по имени или классу" />
+            </label>
+            <div className="student-preview-picker__meta">{previewStudents.length} доступных учеников</div>
+            {previewStudents.length ? previewStudents.slice(0, 30).map((student, index) => (
+              <div className="student-preview-row" key={displayValue(student.id, String(index))}>
+                <span className="avatar-mini">{personLabel(student).slice(0, 1)}</span>
+                <div><strong>{personLabel(student)}</strong><small>{personBaseClass(student) || 'Класс не указан'}</small></div>
+                <button className="preview-button" onClick={() => void onPreview(displayValue(student.id)).catch((error) => setMessage(error instanceof Error ? error.message : 'Экран ученика не открылся'))}>Открыть как ученик</button>
+              </div>
+            )) : <p className="calm-empty">Ученики не найдены. Проверьте имя или класс.</p>}
+          </section>
+        </>
+      );
     if (section === 'overview')
       return (
         <>
@@ -3515,12 +3550,12 @@ export default function Home() {
   }, [authKey, load]);
   const startPreview = async (userId: string) => {
     try {
-      const preview = await api<{ id: string; target: { display_name: string } }>(
+      const preview = await api<{ id: string; target: { display_name: string; class_name?: string | null } }>(
         '/api/admin/student-previews',
         { method: 'POST', body: JSON.stringify({ target_user_id: userId }) },
       );
       activeStudentPreviewId = preview.id;
-      setPreviewTarget(preview.target.display_name);
+      setPreviewTarget(`${preview.target.display_name} · ${preview.target.class_name || 'класс не указан'}`);
       // Load the target through the preview header before switching screens. If
       // any one of the student endpoints rejects, do not leave a half-open
       // preview token behind in the admin session.
@@ -3584,7 +3619,7 @@ export default function Home() {
       <div className="preview-mode">
         <div className="preview-banner">
           <span>
-            <ShieldCheck size={16} /> Режим просмотра:{' '}
+            <ShieldCheck size={16} /> Предпросмотр:{' '}
             <strong>{previewTarget}</strong> · только чтение
           </span>
           <button onClick={() => void exitPreview()}>Выйти</button>
