@@ -169,6 +169,35 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         FROM membership_overrides WHERE active IS TRUE AND action='exclude'""").fetchall()]
     assignments = [dict(row) for row in database.execute(connection, """SELECT teacher_identity_id,group_id,subject
         FROM teacher_assignments WHERE active IS TRUE""").fetchall()]
+    # Learn parallel subject-group lanes only from explicit subgroup/exam
+    # anchors. This is structural evidence, not a universal left/centre/right
+    # assumption.
+    column_lane_groups: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for lesson in rows:
+        payload = lesson.get("raw_payload") or {}
+        column = payload.get("source_column") if isinstance(payload, Mapping) else None
+        if not isinstance(column, int):
+            continue
+        modifiers = lesson.get("modifiers") or {}
+        subgroup = _norm(modifiers.get("subject_subgroup"))
+        exam = _norm(modifiers.get("exam_track"))
+        grade = _grade(lesson.get("audience"))
+        if not grade or (not subgroup and not exam):
+            continue
+        subject = _subject(lesson.get("subject"))
+        for group in groups:
+            if _norm(group.get("group_type")) == "class":
+                continue
+            if subject and _subject(group.get("subject")) != subject:
+                continue
+            group_grade = _grade(group.get("base_class_name") or group.get("name"))
+            if group_grade and group_grade != grade:
+                continue
+            if subgroup and _norm(group.get("subject_subgroup")) != subgroup:
+                continue
+            if exam and _norm(group.get("exam_track")) != exam:
+                continue
+            column_lane_groups[(grade, column)].add(str(group["id"]))
     source = database.execute(connection, "SELECT source_id FROM school_source_snapshots WHERE id=?", (snapshot_id,)).fetchone()
     mapping_rows = database.execute(connection, """SELECT external_key,canonical_value FROM school_source_mappings
         WHERE source_id=? AND mapping_type='audience_rule' AND status='confirmed' AND valid_until IS NULL""", (source["source_id"],)).fetchall() if source else []
@@ -206,7 +235,11 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
     for column, names in column_evidence.items():
         if len(names) == 1:
             structural_columns[column] = next(iter(names))
-    slot_rows: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    # First materialize the complete date+time frame.  Source-context cells
+    # (lunch/break/no_lesson markers) stay in the frame for provenance, but are
+    # not activities.  This prevents a marker or a visually empty cell from
+    # changing the allocation universe.
+    slot_frames: dict[tuple[str, str, str], dict[str, list[dict[str, Any]]]] = defaultdict(lambda: {"activities": [], "context": []})
     valid_grades = {"5", "6", "7", "8", "9", "10", "11"}
     for row in rows:
         # A merged cell can represent a joint lesson for more than one
@@ -225,14 +258,24 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 and _norm(modifiers.get("subject_subgroup")) in {"1", "2"}
                 and grades & {"5", "6"}):
             grades.update({"5", "6"})
-        if not (row.get("modifiers") or {}).get("synthetic_cancelled") and not _is_source_context(row):
+        # Special events are projected as events, not assigned as ordinary
+        # lessons. Their audience is resolved separately by the student
+        # projection, so they must not create fake lesson/no_lesson slots.
+        if row.get("activity_type") != "special_event" and not (row.get("modifiers") or {}).get("synthetic_cancelled"):
             for grade in sorted(grades & valid_grades):
                 if _is_sdep_day(str(row["lesson_date"]), grade):
                     # Friday is an SDEP day for grades 10–11. Keep the source
                     # lesson immutable, but do not project its activities into
                     # slot-level audience/allocation data.
                     continue
-                slot_rows[(str(row["lesson_date"]), str(row["start_time"]), grade)].append(row)
+                frame = slot_frames[(str(row["lesson_date"]), str(row["start_time"]), grade)]
+                frame["context" if _is_source_context(row) else "activities"].append(row)
+
+    # Allocation consumes only the activity side of the already-built frame.
+    # A frame may contain several independent parallel blocks; the resolver
+    # below derives each block from explicit cohort targets/lane anchors rather
+    # than treating the source row as one universal left/centre/right mapping.
+    slot_rows = {key: frame["activities"] for key, frame in slot_frames.items() if frame["activities"]}
 
     allocations: list[dict[str, Any]] = []
     audience_rows: dict[str, dict[str, Any]] = {}
@@ -297,7 +340,14 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             elif rule["kind"] in {"group", "group_set", "class"}:
                 semantic_key = (tuple(sorted(rule.get("groups", []))), _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), lesson.get("activity_type"))
             elif rule["kind"] == "pending":
-                semantic_key = ("pending", _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), _norm(lesson.get("room")), _norm(lesson.get("audience")))
+                # Pending activities must remain distinct when neighbouring
+                # source cells are later resolved to different parallel
+                # cohorts (for example Plastic in Math B and Plastic in Math C).
+                # Include structural lane evidence in the key; this keeps
+                # dedup cohort-aware without assuming a global column order.
+                lane_column = payload.get("source_column") if isinstance(payload, Mapping) else None
+                lane_groups = tuple(sorted(column_lane_groups.get((grade, lane_column), set()))) if isinstance(lane_column, int) else ()
+                semantic_key = ("pending", _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), _norm(lesson.get("room")), _norm(lesson.get("audience")), lane_groups)
             else:
                 continue
             if semantic_key in seen_activity_keys:
@@ -308,11 +358,6 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
 
         pending_lessons = [lesson for lesson in lessons if activity_rules[str(lesson["id"])]["kind"] == "pending" and lesson.get("activity_type") != "nonlesson"]
         pending_lessons = [lesson for lesson in pending_lessons if not _is_source_context(lesson)]
-        if explicit_count and len(pending_lessons) == 1:
-            rule = activity_rules[str(pending_lessons[0]["id"])]
-            rule.update({"kind": "complement", "reason": "complement"})
-            complement_slot_keys.add((lesson_day, start_time, grade))
-
         # A structural column is evidence for a base-class audience only when
         # that class has one remaining activity in the slot.  Cross-class
         # instructional groups are allocated first; if several companion
@@ -335,6 +380,17 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             audience = str(lesson.get("audience") or "")
             payload = lesson.get("raw_payload") or {}
             column = payload.get("source_column") if isinstance(payload, Mapping) else None
+            lane_groups = column_lane_groups.get((grade, column), set()) if isinstance(column, int) else set()
+            if (
+                len(lane_groups) == 1
+                and not (lesson.get("modifiers") or {}).get("subject_subgroup")
+                and not (lesson.get("modifiers") or {}).get("exam_track")
+            ):
+                lane_group = next(iter(lane_groups))
+                lane_students = group_members.get(lane_group, set()) & universe
+                if lane_students:
+                    rule.update({"kind": "group", "groups": [lane_group], "students": lane_students, "reason": "row-wide lane inference"})
+                    continue
             structural_audience = structural_columns.get(column) if isinstance(column, int) else None
             if structural_audience and _grade(structural_audience) == grade:
                 audience = structural_audience
