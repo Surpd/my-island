@@ -1914,12 +1914,14 @@ function AdminApp({
           (user) => displayValue(user.identity_id) === displayValue(person.id),
         );
         return Object.assign({}, person, account, {
-          id: account?.id || person.id,
+          // People projection exposes the linked account id explicitly. Keep
+          // it as the preview target even if the legacy users join misses.
+          id: account?.id || person.user_id || person.id,
           identity_id: person.id,
           display_name: person.display_name,
           class_name: person.class_name,
           roles: person.roles,
-          has_account: Boolean(account),
+          has_account: Boolean(account || person.user_id),
         });
       });
       const unmatchedAccounts = data.users
