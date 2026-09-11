@@ -328,6 +328,9 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         universe = set().union(*(group_members.get(str(group["id"]), set()) for group in base_groups)) if base_groups else set()
         if not universe:
             continue
+        math_frame = any(_parallel_family(lesson) == "math" for lesson in lessons)
+        english_frame = any(_parallel_family(lesson) == "english" for lesson in lessons)
+        lane_families = ("math", "english") if math_frame and english_frame else ("math",) if math_frame else ("english",) if english_frame else ()
         activity_rules: dict[str, dict[str, Any]] = {}
         explicit_count = 0
         for lesson in lessons:
@@ -358,6 +361,20 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 activity_rules[lesson_id] = {"kind": "class", "groups": [str(group["id"]) for group in base_groups], "students": set(universe), "reason": "structural digital track"}
                 explicit_count += 1
                 continue
+            # Resolve an unqualified activity from the row-wide Math/English
+            # lane before generic subject-group lookup. Otherwise a shared
+            # subject group (e.g. Geography) can swallow a lane-specific cell
+            # and later be incorrectly deduplicated with its neighbour.
+            if lane_families and not _is_base_class_activity(lesson) and not (lesson.get("modifiers") or {}).get("subject_subgroup") and not (lesson.get("modifiers") or {}).get("exam_track"):
+                column = _source_column(lesson)
+                lane_groups = {group_id for family in lane_families for group_id in column_lane_groups.get((family, grade, column), set())} if column is not None else set()
+                if len(lane_groups) == 1:
+                    lane_group = next(iter(lane_groups))
+                    lane_students = group_members.get(lane_group, set()) & universe
+                    if lane_students:
+                        activity_rules[lesson_id] = {"kind": "group", "groups": [lane_group], "students": lane_students, "reason": "row-wide lane inference", "priority": 10}
+                        explicit_count += 1
+                        continue
             group_ids, reason = _candidate_groups(lesson, grade, groups, group_members, universe, assignments, manual_rules)
             if group_ids:
                 activity_rules[lesson_id] = {"kind": "group" if len(group_ids) == 1 else "group_set", "groups": group_ids, "students": set().union(*(group_members.get(group_id, set()) for group_id in group_ids)) & universe, "reason": reason}
@@ -365,8 +382,6 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             else:
                 activity_rules[lesson_id] = {"kind": "pending", "groups": group_ids, "students": set(), "reason": ""}
 
-        math_frame = any(_parallel_family(lesson) == "math" for lesson in lessons)
-        english_frame = any(_parallel_family(lesson) == "english" for lesson in lessons)
         for lesson in lessons:
             rule = activity_rules[str(lesson["id"])]
             if rule["kind"] in {"group", "group_set", "class"}:
@@ -394,7 +409,6 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 # Include structural lane evidence in the key; this keeps
                 # dedup cohort-aware without assuming a global column order.
                 lane_column = _source_column(lesson)
-                lane_families = ("math", "english") if math_frame and english_frame else ("math",) if math_frame else ("english",) if english_frame else ()
                 lane_groups = tuple(sorted({group_id for family in lane_families for group_id in column_lane_groups.get((family, grade, lane_column), set())})) if isinstance(lane_column, int) else ()
                 semantic_key = ("pending", _subject(lesson.get("subject")), _norm(lesson.get("teacher_hint")), _norm(lesson.get("room")), _norm(lesson.get("audience")), lane_groups)
             else:
@@ -426,7 +440,6 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 continue
             audience = str(lesson.get("audience") or "")
             column = _source_column(lesson)
-            lane_families = ("math", "english") if math_frame and english_frame else ("math",) if math_frame else ("english",) if english_frame else ()
             lane_groups = {group_id for family in lane_families for group_id in column_lane_groups.get((family, grade, column), set())} if isinstance(column, int) else set()
             if (
                 len(lane_groups) == 1
