@@ -413,12 +413,11 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         # activities remain, interpreting any of them as the complement would
         # be a guess and must stay in admin review.
         structural_pending_counts: dict[str, int] = defaultdict(int)
-        if not explicit_count:
-            for pending in pending_lessons:
-                column = _source_column(pending)
-                structural_audience = structural_columns.get(column) if isinstance(column, int) else None
-                if structural_audience and _grade(structural_audience) == grade:
-                    structural_pending_counts[_norm(structural_audience)] += 1
+        for pending in pending_lessons:
+            column = _source_column(pending)
+            structural_audience = structural_columns.get(column) if isinstance(column, int) else None
+            if structural_audience and _grade(structural_audience) == grade:
+                structural_pending_counts[_norm(structural_audience)] += 1
 
         for lesson in lessons:
             lesson_id = str(lesson["id"])
@@ -448,7 +447,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             merged_names = [value for value in merged_names if _grade(value) == grade]
             merged_classes = [group for group in base_groups if any(_norm(group.get("base_class_name") or group.get("name")) == _norm(value) for value in [audience, *merged_names])]
             direct_class = next((group for group in merged_classes if _norm(group.get("base_class_name") or group.get("name")) == _norm(audience)), None)
-            if direct_class and structural_audience and not explicit_count and structural_pending_counts[_norm(structural_audience)] == 1:
+            if direct_class and structural_audience and structural_pending_counts[_norm(structural_audience)] == 1:
                 rule.update({"kind": "class", "groups": [str(direct_class["id"])], "students": group_members.get(str(direct_class["id"]), set()), "reason": "structural column"})
                 structural_slot_keys.add((lesson_day, start_time, grade))
             elif merged_classes and (len(siblings) == 1 or len(merged_classes) > 1 or lesson.get("activity_type") == "combined"):

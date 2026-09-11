@@ -214,6 +214,33 @@ class ScheduleAllocationTests(unittest.TestCase):
             self.assertEqual(sum(row["allocation_kind"] == "lesson" for row in rows), 4)
             self.assertEqual(sum(row["allocation_kind"] == "no_lesson" for row in rows), 1)
 
+    def test_oge_anchor_leaves_safe_base_class_residual(self):
+        with self.database.connection() as connection:
+            source = connection.execute("INSERT INTO school_sources(source_type,external_key,display_name) VALUES ('schedule','oge-residual','OGE residual') RETURNING id").fetchone()[0]
+            run = connection.execute("INSERT INTO school_sync_runs(source_id,mode,status,idempotency_key) VALUES (?,'incremental','applied','oge-residual') RETURNING id", (source,)).fetchone()[0]
+            snapshot = connection.execute("INSERT INTO school_source_snapshots(source_id,sync_run_id,fingerprint,observed_at,status,is_last_known_valid) VALUES (?,?,'oge-residual',CURRENT_TIMESTAMP,'valid',1) RETURNING id", (source, run)).fetchone()[0]
+            base = connection.execute("INSERT INTO groups(name,display_name,group_type,base_class_name,canonical) VALUES ('9-Д','9-Д','class','9-Д',1) RETURNING id").fetchone()[0]
+            info = connection.execute("INSERT INTO groups(name,display_name,group_type,subject,base_class_name,subject_subgroup,exam_track,canonical) VALUES ('info-oge','Информатика ОГЭ','subject_group','Информатика','9','ОГЭ','ОГЭ',1) RETURNING id").fetchone()[0]
+            physics = connection.execute("INSERT INTO groups(name,display_name,group_type,subject,base_class_name,subject_subgroup,exam_track,canonical) VALUES ('physics-oge','Физика ОГЭ','subject_group','Физика','9','ОГЭ','ОГЭ',1) RETURNING id").fetchone()[0]
+            info_student = connection.execute("INSERT INTO identities(kind,display_name,status) VALUES ('student','Info student','active') RETURNING id").fetchone()[0]
+            other_student = connection.execute("INSERT INTO identities(kind,display_name,status) VALUES ('student','Base student','active') RETURNING id").fetchone()[0]
+            physics_student = connection.execute("INSERT INTO identities(kind,display_name,status) VALUES ('student','Physics student','active') RETURNING id").fetchone()[0]
+            for student in (info_student, other_student, physics_student):
+                connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (base, student))
+            connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (info, info_student))
+            connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (physics, physics_student))
+            lessons = [("09:00", "Информатика", "9-Д", 14, {"exam_track": "ОГЭ"}), ("09:00", "Естествознание", "9-Д", 13, {}), ("09:55", "Информатика", "9-Д", 13, {}), ("09:55", "Физика", "9-Д", 14, {"exam_track": "ОГЭ"})]
+            for index, (start, subject, audience, column, modifiers) in enumerate(lessons):
+                connection.execute("""INSERT INTO schedule_lessons(source_snapshot_id,record_key,version_kind,week_start,lesson_date,start_time,end_time,subject,audience,activity_type,lesson_kind,modifiers,resolution_status,source_cell,raw_payload)
+                    VALUES (?,?, 'weekly','2026-09-07','2026-09-10',?,'09:45',?,?, 'lesson','lesson',?,'RESOLVED',?,?)""", (snapshot, f"oge-{index}", start, subject, audience, json.dumps(modifiers), f"{chr(76 + column - 11)}{index + 1}", json.dumps({"source_column": str(column)})))
+            rebuild_schedule_allocations(self.database, connection, snapshot)
+            rows = connection.execute("SELECT student_identity_id,start_time,allocation_kind,lesson_id FROM schedule_student_allocations WHERE source_snapshot_id=?", (snapshot,)).fetchall()
+            lookup = {(row["start_time"], row["student_identity_id"]): row for row in rows}
+            self.assertEqual(lookup[("09:00", info_student)]["allocation_kind"], "lesson")
+            self.assertEqual(lookup[("09:00", other_student)]["allocation_kind"], "lesson")
+            self.assertEqual(lookup[("09:55", physics_student)]["allocation_kind"], "lesson")
+            self.assertEqual(lookup[("09:55", other_student)]["allocation_kind"], "lesson")
+
 
 if __name__ == "__main__":
     unittest.main()
