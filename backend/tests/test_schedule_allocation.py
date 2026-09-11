@@ -26,6 +26,20 @@ class ScheduleAllocationTests(unittest.TestCase):
         self.assertEqual(group_ids, ["seven"])
         self.assertEqual(reason, "explicit membership")
 
+    def test_ordinary_subject_never_falls_back_to_exam_group(self):
+        groups = [
+            {"id": "geography-oge", "name": "geography-oge", "display_name": "География ОГЭ",
+             "group_type": "subject_group", "subject": "География", "base_class_name": "9",
+             "subject_subgroup": "", "exam_track": "ОГЭ"},
+        ]
+        lesson = {"subject": "География", "teacher_hint": "Антон", "modifiers": {}, "activity_type": "lesson"}
+        group_ids, reason = _candidate_groups(
+            lesson, "9", groups, {"geography-oge": {"student"}}, {"student"},
+            [{"teacher_identity_id": "teacher", "group_id": "geography-oge", "subject": "География"}], {},
+        )
+        self.assertEqual(group_ids, [])
+        self.assertEqual(reason, "")
+
     def test_english_one_two_line_is_projected_to_both_grades(self):
         with self.database.connection() as connection:
             source = connection.execute("INSERT INTO school_sources(source_type,external_key,display_name) VALUES ('schedule','english-line','English line') RETURNING id").fetchone()[0]

@@ -149,6 +149,13 @@ def _candidate_groups(
             continue
         if subject and _subject(group.get("subject")) != subject:
             continue
+        # An exam-track canonical group is never a valid generic subject
+        # fallback.  It may participate only when the source lesson carries
+        # explicit exam evidence (or an administrator supplied a rule above).
+        # Otherwise an ordinary lesson such as Geography could be swallowed by
+        # Geography OGE merely because the teacher/subject happens to match.
+        if _norm(group.get("exam_track")) and not exam:
+            continue
         candidates.append(group)
     if lesson.get("activity_type") in {"course_choice", "digital_track"}:
         exact = [str(group["id"]) for group in candidates if _subject(group.get("subject")) == subject]
@@ -386,10 +393,23 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             rule = activity_rules[str(lesson["id"])]
             if rule["kind"] in {"group", "group_set", "class"}:
                 modifiers = lesson.get("modifiers") or {}
-                if _parallel_family(lesson):
+                # Explicit canonical membership is hard evidence and must win
+                # over structural column inference.  The latter is deliberately
+                # lower-confidence, even when it came from a Math/English
+                # anchor in this slot.
+                if rule.get("reason") == "manual/admin decision":
+                    rule["priority"] = 1
+                elif _parallel_family(lesson) and rule.get("reason") == "explicit membership":
+                    # A confirmed instructional lane (Math/English) is the
+                    # primary partition.  OGE is evaluated only for students
+                    # left after this lane has claimed its members.
+                    rule["priority"] = 5
+                elif _parallel_family(lesson):
                     rule["priority"] = 10
                 elif _norm(modifiers.get("exam_track")):
                     rule["priority"] = 20
+                elif rule.get("reason") == "explicit membership":
+                    rule["priority"] = 25
                 elif rule["kind"] == "class":
                     rule["priority"] = 30
                 else:
