@@ -368,6 +368,12 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 activity_rules[lesson_id] = {"kind": "class", "groups": [str(group["id"]) for group in base_groups], "students": set(universe), "reason": "structural digital track"}
                 explicit_count += 1
                 continue
+            # With a Math/English partition, a base-class lesson shown under
+            # 9-A/9-D is a residual activity for the block, not a class-only
+            # target. The source column is visual evidence, not its audience.
+            if lane_families and _is_base_class_activity(lesson):
+                activity_rules[lesson_id] = {"kind": "residual_base", "groups": [], "students": set(universe), "reason": "residual parallel activity"}
+                continue
             # Resolve an unqualified activity from the row-wide Math/English
             # lane before generic subject-group lookup. Otherwise a shared
             # subject group (e.g. Geography) can swallow a lane-specific cell
@@ -489,6 +495,7 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
             else:
                 rule.update({"kind": "ambiguous", "reason": "ambiguous lesson audience"})
 
+        residual_base_ids = [str(lesson["id"]) for lesson in lessons if activity_rules[str(lesson["id"])]["kind"] == "residual_base"]
         complement_ids = [str(lesson["id"]) for lesson in lessons if activity_rules[str(lesson["id"])]["kind"] == "complement"]
         for lesson in lessons:
             lesson_id = str(lesson["id"]); rule = activity_rules[lesson_id]
@@ -520,6 +527,15 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
                 allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": lesson,
                                     "kind": "lesson", "status": "assigned", "reason": rule["reason"],
                                     "provenance": {"reason": rule["reason"], "group_ids": rule.get("groups", []), "audience_key": _allocation_key(lesson, grade)}})
+            elif len(candidates) == 0 and len(residual_base_ids) == 1:
+                # A single base activity in a Math/English block is the
+                # residual lesson for students not claimed by a lane or an
+                # explicit OGE/group assignment.
+                lesson = next(item for item in lessons if str(item["id"]) == residual_base_ids[0])
+                rule = activity_rules[residual_base_ids[0]]
+                allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": lesson,
+                                    "kind": "lesson", "status": "assigned", "reason": rule["reason"],
+                                    "provenance": {"reason": rule["reason"], "residual": True, "audience_key": _allocation_key(lesson, grade)}})
             elif len(complement_ids) == 1:
                 lesson = next(item for item in lessons if str(item["id"]) == complement_ids[0]); reason = activity_rules[complement_ids[0]]["reason"]
                 allocations.append({"day": lesson_day, "time": start_time, "grade": grade, "student": student_id, "lesson": lesson,
