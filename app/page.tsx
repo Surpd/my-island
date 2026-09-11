@@ -2000,7 +2000,7 @@ function AdminApp({
   const previewStudents = useMemo(
     () => catalogUsers.filter((user) => {
       const roles = Array.isArray(user.roles) ? user.roles : [];
-      return user.identity_kind === 'student' && user.identity_id && roles.includes('student') && user.has_account !== false &&
+      return user.identity_kind === 'student' && user.identity_id && user.user_id && roles.includes('student') &&
         `${displayValue(user.display_name)} ${personBaseClass(user)}`.toLowerCase().includes(previewQuery.toLowerCase());
     }),
     [catalogUsers, previewQuery],
@@ -2159,7 +2159,7 @@ function AdminApp({
               <div className="student-preview-row" key={displayValue(student.id, String(index))}>
                 <span className="avatar-mini">{personLabel(student).slice(0, 1)}</span>
                 <div><strong>{personLabel(student)}</strong><small>{personBaseClass(student) || 'Класс не указан'}</small></div>
-                <button className="preview-button" onClick={() => void onPreview(displayValue(student.id)).catch((error) => setMessage(error instanceof Error ? error.message : 'Экран ученика не открылся'))}>Открыть как ученик</button>
+                <button className="preview-button" onClick={() => void onPreview(displayValue(student.user_id)).catch((error) => setMessage(error instanceof Error ? error.message : 'Экран ученика не открылся'))}>Открыть как ученик</button>
               </div>
             )) : <p className="calm-empty">Ученики не найдены. Проверьте имя или класс.</p>}
           </section>
