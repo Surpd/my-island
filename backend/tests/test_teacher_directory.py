@@ -12,6 +12,7 @@ from backend.services.teacher_directory import (
     parse_teacher_rows,
     sync_teacher_directory,
 )
+from backend.scripts.build_full_current_v2 import teacher_id_for
 
 
 class TeacherDirectoryTests(unittest.TestCase):
@@ -45,6 +46,19 @@ class TeacherDirectoryTests(unittest.TestCase):
         self.assertEqual(normalize_subjects("Русский язык, литература, лаборатория"), ("Русский язык", "Литература"))
         self.assertEqual(len(candidates), 4 + 6 + 4)
         self.assertFalse(mapping_issues)
+
+    def test_schedule_bootstrap_uses_shared_teacher_alias_directory(self):
+        teachers = [
+            {"id": "andrey", "display_name": "Андрей"},
+            {"id": "dmitry", "display_name": "Дмитрий Филиппов"},
+            {"id": "dmitry-k", "display_name": "Дмитрий К"},
+            {"id": "irina", "display_name": "Ирина Анатольевна"},
+            {"id": "elena", "display_name": "Елена Викторовна"},
+        ]
+        for alias, expected in (("ANK", "andrey"), ("DF", "dmitry"), ("ДК", "dmitry-k"), ("ИА", "irina"), ("ЕВ", "elena")):
+            teacher_id, issue = teacher_id_for(alias, "", teachers)
+            self.assertEqual(teacher_id, expected)
+            self.assertIsNone(issue)
 
     def test_sync_is_idempotent_and_does_not_touch_student_memberships(self):
         with tempfile.TemporaryDirectory() as directory:
