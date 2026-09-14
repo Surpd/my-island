@@ -1,0 +1,253 @@
+{
+  "artifact": {
+    "version_id": "c361e1e759d64e5cc0b3a0de1c0b4e3806e17cee24b2b160ed1161daaf168b8c",
+    "parent_version_id": "b4b45e997cf9b0586f887482b6fb71676091865fc4495c8fbd6f02606448db04",
+    "blocks": 255,
+    "assignments": 392,
+    "status": "approved_with_exceptions",
+    "authoritative": false
+  },
+  "student_projection": {
+    "states": {
+      "ACTIVITY": 3201,
+      "NO_LESSON": 1003,
+      "UNRESOLVED": 30
+    },
+    "duplicate_student_slots": [],
+    "multiple_activities": [],
+    "unknown_group_refs": [],
+    "unresolved_count": 30,
+    "unresolved_by_reason": {
+      "student is missing from the active English instructional partition": 6,
+      "student is missing from the active math instructional partition": 15,
+      "student is missing from the active english instructional partition": 7,
+      "contradictory elective memberships": 2
+    },
+    "active_students": 114
+  },
+  "teacher_projection": {
+    "resolved_assignments": 294,
+    "unresolved_assignments": [],
+    "orphan_expected_teacher": [],
+    "simultaneous_conflicts": [
+      {
+        "key": [
+          "2",
+          "09:00",
+          "8b2e4013-171a-45d3-a63b-238d8ac89b5a"
+        ],
+        "items": [
+          {
+            "block_key": "638874869|2026/27 шаблон|weekday-2|09:00|09:45|9",
+            "activity": "Физика"
+          },
+          {
+            "block_key": "638874869|2026/27 шаблон|weekday-2|09:00|09:45|9",
+            "activity": "Химия"
+          }
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "13:40",
+          "d60bc7f2-6dfb-49af-aef9-413059c1c710"
+        ],
+        "items": [
+          {
+            "block_key": "638874869|2026/27 шаблон|weekday-3|13:40|14:25|11",
+            "activity": "Русский язык"
+          },
+          {
+            "block_key": "638874869|2026/27 шаблон|weekday-3|13:40|14:25|8",
+            "activity": "Лаборатория"
+          }
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "14:35",
+          "d60bc7f2-6dfb-49af-aef9-413059c1c710"
+        ],
+        "items": [
+          {
+            "block_key": "638874869|2026/27 шаблон|weekday-3|14:35|15:20|11",
+            "activity": "Русский язык"
+          },
+          {
+            "block_key": "638874869|2026/27 шаблон|weekday-3|14:35|15:20|8",
+            "activity": "Лаборатория"
+          }
+        ]
+      }
+    ]
+  },
+  "semantic_diff": {
+    "counts": {
+      "unchanged": 245,
+      "changed": 10,
+      "audience/routing": 10,
+      "activity": 2,
+      "teacher": 2
+    },
+    "details": [
+      {
+        "key": [
+          "0",
+          "13:40",
+          "14:25",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "14:35",
+          "15:20",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "09:00",
+          "09:45",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "09:55",
+          "10:40",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "11:50",
+          "12:35",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "09:55",
+          "10:40",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "10:55",
+          "11:40",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "11:50",
+          "12:35",
+          "9"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "12:45",
+          "13:30",
+          "9"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "13:40",
+          "14:25",
+          "9"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      }
+    ]
+  },
+  "grade7_reuse": {
+    "candidate_version_id": "candidate-v2-grade7-fd6d3f3beccca0fc",
+    "replaced_block_count": 39
+  },
+  "source_metadata": {
+    "structured_values": true,
+    "source_cells": 398,
+    "sheet": "2026/27 шаблон",
+    "sheet_id": "638874869",
+    "source_of_truth": "live Google Sheet current template",
+    "historical_week_excluded": "7-11 Сентября",
+    "teacher_reconciliation_manifest": "schedule-teacher-reconciliation-v1",
+    "teacher_reconciliation_source": "manual_review_of_current_template_plus_resolver_correction",
+    "teacher_reconciliation_unapplied": [
+      {
+        "source_cell": "C52",
+        "reason": "source-only interpretation retained; no canonical assignment created",
+        "interpretation": {
+          "activity": "Лаборатория",
+          "teacher": "Дмитрий К",
+          "reason": "User grouped laboratory/past/present cells as laboratory; no persisted assignment currently exists"
+        }
+      },
+      {
+        "source_cell": "C53",
+        "reason": "source-only interpretation retained; no canonical assignment created",
+        "interpretation": {
+          "activity": "Лаборатория",
+          "teacher": "Дмитрий К",
+          "reason": "User grouped laboratory/past/present cells as laboratory; no persisted assignment currently exists"
+        }
+      }
+    ],
+    "raw_source_snapshot_id": "live-template-638874869-2026-09-13",
+    "raw_source_fingerprint": "872a2f427590a66e33c47fb2b84b96b10b6ae5db52cbb3233c57c53bf60c9f67",
+    "reconciliation_manifest_fingerprint": "cf87a273241a7f3e751636dcb3e15f2e77bcf434085b763ff434c60b629b3c19"
+  },
+  "current_week": {
+    "tab": "14-18 сентября",
+    "available": true,
+    "used_as_ground_truth": false
+  }
+}

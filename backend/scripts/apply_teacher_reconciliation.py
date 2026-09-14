@@ -186,6 +186,7 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--teacher-source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--parent-version-id", help="Persist this reviewed artifact as a child of an already imported version")
     parser.add_argument("--for-import", action="store_true", help="derive a unique immutable source identity for DB import")
     args = parser.parse_args()
     artifact = json.loads(args.artifact.read_text(encoding="utf-8"))
@@ -193,6 +194,12 @@ def main() -> int:
     teacher_source = json.loads(args.teacher_source.read_text(encoding="utf-8"))
     teachers = list((teacher_source.get("db") or {}).get("teachers") or [])
     corrected, report = reconcile(artifact, manifest, teachers)
+    if args.parent_version_id:
+        corrected["parent_version_id"] = args.parent_version_id
+        encoded = json.dumps({"parent": corrected["parent_version_id"], "source": corrected.get("source_snapshot"), "blocks": corrected.get("blocks")}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        corrected["version_id"] = hashlib.sha256(encoded).hexdigest()
+        report["parent_version_id"] = corrected["parent_version_id"]
+        report["version_id"] = corrected["version_id"]
     if args.for_import:
         report["source_fingerprint"] = make_import_identity(corrected, manifest)
         encoded = json.dumps({"parent": corrected["parent_version_id"], "source": corrected.get("source_snapshot"), "blocks": corrected.get("blocks")}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")

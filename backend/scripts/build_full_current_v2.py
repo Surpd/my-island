@@ -205,6 +205,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--grade7", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--parent-version-id", default="4d21ef71ba1b0cb92b48735f410758b64a882c5f496a4361be02c5a6e229cf93")
     args = parser.parse_args()
     payload = json.loads(args.input.read_text(encoding="utf-8"))
     source_values = payload["values"]
@@ -240,7 +241,7 @@ def main() -> None:
     add_teacher_resolution(artifact, lessons, teachers)
     artifact["schema_version"] = "canonical-schedule-v2"
     artifact["interpretation_source"] = "live_template_agent_bootstrap_v2"
-    artifact["parent_version_id"] = "4d21ef71ba1b0cb92b48735f410758b64a882c5f496a4361be02c5a6e229cf93"
+    artifact["parent_version_id"] = args.parent_version_id
     artifact["status"] = "approved_with_exceptions" if artifact.get("unresolved") or artifact.get("teacher_resolution", {}).get("issues") else "candidate"
     artifact["authoritative"] = False
     artifact["source_snapshot"] = corpus["snapshot"]

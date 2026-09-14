@@ -1,0 +1,19 @@
+{
+  "schema_version": "schedule-teacher-reconciliation-v1",
+  "source": "manual_review_of_current_template_plus_resolver_correction",
+  "confirmed_by": "user",
+  "resolution_revision": "ordinary_subjects_use_explicit_cell_audience_v1",
+  "teacher_overrides": {
+    "L5": {"teacher": "Антон", "reason": "Grade 9A class hour; manually confirmed from template context"},
+    "S19": {"teacher": "Татьяна", "reason": "Grade 11 class hour; manually confirmed from template color/context"},
+    "S35": {"teacher": "Татьяна", "reason": "Grade 11 Russian practicum; manually confirmed from template color/context"},
+    "S45": {"teacher": "Татьяна", "reason": "Grade 11 Russian practicum; manually confirmed from template color/context"},
+    "S46": {"teacher": "Татьяна", "reason": "Grade 11 Russian practicum; manually confirmed from template color/context"},
+    "I53": {"teacher": "Ангелина", "reason": "English group 4; manually confirmed after template rename"},
+    "C54": {"teacher": "Дмитрий К", "activity": "Лаборатория", "reason": "Laboratory block; DK color/context manually confirmed"}
+  },
+  "source_only_interpretations": {
+    "C52": {"activity": "Лаборатория", "teacher": "Дмитрий К", "reason": "User grouped laboratory/past/present cells as laboratory; no persisted assignment currently exists"},
+    "C53": {"activity": "Лаборатория", "teacher": "Дмитрий К", "reason": "User grouped laboratory/past/present cells as laboratory; no persisted assignment currently exists"}
+  }
+}
