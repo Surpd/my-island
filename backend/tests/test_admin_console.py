@@ -52,6 +52,17 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         response = TestClient(app).get("/api/admin/groups", headers={"X-Dev-Auth": "admin:1"})
         self.assertNotEqual(response.status_code, 404)
 
+    def test_admin_student_schedule_route_is_available(self):
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        response = TestClient(app).get(
+            "/api/admin/people/00000000-0000-0000-0000-000000000000/schedule?start_day=2026-09-14&end_day=2026-09-18",
+            headers={"X-Dev-Auth": "admin:1"},
+        )
+        self.assertNotEqual(response.status_code, 405)
+
 
 if __name__ == "__main__":
     unittest.main()

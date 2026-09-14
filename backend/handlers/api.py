@@ -356,6 +356,22 @@ def create_router(database: Database) -> APIRouter:
         require_role(telegram_user, "admin")
         return database.list_people_filter_options()
 
+    @router.get("/admin/people/{identity_id}/schedule")
+    def admin_person_schedule(identity_id: str, start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        person = database.get_people_library_person(identity_id)
+        if not person or person.get("kind") != "student":
+            raise HTTPException(status_code=404, detail="Active student identity was not found")
+        try:
+            date.fromisoformat(start_day)
+            if end_day:
+                date.fromisoformat(end_day)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
+        projection = project_student_range(database, identity_id, start_day, end_day)
+        return {"student": {"id": person["id"], "display_name": person["display_name"], "class_name": person.get("class_name"), "status": person.get("status")}, **projection}
+
     @router.get("/admin/people/{identity_id}")
     def admin_person(identity_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
