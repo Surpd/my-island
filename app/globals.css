@@ -2065,6 +2065,24 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .schedule-v2-check input { accent-color: var(--schedule-v2-accent); }
 .schedule-v2-workspace { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(340px, .7fr); gap: 16px; align-items: start; }
 .schedule-v2-detail { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.schedule-v2-student-preview { position: fixed; z-index: 30; top: 24px; right: 24px; width: min(420px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; box-shadow: 0 18px 48px rgb(25 63 72 / 18%); }
+.schedule-v2-student-preview h2 { margin: 0; font-size: 18px; }
+.schedule-v2-student-preview .admin-panel__heading .admin-link { display: inline-flex; align-items: center; gap: 5px; }
+.schedule-v2-student-preview__summary { display: flex; flex-wrap: wrap; gap: 7px; margin: 8px 0 12px; color: #668087; font-size: 10px; }
+.schedule-v2-student-preview__summary strong { color: #244852; }
+.schedule-v2-student-preview__actions { margin-bottom: 15px; }
+.schedule-v2-student-preview__actions a { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.schedule-v2-student-preview > section { margin-top: 17px; }
+.schedule-v2-student-preview__chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.schedule-v2-student-preview__chips span { padding: 5px 7px; border-radius: 6px; background: #f0f5f5; color: #496971; font-size: 10px; }
+.schedule-v2-student-preview__source { margin: 17px 0 0; color: #8a9ba0; font-size: 9px; overflow-wrap: anywhere; }
+.schedule-v2-student-button { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; max-width: 100%; padding: 5px 7px; border: 1px solid #dce9ea; border-radius: 6px; background: #f7fbfb; color: #315660; text-align: left; cursor: pointer; }
+.schedule-v2-student-button:hover { border-color: #83b9ba; background: #eef8f7; }
+.schedule-v2-student-button strong { font-size: 9px; overflow-wrap: anywhere; }
+.schedule-v2-student-button small { color: #789098; font-size: 8px; }
+.schedule-v2-issue { display: grid; gap: 6px; }
+.schedule-v2-issue p { margin: 0; }
+.schedule-v2-issue__students { display: flex; flex-wrap: wrap; gap: 5px; }
 .schedule-v2-detail > section { margin-top: 19px; }
 .schedule-v2-detail__summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; color: #668087; font-size: 11px; }
 .schedule-v2-detail__summary strong { color: #244852; }
@@ -2150,6 +2168,7 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 @media (max-width: 980px) { .admin-console { grid-template-columns: 214px minmax(0, 1fr); } .admin-console-main { padding: 0 24px 42px; } .admin-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .schedule-counter-grid { grid-template-columns: repeat(4, minmax(105px, 1fr)); } }
 @media (max-width: 720px) { .admin-console { display: block; } .admin-console-sidebar { position: sticky; z-index: 4; top: 0; height: auto; padding: 12px; } .admin-console-brand { margin-bottom: 10px; } .admin-console-sidebar nav { display: flex; overflow-x: auto; } .admin-console-sidebar nav button { width: auto; min-width: max-content; } .admin-console-sidebar nav button svg:last-child, .admin-console-sidebar__footer { display: none; } .admin-console-main { padding: 0 14px 32px; } .admin-console-header { min-height: 106px; padding: 20px 0; } .admin-console-header__meta { display: none; } .admin-two-col, .admin-schedule-workspace, .schedule-issue-card, .schedule-v2-workspace { grid-template-columns: 1fr; } .admin-schedule-detail, .schedule-v2-detail { position: static; max-height: none; } .admin-page-actions, .admin-toolbar, .schedule-filter-row { align-items: stretch; flex-direction: column; } .admin-toolbar select { width: 100%; min-height: 40px; } .admin-metric-grid, .schedule-counter-grid, .schedule-v2-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .schedule-v2-identity-grid, .schedule-v2-teacher-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .schedule-v2-diff-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .schedule-v2-list-head { display: none; } .schedule-v2-block-row { grid-template-columns: 1fr 1fr; gap: 8px; padding: 13px 0; } .schedule-v2-block-row > :nth-child(3) { grid-column: 1 / -1; } .schedule-v2-block-row > :nth-child(4) { grid-column: 1 / -1; } .schedule-v2-projection-row { grid-template-columns: 1fr; gap: 3px; } .admin-identity-card { align-items: flex-start; flex-wrap: wrap; } .admin-identity-card__meta { width: 100%; margin-left: 64px; text-align: left; } .schedule-example-row, .schedule-issue-card details { margin-left: 0; } .schedule-mapping-row { align-items: stretch; flex-direction: column; } .schedule-class-week { display: block; overflow: visible; } .schedule-class-day { margin-bottom: 14px; } .schedule-slot-grid { grid-template-columns: 1fr; padding: 0 10px 10px; } .schedule-slot-grid article { padding: 14px; } .schedule-audience-decision { padding-top: 4px; } }
+@media (max-width: 720px) { .schedule-v2-student-preview { position: fixed; top: 12px; right: 12px; width: calc(100vw - 24px); max-height: calc(100vh - 24px); } }
 @media (max-width: 380px) {
   .brand-subtitle {
     display: none;
