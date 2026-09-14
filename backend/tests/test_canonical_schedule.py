@@ -164,6 +164,25 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         teacher_projection = project_teacher_range(self.database, self.teacher["id"], "2026-09-09", "2026-09-09")
         self.assertEqual(teacher_projection["items"], [])
 
+    def test_weekly_patch_preserves_baseline_teacher_when_audience_and_cell_match(self):
+        import_canonical_artifact(self.database, self.artifact())
+        materialize_effective_week(self.database, self.version_id, "2026-09-14", patches=[{
+            "block_key": self.block_key,
+            "change_kind": "replaced",
+            "assignments": [{
+                "activity": "Математика",
+                "role": "primary",
+                "audience": {"type": "canonical_groups", "canonical_group_ids": [str(self.math_group["id"])]},
+                "teacher_ids": [],
+                "source_cells": ["B3"],
+            }],
+        }])
+        result = schedule_admin_observability(self.database, "2026-09-14")
+        effective = result["blocks"][0]["effective_assignments"][0]
+        self.assertEqual(effective["teacher_ids"], [str(self.teacher["id"])])
+        self.assertEqual(effective["teachers"], ["Teacher One"])
+        self.assertEqual(result["teacher_projection"]["unresolved"], 1)
+
     def test_unknown_canonical_group_is_unresolved_not_no_lesson(self):
         artifact = self.artifact()
         artifact["blocks"][self.block_key]["assignments"][0]["audience"]["canonical_group_ids"] = ["missing-group"]

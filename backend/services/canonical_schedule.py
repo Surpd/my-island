@@ -628,7 +628,53 @@ def _block_rows(database: Database, effective_week_id: str) -> list[dict[str, An
 
 def _assignments(database: Database, block_id: Any, patch: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     if patch and isinstance(patch.get("assignments"), list):
-        return [dict(item) for item in patch["assignments"] if isinstance(item, Mapping)]
+        result = [dict(item) for item in patch["assignments"] if isinstance(item, Mapping)]
+        # A weekly patch replaces the assignment payload, but an omitted teacher
+        # is not evidence that a reviewed baseline teacher was removed. Preserve
+        # that proof when the source cell and canonical audience are unchanged.
+        if block_id is not None and result:
+            baseline = _assignments(database, block_id)
+
+            def source_cells(assignment: Mapping[str, Any]) -> set[str]:
+                values = assignment.get("source_cells") or []
+                result: set[str] = set()
+                for item in values:
+                    value = (item.get("coordinate") or item.get("cell")) if isinstance(item, Mapping) else item
+                    if value:
+                        result.add(str(value))
+                return result
+
+            def group_ids(assignment: Mapping[str, Any]) -> set[str]:
+                audience = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
+                return {str(value) for value in audience.get("canonical_group_ids") or assignment.get("canonical_group_ids") or []}
+
+            for item in result:
+                if item.get("teacher_ids"):
+                    continue
+                item_cells = source_cells(item)
+                item_groups = group_ids(item)
+                candidates = [
+                    candidate for candidate in baseline
+                    if item_cells
+                    and item_cells.intersection(source_cells(candidate))
+                    and item_groups
+                    and item_groups == group_ids(candidate)
+                    and candidate.get("teacher_ids")
+                ]
+                if len(candidates) != 1:
+                    continue
+                candidate = candidates[0]
+                item["teacher_ids"] = list(candidate.get("teacher_ids") or [])
+                metadata = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), Mapping) else {}
+                baseline_metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), Mapping) else {}
+                if not metadata.get("teachers") and baseline_metadata.get("teachers"):
+                    metadata["teachers"] = list(baseline_metadata["teachers"])
+                metadata["teacher_inheritance"] = {
+                    "source": "canonical_baseline",
+                    "reason": "weekly patch omitted teacher while source cell and canonical audience remained unchanged",
+                }
+                item["metadata"] = metadata
+        return result
     cache = getattr(database, "_canonical_assignment_cache", None)
     if cache is None:
         cache = {}
