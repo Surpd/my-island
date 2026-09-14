@@ -18,6 +18,7 @@ from backend.database import Database
 
 CANONICAL_STATUSES = {"draft", "approved_baseline", "approved_with_exceptions", "authoritative", "superseded"}
 _NO_LESSON = "NO_LESSON"
+_OPTIONAL_TEACHER_ACTIVITIES = {"Творчество", "Тренинг", "Курс по выбору", "Цифровой трек", "SDEP"}
 
 
 def _json(database: Database, value: Any) -> Any:
@@ -743,7 +744,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
             "room": metadata.get("room") or "",
             "source_cells": assignment.get("source_cells") or [],
             "student_count": len(affected) if group_ids else None,
-            "teacher_issue": metadata.get("teacher_issue") or ("teacher_id=null" if not teacher_ids and str(assignment.get("activity") or "") != _NO_LESSON else ""),
+            "teacher_issue": metadata.get("teacher_issue") or ("teacher_id=null" if not teacher_ids and str(assignment.get("activity") or "") not in {_NO_LESSON, *_OPTIONAL_TEACHER_ACTIVITIES} else ""),
         }
 
     def source_coordinates(provenance: Any) -> list[str]:
@@ -797,6 +798,8 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
             role = assignment_role(assignment)
             teacher_ids = [str(value) for value in assignment.get("teacher_ids") or []]
             if not teacher_ids:
+                if activity in _OPTIONAL_TEACHER_ACTIVITIES:
+                    continue
                 issue = {"block_key": block.get("block_key"), "activity": activity, "source_cells": assignment.get("source_cells") or [], "reason": (assignment.get("metadata") or {}).get("teacher_issue") if isinstance(assignment.get("metadata"), Mapping) else "teacher_id=null"}
                 issue["reason"] = issue["reason"] or "teacher_id=null"
                 teacher_unresolved.append(issue)
