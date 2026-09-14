@@ -1,261 +1,58 @@
+/* oxlint-disable */
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronDown, Clock3, RefreshCw, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { AlertTriangle, CalendarDays, CheckCircle2, ChevronDown, Clock3, Filter, RefreshCw, ShieldCheck, Users } from 'lucide-react';
 
 type Item = Record<string, any>;
 type AdminApi = <T>(path: string, init?: RequestInit) => Promise<T>;
-
-const STATUS_LABELS: Record<string, string> = {
-  RESOLVED: 'Решено', WARNING: 'Нужно проверить', UNRESOLVED: 'Не определено', CONFLICT: 'Конфликт',
-};
-
-const DIFF_LABELS: Record<string, string> = { added: 'Добавлено', changed: 'Изменено', removed: 'Отменено' };
-
-function humanReason(group: Item) {
-  if (group.mapping_type === 'identity') return `В расписании обозначение «${group.external_key}» не связано с одним преподавателем.`;
-  if (group.mapping_type === 'group') return `Обозначение «${group.external_key}» не связано с одним каноническим классом или группой.`;
-  return group.description || 'Нужно подтвердить интерпретацию данных источника.';
-}
+const WEEK = '2026-09-14';
+const DAY_NAMES = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт'];
+const DIFF_LABELS: Record<string, string> = { UNCHANGED: 'Без изменений', REPLACED: 'Заменено', SEMANTIC_AUDIENCE_CHANGE: 'Изменилась аудитория', CANCELLED: 'Отменено', MOVED: 'Перенесено', ADDED: 'Добавлено', METADATA_ONLY: 'Только метаданные' };
 
 function formatDate(value: unknown) {
   if (!value) return '—';
   const parsed = new Date(String(value));
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('ru-RU');
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleDateString('ru-RU');
+}
+function shortFingerprint(value: unknown) { const text = String(value || ''); return text ? `${text.slice(0, 12)}…${text.slice(-8)}` : '—'; }
+function yesNo(value: unknown) { return value === true || value === 'true' ? 'да' : value === false || value === 'false' ? 'нет' : '—'; }
+function sourceCells(value: unknown) { return Array.isArray(value) ? value.map((item) => typeof item === 'object' && item ? String(item.coordinate || item.cell || '') : String(item)).filter(Boolean) : []; }
+function changeLabel(value: unknown) { return DIFF_LABELS[String(value || '').toUpperCase()] || String(value || 'Без изменений'); }
+
+function StatCard({ label, value, hint, active, tone = 'neutral', onClick }: { label: string; value: unknown; hint?: string; active?: boolean; tone?: string; onClick: () => void }) {
+  return <button type="button" className={`schedule-v2-stat schedule-v2-stat--${tone} ${active ? 'is-active' : ''}`} onClick={onClick} aria-pressed={active}><strong>{String(value ?? 0)}</strong><span>{label}</span>{hint ? <small>{hint}</small> : null}</button>;
 }
 
-function mappingScope(mapping: Item) {
-  if (mapping.mapping_type !== 'audience_rule') return 'Используется в следующих sync и неделях';
-  return String(mapping.external_key || '').startsWith('case:') ? 'Только сохранённый конкретный slot' : 'Повторяющиеся случаи (сохранено явно администратором)';
+function Assignment({ assignment }: { assignment: Item }) {
+  return <article className="schedule-v2-assignment"><div className="schedule-v2-assignment__head"><strong>{assignment.activity || 'Без названия'}</strong><span>{assignment.role || 'primary'}</span></div><div className="schedule-v2-assignment__meta"><span>Аудитория: {assignment.groups?.length ? assignment.groups.join(', ') : assignment.audience_kind === 'complement' ? 'остаток параллели' : '—'}</span><span>Учитель: {assignment.teachers?.length ? assignment.teachers.join(', ') : assignment.teacher_issue ? `не определён · ${assignment.teacher_issue}` : '—'}</span><span>Кабинет: {assignment.room || '—'}</span>{assignment.student_count !== null && assignment.student_count !== undefined ? <span>Учеников в группе: {assignment.student_count}</span> : null}</div>{assignment.source_cells?.length ? <small>Ячейки: {sourceCells(assignment.source_cells).join(', ')}</small> : null}</article>;
+}
+
+function BlockDetail({ block, onClose }: { block: Item; onClose: () => void }) {
+  const provenance = block.source_provenance || {};
+  return <aside className="admin-panel schedule-v2-detail"><div className="admin-panel__heading"><div><p className="admin-eyebrow">ДЕТАЛИ CANONICAL BLOCK</p><h2>{block.date || '—'} · {String(block.start_time || '').slice(0, 5)}–{String(block.end_time || '').slice(0, 5)}</h2></div><button type="button" className="admin-link" onClick={onClose}>Закрыть</button></div><div className="schedule-v2-detail__summary"><strong>{block.grade_scope ? `${block.grade_scope} класс` : 'Параллель'}</strong><span>{block.routing_dimension || 'routing dimension не указана'}</span><span className={`schedule-v2-change schedule-v2-change--${String(block.change_classification || 'UNCHANGED').toLowerCase()}`}>{changeLabel(block.change_classification)}</span></div><dl className="schedule-v2-definition"><dt>Source cells</dt><dd>{sourceCells(provenance.source_cells || block.source_cells).join(', ') || '—'}</dd><dt>Block key</dt><dd className="admin-mono">{block.block_key || '—'}</dd><dt>Effective students</dt><dd>{block.affected_students?.count || 0} · {Object.entries(block.affected_students?.states || {}).map(([key, value]) => `${key}: ${String(value)}`).join(' · ') || 'нет projection entries'}</dd></dl><section><div className="schedule-v2-section-title"><h3>Canonical baseline</h3><span>{block.baseline_assignments?.length || 0} assignments</span></div>{block.baseline_assignments?.length ? block.baseline_assignments.map((assignment: Item, index: number) => <Assignment key={`baseline-${index}`} assignment={assignment} />) : <p className="admin-empty">Нет baseline assignment</p>}</section><section><div className="schedule-v2-section-title"><h3>Weekly change</h3><span>{block.weekly_change ? changeLabel(block.weekly_change.change_classification) : 'нет'}</span></div>{block.weekly_change ? <div className="schedule-v2-weekly-change"><p>Weekly cells: {sourceCells(block.weekly_change.weekly_source_cells).join(', ') || '—'}</p>{Object.entries(block.weekly_change.weekly_raw_text || {}).map(([cell, raw]) => <div key={cell}><strong>{cell}</strong><pre>{String(raw || '')}</pre></div>)}</div> : <p className="admin-empty">Overlay для этого блока не меняет baseline.</p>}</section><section><div className="schedule-v2-section-title"><h3>Effective result</h3><span>{block.effective_assignments?.length || 0} assignments</span></div>{block.effective_assignments?.length ? block.effective_assignments.map((assignment: Item, index: number) => <Assignment key={`effective-${index}`} assignment={assignment} />) : <p className="admin-empty">Итог: NO_LESSON для оставшихся учеников или отменённый block</p>}</section><section><div className="schedule-v2-section-title"><h3>Groups / students</h3><Users size={16} /></div><p>{block.affected_students?.count || 0} затронутых student-slot entries</p><div className="schedule-v2-chip-list">{(block.affected_students?.sample || []).map((student: Item) => <span key={String(student.id)}>{String(student.name || student.id)} · {String(student.state)}</span>)}</div></section><section><div className="schedule-v2-section-title"><h3>Issues / reasons</h3><AlertTriangle size={16} /></div>{block.issues?.length ? <ul className="schedule-v2-issue-list">{block.issues.map((issue: Item, index: number) => <li key={`${String(issue.reason)}-${index}`}>{String(issue.reason || 'Не указано')}{issue.activity ? ` · ${String(issue.activity)}` : ''}{issue.source_cells?.length ? ` · ${sourceCells(issue.source_cells).join(', ')}` : ''}</li>)}</ul> : <p className="admin-empty">Проблем не обнаружено.</p>}</section></aside>;
 }
 
 export function ScheduleAdmin({ api }: { api: AdminApi }) {
-  const [overview, setOverview] = useState<Item | null>(null);
-  const [lessons, setLessons] = useState<Item[]>([]);
-  const [reconciliation, setReconciliation] = useState<Item>({ issue_groups: [], mappings: [], teachers: [], groups: [] });
-  const [week, setWeek] = useState('');
-  const [status, setStatus] = useState('');
-  const [busy, setBusy] = useState('');
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [decisions, setDecisions] = useState<Record<string, string>>({});
-  const [allocation, setAllocation] = useState<Item>({ summary: {}, slots: [], day_blocks: [], students: [], teachers: [], groups: [], student_preview: [], student_day_blocks: [], teacher_preview: [] });
-  const [grade, setGrade] = useState('9');
-  const [studentPreview, setStudentPreview] = useState('');
-  const [teacherPreview, setTeacherPreview] = useState('');
-  const [audienceDecisions, setAudienceDecisions] = useState<Record<string, { decision_type: string; group_ids: string[]; persistent: boolean }>>({});
-
-  const loadAllocation = async (selectedWeek: string, selectedGrade = grade, student = studentPreview, teacher = teacherPreview) => {
-    if (!selectedWeek) return;
-    const query = new URLSearchParams({ week_start: selectedWeek, grade: selectedGrade });
-    if (student) query.set('student_id', student);
-    if (teacher) query.set('teacher_id', teacher);
-    setAllocation(await api<Item>(`/api/admin/schedule/allocation-qa?${query}`));
-  };
-
-  const loadWeek = async (selectedWeek: string, selectedStatus = status) => {
-    setError('');
-    const query = new URLSearchParams();
-    if (selectedWeek) query.set('week_start', selectedWeek);
-    const lessonQuery = new URLSearchParams(query);
-    if (selectedStatus) lessonQuery.set('status', selectedStatus);
-    const [nextOverview, nextLessons, nextReconciliation] = await Promise.all([
-      api<Item>(`/api/admin/schedule/overview?${query}`),
-      api<{ items: Item[] }>(`/api/admin/schedule/lessons?${lessonQuery}`),
-      api<Item>(`/api/admin/schedule/reconciliation?${query}`),
-    ]);
-    setOverview(nextOverview);
-    setLessons(nextLessons.items || []);
-    setReconciliation(nextReconciliation);
-  };
-
-  const bootstrap = async () => {
-    setBusy('load'); setError('');
-    try {
-      const initial = await api<Item>('/api/admin/schedule/overview');
-      const selectedWeek = String(initial.selected_week || initial.weeks?.[0]?.week_start || '');
-      setWeek(selectedWeek);
-      await Promise.all([loadWeek(selectedWeek, ''), loadAllocation(selectedWeek, '9', '', '')]);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Не удалось загрузить расписание');
-    } finally { setBusy(''); }
-  };
-
-  useEffect(() => { void bootstrap(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const selectStatus = async (nextStatus: string) => {
-    const selected = status === nextStatus ? '' : nextStatus;
-    setStatus(selected); setBusy('filter');
-    try { await loadWeek(week, selected); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось применить фильтр'); }
-    finally { setBusy(''); }
-  };
-
-  const selectWeek = async (nextWeek: string) => {
-    setWeek(nextWeek); setBusy('filter');
-    try { await Promise.all([loadWeek(nextWeek, status), loadAllocation(nextWeek)]); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить неделю'); }
-    finally { setBusy(''); }
-  };
-
-  const selectGrade = async (nextGrade: string) => {
-    setGrade(nextGrade); setBusy('allocation');
-    try { await loadAllocation(week, nextGrade); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить распределение'); }
-    finally { setBusy(''); }
-  };
-
-  const selectPreview = async (kind: 'student' | 'teacher', value: string) => {
-    if (kind === 'student') setStudentPreview(value); else setTeacherPreview(value);
-    setBusy('allocation');
-    try { await loadAllocation(week, grade, kind === 'student' ? value : studentPreview, kind === 'teacher' ? value : teacherPreview); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось построить preview'); }
-    finally { setBusy(''); }
-  };
-
-  const refresh = async () => {
-    setBusy('refresh'); setError(''); setMessage('');
-    try {
-      const result = await api<Item>('/api/admin/schedule/refresh', { method: 'POST' });
-      if (result.status === 'blocked' || result.ok === false) setMessage(String(result.message || 'Синхронизация заблокирована настройками источника'));
-      else { setMessage('Источник обновлён, baseline и изменения недели пересчитаны.'); await bootstrap(); }
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось обновить источник'); }
-    finally { setBusy(''); }
-  };
-
-  const recalculate = async () => {
-    setBusy('recalculate'); setError(''); setMessage('');
-    try {
-      const result = await api<Item>('/api/admin/schedule/recalculate', { method: 'POST' });
-      if (result.status === 'blocked') setMessage(String(result.message || 'Нет сохранённого snapshot для пересчёта'));
-      else { setMessage('Производные данные пересчитаны по последнему snapshot. Новый snapshot Google не создан.'); await bootstrap(); }
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось пересчитать расписание'); }
-    finally { setBusy(''); }
-  };
-
-  const saveDecision = async (group: Item) => {
-    const key = `${group.mapping_type}:${group.external_key}`;
-    const target = decisions[key] || '';
-    if (!target) { setError('Сначала выберите преподавателя или группу.'); return; }
-    setBusy(key); setError(''); setMessage('');
-    try {
-      await api('/api/admin/schedule/mappings', { method: 'POST', body: JSON.stringify({ mapping_type: group.mapping_type, external_key: group.external_key, target_id: target }) });
-      setMessage(`Решение для «${group.external_key}» сохранено и применено ко всем совпадениям.`);
-      setDecisions((current) => { const next = { ...current }; delete next[key]; return next; });
-      await loadWeek(week, status);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось сохранить решение'); }
-    finally { setBusy(''); }
-  };
-
-  const retireMapping = async (mapping: Item) => {
-    setBusy(`retire:${mapping.id}`); setError('');
-    try {
-      await api(`/api/admin/schedule/mappings/${mapping.id}`, { method: 'DELETE' });
-      setMessage(`Правило для «${mapping.external_key}» отключено.`);
-      await loadWeek(week, status);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось отключить правило'); }
-    finally { setBusy(''); }
-  };
-
-  const audienceCaseKey = (activity: Item) => `${activity.lesson_id || 'slot'}:${activity.lesson_date || week}:${activity.grade_scope || grade}`;
-  const audienceDecisionFor = (activity: Item) => audienceDecisions[audienceCaseKey(activity)] || { decision_type: 'canonical_group', group_ids: [], persistent: false };
-  const decisionLabel: Record<string, string> = {
-    canonical_group: 'Конкретная группа', groups: 'Несколько групп', base_class: 'Весь базовый класс',
-    parallel: 'Вся параллель', complement: 'Все остальные после уже назначенных', no_lesson: 'Нет урока',
-  };
-  const saveAudienceDecision = async (activity: Item) => {
-    const key = audienceCaseKey(activity);
-    const decision = audienceDecisionFor(activity);
-    const needsGroups = ['canonical_group', 'groups', 'base_class'].includes(decision.decision_type);
-    if (needsGroups && !decision.group_ids.length) { setError('Выберите группу или группы для этого решения.'); return; }
-    setBusy(`audience:${key}`); setError('');
-    try {
-      await api('/api/admin/schedule/mappings', { method: 'POST', body: JSON.stringify({ mapping_type: 'audience_rule', external_key: String(activity.provenance?.audience_key || ''), decision_type: decision.decision_type, group_ids: decision.group_ids, lesson_id: activity.lesson_id, week_start: activity.week_start || week, grade_scope: activity.grade_scope || grade, persistent: decision.persistent }) });
-      setMessage(decision.persistent ? 'Решение сохранено как отдельное правило для повторяющихся случаев.' : 'Решение сохранено только для этого конкретного slot.');
-      setAudienceDecisions((current) => { const next = { ...current }; delete next[key]; return next; });
-      await loadAllocation(week, grade);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось сохранить правило аудитории'); }
-    finally { setBusy(''); }
-  };
-
-  const summary = overview?.summary || {};
-  const activeMappings = useMemo(() => (reconciliation.mappings || []).filter((item: Item) => !item.valid_until), [reconciliation.mappings]);
-  const issueGroups = useMemo(() => (reconciliation.issue_groups || []).filter((item: Item) => !status || Number(item.statuses?.[status] || 0) > 0), [reconciliation.issue_groups, status]);
-  const classDays = useMemo(() => {
-    const grouped = new Map<string, Item[]>();
-    for (const slot of allocation.slots || []) {
-      const day = String(slot.lesson_date || '');
-      grouped.set(day, [...(grouped.get(day) || []), slot]);
-    }
-    for (const block of allocation.day_blocks || []) {
-      const day = String(block.lesson_date || '');
-      if (day) grouped.set(day, grouped.get(day) || []);
-    }
-    return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right));
-  }, [allocation.slots, allocation.day_blocks]);
-  const choicesFor = (group: Item) => group.mapping_type === 'identity' ? reconciliation.teachers || [] : reconciliation.groups || [];
-
-  if (!overview && busy === 'load') return <div className="admin-loading"><RefreshCw className="admin-spin" size={18} />Загружаем расписание…</div>;
-  if (!overview) return <div className="admin-error"><AlertTriangle size={17} /><div><strong>Не удалось загрузить расписание</strong><p>{error}</p></div><button className="admin-button admin-button--quiet" onClick={() => void bootstrap()}>Повторить</button></div>;
-
-  return <div className="admin-stack schedule-reconciliation">
-    <div className="admin-page-actions">
-      <div><strong>Сверка расписания</strong><p>Шаблон — baseline. Каждая недельная вкладка показывает только изменения для своих дат.</p></div>
-      <div className="admin-button-row"><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void refresh()}><RefreshCw size={15} className={busy === 'refresh' ? 'admin-spin' : ''} />{busy === 'refresh' ? 'Проверяем Google…' : 'Обновить из источника'}</button><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void recalculate()}><RefreshCw size={15} className={busy === 'recalculate' ? 'admin-spin' : ''} />{busy === 'recalculate' ? 'Пересчитываем…' : 'Пересчитать правила'}</button><button className="admin-button admin-button--quiet" disabled={!!busy} onClick={() => void loadWeek(week)}>Перечитать</button></div>
-    </div>
-    {error ? <div className="admin-error"><AlertTriangle size={17} /><div><strong>Не удалось выполнить действие</strong><p>{error}</p></div></div> : null}
-    {message ? <div className="admin-callout admin-callout--safe"><CheckCircle2 size={16} /><span>{message}</span></div> : null}
-    <section className="admin-panel schedule-source-card">
-      <div className="admin-panel__heading"><div><p className="admin-eyebrow">ИСТОЧНИК / BASELINE</p><h2>{overview.source?.name || 'Расписание'}</h2></div><span className="admin-status admin-status--good">Подключено</span></div>
-      <div className="schedule-source-meta"><span>Шаблон: <strong>{overview.source?.template || '—'}</strong></span><span>Неделя: <strong>{week || '—'}</strong></span><span>Последняя синхронизация: <strong>{formatDate(overview.last_sync)}</strong></span></div>
-    </section>
-    <section className="schedule-counter-grid" aria-label="Фильтр по состоянию сверки">
-      {(['RESOLVED','WARNING','UNRESOLVED','CONFLICT'] as const).map((key) => <button key={key} className={`schedule-counter schedule-counter--${key.toLowerCase()} ${status === key ? 'is-active' : ''}`} aria-pressed={status === key} disabled={busy === 'filter'} onClick={() => void selectStatus(key)}><strong>{Number(summary[key.toLowerCase()] || 0)}</strong><span>{STATUS_LABELS[key]}</span></button>)}
-      {(['added','changed','removed'] as const).map((key) => <div key={key} className="schedule-counter schedule-counter--diff"><strong>{Number(summary[key] || 0)}</strong><span>{DIFF_LABELS[key]}</span></div>)}
-    </section>
-    <div className="schedule-filter-row"><label>Неделя<select value={week} onChange={(event) => void selectWeek(event.target.value)}>{(overview.weeks || []).map((item: Item) => <option key={item.week_start} value={item.week_start}>{item.week_start} · {item.lessons} уроков</option>)}</select></label>{status ? <button className="admin-button admin-button--quiet" onClick={() => void selectStatus(status)}>Сбросить фильтр «{STATUS_LABELS[status]}»</button> : null}</div>
-    <section className="admin-panel">
-      <div className="admin-panel__heading"><div><p className="admin-eyebrow">ТРЕБУЮТ РЕШЕНИЯ</p><h2>Повторяющиеся проблемы</h2></div><span>{issueGroups.length} групп</span></div>
-      {issueGroups.length ? <div className="schedule-issue-list">{issueGroups.map((group: Item) => {
-        const key = `${group.mapping_type}:${group.external_key}`;
-        return <article className="schedule-issue-card" key={key}>
-          <div className="schedule-issue-card__copy"><div className="schedule-issue-card__title"><span className="schedule-issue-count">{group.count}</span><div><h3>{group.title}</h3><p>{humanReason(group)}</p></div></div><div className="schedule-example-row">{(group.examples || []).slice(0, 3).map((example: Item, index: number) => <span key={`${example.cell}-${index}`}>{example.date || 'Шаблон'} · {example.time || ''} · {example.subject || 'Без предмета'} · {example.audience || 'Без группы'}</span>)}</div><details><summary>Технические детали <ChevronDown size={14} /></summary><pre>{JSON.stringify(group.technical, null, 2)}</pre></details></div>
-          <div className="schedule-decision"><label>{group.mapping_type === 'identity' ? 'Преподаватель' : 'Класс / группа'}<select value={decisions[key] || ''} onChange={(event) => setDecisions((current) => ({ ...current, [key]: event.target.value }))}><option value="">Выберите…</option>{choicesFor(group).map((choice: Item) => <option key={choice.id} value={choice.id}>{choice.display_name || choice.name}</option>)}</select></label><button className="admin-button admin-button--primary" disabled={busy === key || !decisions[key]} onClick={() => void saveDecision(group)}>{busy === key ? 'Применяем…' : `Применить ко всем (${group.count})`}</button></div>
-        </article>;
-      })}</div> : <div className="schedule-clean-state"><CheckCircle2 size={22} /><div><strong>По выбранному фильтру решений не требуется</strong><p>Детерминированные обозначения уже разрешены автоматически или сохранёнными правилами.</p></div></div>}
-    </section>
-    <section className="admin-panel">
-      <div className="admin-panel__heading"><div><p className="admin-eyebrow">ПОСТОЯННЫЕ ПРАВИЛА</p><h2>Mappings и aliases</h2></div><span>{activeMappings.length}</span></div>
-      {activeMappings.length ? <div className="schedule-mapping-list">{activeMappings.map((mapping: Item) => <div className="schedule-mapping-row" key={mapping.id}><div><strong>{mapping.mapping_type === 'audience_rule' ? 'Решение аудитории' : mapping.external_key}</strong><span>{mapping.mapping_type === 'identity' ? 'Преподаватель' : mapping.mapping_type === 'group' ? 'Группа' : mapping.mapping_type === 'audience_rule' ? 'Правило аудитории' : 'Предмет'} → {mapping.identity_name || mapping.group_name || mapping.canonical_value}</span><small>{mappingScope(mapping)}</small>{mapping.mapping_type === 'audience_rule' ? <details><summary>Техническая область</summary><code>{mapping.external_key}</code></details> : null}</div><button className="admin-button admin-button--quiet" disabled={busy === `retire:${mapping.id}`} onClick={() => void retireMapping(mapping)}><Trash2 size={14} />Отключить</button></div>)}</div> : <p className="admin-empty">Сохранённых правил пока нет.</p>}
-    </section>
-    <section className="admin-panel schedule-allocation-qa">
-      <div className="admin-panel__heading"><div><p className="admin-eyebrow">ПРОВЕРКА РАСПИСАНИЯ КЛАССА</p><h2>{grade} класс · неделя {week}</h2><p>Откройте проблемный или интересующий слот, чтобы увидеть группы, учеников и источник решения.</p></div><Users size={20} /></div>
-      <div className="schedule-allocation-summary">
-        <div><strong>{Number(allocation.summary?.complete || 0)}</strong><span>Распределены полностью</span></div>
-        <div><strong>{Number(allocation.summary?.with_unassigned || 0)}</strong><span>С Unassigned</span></div>
-        <div><strong>{Number(allocation.summary?.with_conflicts || 0)}</strong><span>С Conflicts</span></div>
-      </div>
-      <div className="schedule-filter-row schedule-allocation-filters">
-        <label>Класс<select value={grade} onChange={(event) => void selectGrade(event.target.value)}>{['5','6','7','8','9','10','11'].map((value) => <option key={value} value={value}>{value} класс</option>)}</select></label>
-        <label>Preview ученика<select value={studentPreview} onChange={(event) => void selectPreview('student', event.target.value)}><option value="">Выберите ученика…</option>{(allocation.students || []).map((item: Item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
-        <label>Preview преподавателя<select value={teacherPreview} onChange={(event) => void selectPreview('teacher', event.target.value)}><option value="">Выберите преподавателя…</option>{(allocation.teachers || []).map((item: Item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>
-      </div>
-      {studentPreview ? <div className="schedule-preview"><h3>Неделя ученика</h3>{(allocation.student_day_blocks || []).map((item: Item) => <div className="schedule-preview__day-block" key={`sdep-${item.lesson_date}`}><span>{item.lesson_date}</span><strong>SDEP</strong><small>Самостоятельная работа весь день</small></div>)}{(allocation.student_preview || []).map((item: Item, index: number) => <div key={`${item.lesson_date}-${item.start_time}-${index}`}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.allocation_kind === 'no_lesson' || !item.subject ? 'Нет урока' : item.subject}</strong></div>)}</div> : null}
-      {teacherPreview ? <div className="schedule-preview"><h3>Неделя преподавателя</h3>{(allocation.teacher_preview || []).map((item: Item) => <div key={item.id}><span>{item.lesson_date} · {item.start_time}</span><strong>{item.subject}</strong><small>{item.audience} · {item.room || 'кабинет не указан'}</small></div>)}</div> : null}
-      <div className="schedule-class-week">{classDays.map(([day, slots]) => <section className="schedule-class-day" key={day}><header><strong>{new Intl.DateTimeFormat('ru-RU', { weekday: 'long' }).format(new Date(`${day}T12:00:00`))}</strong><span>{day.slice(8)}.{day.slice(5, 7)}</span></header>{(allocation.day_blocks || []).filter((block: Item) => block.lesson_date === day).map((block: Item) => <div className="schedule-day-rule" key={`${block.kind}-${block.lesson_date}-${block.grade}`}><strong>SDEP</strong><span>{block.rule}</span><details><summary>Исходные ячейки</summary><ul>{(block.raw_activities || []).map((raw: Item, index: number) => <li key={`${raw.source_cell || 'raw'}-${index}`}>{raw.source_cell || 'ячейка'} · {raw.subject || 'без названия'} · {raw.audience || 'без класса'}</li>)}</ul></details></div>)}<div className="schedule-slot-list">{slots.map((slot: Item) => <details className={`schedule-slot schedule-slot--${slot.status}`} key={`${slot.lesson_date}-${slot.start_time}-${slot.grade}`}>
-        <summary><Clock3 size={15} /><strong>{String(slot.start_time).slice(0, 5)}</strong><span>{(slot.activities || []).filter((item: Item) => item.audience_kind !== 'duplicate').map((item: Item) => `${item.subject}${item.group_names?.length ? ` · ${item.group_names.join(', ')}` : ''}`).join(' / ') || 'Нет урока'}</span>{slot.unassigned?.length ? <b>{slot.unassigned.length} без назначения</b> : null}{slot.conflicts?.length ? <b>{slot.conflicts.length} конфликтов</b> : null}<ChevronDown size={15} /></summary>
-        <div className="schedule-slot-grid">{(slot.activities || []).map((activity: Item, index: number) => {
-          const caseKey = audienceCaseKey(activity);
-          const decision = audienceDecisionFor(activity);
-          const selectedGroups = (allocation.groups || []).filter((groupItem: Item) => decision.group_ids.includes(String(groupItem.id)));
-          const needsGroups = ['canonical_group', 'groups', 'base_class'].includes(decision.decision_type);
-          return <article key={`${activity.lesson_id || activity.synthetic_kind}-${index}`}><div><strong>{activity.subject}</strong><span>{activity.teacher_hint || activity.activity_type}</span></div><b>{activity.student_count || 0}</b><small>{activity.rule_reason}</small><details><summary>Ученики и причины</summary><ul>{(activity.students || []).map((student: Item) => <li key={student.id}><span>{student.name}</span><small>{student.reason}</small></li>)}</ul></details>{activity.status === 'ambiguous' ? <div className="schedule-audience-decision"><label>Как понимать аудиторию<select value={decision.decision_type} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [caseKey]: { ...decision, decision_type: event.target.value, group_ids: ['canonical_group','groups','base_class'].includes(event.target.value) ? decision.group_ids : [] } }))}><option value="canonical_group">{decisionLabel.canonical_group}</option><option value="groups">{decisionLabel.groups}</option><option value="base_class">{decisionLabel.base_class}</option><option value="parallel">{decisionLabel.parallel}</option><option value="complement">{decisionLabel.complement}</option><option value="no_lesson">{decisionLabel.no_lesson}</option></select></label>{needsGroups ? <label>{decision.decision_type === 'base_class' ? 'Выберите базовый класс' : 'Выберите группу или группы'}<select multiple={decision.decision_type === 'groups'} value={decision.decision_type === 'groups' ? decision.group_ids : (decision.group_ids[0] || '')} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [caseKey]: { ...decision, group_ids: decision.decision_type === 'groups' ? Array.from(event.target.selectedOptions).map((option) => option.value) : [event.target.value] } }))}>{(allocation.groups || []).filter((groupItem: Item) => decision.decision_type !== 'base_class' || groupItem.group_type === 'class').map((groupItem: Item) => <option key={groupItem.id} value={groupItem.id}>{groupItem.display_name}</option>)}</select></label> : null}<p>Это решение будет применено к: {activity.lesson_date || week}, {String(activity.start_time || '').slice(0, 5)}, «{activity.subject}», {activity.source_cell ? `исходная ячейка ${activity.source_cell}` : 'этому slot'}.</p><label className="schedule-persistent-choice"><input type="checkbox" checked={decision.persistent} onChange={(event) => setAudienceDecisions((current) => ({ ...current, [caseKey]: { ...decision, persistent: event.target.checked } }))} /> Сохранить также для повторяющихся случаев</label><button className="admin-button admin-button--primary" disabled={(needsGroups && !decision.group_ids.length) || busy === `audience:${caseKey}`} onClick={() => void saveAudienceDecision(activity)}>{busy === `audience:${caseKey}` ? 'Сохраняем…' : 'Сохранить решение'}</button>{selectedGroups.length ? <small>Выбрано: {selectedGroups.map((groupItem: Item) => groupItem.display_name).join(', ')}</small> : null}</div> : null}</article>;
-        })}</div>
-        {slot.unassigned?.length ? <div className="schedule-allocation-alert"><strong>Unassigned</strong>{slot.unassigned.map((student: Item) => <span key={student.id}>{student.name} — {student.reason}</span>)}</div> : null}
-        {slot.conflicts?.length ? <div className="schedule-allocation-alert schedule-allocation-alert--conflict"><strong>Conflicts</strong>{slot.conflicts.map((student: Item) => <span key={student.id}>{student.name} — {(student.conflicting_activities || []).join(' ↔ ') || 'пересечение memberships'}</span>)}</div> : null}
-      </details>)}</div></section>)}</div>
-    </section>
-    <section className="admin-panel admin-table-panel">
-      <div className="admin-table-meta"><span>{lessons.length} уроков по выбранному фильтру</span><span>Weekly имеет приоритет для дат {week}</span></div>
-      {lessons.length ? <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Дата / время</th><th>Урок</th><th>Преподаватель</th><th>Класс / группа</th><th>Состояние</th><th>Изменение</th></tr></thead><tbody>{lessons.map((lesson: Item) => <tr key={lesson.id}><td><strong>{lesson.lesson_date || '—'}</strong><small>{lesson.start_time || ''}–{lesson.end_time || ''}</small></td><td><strong>{lesson.subject || '—'}</strong><small>{lesson.room || ''}</small></td><td>{lesson.teacher_name || lesson.teacher_hint || 'Не определён'}</td><td>{lesson.group_name || lesson.audience || 'Не определена'}</td><td><span className={`admin-status admin-status--${lesson.resolution_status === 'RESOLVED' ? 'good' : lesson.resolution_status === 'WARNING' ? 'warn' : 'bad'}`}>{STATUS_LABELS[lesson.resolution_status] || lesson.resolution_status}</span></td><td>{lesson.diff_status || '—'}</td></tr>)}</tbody></table></div> : <p className="admin-empty">Уроков по выбранному фильтру нет.</p>}
-    </section>
-    <div className="admin-callout admin-callout--muted"><ShieldCheck size={16} /><span>Решения меняют только Schedule mappings и производную сверку расписания. Directory memberships и teacher assignments не изменяются.</span></div>
+  const [data, setData] = useState<Item | null>(null); const [selected, setSelected] = useState<Item | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+  const [grade, setGrade] = useState(''); const [weekday, setWeekday] = useState(''); const [routing, setRouting] = useState(''); const [changedOnly, setChangedOnly] = useState(false); const [unresolvedOnly, setUnresolvedOnly] = useState(false); const [teacherUnresolved, setTeacherUnresolved] = useState(false); const [focus, setFocus] = useState(''); const [projectionFocus, setProjectionFocus] = useState('');
+  const load = async (weekStart = WEEK) => { setLoading(true); setError(''); try { const result = await api<Item>(`/api/admin/schedule/observability?week_start=${encodeURIComponent(weekStart)}`); setData(result); setSelected(null); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить canonical schedule observability'); } finally { setLoading(false); } };
+  useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const blocks = data?.blocks || [];
+  const filteredBlocks = useMemo(() => blocks.filter((block: Item) => { const classification = String(block.change_classification || 'UNCHANGED'); const grades = String(block.grade_scope || '').split(',').map((value: string) => value.trim()); const hasUnresolved = Boolean(block.issues?.length || block.affected_students?.states?.UNRESOLVED); const hasTeacherIssue = (block.issues || []).some((issue: Item) => String(issue.reason || '').includes('teacher')); if (grade && !grades.includes(grade)) return false; if (weekday && String(block.weekday) !== weekday) return false; if (routing && String(block.routing_dimension || '') !== routing) return false; if (changedOnly && classification === 'UNCHANGED') return false; if (unresolvedOnly && !hasUnresolved) return false; if (teacherUnresolved && !hasTeacherIssue) return false; if (focus === 'changed' && classification === 'UNCHANGED') return false; if (focus === 'cancelled' && classification !== 'CANCELLED') return false; if (focus === 'audience' && classification !== 'SEMANTIC_AUDIENCE_CHANGE') return false; if (focus === 'unresolved' && !hasUnresolved) return false; if (focus === 'teacher' && !hasTeacherIssue) return false; return true; }), [blocks, changedOnly, focus, grade, routing, teacherUnresolved, unresolvedOnly, weekday]);
+  const projectionEntries = projectionFocus ? data?.student_projection?.samples?.[projectionFocus] || [] : []; const routingOptions: string[] = useMemo(() => Array.from(new Set<string>(blocks.map((block: Item) => String(block.routing_dimension || '')).filter(Boolean))), [blocks]); const diff = data?.effective_week?.diff_counts || {}; const studentStates = data?.student_projection?.states || {}; const teacher = data?.teacher_projection || {};
+  const clearFocus = () => { setFocus(''); setProjectionFocus(''); setChangedOnly(false); setUnresolvedOnly(false); setTeacherUnresolved(false); }; const focusBlocks = (next: string) => { setProjectionFocus(''); setFocus((current) => current === next ? '' : next); };
+  if (loading) return <div className="admin-loading"><RefreshCw size={17} className="admin-spin" /> Загружаем canonical v2 и current week…</div>;
+  if (error) return <div className="admin-error"><AlertTriangle size={17} /><div><strong>Не удалось загрузить Schedule observability</strong><p>{error}</p></div><button type="button" className="admin-button admin-button--quiet" onClick={() => void load()}>Повторить</button></div>;
+  if (!data?.canonical) return <div className="admin-panel"><p className="admin-empty">Canonical version не найдена.</p></div>;
+  return <div className="admin-stack schedule-v2-console"><div className="admin-page-actions"><div><p className="admin-eyebrow">CANONICAL SCHEDULE / READ-ONLY</p><h2>Ручная проверка v2 · неделя 14–18 сентября</h2><p>Persisted canonical/effective data. Здесь нет действий, меняющих semantics, memberships или production UI.</p></div><button type="button" className="admin-button admin-button--quiet" onClick={() => void load(data.selected_week || WEEK)}><RefreshCw size={15} /> Перечитать</button></div>
+    <section className="admin-panel schedule-v2-identity"><div className="admin-panel__heading"><div><p className="admin-eyebrow">ACTIVE CANONICAL VERSION</p><h2>v2 · {data.canonical.status}</h2></div><span className="schedule-v2-readonly"><ShieldCheck size={15} /> authoritative: {yesNo(data.canonical.authoritative)}</span></div><div className="schedule-v2-identity-grid"><div><span>Version ID</span><strong className="admin-mono">{data.canonical.version_id}</strong></div><div><span>Source fingerprint</span><strong className="admin-mono" title={data.canonical.source_fingerprint}>{shortFingerprint(data.canonical.source_fingerprint)}</strong></div><div><span>Template snapshot</span><strong>{data.canonical.source_snapshot_id || '—'}</strong></div><div><span>Students</span><strong>{data.student_projection?.active_students || 0} active</strong></div></div></section>
+    <section className="admin-panel schedule-v2-week-card"><div className="admin-panel__heading"><div><p className="admin-eyebrow">EFFECTIVE WEEK</p><h2><CalendarDays size={19} /> {formatDate(data.selected_week)} · 14–18 сентября</h2></div><span className="schedule-v2-readonly">current · read-only</span></div><div className="schedule-v2-identity-grid"><div><span>Weekly snapshot</span><strong>{data.effective_week?.source_snapshot?.sheet_title || '—'}</strong></div><div><span>Fingerprint</span><strong className="admin-mono" title={data.effective_week?.source_snapshot?.fingerprint}>{shortFingerprint(data.effective_week?.source_snapshot?.fingerprint)}</strong></div><div><span>Raw / structured</span><strong>{data.effective_week?.source_snapshot?.raw_rows || 0} rows · {data.effective_week?.source_snapshot?.structured_cells || 0} cells</strong></div><div><span>Historical</span><strong>не показывается как current</strong></div></div></section>
+    <section className="schedule-v2-stat-grid"><StatCard label="Baseline blocks" value={data.canonical.blocks} hint={`${data.canonical.assignments} assignments`} onClick={clearFocus} /><StatCard label="Overlay patches" value={data.effective_week?.overlay_patch_count} hint="изменения недели" tone="accent" active={focus === 'changed'} onClick={() => focusBlocks('changed')} /><StatCard label="Effective blocks" value={data.effective_week?.effective_blocks} hint="после overlay" onClick={clearFocus} /><StatCard label="ACTIVITY" value={studentStates.ACTIVITY} hint="student-slot entries" tone="good" active={projectionFocus === 'ACTIVITY'} onClick={() => setProjectionFocus(projectionFocus === 'ACTIVITY' ? '' : 'ACTIVITY')} /><StatCard label="NO_LESSON" value={studentStates.NO_LESSON} hint="final student state" onClick={() => setProjectionFocus(projectionFocus === 'NO_LESSON' ? '' : 'NO_LESSON')} /><StatCard label="UNRESOLVED" value={studentStates.UNRESOLVED} hint={`${data.student_projection?.conflicts || 0} conflicts`} tone="warn" active={projectionFocus === 'UNRESOLVED' || focus === 'unresolved'} onClick={() => { setProjectionFocus('UNRESOLVED'); setFocus('unresolved'); }} /><StatCard label="Teacher resolved" value={teacher.resolved} hint="assignments" tone="good" onClick={clearFocus} /><StatCard label="Teacher unresolved" value={teacher.unresolved} hint={`${teacher.orphan || 0} orphan expected`} tone="warn" active={teacherUnresolved || focus === 'teacher'} onClick={() => { setProjectionFocus(''); setTeacherUnresolved((value) => !value); setFocus('teacher'); }} /><StatCard label="Projection conflicts" value={(data.student_projection?.conflicts || 0) + (teacher.conflicts || 0)} hint="student + teacher" tone={(data.student_projection?.conflicts || 0) + (teacher.conflicts || 0) ? 'warn' : 'good'} onClick={() => { setProjectionFocus('UNRESOLVED'); setFocus('unresolved'); }} /></section>
+    <section className="admin-panel schedule-v2-diff-panel"><div className="schedule-v2-section-title"><div><p className="admin-eyebrow">WEEKLY DIFF</p><h2>Изменения относительно canonical v2</h2></div><span>{data.effective_week?.overlay_patch_count || 0} patches</span></div><div className="schedule-v2-diff-grid">{Object.entries(DIFF_LABELS).map(([key, label]) => <button type="button" key={key} className="schedule-v2-diff-item" onClick={() => key === 'UNCHANGED' ? clearFocus() : focusBlocks(key === 'CANCELLED' ? 'cancelled' : key === 'SEMANTIC_AUDIENCE_CHANGE' ? 'audience' : 'changed')}><strong>{Number(diff[key] || 0)}</strong><span>{label}</span></button>)}</div></section>
+    {projectionFocus ? <section className="admin-panel schedule-v2-projection-panel"><div className="schedule-v2-section-title"><div><p className="admin-eyebrow">STUDENT PROJECTION</p><h2>{projectionFocus} · примеры маршрутов</h2></div><button type="button" className="admin-link" onClick={() => setProjectionFocus('')}>Скрыть</button></div>{projectionEntries.length ? <div className="schedule-v2-projection-list">{projectionEntries.map((item: Item, index: number) => <button type="button" className="schedule-v2-projection-row" key={`${item.student_id}-${item.block_key}-${index}`} onClick={() => { const block = blocks.find((candidate: Item) => candidate.block_key === item.block_key); if (block) setSelected(block); }}><strong>{item.student_name || item.student_id}</strong><span>{item.class_name || '—'} · {item.date || '—'} · {String(item.start_time || '').slice(0, 5)}</span><span>{item.activity || item.reason || projectionFocus}</span></button>)}</div> : <p className="admin-empty">Нет примеров для выбранного состояния.</p>}<small className="schedule-v2-truncated">Показаны первые 80 записей; полный счётчик остаётся в карточке.</small></section> : null}
+    <section className="admin-panel schedule-v2-filter-panel"><div className="schedule-v2-section-title"><div><p className="admin-eyebrow">BLOCK EXPLORER</p><h2>Canonical blocks · {filteredBlocks.length} из {blocks.length}</h2></div><Filter size={17} /></div><div className="schedule-v2-filters"><label>Grade<select value={grade} onChange={(event) => setGrade(event.target.value)}><option value="">Все grades</option>{['5', '6', '7', '8', '9', '10', '11'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label>Weekday<select value={weekday} onChange={(event) => setWeekday(event.target.value)}><option value="">Все дни</option>{DAY_NAMES.map((value, index) => <option key={value} value={String(index)}>{value}</option>)}</select></label><label>Routing dimension<select value={routing} onChange={(event) => setRouting(event.target.value)}><option value="">Все dimensions</option>{routingOptions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="schedule-v2-check"><input type="checkbox" checked={changedOnly} onChange={(event) => setChangedOnly(event.target.checked)} /> changed only</label><label className="schedule-v2-check"><input type="checkbox" checked={unresolvedOnly} onChange={(event) => setUnresolvedOnly(event.target.checked)} /> unresolved only</label><label className="schedule-v2-check"><input type="checkbox" checked={teacherUnresolved} onChange={(event) => setTeacherUnresolved(event.target.checked)} /> teacher unresolved</label><button type="button" className="admin-button admin-button--quiet" onClick={() => { setGrade(''); setWeekday(''); setRouting(''); clearFocus(); }}>Сбросить</button></div></section>
+    <div className="schedule-v2-workspace"><section className="admin-panel schedule-v2-block-list"><div className="schedule-v2-list-head"><span>День / время</span><span>Grade / routing</span><span>Effective activity</span><span>Change</span></div>{filteredBlocks.length ? filteredBlocks.map((block: Item) => <button type="button" className={`schedule-v2-block-row ${selected?.block_key === block.block_key ? 'is-selected' : ''}`} key={block.block_key} onClick={() => setSelected(block)}><span><strong>{block.date || '—'}</strong><small><Clock3 size={13} /> {String(block.start_time || '').slice(0, 5)}–{String(block.end_time || '').slice(0, 5)}</small></span><span><strong>{block.grade_scope || '—'}</strong><small>{block.routing_dimension || '—'}</small></span><span><strong>{block.effective_assignments?.map((item: Item) => item.activity).filter(Boolean).join(' · ') || 'NO_LESSON'}</strong><small>{block.affected_students?.count || 0} student-slot entries</small></span><span><em className={`schedule-v2-change schedule-v2-change--${String(block.change_classification || 'UNCHANGED').toLowerCase()}`}>{changeLabel(block.change_classification)}</em>{block.issues?.length ? <small className="schedule-v2-row-warning">{block.issues.length} issues</small> : null}</span><ChevronDown size={15} /></button>) : <p className="admin-empty">По выбранным фильтрам blocks не найдены.</p>}</section>{selected ? <BlockDetail block={selected} onClose={() => setSelected(null)} /> : <section className="admin-panel schedule-v2-empty-detail"><CheckCircle2 size={22} /><h3>Выберите block</h3><p>Провалитесь в строку, чтобы увидеть baseline, weekly change, effective result, groups, students и причины unresolved.</p></section>}</div>
+    <section className="admin-panel schedule-v2-teacher-panel"><div className="schedule-v2-section-title"><div><p className="admin-eyebrow">TEACHER PROJECTION</p><h2>Контроль teacher-side</h2></div><Users size={18} /></div><div className="schedule-v2-teacher-grid"><button type="button" onClick={clearFocus}><strong>{teacher.resolved || 0}</strong><span>resolved assignments</span></button><button type="button" onClick={() => { setTeacherUnresolved(true); setFocus('teacher'); }}><strong>{teacher.unresolved || 0}</strong><span>unresolved mappings</span></button><button type="button" onClick={() => { setTeacherUnresolved(true); setFocus('teacher'); }}><strong>{teacher.orphan || 0}</strong><span>orphan expected teacher</span></button><button type="button" onClick={clearFocus}><strong>{teacher.conflicts || 0}</strong><span>simultaneous conflicts</span></button></div></section><div className="admin-callout admin-callout--muted"><ShieldCheck size={16} /><span>Только просмотр. Current week: 14–18 сентября. Historical 7–11 сентября не показывается как current.</span></div>
   </div>;
 }
