@@ -25,6 +25,19 @@ def _schedule_row_matches_grade(row: dict[str, Any], grade: str) -> bool:
     return any(_schedule_grade(value) == grade for value in values)
 
 
+def _schedule_row_is_sdep(row: dict[str, Any], grade: str) -> bool:
+    if grade not in {"10", "11"} or not _schedule_row_matches_grade(row, grade):
+        return False
+    payload = row.get("raw_payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {}
+    label = payload.get("source_day_label") if isinstance(payload, dict) else ""
+    return bool(re.search(r"\bsdep\b", str(label or ""), re.IGNORECASE))
+
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
@@ -64,6 +77,8 @@ CREATE TABLE IF NOT EXISTS groups (
   exam_track TEXT,
   provenance_source TEXT,
   provenance_ref TEXT,
+  role TEXT,
+  semantic_dimension TEXT,
   canonical INTEGER NOT NULL DEFAULT 1,
   UNIQUE(name, group_type)
 );
@@ -193,6 +208,68 @@ CREATE INDEX IF NOT EXISTS schedule_lesson_audiences_lesson_idx ON schedule_less
 CREATE INDEX IF NOT EXISTS schedule_student_allocations_slot_idx ON schedule_student_allocations(source_snapshot_id, week_start, lesson_date, start_time, grade_scope, status);
 CREATE INDEX IF NOT EXISTS schedule_student_allocations_student_idx ON schedule_student_allocations(student_identity_id, lesson_date, start_time);
 CREATE INDEX IF NOT EXISTS schedule_student_allocations_lesson_idx ON schedule_student_allocations(lesson_id);
+CREATE TABLE IF NOT EXISTS canonical_schedule_versions (
+  version_id TEXT PRIMARY KEY,
+  source_snapshot_id TEXT NOT NULL,
+  source_fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft','approved_baseline','approved_with_exceptions','authoritative','superseded')),
+  parent_version_id TEXT REFERENCES canonical_schedule_versions(version_id),
+  artifact_schema_version TEXT NOT NULL DEFAULT '',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_at TEXT,
+  UNIQUE(source_snapshot_id, source_fingerprint)
+);
+CREATE TABLE IF NOT EXISTS canonical_schedule_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  version_id TEXT NOT NULL REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT,
+  block_key TEXT NOT NULL,
+  weekday INTEGER,
+  start_time TEXT,
+  end_time TEXT,
+  grade_scope TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT '',
+  structural_fingerprint TEXT NOT NULL DEFAULT '',
+  source_provenance TEXT NOT NULL DEFAULT '{}',
+  evidence TEXT NOT NULL DEFAULT '{}',
+  unresolved TEXT NOT NULL DEFAULT '[]',
+  UNIQUE(version_id, block_key)
+);
+CREATE TABLE IF NOT EXISTS canonical_schedule_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  block_id INTEGER NOT NULL REFERENCES canonical_schedule_blocks(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  activity TEXT NOT NULL DEFAULT '',
+  assignment_kind TEXT NOT NULL DEFAULT 'primary',
+  audience_kind TEXT NOT NULL DEFAULT 'canonical_groups',
+  canonical_group_ids TEXT NOT NULL DEFAULT '[]',
+  source_cells TEXT NOT NULL DEFAULT '[]',
+  teacher_ids TEXT NOT NULL DEFAULT '[]',
+  metadata TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(block_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS canonical_effective_weeks (
+  effective_week_id TEXT PRIMARY KEY,
+  version_id TEXT NOT NULL REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT,
+  week_start TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'materialized',
+  overlay_source_snapshot_id TEXT,
+  provenance TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(version_id, week_start)
+);
+CREATE TABLE IF NOT EXISTS canonical_effective_blocks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  effective_week_id TEXT NOT NULL REFERENCES canonical_effective_weeks(effective_week_id) ON DELETE CASCADE,
+  canonical_block_id INTEGER REFERENCES canonical_schedule_blocks(id) ON DELETE RESTRICT,
+  block_key TEXT NOT NULL,
+  change_kind TEXT NOT NULL CHECK (change_kind IN ('unchanged','metadata','cancelled','replaced','added','moved','weekly_only')),
+  patch TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(effective_week_id, block_key)
+);
+CREATE INDEX IF NOT EXISTS canonical_schedule_blocks_version_idx ON canonical_schedule_blocks(version_id, weekday, start_time);
+CREATE INDEX IF NOT EXISTS canonical_effective_blocks_week_idx ON canonical_effective_blocks(effective_week_id, change_kind);
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
@@ -665,11 +742,12 @@ CREATE INDEX IF NOT EXISTS announcements_author_idx ON announcements(author_user
 
 
 class Database:
-    def __init__(self, path: str | Path | None = None, database_url: str | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, database_url: str | None = None, *, autocommit: bool = False) -> None:
         # An explicit local path keeps isolated tests/local stores on SQLite even if the
         # process environment also contains the application's Postgres URL.
         self.database_url = database_url if database_url is not None else (None if path is not None else os.getenv("DATABASE_URL") or None)
         self.path = Path(path or os.getenv("DATABASE_PATH", "data/my-island.db"))
+        self.autocommit = autocommit
 
     @contextmanager
     def connection(self) -> Iterator[Any]:
@@ -679,7 +757,7 @@ class Database:
                 from psycopg.rows import dict_row
             except ImportError as error:
                 raise RuntimeError("psycopg is required when DATABASE_URL is configured") from error
-            connection = psycopg.connect(self.database_url, row_factory=dict_row)
+            connection = psycopg.connect(self.database_url, row_factory=dict_row, autocommit=self.autocommit)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             connection = sqlite3.connect(self.path)
@@ -761,6 +839,8 @@ class Database:
                 "exam_track": "TEXT",
                 "provenance_source": "TEXT",
                 "provenance_ref": "TEXT",
+                "role": "TEXT",
+                "semantic_dimension": "TEXT",
                 "canonical": "INTEGER NOT NULL DEFAULT 1",
             },
             "memberships": {
@@ -1243,8 +1323,14 @@ class Database:
 
             day_blocks: list[dict[str, Any]] = []
             grade = _schedule_grade(dict(profile["user"]).get("class_name"))
+            source_day_rows = [dict(row) for row in self.execute(connection, """SELECT lesson_date,audience,raw_payload
+                FROM schedule_lessons WHERE source_snapshot_id=? AND lesson_date BETWEEN ? AND ?""",
+                (snapshot["id"], start_day, finish)).fetchall()]
+            for row in source_day_rows:
+                row["raw_payload"] = decoded(row.get("raw_payload"), {})
             for day in days.values():
-                if grade in {"10", "11"} and date.fromisoformat(day["date"]).weekday() == 4:
+                if any(str(row.get("lesson_date")) == day["date"] and _schedule_row_is_sdep(row, grade)
+                       for row in source_day_rows):
                     day["state"] = "special"
                     day["special"] = {"kind": "sdep", "title": "SDEP", "description": "Самостоятельная работа весь учебный день."}
                     day_blocks.append({"lesson_date": day["date"], "kind": "sdep", "label": "SDEP"})
@@ -2744,35 +2830,31 @@ class Database:
                 for item in student_preview:
                     item["provenance"] = self._decode_json_value(item.get("provenance")) or {}
             teacher_preview = self.schedule_v1_lessons(week_start=week_start, teacher_id=teacher_id) if teacher_id else []
-            # SDEP is a day-level product rule: Friday is self-directed work
-            # for grades 10–11. Source activities remain visible as provenance,
-            # but never enter slot allocation or student lesson/no_lesson rows.
+            # SDEP is a day-level source rule for grades 10–11. Source
+            # activities remain visible as provenance, but never enter slot
+            # allocation or student lesson/no_lesson rows.
             sdep_grades = [grade] if grade in {"10", "11"} else ([] if grade else ["10", "11"])
-            try:
-                week_date = datetime.fromisoformat(str(week_start)).date()
-                friday = week_date + timedelta(days=(4 - week_date.weekday()) % 7)
-            except ValueError:
-                friday = None
             day_blocks: list[dict[str, Any]] = []
-            if friday:
-                raw_rows = [dict(row) for row in self.execute(connection, """SELECT lesson_date,start_time,end_time,subject,audience,activity_type,source_cell,raw_payload
-                    FROM schedule_lessons WHERE source_snapshot_id=? AND version_kind='weekly' AND week_start=? AND lesson_date=?
-                    ORDER BY start_time,id""", (snapshot["id"], week_start, friday.isoformat())).fetchall()]
-                for raw_row in raw_rows:
-                    raw_row["raw_payload"] = self._decode_json_value(raw_row.get("raw_payload")) or {}
-                for sdep_grade in sdep_grades:
+            raw_rows = [dict(row) for row in self.execute(connection, """SELECT lesson_date,start_time,end_time,subject,audience,activity_type,source_cell,raw_payload
+                FROM schedule_lessons WHERE source_snapshot_id=? AND version_kind='weekly' AND week_start=?
+                ORDER BY lesson_date,start_time,id""", (snapshot["id"], week_start)).fetchall()]
+            for raw_row in raw_rows:
+                raw_row["raw_payload"] = self._decode_json_value(raw_row.get("raw_payload")) or {}
+            for sdep_grade in sdep_grades:
+                dates = sorted({str(row.get("lesson_date")) for row in raw_rows if _schedule_row_is_sdep(row, sdep_grade)})
+                for special_day in dates:
                     day_blocks.append({
-                        "lesson_date": friday.isoformat(),
+                        "lesson_date": special_day,
                         "grade": sdep_grade,
                         "kind": "sdep",
                         "label": "SDEP",
-                        "rule": "Пятница — самостоятельная работа (SDEP)",
+                        "rule": "Source day explicitly marked SDEP",
                         "raw_activities": [
                             {"subject": row.get("subject"), "audience": row.get("audience"),
                              "activity_type": row.get("activity_type"), "source_cell": row.get("source_cell"),
                              "start_time": row.get("start_time"), "end_time": row.get("end_time"),
                              "raw_payload": row.get("raw_payload")}
-                            for row in raw_rows if _schedule_row_matches_grade(row, sdep_grade)
+                            for row in raw_rows if str(row.get("lesson_date")) == special_day and _schedule_row_matches_grade(row, sdep_grade)
                         ],
                     })
             student_day_blocks = [item for item in day_blocks if student_id and str(item["grade"]) == str(grade)]

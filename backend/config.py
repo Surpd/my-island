@@ -43,6 +43,8 @@ class Settings:
     google_oauth_refresh_token: str | None
     telegram_bootstrap_user_ids: tuple[int, ...] = ()
     telegram_webhook_secret: str = ""
+    # Scheduling is fail-closed until canonical is explicitly enabled for a pilot.
+    schedule_backend: str = "disabled"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -64,6 +66,7 @@ class Settings:
             google_oauth_redirect_uri=os.getenv("GOOGLE_OAUTH_REDIRECT_URI") or None,
             google_oauth_refresh_token=os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN") or None,
             telegram_bootstrap_user_ids=_parse_telegram_user_ids(os.getenv("TELEGRAM_BOOTSTRAP_USER_IDS", "")),
+            schedule_backend=os.getenv("SCHEDULE_BACKEND", "disabled").strip().casefold() or "disabled",
         )
 
     def validate(self) -> None:

@@ -12,11 +12,11 @@ from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.admin import (
     add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
-    map_schedule_scope, override_membership, publish_information,
+    override_membership, publish_information,
 )
-from backend.services.google_live import GoogleLiveError, GoogleTokenStore
-from backend.services.google_sync_service import refresh_classroom, refresh_journal, refresh_schedule_v1
-from backend.services.schedule_pipeline import recalculate_current_schedule, reconcile_current_schedule, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
+from backend.services.google_live import GoogleLiveError
+from backend.services.google_sync_service import refresh_classroom, refresh_journal
+from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -43,17 +43,6 @@ def _student_grade(profile: dict | None) -> str:
     return match.group(1) if match else ""
 
 
-def _sdep_block(day: str, grade: str) -> dict | None:
-    if grade not in {"10", "11"}:
-        return None
-    try:
-        if date.fromisoformat(day).weekday() != 4:
-            return None
-    except ValueError:
-        return None
-    return {"lesson_date": day, "kind": "sdep", "label": "SDEP", "title": "SDEP", "description": "Самостоятельная работа весь учебный день."}
-
-
 class ReviewPayload(BaseModel):
     status: str
 
@@ -75,14 +64,6 @@ class MembershipPayload(BaseModel):
     source: str = "admin_override"
     source_ref: str = ""
     member_role: str = "student"
-
-
-class ScheduleScopePayload(BaseModel):
-    group_id: str
-    audience: str
-    subject: str = ""
-    subject_subgroup: str = ""
-    exam_track: str = ""
 
 
 class RolesPayload(BaseModel):
@@ -149,19 +130,6 @@ class ReconciliationReviewPayload(BaseModel):
     approved: bool = True
 
 
-class ScheduleMappingPayload(BaseModel):
-    mapping_type: str
-    external_key: str = ""
-    target_id: str | None = None
-    canonical_value: str | None = None
-    decision_type: str | None = None
-    group_ids: list[str] | None = None
-    lesson_id: str | None = None
-    week_start: str | None = None
-    grade_scope: str | None = None
-    persistent: bool = False
-
-
 def create_router(database: Database) -> APIRouter:
     router = APIRouter(prefix="/api")
 
@@ -187,6 +155,9 @@ def create_router(database: Database) -> APIRouter:
         if not user or not database.user_has_role(user["id"], role):
             raise HTTPException(status_code=403, detail=f"{role.capitalize()} role required")
         return user
+
+    def canonical_backend_enabled() -> bool:
+        return get_settings().schedule_backend == "canonical"
 
     @router.post("/admin/auth/challenge")
     def create_admin_browser_challenge(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -311,11 +282,11 @@ def create_router(database: Database) -> APIRouter:
             date.fromisoformat(requested_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
-        projection = database.student_schedule_projection(user["id"], requested_day)
-        day = next((item for item in projection["days"] if item["date"] == requested_day), None)
-        sdep = day.get("special") if day and day.get("special", {}).get("kind") == "sdep" else None
-        schedule = [] if sdep else [item for item in projection.get("items", []) if item.get("lesson_date") == requested_day]
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "schedule": schedule, "day_block": sdep, "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
+        if not canonical_backend_enabled():
+            return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "schedule": [], "day_block": None, "schedule_issues": [], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
+        projection = project_student_range(database, user["identity_id"], requested_day)
+        schedule = [item for item in projection.get("items", []) if item.get("date") == requested_day]
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "schedule": schedule, "day_block": None, "schedule_issues": projection.get("issues", []), "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
 
     @router.get("/student/grades")
     def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
@@ -344,8 +315,10 @@ def create_router(database: Database) -> APIRouter:
                 date.fromisoformat(end_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
-        projection = database.student_schedule_projection(user["id"], start_day, end_day)
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", **projection}
+        if not canonical_backend_enabled():
+            return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "items": [], "issues": []}
+        projection = project_student_range(database, user["identity_id"], start_day, end_day)
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), **projection}
 
     @router.get("/student/profile")
     def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
@@ -593,46 +566,44 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_refresh(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        try:
-            return refresh_schedule_v1(database, get_settings())
-        except (GoogleLiveError, ValueError, RuntimeError) as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+        return {"status": "blocked", "ok": False,
+                "message": "Legacy Schedule Integration v1 is retired. The approved canonical template is awaiting manual reconciliation and has not been enabled for production."}
 
     @router.post("/admin/schedule/recalculate")
     def admin_schedule_recalculate(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        actor = require_role(telegram_user, "admin")
-        result = recalculate_current_schedule(database)
-        database.record_audit_event("schedule.recalculated", "school_source_snapshot", {"created_snapshot": False, "snapshot_id": result.get("recalculated_snapshot_id")}, actor["id"] if actor else None)
-        return result
+        require_role(telegram_user, "admin")
+        return {"status": "blocked", "ok": False,
+                "message": "There is no legacy recalculation path. Reconciliation must be completed against the approved canonical template."}
 
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        if schedule_reconciliation_needs_refresh(database):
-            reconcile_current_schedule(database)
-        result = database.schedule_v1_overview(week_start=week_start)
-        settings = get_settings()
-        if not settings.google_sheets_spreadsheet_id:
-            result["auth_state"] = "missing_spreadsheet_id"
-        elif not GoogleTokenStore().has_refresh_token():
-            result["auth_state"] = "missing_google_token"
-        return result
+        return effective_status(database, week_start) if canonical_backend_enabled() else {"status": "canonical_backend_disabled", "authoritative": False, "weeks": [], "summary": {"lessons": 0, "issues": 0}}
+
+    @router.get("/admin/schedule/observability")
+    def admin_schedule_observability(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        """Read-only canonical/effective schedule diagnostics for the admin console."""
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return schedule_admin_observability(database, week_start)
 
     @router.get("/admin/schedule/lessons")
     def admin_schedule_lessons(week_start: str | None = None, status: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return {"items": database.schedule_v1_lessons(status=status, week_start=week_start, teacher_id=teacher_id, group_id=group_id, lesson_type=lesson_type)}
+        result = effective_blocks(database, week_start) if canonical_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
+        return {"items": result.get("items", []), "status": result.get("status")}
 
     @router.get("/admin/schedule/issues")
     def admin_schedule_issues(week_start: str | None = None, status: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return {"items": database.schedule_v1_issues(week_start=week_start, status=status)}
+        result = effective_blocks(database, week_start) if canonical_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
+        return {"items": [{"block_key": item.get("block_key"), "unresolved": item.get("unresolved", []), "status": item.get("status"), "change_kind": item.get("change_kind")} for item in result.get("items", []) if item.get("unresolved")], "status": result.get("status")}
 
     @router.get("/admin/schedule/reconciliation")
     def admin_schedule_reconciliation(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return schedule_reconciliation_view(database, week_start=week_start)
+        return {"status": "canonical_pending_reconciliation",
+                "message": "Use the canonical v1 reconciliation queue; legacy mapping decisions are retired."}
 
     @router.get("/admin/schedule/allocation-qa")
     def admin_schedule_allocation_qa(week_start: str, grade: str | None = None, student_id: str | None = None,
@@ -640,48 +611,19 @@ def create_router(database: Database) -> APIRouter:
                                      x_dev_auth: str | None = Header(default=None),
                                      x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            date.fromisoformat(week_start)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail="week_start must be an ISO date") from error
-        if grade and grade not in {"5", "6", "7", "8", "9", "10", "11"}:
-            raise HTTPException(status_code=400, detail="grade must be between 5 and 11")
-        return database.schedule_allocation_qa(week_start, grade, student_id, teacher_id)
+        raise HTTPException(status_code=409, detail="Allocation QA is unavailable until the canonical effective schedule is enabled")
 
     @router.post("/admin/schedule/mappings")
-    def admin_schedule_save_mapping(payload: ScheduleMappingPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_schedule_save_mapping(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        actor = authenticated_user(telegram_user)
-        try:
-            external_key = payload.external_key
-            canonical_value = payload.canonical_value
-            if payload.mapping_type == "audience_rule" and payload.decision_type:
-                if not payload.persistent:
-                    if not payload.lesson_id or not payload.week_start or not payload.grade_scope:
-                        raise ValueError("Для решения по конкретному случаю нужны slot, неделя и параллель")
-                    external_key = f"case:{payload.lesson_id}:{payload.week_start}:{payload.grade_scope}"
-                decision = {"decision_type": payload.decision_type, "group_ids": payload.group_ids or [],
-                            "lesson_id": payload.lesson_id, "week_start": payload.week_start, "grade_scope": payload.grade_scope}
-                canonical_value = json.dumps(decision, ensure_ascii=False)
-            mapping = database.save_schedule_v1_mapping(payload.mapping_type, external_key, target_id=payload.target_id,
-                                                        canonical_value=canonical_value, actor_user_id=actor["id"] if actor else None)
-            reconcile_current_schedule(database)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        database.record_audit_event("schedule_mapping.confirmed", "school_source_mapping", {"mapping_id": mapping["id"], "mapping_type": payload.mapping_type, "external_key": payload.external_key}, actor["id"] if actor else None)
-        return {"mapping": mapping, "reconciliation": schedule_reconciliation_view(database)}
+        raise HTTPException(status_code=409, detail="Legacy schedule mappings are retired; resolve canonical v1 through the reconciliation queue")
 
     @router.delete("/admin/schedule/mappings/{mapping_id}")
     def admin_schedule_retire_mapping(mapping_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        actor = authenticated_user(telegram_user)
-        if not database.retire_schedule_v1_mapping(mapping_id):
-            raise HTTPException(status_code=404, detail="Schedule mapping was not found")
-        reconcile_current_schedule(database)
-        database.record_audit_event("schedule_mapping.retired", "school_source_mapping", {"mapping_id": mapping_id}, actor["id"] if actor else None)
-        return {"ok": True, "reconciliation": schedule_reconciliation_view(database)}
+        raise HTTPException(status_code=409, detail="Legacy schedule mappings are retired")
 
     @router.get("/admin/classroom/syncs")
     def admin_classroom_syncs(limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -773,11 +715,10 @@ def create_router(database: Database) -> APIRouter:
         return {"id": item["id"], "active": item["active"]}
 
     @router.post("/admin/schedule-scopes")
-    def create_schedule_scope(payload: ScheduleScopePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def create_schedule_scope(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        scope = map_schedule_scope(database, payload.group_id, payload.audience, subject=payload.subject, subject_subgroup=payload.subject_subgroup, exam_track=payload.exam_track)
-        return {"id": scope["id"], "group_id": scope["group_id"], "audience": scope["audience"], "subject": scope["subject"], "subject_subgroup": scope["subject_subgroup"], "exam_track": scope["exam_track"]}
+        raise HTTPException(status_code=409, detail="Legacy schedule scopes are retired; canonical audiences are approved with the canonical template")
 
     @router.post("/admin/claims/{claim_id}/review")
     def review_claim(claim_id: str, payload: ReviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -865,9 +806,18 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
         if not user["identity_id"]:
             return {"state": "not_configured", "schedule": [], "groups": [], "information": []}
+        if not canonical_backend_enabled():
+            return {
+                "state": "canonical_backend_disabled",
+                "schedule": [],
+                "groups": database.list_teacher_groups(user["id"]),
+                "information": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")],
+            }
+        schedule_projection = project_teacher_range(database, user["identity_id"], requested_day)
         return {
-            "state": "approved",
-            "schedule": [dict(row) for row in database.list_teacher_schedule(user["id"], requested_day)],
+            "state": schedule_projection.get("status"),
+            "schedule": schedule_projection.get("items", []),
+            "schedule_issues": schedule_projection.get("issues", []),
             "groups": database.list_teacher_groups(user["id"]),
             "information": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")],
         }
@@ -936,6 +886,9 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
         if not user["identity_id"]:
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "not_configured", "items": []}
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_teacher_schedule(user["id"], start_day, end_day)]}
+        if not canonical_backend_enabled():
+            return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "items": [], "issues": []}
+        projection = project_teacher_range(database, user["identity_id"], start_day, end_day)
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "items": projection.get("items", []), "issues": projection.get("issues", [])}
 
     return router
