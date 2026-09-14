@@ -132,6 +132,8 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result["blocks"]), 2)
         self.assertEqual(result["blocks"][0]["source_cells"], ["B3"])
         self.assertEqual(result["blocks"][0]["effective_assignments"][0]["activity"], "Математика")
+        self.assertEqual(result["blocks"][0]["affected_students"]["count"], 2)
+        self.assertEqual(result["blocks"][0]["affected_students"]["states"], {"ACTIVITY": 1, "NO_LESSON": 1})
 
     def test_optional_activity_without_teacher_is_not_teacher_issue(self):
         artifact = self.artifact()

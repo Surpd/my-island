@@ -924,7 +924,7 @@ def project_student(database: Database, identity_id: Any, week_start: str) -> di
             state = claims[0]
         else:
             state = {"state": "NO_LESSON", "activity": _NO_LESSON, "reason": "no remaining canonical activity", "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
-        items.append({"date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **state})
+        items.append({"block_key": block["block_key"], "date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **state})
     return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
 
 
