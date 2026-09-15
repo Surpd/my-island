@@ -1,6 +1,6 @@
 import unittest
 
-from backend.scripts.build_current_week_overlay import semantic_norm
+from backend.scripts.build_current_week_overlay import by_source_column, semantic_norm
 
 
 class CurrentWeekOverlaySemanticTests(unittest.TestCase):
@@ -32,6 +32,14 @@ class CurrentWeekOverlaySemanticTests(unittest.TestCase):
         self.assertNotEqual(
             semantic_norm("кл час 9-А\nкаб.8"),
             semantic_norm("кл час 9-Д\nкаб.8"),
+        )
+
+    def test_logical_block_comparison_ignores_inserted_source_rows(self):
+        template = [{"source_cell": "L16", "source_column": 11, "raw_text": "Русский ИА"}]
+        weekly = [{"source_cell": "L17", "source_column": 11, "raw_text": "Русский ИА"}]
+        self.assertEqual(
+            {column: semantic_norm(item["raw_text"]) for column, item in by_source_column(template).items()},
+            {column: semantic_norm(item["raw_text"]) for column, item in by_source_column(weekly).items()},
         )
 
 

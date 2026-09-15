@@ -168,6 +168,11 @@ def raw_by_coord(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]
     return {str(item["source_cell"]): item for cells in parsed.values() for item in cells}
 
 
+def by_source_column(items: list[Mapping[str, Any]]) -> dict[int, Mapping[str, Any]]:
+    """Index cells within one logical block by source column, not row number."""
+    return {int(item["source_column"]): item for item in items if item.get("source_column") is not None}
+
+
 def subject_hint(raw: str) -> str:
     first = str(raw).splitlines()[0].strip()
     if classify_simple_activity(raw):
@@ -254,15 +259,19 @@ def main() -> None:
         weekly_cells = weekly_parsed.get(structural_key, [])
         base_items = {coord: template_raw.get(coord, {"source_cell": coord, "raw_text": ""}) for coord in base_coords}
         week_items = {str(item["source_cell"]): item for item in weekly_cells}
-        base_nonempty = {coord: item for coord, item in base_items.items() if str(item.get("raw_text") or "").strip()}
-        week_nonempty = {coord: item for coord, item in week_items.items() if str(item.get("raw_text") or "").strip()}
-        base_text = {coord: semantic_norm(item.get("raw_text")) for coord, item in base_nonempty.items()}
-        week_text = {coord: semantic_norm(item.get("raw_text")) for coord, item in week_nonempty.items()}
+        base_nonempty = by_source_column([item for item in base_items.values() if str(item.get("raw_text") or "").strip()])
+        week_nonempty = by_source_column([item for item in week_items.values() if str(item.get("raw_text") or "").strip()])
+        base_text = {column: semantic_norm(item.get("raw_text")) for column, item in base_nonempty.items()}
+        week_text = {column: semantic_norm(item.get("raw_text")) for column, item in week_nonempty.items()}
+        base_raw = {column: norm(item.get("raw_text")) for column, item in base_nonempty.items()}
+        week_raw = {column: norm(item.get("raw_text")) for column, item in week_nonempty.items()}
+        base_meta = {column: template_meta_by_coord.get(str(item.get("source_cell")), {}) for column, item in base_nonempty.items()}
+        week_meta = {column: weekly_meta_by_coord.get(str(item.get("source_cell")), {}) for column, item in week_nonempty.items()}
         if not week_nonempty:
             classification, change_kind = "CANCELLED", "cancelled"
         elif base_text != week_text:
             classification, change_kind = "REPLACED", "replaced"
-        elif any(template_meta_by_coord.get(coord, {}) != weekly_meta_by_coord.get(coord, {}) for coord in set(base_coords) | set(week_items)):
+        elif base_raw != week_raw or base_meta != week_meta:
             classification, change_kind = "METADATA_ONLY", "metadata"
         else:
             classification, change_kind = "UNCHANGED", "unchanged"
