@@ -26,7 +26,7 @@ from backend.services.school_data import stable_fingerprint
 
 _GRADE = re.compile(r"^\s*(\d{1,2})")
 _ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*(\d{1,2})(?:\s*/\s*(\d{1,2}))?", re.IGNORECASE)
-_EXAM = re.compile(r"\b(?:огэ|еге|oge)\b", re.IGNORECASE)
+_EXAM = re.compile(r"\b(?:огэ|егэ|oge)\b", re.IGNORECASE)
 
 
 def _norm(value: Any) -> str:
@@ -47,7 +47,7 @@ def _subject(value: Any) -> str:
         ("био", "биология"), ("физ", "физика"),
     )
     for prefix, canonical in aliases:
-        if text == prefix or text.startswith(prefix + " "):
+        if text == prefix or text.startswith(prefix):
             return canonical
     return text
 
@@ -222,6 +222,20 @@ def _english_group_for_cell(cell: Any, target_grade: str, groups: Sequence[Mappi
     return None
 
 
+def _explicit_instructional_marker(cell: Any) -> bool:
+    """Return whether source text explicitly claims a routed partition."""
+    raw = str(cell.raw_text or "")
+    if _ENGLISH_NUMBER.search(raw) or _EXAM.search(raw):
+        return True
+    return bool(re.search(
+        r"\b(?:мат(?:ематика|ем)?|матпроф|физ(?:ика)?|био(?:логия)?|"
+        r"информ(?:атика)?|литер(?:атура)?|обществ(?:ознание)?|хим(?:ия)?)"
+        r"\s+(?:группа\s*)?(?:[а-яa-z]|\d+)\b",
+        raw,
+        re.IGNORECASE,
+    ))
+
+
 def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> str | None:
     english = _english_group_for_cell(cell, grade, groups)
     if english:
@@ -240,12 +254,18 @@ def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, An
             continue
         candidates.append(group)
     if _EXAM.search(cell.raw_text):
-        exam = [item for item in candidates if _norm(item.get("exam_track")) in {"огэ", "еге", "oge"}]
+        exam = [item for item in candidates if _norm(item.get("exam_track")) in {"огэ", "егэ", "oge"}]
         if len(exam) == 1:
             return str(exam[0]["id"])
+        # Some current rosters name the canonical exam-preparation
+        # partition "Угл" while the schedule says ЕГЭ.  Treat that as an
+        # equivalent only when the directory proves there is exactly one
+        # advanced instructional candidate for this subject/grade; never
+        # choose among several candidates or fall back to the base class.
         advanced = [item for item in candidates if _norm(item.get("subject_subgroup")) in {"угл", "advanced", "углублённая", "углубленная"}]
         if len(advanced) == 1:
             return str(advanced[0]["id"])
+        return None
     if any(marker in raw for marker in ("база", "базовая")):
         base = [item for item in candidates if _norm(item.get("subject_subgroup")) in {"база", "base", "базовая"}]
         if len(base) == 1:
@@ -316,6 +336,17 @@ def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow]
             teacher_ids = [str(item) for item in cell.parsed.get("resolved_identity_ids", ())]
             activity = classify_simple_activity(cell.raw_text) or str(group.get("subject") or cell.parsed.get("subject") or cell.raw_text)
             assignments.append(_assignment_payload(activity, role, [group_id], members, [cell], teachers, teacher_ids))
+            grouped_cells.add(cell.source_cell)
+        elif _explicit_instructional_marker(cell):
+            # A source marker such as English 6 or Physics EGE is an
+            # audience claim, not an ordinary whole-class lesson.  Do not
+            # fall through to the base class when the canonical partition is
+            # absent or ambiguous.
+            unresolved.append({
+                "source_cell": cell.source_cell,
+                "reason": "explicit instructional audience has no unique canonical group",
+                "raw_text": cell.raw_text,
+            })
             grouped_cells.add(cell.source_cell)
     active_students = set().union(*(set(item["student_ids"]) for item in assignments)) if assignments else set()
     for cell in row.cells:

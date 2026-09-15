@@ -286,7 +286,7 @@ class NinthGradeResolver:
             if cell in oge_cells or normalize_no_lesson(cell.raw_text):
                 continue
             groups = []
-            refs = _explicit_lane_refs(cell, family)
+            refs = _explicit_lane_refs(cell, family) if _belongs_to_partition(cell, family) else ()
             if refs:
                 family_groups = self.context.math_groups if family == "math" else self.context.english_groups
                 for ref in refs:
@@ -329,11 +329,13 @@ class NinthGradeResolver:
         available -= set().union(*(item.student_ids for item in secondary)) if secondary else set()
         available -= elective_blocked
         residual_cells = [cell for cell in row.cells if cell not in oge_cells and not normalize_no_lesson(cell.raw_text)
-                          and not _explicit_lane_refs(cell, family)
+                          and not (_belongs_to_partition(cell, family) and _explicit_lane_refs(cell, family))
                           and not (_belongs_to_partition(cell, family)
                                    and cell.source_column is not None
                                    and cell.source_column in lane_map)]
         residual_activities = {_norm(_activity(cell)) for cell in residual_cells}
+        default = None
+        residual_assignments: list[ScheduleAssignment] = []
         if residual_cells and len(residual_activities) == 1:
             residual_groups = {
                 str(group["id"]): group
@@ -354,15 +356,47 @@ class NinthGradeResolver:
             evidence["explicit_complement_group_ids"] = list(residual_groups)
             available -= set(assigned)
         elif len(residual_activities) > 1:
-            return self._unresolved(row, mode, "multiple residual activities cannot be assigned as one complement", **evidence,
-                                    residual_cells=[cell.source_cell for cell in residual_cells])
-        else:
-            default = None
+            # Different ordinary activities can legitimately occupy the
+            # residual class columns of the same parallel row (for example
+            # Plastic for 9-А and Geography for 9-Д next to Math B).  Resolve
+            # each cell against its own explicit base audience instead of
+            # forcing all residual cells into one complement activity.
+            for cell in residual_cells:
+                groups = self._base_groups_for_cell(cell)
+                if not groups:
+                    return self._unresolved(row, mode, "residual activity has no canonical base audience", **evidence,
+                                            residual_cells=[item.source_cell for item in residual_cells],
+                                            unresolved_cell=cell.source_cell)
+                scope = frozenset().union(*(self.context.members(group) for group in groups))
+                assigned = frozenset(available) & scope
+                residual_assignments.append(ScheduleAssignment(
+                    _activity(cell), assigned, (cell.source_cell,),
+                    tuple(str(group["id"]) for group in groups), "residual"))
+                available -= set(assigned)
+            evidence["explicit_residual_cells"] = [cell.source_cell for cell in residual_cells]
+            evidence["explicit_residual_group_ids"] = {
+                cell.source_cell: [str(group["id"]) for group in self._base_groups_for_cell(cell)]
+                for cell in residual_cells
+            }
+            all_assignments = [*primary, *secondary, *residual_assignments]
+            conflicts = _assignments_conflicts(all_assignments)
+            if conflicts:
+                blocked = {str(item["student_id"]) for item in conflicts}
+                evidence["conflicting_memberships"] = conflicts
+                primary = [replace(item, student_ids=frozenset(set(item.student_ids) - blocked)) for item in primary]
+                secondary = [replace(item, student_ids=frozenset(set(item.student_ids) - blocked)) for item in secondary]
+                residual_assignments = [replace(item, student_ids=frozenset(set(item.student_ids) - blocked)) for item in residual_assignments]
+                available -= blocked
+            # Keep the same return vocabulary: the residual assignments are
+            # represented as default plus explicit residuals below.
+            default = residual_assignments[0] if residual_assignments else None
+            residual_assignments = residual_assignments[1:]
         evidence["remaining_student_ids"] = sorted(available)
         unresolved = []
         if blocked:
             unresolved.append({"row_key": row.row_key, "reason": "contradictory memberships", "student_ids": sorted(blocked)})
         final = [ScheduleAssignment(NO_LESSON, frozenset(available), (), (), "final_state")] if available else []
+        secondary = [*secondary, *residual_assignments]
         return ScheduleRowInterpretation(row.row_key, mode, primary, secondary, default,
                                          unresolved_blocks=unresolved, evidence=evidence, final_assignments=final)
 

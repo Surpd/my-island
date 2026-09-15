@@ -128,6 +128,21 @@ def normalize_grade7_candidate_block(candidate: Mapping[str, Any], groups: list[
         if str(item.get("activity")) == "NO_LESSON":
             continue
         group_ids = [str(value) for value in item.get("canonical_group_ids") or []]
+        # A row-level split can contain an ordinary class lesson next to an
+        # explicitly split lesson.  The accepted Grade 7 candidate records
+        # that ordinary cell as an "inferred complement", but that inference
+        # must not make the cell inherit split 1/2.  Its own source audience
+        # is the stronger evidence: ordinary cells route to 7-А/7-Б, while
+        # only an explicit split marker routes to grade7:split:1/2.
+        if (
+            item.get("routing_dimension") == "SHARED_SPLIT_1_2"
+            and bool(item.get("inferred_complement"))
+            and not re.search(r"\b(?:мат|математика|физ|физика)\s*(?:группа\s*)?[12]\b", str(item.get("raw_text") or ""), re.IGNORECASE)
+        ):
+            label = str(item.get("source_audience") or "").strip()
+            base_id = by_name.get(f"grade7:base:{label}")
+            if base_id:
+                group_ids = [base_id]
         if not group_ids:
             label = str(item.get("source_audience") or ((item.get("audience") or {}).get("label") if isinstance(item.get("audience"), Mapping) else ""))
             group_id = by_name.get(f"grade7:base:{label}")
@@ -144,7 +159,13 @@ def normalize_grade7_candidate_block(candidate: Mapping[str, Any], groups: list[
             "audience": {"type": "canonical_groups", "canonical_group_ids": group_ids},
             "student_ids": sorted(student_ids), "student_count": len(student_ids),
             "teacher_ids": [], "teachers": [], "source_cells": [item.get("source_coordinate")],
-            "metadata": {"accepted_grade7_routing_dimension": item.get("routing_dimension"), "source_audience": item.get("source_audience")},
+            "metadata": {
+                "accepted_grade7_routing_dimension": item.get("routing_dimension"),
+                "source_audience": item.get("source_audience"),
+                "source_cell_precedence": "explicit split marker > source audience for inferred complement"
+                if item.get("routing_dimension") == "SHARED_SPLIT_1_2" and item.get("inferred_complement")
+                else None,
+            },
         })
     remaining = universe - claimed
     if remaining:

@@ -178,6 +178,21 @@ class NinthGradeResolverTests(unittest.TestCase):
         self.assertEqual(result.mode, ScheduleRowMode.MATH)
         self.assertEqual(result.evidence["lane_columns"], {"30": "math-A", "31": "math-B", "32": "math-C"})
 
+    def test_partition_row_can_route_multiple_residual_class_activities(self):
+        resolver = NinthGradeResolver(self.context())
+        # Two ordinary class cells around an explicit Math B anchor each keep
+        # their own base audience instead of making the whole row unresolved.
+        row = self.row([
+            cell("L55", 11, "Пластика Вадим", "9-А"),
+            cell("M55", 12, "Матем В ДФ", "9-Д"),
+            cell("N55", 13, "География Антон", "9-Д"),
+        ])
+        result = resolver.interpret(row)
+        self.assertEqual(result.mode, ScheduleRowMode.MATH)
+        self.assertEqual(set(result.primary_assignments[0].student_ids), {"d2"})
+        self.assertEqual(set(result.default_assignment.student_ids), {"a1", "a2", "a3", "a4"})
+        self.assertEqual(set(result.secondary_assignments[0].student_ids), {"d1", "d3", "d4", "d5"})
+
     def test_english_ids_are_not_hardcoded_and_complement_can_be_history(self):
         context = self.context()
         groups = tuple({**group, "subject_subgroup": lane} for group, lane in zip(context.english_groups, ("42", "99", "105")))
@@ -252,8 +267,11 @@ class NinthGradeResolverTests(unittest.TestCase):
 
         group_set = resolver.interpret(self.real_row("tuesday_math_group_set", 1))
         self.assertEqual(group_set.mode, ScheduleRowMode.MATH)
-        self.assertEqual(set(group_set.primary_assignments[0].student_ids), {"d1", "d2"})
-        self.assertEqual(set(group_set.primary_assignments[1].student_ids), {"d3"})
+        # "группы А, В" belongs to История искусства, not to the
+        # neighbouring Math lane.  Only the explicit Math C cell is a Math
+        # assignment; the ordinary history cell is the base-class residual.
+        self.assertEqual(set(group_set.primary_assignments[0].student_ids), {"d3"})
+        self.assertEqual(set(group_set.default_assignment.student_ids), {"a1", "a2", "a3", "a4"})
 
         mixed = resolver.interpret(self.real_row("wednesday_math_and_oge", 2))
         self.assertEqual(mixed.mode, ScheduleRowMode.MATH_WITH_ELECTIVES)
