@@ -253,11 +253,13 @@ CREATE TABLE IF NOT EXISTS canonical_effective_weeks (
   effective_week_id TEXT PRIMARY KEY,
   version_id TEXT NOT NULL REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT,
   week_start TEXT NOT NULL,
+  overlay_fingerprint TEXT NOT NULL DEFAULT '',
+  revision_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   status TEXT NOT NULL DEFAULT 'materialized',
   overlay_source_snapshot_id TEXT,
   provenance TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(version_id, week_start)
+  UNIQUE(version_id, week_start, overlay_fingerprint)
 );
 CREATE TABLE IF NOT EXISTS canonical_effective_blocks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

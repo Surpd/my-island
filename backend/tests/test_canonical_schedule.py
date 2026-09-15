@@ -164,6 +164,30 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         teacher_projection = project_teacher_range(self.database, self.teacher["id"], "2026-09-09", "2026-09-09")
         self.assertEqual(teacher_projection["items"], [])
 
+    def test_corrected_week_creates_a_new_immutable_overlay_revision(self):
+        import_canonical_artifact(self.database, self.artifact())
+        first = materialize_effective_week(
+            self.database, self.version_id, "2026-09-14", patches=[],
+            overlay_source_snapshot_id="weekly-snapshot-v1", overlay_fingerprint="source-v1",
+        )
+        corrected = materialize_effective_week(
+            self.database, self.version_id, "2026-09-14", patches=[{
+                "block_key": self.block_key, "change_kind": "cancelled",
+            }], overlay_source_snapshot_id="weekly-snapshot-v2", overlay_fingerprint="source-v2",
+        )
+        retry = materialize_effective_week(
+            self.database, self.version_id, "2026-09-14", patches=[{
+                "block_key": self.block_key, "change_kind": "cancelled",
+            }], overlay_source_snapshot_id="weekly-snapshot-v2", overlay_fingerprint="source-v2",
+        )
+
+        self.assertNotEqual(first["effective_week_id"], corrected["effective_week_id"])
+        self.assertFalse(corrected["idempotent"])
+        self.assertTrue(retry["idempotent"])
+        projection = project_student(self.database, self.student["id"], "2026-09-14")
+        item = next(value for value in projection["items"] if value["start_time"] == "09:00")
+        self.assertEqual(item["state"], "NO_LESSON")
+
     def test_weekly_patch_preserves_baseline_teacher_when_audience_and_cell_match(self):
         import_canonical_artifact(self.database, self.artifact())
         materialize_effective_week(self.database, self.version_id, "2026-09-14", patches=[{

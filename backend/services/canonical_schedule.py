@@ -7,7 +7,7 @@ canonical version remains immutable while projections stay date-aware.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -378,18 +378,30 @@ def read_canonical_template(database: Database, version_id: str | None = None) -
 
 def materialize_effective_week(database: Database, version_id: str, week_start: str,
                                patches: Sequence[Mapping[str, Any]] = (), *,
-                               overlay_source_snapshot_id: str | None = None) -> dict[str, Any]:
+                               overlay_source_snapshot_id: str | None = None,
+                               overlay_fingerprint: str | None = None,
+                               overlay_observed_at: str | None = None) -> dict[str, Any]:
     """Create an immutable effective week from canonical blocks and patches."""
     try:
         start = date.fromisoformat(week_start)
     except ValueError as error:
         raise ValueError("week_start must be an ISO date") from error
-    effective_id = _hash({"version_id": version_id, "week_start": week_start})
     patch_by_key = {str(item.get("block_key")): dict(item) for item in patches if item.get("block_key")}
+    # A source week can be corrected after it was first materialized.  Keep each
+    # observed overlay immutable instead of overwriting the earlier effective
+    # week.  The deterministic fingerprint also makes retrying the same source
+    # idempotent.
+    revision = str(overlay_fingerprint or _hash({
+        "overlay_source_snapshot_id": overlay_source_snapshot_id or "",
+        "patches": patch_by_key,
+    }))
+    revision_at = str(overlay_observed_at or datetime.now(timezone.utc).isoformat())
+    effective_id = _hash({"version_id": version_id, "week_start": week_start, "overlay_fingerprint": revision})
     if database.autocommit:
         return _materialize_effective_week_reconnect(
             database, version_id, start.isoformat(), effective_id, patch_by_key,
-            overlay_source_snapshot_id=overlay_source_snapshot_id,
+            overlay_source_snapshot_id=overlay_source_snapshot_id, overlay_fingerprint=revision,
+            overlay_observed_at=revision_at,
         )
     with database.connection() as connection:
         version = database.execute(connection, "SELECT version_id FROM canonical_schedule_versions WHERE version_id = ?", (version_id,)).fetchone()
@@ -399,9 +411,9 @@ def materialize_effective_week(database: Database, version_id: str, week_start: 
         if existing:
             return {**dict(existing), "idempotent": True}
         database.execute(connection, """INSERT INTO canonical_effective_weeks(
-                effective_week_id,version_id,week_start,status,overlay_source_snapshot_id,provenance)
-                VALUES (?,?,?,?,?,?)""", (effective_id, version_id, start.isoformat(), "materialized",
-                overlay_source_snapshot_id, _json(database, {"patch_count": len(patch_by_key)})))
+                effective_week_id,version_id,week_start,overlay_fingerprint,revision_at,status,overlay_source_snapshot_id,provenance)
+                VALUES (?,?,?,?,?,?,?,?)""", (effective_id, version_id, start.isoformat(), revision, revision_at, "materialized",
+                overlay_source_snapshot_id, _json(database, {"patch_count": len(patch_by_key), "overlay_fingerprint": revision})))
         blocks = database.execute(connection, "SELECT id,block_key FROM canonical_schedule_blocks WHERE version_id=? ORDER BY weekday,start_time,id", (version_id,)).fetchall()
         known = {str(row["block_key"]): row for row in blocks}
         for block_key, row in known.items():
@@ -427,7 +439,9 @@ def materialize_effective_week(database: Database, version_id: str, week_start: 
 
 def _materialize_effective_week_reconnect(database: Database, version_id: str, week_start: str,
                                           effective_id: str, patch_by_key: Mapping[str, Mapping[str, Any]], *,
-                                          overlay_source_snapshot_id: str | None) -> dict[str, Any]:
+                                          overlay_source_snapshot_id: str | None,
+                                          overlay_fingerprint: str,
+                                          overlay_observed_at: str) -> dict[str, Any]:
     """Pooler-safe effective-week materialization using short-lived connections."""
     if not _single_fetchone(database, "SELECT version_id FROM canonical_schedule_versions WHERE version_id=?", (version_id,)):
         raise ValueError("Canonical version was not found")
@@ -435,10 +449,10 @@ def _materialize_effective_week_reconnect(database: Database, version_id: str, w
     if existing:
         return {**dict(existing), "idempotent": True}
     _single_execute(database, """INSERT INTO canonical_effective_weeks(
-            effective_week_id,version_id,week_start,status,overlay_source_snapshot_id,provenance)
-            VALUES (?,?,?,?,?,?)""", (
-        effective_id, version_id, week_start, "materialized", overlay_source_snapshot_id,
-        _json(database, {"patch_count": len(patch_by_key), "connection_mode": "pooler_autocommit"}),
+            effective_week_id,version_id,week_start,overlay_fingerprint,revision_at,status,overlay_source_snapshot_id,provenance)
+            VALUES (?,?,?,?,?,?,?,?)""", (
+        effective_id, version_id, week_start, overlay_fingerprint, overlay_observed_at, "materialized", overlay_source_snapshot_id,
+        _json(database, {"patch_count": len(patch_by_key), "connection_mode": "pooler_autocommit", "overlay_fingerprint": overlay_fingerprint}),
     ))
     blocks: list[Any] = []
     offset = 0
@@ -717,7 +731,7 @@ def _effective_week(database: Database, version_id: str | None, week_start: str)
         if version_id:
             query += " AND ew.version_id=?"
             params += (version_id,)
-        query += " ORDER BY ew.created_at DESC LIMIT 1"
+        query += " ORDER BY ew.revision_at DESC, ew.created_at DESC LIMIT 1"
         row = database.execute(connection, query, params).fetchone()
         return dict(row) if row else None
 
