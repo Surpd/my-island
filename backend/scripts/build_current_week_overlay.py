@@ -25,10 +25,28 @@ from backend.scripts.validate_full_current_v2 import project, teacher_projection
 CLASS_RE = re.compile(r"^\s*\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?\s*$", re.IGNORECASE)
 TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})\s*$")
 DAYS = {"пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2, "чт": 3, "четверг": 3, "пт": 4, "пятница": 4}
+ROOM_LINE_RE = re.compile(r"^\s*(?:каб(?:инет)?\.?\s*[^\n]*|зал(?:\s*[^\n]*)?|\d{1,3})\s*$", re.IGNORECASE)
+ROOM_INLINE_RE = re.compile(r"\s+(?:каб(?:инет)?\.?\s*[^\n]*|зал(?:\s*[^\n]*)?)(?=\s*$)", re.IGNORECASE)
 
 
 def norm(value: Any) -> str:
     return " ".join(re.sub(r"[^0-9a-zа-яё]+", " ", str(value or "").casefold()).split())
+
+
+def semantic_norm(value: Any) -> str:
+    """Normalize lesson meaning while ignoring cabinet/room-only edits.
+
+    Weekly sheets commonly change only the room line.  Such a change must be
+    retained as source metadata, but it must not re-run semantic resolution and
+    accidentally create a new audience/unresolved result.  Teacher, subject,
+    exam track and delivery markers (including ``онлайн``) remain semantic.
+    """
+    lines = []
+    for line in str(value or "").splitlines():
+        if ROOM_LINE_RE.fullmatch(line):
+            continue
+        lines.append(ROOM_INLINE_RE.sub("", line))
+    return norm("\n".join(lines))
 
 
 def grade(value: Any) -> str:
@@ -238,8 +256,8 @@ def main() -> None:
         week_items = {str(item["source_cell"]): item for item in weekly_cells}
         base_nonempty = {coord: item for coord, item in base_items.items() if str(item.get("raw_text") or "").strip()}
         week_nonempty = {coord: item for coord, item in week_items.items() if str(item.get("raw_text") or "").strip()}
-        base_text = {coord: norm(item.get("raw_text")) for coord, item in base_nonempty.items()}
-        week_text = {coord: norm(item.get("raw_text")) for coord, item in week_nonempty.items()}
+        base_text = {coord: semantic_norm(item.get("raw_text")) for coord, item in base_nonempty.items()}
+        week_text = {coord: semantic_norm(item.get("raw_text")) for coord, item in week_nonempty.items()}
         if not week_nonempty:
             classification, change_kind = "CANCELLED", "cancelled"
         elif base_text != week_text:
@@ -271,8 +289,8 @@ def main() -> None:
     cancelled = [item for item in diffs if item["classification"] == "CANCELLED"]
     added = [item for item in diffs if item["classification"] == "ADDED"]
     for old in cancelled:
-        old_text = {norm(template_raw.get(coord, {}).get("raw_text")) for coord in old["template_cells"]} - {""}
-        matches = [new for new in added if old_text and old_text == ({norm(weekly_raw.get(coord, {}).get("raw_text")) for coord in new["weekly_cells"]} - {""})]
+        old_text = {semantic_norm(template_raw.get(coord, {}).get("raw_text")) for coord in old["template_cells"]} - {""}
+        matches = [new for new in added if old_text and old_text == ({semantic_norm(weekly_raw.get(coord, {}).get("raw_text")) for coord in new["weekly_cells"]} - {""})]
         if len(matches) == 1:
             new = matches[0]
             old["classification"], old["change_kind"] = "MOVED", "moved"
