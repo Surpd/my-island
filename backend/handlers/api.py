@@ -17,6 +17,7 @@ from backend.services.admin import (
 from backend.services.google_live import GoogleLiveError
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
+from backend.services.canonical_weekly_refresh import refresh_current_week
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -582,8 +583,12 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_refresh(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        return {"status": "blocked", "ok": False,
-                "message": "Legacy Schedule Integration v1 is retired. The approved canonical template is awaiting manual reconciliation and has not been enabled for production."}
+        if not canonical_backend_enabled():
+            return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
+        try:
+            return refresh_current_week(database, get_settings(), week_start or "2026-09-14")
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            return {"status": "blocked", "ok": False, "message": str(error)}
 
     @router.post("/admin/schedule/recalculate")
     def admin_schedule_recalculate(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
