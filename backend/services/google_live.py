@@ -20,7 +20,12 @@ class GoogleApiError(GoogleLiveError):
     def __init__(self, status: int, body: Any) -> None:
         self.status = status
         self.body = body
-        super().__init__(f"Google API request failed ({status})")
+        error_code = body.get("error") if isinstance(body, dict) else None
+        if error_code == "invalid_grant":
+            message = "Google authorization expired or was revoked; reconnect Google integration"
+        else:
+            message = f"Google API request failed ({status})"
+        super().__init__(message)
 
 
 def _decode_json(response: Any) -> dict[str, Any]:
