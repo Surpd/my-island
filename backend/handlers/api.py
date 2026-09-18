@@ -160,6 +160,10 @@ def create_router(database: Database) -> APIRouter:
     def canonical_backend_enabled() -> bool:
         return get_settings().schedule_backend == "canonical"
 
+    def canonical_admin_backend_enabled() -> bool:
+        """Allow read-only admin shadow work without enabling user projections."""
+        return get_settings().schedule_backend in {"canonical_shadow", "canonical"}
+
     @router.post("/admin/auth/challenge")
     def create_admin_browser_challenge(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -583,7 +587,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_refresh(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        if not canonical_backend_enabled():
+        if not canonical_admin_backend_enabled():
             return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
         try:
             return refresh_current_week(database, get_settings(), week_start or "2026-09-14")
@@ -600,7 +604,7 @@ def create_router(database: Database) -> APIRouter:
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return effective_status(database, week_start) if canonical_backend_enabled() else {"status": "canonical_backend_disabled", "authoritative": False, "weeks": [], "summary": {"lessons": 0, "issues": 0}}
+        return effective_status(database, week_start) if canonical_admin_backend_enabled() else {"status": "canonical_backend_disabled", "authoritative": False, "weeks": [], "summary": {"lessons": 0, "issues": 0}}
 
     @router.get("/admin/schedule/observability")
     def admin_schedule_observability(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -611,13 +615,13 @@ def create_router(database: Database) -> APIRouter:
     @router.get("/admin/schedule/lessons")
     def admin_schedule_lessons(week_start: str | None = None, status: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        result = effective_blocks(database, week_start) if canonical_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
+        result = effective_blocks(database, week_start) if canonical_admin_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
         return {"items": result.get("items", []), "status": result.get("status")}
 
     @router.get("/admin/schedule/issues")
     def admin_schedule_issues(week_start: str | None = None, status: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        result = effective_blocks(database, week_start) if canonical_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
+        result = effective_blocks(database, week_start) if canonical_admin_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
         return {"items": [{"block_key": item.get("block_key"), "unresolved": item.get("unresolved", []), "status": item.get("status"), "change_kind": item.get("change_kind")} for item in result.get("items", []) if item.get("unresolved")], "status": result.get("status")}
 
     @router.get("/admin/schedule/reconciliation")
