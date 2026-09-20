@@ -3,18 +3,27 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from backend.database import Database
 from backend.services.admin import add_membership
 from backend.services.school_data import (
     diff_source_records,
+    stable_fingerprint,
     validate_audience_rule,
     validate_candidate_change,
 )
 
 
 class SchoolDataFoundationTests(unittest.TestCase):
+    def test_fingerprint_normalizes_database_uuid_values(self):
+        value = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        self.assertEqual(
+            stable_fingerprint({"id": value}),
+            stable_fingerprint({"id": str(value)}),
+        )
+
     def test_diff_is_deterministic_and_marks_only_changed_units(self):
         changes = diff_source_records(
             {"same": {"name": "A"}, "changed": {"name": "B"}, "deleted": {"name": "C"}},
