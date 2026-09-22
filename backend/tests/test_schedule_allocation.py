@@ -113,7 +113,7 @@ class ScheduleAllocationTests(unittest.TestCase):
             connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (class_group, student))
             connection.execute("""INSERT INTO schedule_lessons(source_snapshot_id,record_key,version_kind,week_start,lesson_date,start_time,end_time,subject,audience,activity_type,lesson_kind,modifiers,resolution_status,source_cell,raw_payload)
                 VALUES (?,?,'weekly','2026-09-07','2026-09-11','10:00','10:45','Математика','10-А','lesson','lesson','{}','WARNING','B4',?)""",
-                (snapshot, "sdep-math", '{"raw_text":"Математика 10-А","source_day_label":"Пт SDEP"}'))
+                (snapshot, "sdep-math", '{"raw_text":"Математика 10-А"}'))
             result = rebuild_schedule_allocations(self.database, connection, snapshot)
             self.assertEqual(result["slots"], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM schedule_student_allocations").fetchone()[0], 0)
@@ -125,19 +125,6 @@ class ScheduleAllocationTests(unittest.TestCase):
         self.assertEqual(qa["day_blocks"][0]["raw_activities"][0]["source_cell"], "B4")
         self.assertEqual(qa["student_day_blocks"][0]["kind"], "sdep")
         self.assertEqual(self.database.schedule_allocation_qa("2026-09-07", "9", None, None)["summary"]["sdep_days"], 0)
-
-    def test_friday_without_explicit_sdep_marker_is_an_ordinary_day(self):
-        with self.database.connection() as connection:
-            source = connection.execute("INSERT INTO school_sources(source_type,external_key,display_name) VALUES ('schedule','plain-friday','Plain Friday') RETURNING id").fetchone()[0]
-            run = connection.execute("INSERT INTO school_sync_runs(source_id,mode,status,idempotency_key) VALUES (?,'incremental','applied','plain-friday') RETURNING id", (source,)).fetchone()[0]
-            snapshot = connection.execute("INSERT INTO school_source_snapshots(source_id,sync_run_id,fingerprint,observed_at,status,is_last_known_valid) VALUES (?,?,'plain-friday',CURRENT_TIMESTAMP,'valid',1) RETURNING id", (source, run)).fetchone()[0]
-            group = connection.execute("INSERT INTO groups(name,display_name,group_type,base_class_name,canonical) VALUES ('10-А','10-А','class','10-А',1) RETURNING id").fetchone()[0]
-            student = connection.execute("INSERT INTO identities(kind,display_name,status) VALUES ('student','Plain Friday student','active') RETURNING id").fetchone()[0]
-            connection.execute("INSERT INTO memberships(group_id,identity_id,member_role,source,active) VALUES (?,?,'student','test',1)", (group, student))
-            connection.execute("""INSERT INTO schedule_lessons(source_snapshot_id,record_key,version_kind,week_start,lesson_date,start_time,end_time,subject,audience,activity_type,lesson_kind,modifiers,resolution_status,raw_payload)
-                VALUES (?,?,'weekly','2026-09-07','2026-09-11','10:00','10:45','Математика','10-А','lesson','lesson','{}','WARNING','{"source_day_label":"Пт"}')""", (snapshot, "plain-friday"))
-            result = rebuild_schedule_allocations(self.database, connection, snapshot)
-            self.assertEqual(result["slots"], 1)
 
     def test_row_wide_parallel_lanes_assign_neighbouring_activities_by_anchor(self):
         with self.database.connection() as connection:

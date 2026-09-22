@@ -28,14 +28,10 @@ def _schedule_row_matches_grade(row: dict[str, Any], grade: str) -> bool:
 def _schedule_row_is_sdep(row: dict[str, Any], grade: str) -> bool:
     if grade not in {"10", "11"} or not _schedule_row_matches_grade(row, grade):
         return False
-    payload = row.get("raw_payload") or {}
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError:
-            payload = {}
-    label = payload.get("source_day_label") if isinstance(payload, dict) else ""
-    return bool(re.search(r"\bsdep\b", str(label or ""), re.IGNORECASE))
+    try:
+        return date.fromisoformat(str(row.get("lesson_date") or "")).weekday() == 4
+    except ValueError:
+        return False
 
 
 SCHEMA = """
@@ -2850,7 +2846,7 @@ class Database:
                         "grade": sdep_grade,
                         "kind": "sdep",
                         "label": "SDEP",
-                        "rule": "Source day explicitly marked SDEP",
+                        "rule": "Friday is SDEP for grades 10–11",
                         "raw_activities": [
                             {"subject": row.get("subject"), "audience": row.get("audience"),
                              "activity_type": row.get("activity_type"), "source_cell": row.get("source_cell"),
