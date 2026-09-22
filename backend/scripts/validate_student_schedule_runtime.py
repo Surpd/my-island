@@ -18,9 +18,9 @@ def main() -> None:
     parser.add_argument("--summary", action="store_true")
     args = parser.parse_args()
     settings = get_settings()
-    # Validation is read-only and benefits from ordinary scoped read
-    # connections; reconnect/autocommit is reserved for the write path.
-    database = Database(settings.database_path, settings.database_url, autocommit=False)
+    # Production uses a transaction pooler, so operator reads use short-lived
+    # autocommit connections. Local SQLite validation keeps normal transactions.
+    database = Database(settings.database_path, settings.database_url, autocommit=bool(settings.database_url))
     report = validate_student_projections(
         database,
         args.week_start,
