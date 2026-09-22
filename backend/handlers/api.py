@@ -18,6 +18,7 @@ from backend.services.google_live import GoogleLiveError
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
 from backend.services.canonical_weekly_refresh import preview_current_week, refresh_current_week
+from backend.services.student_schedule_validation import validate_student_projections
 from backend.services.teacher import journal_view
 from backend.config import get_settings
 from backend.services.student_membership_reconciliation import run_live_dry_run, GoogleLiveError as ReconciliationGoogleLiveError
@@ -604,6 +605,14 @@ def create_router(database: Database) -> APIRouter:
             return preview_current_week(database, get_settings(), week_start or None)
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             return {"status": "blocked", "ok": False, "message": str(error)}
+
+    @router.get("/admin/schedule/validate-students")
+    def admin_schedule_validate_students(week_start: str, grades: str = "", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not canonical_admin_backend_enabled():
+            return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
+        selected_grades = [value.strip() for value in grades.split(",") if value.strip()]
+        return validate_student_projections(database, week_start, grades=selected_grades or None)
 
     @router.post("/admin/schedule/recalculate")
     def admin_schedule_recalculate(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
