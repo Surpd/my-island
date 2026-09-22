@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from datetime import date
 from typing import Any, Mapping, Sequence
 
 from backend.database import Database
@@ -78,13 +77,12 @@ def _active_on(row: Mapping[str, Any], day: str) -> bool:
     return (not start or start <= day) and (not end or end >= day)
 
 
-def _is_sdep_day(day: str, grade: str) -> bool:
+def _is_sdep_source(lesson: Mapping[str, Any], grade: str) -> bool:
     if grade not in {"10", "11"}:
         return False
-    try:
-        return date.fromisoformat(str(day)).weekday() == 4
-    except ValueError:
-        return False
+    payload = lesson.get("raw_payload") or {}
+    label = payload.get("source_day_label") if isinstance(payload, Mapping) else ""
+    return bool(re.search(r"\bsdep\b", str(label or ""), re.IGNORECASE))
 
 
 def _allocation_key(lesson: Mapping[str, Any], grade: str) -> str:
@@ -304,8 +302,8 @@ def rebuild_schedule_allocations(database: Database, connection: Any, snapshot_i
         # projection, so they must not create fake lesson/no_lesson slots.
         if row.get("activity_type") != "special_event" and not (row.get("modifiers") or {}).get("synthetic_cancelled"):
             for grade in sorted(grades & valid_grades):
-                if _is_sdep_day(str(row["lesson_date"]), grade):
-                    # Friday is an SDEP day for grades 10–11. Keep the source
+                if _is_sdep_source(row, grade):
+                    # SDEP is a source-marked day for grades 10–11. Keep the source
                     # lesson immutable, but do not project its activities into
                     # slot-level audience/allocation data.
                     continue

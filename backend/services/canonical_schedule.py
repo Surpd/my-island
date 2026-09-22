@@ -7,6 +7,7 @@ canonical version remains immutable while projections stay date-aware.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
@@ -19,6 +20,19 @@ from backend.database import Database
 CANONICAL_STATUSES = {"draft", "approved_baseline", "approved_with_exceptions", "authoritative", "superseded"}
 _NO_LESSON = "NO_LESSON"
 _OPTIONAL_TEACHER_ACTIVITIES = {"Творчество", "Тренинг", "Курс по выбору", "Цифровой трек", "SDEP"}
+_RESIDUAL_ROLES = {"default", "residual", "final_state", "final_unassigned", "explicit_no_lesson"}
+
+
+@dataclass
+class StudentProjectionContext:
+    """Fresh directory snapshot shared by every student projection in one request."""
+
+    effective: dict[str, Any]
+    students: dict[str, dict[str, Any]]
+    groups: dict[str, dict[str, Any]]
+    memberships: list[dict[str, Any]]
+    exclusions: list[dict[str, Any]]
+    blocks: list[dict[str, Any]]
 
 
 def _json(database: Database, value: Any) -> Any:
@@ -491,15 +505,9 @@ def _materialize_effective_week_reconnect(database: Database, version_id: str, w
 
 
 def _membership_sets(database: Database, day: str) -> dict[str, set[str]]:
-    cache = getattr(database, "_canonical_membership_cache", None)
-    if cache is None:
-        cache = {}
-        setattr(database, "_canonical_membership_cache", cache)
-    if day in cache:
-        return cache[day]
     membership_query = """SELECT m.group_id,m.identity_id,m.valid_from,m.valid_until
-        FROM memberships m JOIN identities i ON i.id=m.identity_id
-        WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student' AND i.status='active'
+        FROM memberships m JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
+        WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student' AND i.status='active' AND g.canonical IS TRUE
         ORDER BY m.id LIMIT ? OFFSET ?"""
     override_query = """SELECT identity_id,group_id FROM membership_overrides
         WHERE active IS TRUE AND action='exclude' AND (valid_from IS NULL OR valid_from <= ?) AND (valid_until IS NULL OR valid_until >= ?)
@@ -537,14 +545,10 @@ def _membership_sets(database: Database, day: str) -> dict[str, set[str]]:
         start, end = str(row["valid_from"] or ""), str(row["valid_until"] or "")
         if (not start or start <= day) and (not end or end >= day):
             result[group_id].add(identity_id)
-    cache[day] = result
     return result
 
 
 def _active_students(database: Database) -> dict[str, dict[str, Any]]:
-    cached = getattr(database, "_canonical_active_students_cache", None)
-    if cached is not None:
-        return cached
     if database.autocommit:
         rows: list[Any] = []
         offset = 0
@@ -554,19 +558,12 @@ def _active_students(database: Database) -> dict[str, dict[str, Any]]:
             if len(page) < 50:
                 break
             offset += len(page)
-        result = {str(row["id"]): dict(row) for row in rows}
-        setattr(database, "_canonical_active_students_cache", result)
-        return result
+        return {str(row["id"]): dict(row) for row in rows}
     with database.connection() as connection:
-        result = {str(row["id"]): dict(row) for row in database.execute(connection, "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
-        setattr(database, "_canonical_active_students_cache", result)
-        return result
+        return {str(row["id"]): dict(row) for row in database.execute(connection, "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
 
 
 def _canonical_group_ids(database: Database) -> set[str]:
-    cached = getattr(database, "_canonical_group_ids_cache", None)
-    if cached is not None:
-        return cached
     if database.autocommit:
         rows: list[Any] = []
         offset = 0
@@ -576,13 +573,161 @@ def _canonical_group_ids(database: Database) -> set[str]:
             if len(page) < 50:
                 break
             offset += len(page)
-        result = {str(row["id"]) for row in rows}
-        setattr(database, "_canonical_group_ids_cache", result)
-        return result
+        return {str(row["id"]) for row in rows}
     with database.connection() as connection:
-        result = {str(row["id"]) for row in database.execute(connection, "SELECT id FROM groups WHERE canonical IS TRUE").fetchall()}
-        setattr(database, "_canonical_group_ids_cache", result)
-        return result
+        return {str(row["id"]) for row in database.execute(connection, "SELECT id FROM groups WHERE canonical IS TRUE").fetchall()}
+
+
+def _all_rows(database: Database, query: str, *, page_size: int = 1000) -> list[Any]:
+    if not database.autocommit:
+        with database.connection() as connection:
+            return list(database.execute(connection, query).fetchall())
+    rows: list[Any] = []
+    offset = 0
+    while True:
+        page = _single_fetchall(database, f"{query} LIMIT ? OFFSET ?", (page_size, offset))
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        offset += len(page)
+
+
+def build_student_projection_context(
+    database: Database,
+    week_start: str,
+    *,
+    version_id: str | None = None,
+) -> StudentProjectionContext | None:
+    """Load mutable directory state once; never retain it on ``Database``."""
+    effective = _effective_week(database, version_id, week_start)
+    if not effective:
+        return None
+    students = {
+        str(row["id"]): dict(row)
+        for row in _all_rows(
+            database,
+            "SELECT id,display_name,class_name,status FROM identities WHERE kind='student' ORDER BY id",
+        )
+    }
+    groups = {
+        str(row["id"]): dict(row)
+        for row in _all_rows(
+            database,
+            """SELECT id,name,display_name,group_type,subject,base_class_name,subject_subgroup,
+                      exam_track,role,semantic_dimension,canonical FROM groups ORDER BY id""",
+        )
+    }
+    memberships = [
+        dict(row)
+        for row in _all_rows(
+            database,
+            """SELECT m.id,m.group_id,m.identity_id,m.member_role,m.source,m.source_ref,m.active,
+                      m.valid_from,m.valid_until,i.status AS identity_status,i.kind AS identity_kind,
+                      g.canonical AS group_canonical
+                 FROM memberships m
+                 LEFT JOIN identities i ON i.id=m.identity_id
+                 LEFT JOIN groups g ON g.id=m.group_id
+                ORDER BY m.id""",
+        )
+    ]
+    exclusions = [
+        dict(row)
+        for row in _all_rows(
+            database,
+            """SELECT id,identity_id,group_id,member_role,action,active,valid_from,valid_until
+                 FROM membership_overrides
+                WHERE active IS TRUE AND action='exclude'
+                ORDER BY id""",
+        )
+    ]
+    # Assignment rows are immutable with their canonical block. Preloading them
+    # once avoids one connection per block while remaining safely keyed by the
+    # immutable block id (unlike mutable directory caches).
+    assignment_cache = getattr(database, "_canonical_assignment_cache", None)
+    if assignment_cache is None:
+        assignment_cache = {}
+        setattr(database, "_canonical_assignment_cache", assignment_cache)
+    if not getattr(database, "_canonical_assignments_loaded", False):
+        for row in _all_rows(database, "SELECT * FROM canonical_schedule_assignments ORDER BY id"):
+            item = dict(row)
+            for key in ("canonical_group_ids", "source_cells", "teacher_ids", "metadata"):
+                item[key] = _decode(database, item.get(key), [] if key != "metadata" else {})
+            assignment_cache.setdefault(str(row["block_id"]), []).append(item)
+        setattr(database, "_canonical_assignments_loaded", True)
+    return StudentProjectionContext(
+        effective=dict(effective),
+        students=students,
+        groups=groups,
+        memberships=memberships,
+        exclusions=exclusions,
+        blocks=_block_rows(database, str(effective["effective_week_id"])),
+    )
+
+
+def _date_in_period(day: str, start: Any, end: Any) -> bool:
+    start_text, end_text = str(start or ""), str(end or "")
+    return (not start_text or start_text <= day) and (not end_text or end_text >= day)
+
+
+def _student_memberships(context: StudentProjectionContext, student_id: str, day: str) -> set[str]:
+    excluded = {
+        str(row["group_id"])
+        for row in context.exclusions
+        if str(row.get("identity_id")) == student_id
+        and str(row.get("member_role") or "student") == "student"
+        and _date_in_period(day, row.get("valid_from"), row.get("valid_until"))
+    }
+    return {
+        str(row["group_id"])
+        for row in context.memberships
+        if str(row.get("identity_id")) == student_id
+        and bool(row.get("active"))
+        and str(row.get("member_role")) == "student"
+        and str(row.get("identity_status")) == "active"
+        and str(row.get("identity_kind")) == "student"
+        and bool(row.get("group_canonical"))
+        and _date_in_period(day, row.get("valid_from"), row.get("valid_until"))
+        and str(row["group_id"]) not in excluded
+    }
+
+
+def _group_dimension(group: Mapping[str, Any]) -> tuple[str, str]:
+    explicit = str(group.get("semantic_dimension") or "").strip()
+    if explicit:
+        return explicit, "directory.semantic_dimension"
+    role = str(group.get("role") or "").strip()
+    group_type = str(group.get("group_type") or "").strip()
+    name = " ".join(str(group.get(key) or "") for key in ("name", "display_name", "subject", "base_class_name")).lower()
+    grade = _grade(group.get("base_class_name") or group.get("name")) or "unknown"
+    if role == "base_class" or group_type == "class":
+        return f"base_class:{grade}", "fallback:group_role_or_type"
+    subject = str(group.get("subject") or "").strip().lower()
+    if not subject:
+        if "math" in name or "матем" in name:
+            subject = "math"
+        elif "english" in name or "англ" in name:
+            subject = "english"
+    if role == "instructional_partition" or group_type in {"instructional", "instructional_group", "subject_group"}:
+        if subject:
+            return f"instructional:{grade}:{subject}", "fallback:instructional_subject"
+        return f"instructional:{grade}:unknown", "fallback:instructional_unknown"
+    if role == "elective_or_special" or group_type == "exam_track":
+        subject = subject or str(group.get("exam_track") or "unknown").strip().lower()
+        return f"elective:{grade}:{subject}", "fallback:elective_subject"
+    return "unknown", "fallback:insufficient_directory_metadata"
+
+
+def _assignment_group_ids(assignment: Mapping[str, Any]) -> list[str]:
+    audience = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
+    return [str(value) for value in assignment.get("canonical_group_ids") or audience.get("canonical_group_ids") or []]
+
+
+def _assignment_role(assignment: Mapping[str, Any]) -> str:
+    return str(assignment.get("assignment_kind") or assignment.get("role") or assignment.get("kind") or "primary")
+
+
+def _assignment_id(block: Mapping[str, Any], assignment: Mapping[str, Any], index: int) -> str:
+    return str(assignment.get("id") or f"{block.get('block_key')}:assignment:{index}")
 
 
 def _grade(value: Any) -> str:
@@ -608,9 +753,9 @@ def _block_rows(database: Database, effective_week_id: str) -> list[dict[str, An
         rows: list[Any] = []
         offset = 0
         while True:
-            page = _single_fetchall(database, base_query + " LIMIT ? OFFSET ?", (effective_week_id, 5, offset))
+            page = _single_fetchall(database, base_query + " LIMIT ? OFFSET ?", (effective_week_id, 500, offset))
             rows.extend(page)
-            if len(page) < 5:
+            if len(page) < 500:
                 break
             offset += len(page)
     else:
@@ -699,13 +844,13 @@ def _assignments(database: Database, block_id: Any, patch: Mapping[str, Any] | N
     if database.autocommit and not getattr(database, "_canonical_assignments_loaded", False):
         offset = 0
         while True:
-            page = _single_fetchall(database, "SELECT * FROM canonical_schedule_assignments ORDER BY id LIMIT ? OFFSET ?", (10, offset))
+            page = _single_fetchall(database, "SELECT * FROM canonical_schedule_assignments ORDER BY id LIMIT ? OFFSET ?", (1000, offset))
             for row in page:
                 item = dict(row)
                 for key in ("canonical_group_ids", "source_cells", "teacher_ids", "metadata"):
                     item[key] = _decode(database, item.get(key), [] if key != "metadata" else {})
                 cache[str(row["block_id"])] = cache.get(str(row["block_id"]), []) + [item]
-            if len(page) < 10:
+            if len(page) < 1000:
                 break
             offset += len(page)
         setattr(database, "_canonical_assignments_loaded", True)
@@ -777,6 +922,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
     teacher_names = {str(row["id"]): str(row["display_name"] or row["id"]) for row in teacher_rows}
     active_students = _active_students(database)
     memberships = _membership_sets(database, selected_week)
+    projection_context = build_student_projection_context(database, selected_week, version_id=version_id)
 
     def assignment_group_ids(assignment: Mapping[str, Any]) -> list[str]:
         audience = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
@@ -826,7 +972,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
     projection_issues: list[dict[str, Any]] = []
     block_by_key = {str(block.get("block_key")): block for block in effective_blocks}
     for student_id, student in active_students.items():
-        projection = project_student(database, student_id, selected_week)
+        projection = project_student(database, student_id, selected_week, context=projection_context)
         for item in projection.get("items") or []:
             state = str(item.get("state") or "UNRESOLVED")
             projection_states[state] += 1
@@ -842,7 +988,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
                 rollup["issues"].append({"student_id": student_id, "student_name": student.get("display_name"), "reason": item.get("reason")})
         for issue in projection.get("issues") or []:
             block = block_by_key.get(str(issue.get("block_key") or ""), {})
-            projection_issues.append({"student_id": student_id, "student_name": student.get("display_name"), "class_name": student.get("class_name"), "date": (date.fromisoformat(selected_week) + timedelta(days=int(block.get("weekday") or 0))).isoformat() if block.get("weekday") is not None else None, "start_time": block.get("start_time"), "block_key": issue.get("block_key"), "reason": issue.get("reason")})
+            projection_issues.append({**dict(issue), "student_id": student_id, "student_name": student.get("display_name"), "class_name": student.get("class_name"), "date": issue.get("date") or ((date.fromisoformat(selected_week) + timedelta(days=int(block.get("weekday") or 0))).isoformat() if block.get("weekday") is not None else None), "start_time": issue.get("start_time") or block.get("start_time"), "block_key": issue.get("block_key"), "reason": issue.get("reason")})
 
     teacher_unresolved: list[dict[str, Any]] = []
     teacher_orphans: list[dict[str, Any]] = []
@@ -912,78 +1058,282 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
         "weeks": [{"week_start": value, "current": value == selected_week, "historical": value != selected_week} for value in available_values],
         "canonical": {"version_id": version_id, "status": version.get("status"), "authoritative": bool((version.get("metadata") or {}).get("authoritative", False)), "source_snapshot_id": version.get("source_snapshot_id"), "source_fingerprint": version.get("source_fingerprint"), "blocks": len(canonical_blocks), "assignments": sum(len(item.get("assignments") or []) for item in canonical_blocks.values())},
         "effective_week": {"effective_week_id": effective.get("effective_week_id"), "week_start": selected_week, "source_snapshot": snapshot, "overlay_patch_count": sum(value for key, value in diff_counts.items() if key != "UNCHANGED"), "effective_blocks": len(rendered_blocks), "diff_counts": dict(diff_counts)},
-        "student_projection": {"active_students": len(active_students), "states": dict(projection_states), "conflicts": sum(1 for item in projection_issues if item.get("reason") == "multiple effective activities"), "unresolved": len(projection_issues), "unresolved_by_reason": dict(Counter(str(item.get("reason") or "") for item in projection_issues)), "issues": projection_issues, "samples": dict(projection_samples)},
+        "student_projection": {"active_students": len(active_students), "states": dict(projection_states), "conflicts": sum(1 for item in projection_issues if item.get("code") in {"INCOMPATIBLE_MEMBERSHIP_OVERLAP", "MULTIPLE_ACTIVITY_CLAIMS"}), "unresolved": len(projection_issues), "unresolved_by_reason": dict(Counter(str(item.get("reason") or "") for item in projection_issues)), "issues": projection_issues, "samples": dict(projection_samples)},
         "teacher_projection": {"resolved": teacher_resolved, "unresolved": len(teacher_unresolved), "orphan": len(teacher_orphans), "conflicts": len(teacher_conflicts), "unresolved_items": teacher_unresolved, "orphan_items": teacher_orphans, "conflict_items": teacher_conflicts},
         "blocks": rendered_blocks,
     }
 
 
-def project_student(database: Database, identity_id: Any, week_start: str) -> dict[str, Any]:
-    effective = _effective_week(database, None, week_start)
+def _projection_issue(
+    code: str,
+    reason: str,
+    *,
+    student: Mapping[str, Any],
+    block: Mapping[str, Any],
+    day: str,
+    trace: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "reason": reason,
+        "student_id": str(student.get("id")),
+        "student_name": student.get("display_name"),
+        "class_name": student.get("class_name"),
+        "date": day,
+        "start_time": block.get("start_time"),
+        "end_time": block.get("end_time"),
+        "block_key": block.get("block_key"),
+        "canonical_block_id": block.get("canonical_block_id"),
+        "source_cells": trace.get("source_cells") or [],
+        "assignment_ids": trace.get("assignment_ids") or [],
+        "group_ids": trace.get("group_ids") or [],
+        "group_names": trace.get("group_names") or [],
+        "membership_ids": trace.get("membership_ids") or [],
+        "dimension": trace.get("dimension"),
+        "dimension_evidence": trace.get("dimension_evidence") or [],
+        "final_state": trace.get("final_state"),
+        "trace": dict(trace),
+    }
+
+
+def _claim_priority(claim: Mapping[str, Any]) -> tuple[int, int]:
+    role = str(claim.get("role") or "primary")
+    role_priority = {"primary": 40, "secondary": 30, "special": 20}.get(role, 10)
+    group_roles = set(claim.get("group_roles") or [])
+    specificity = 30 if "instructional_partition" in group_roles else 20 if "elective_or_special" in group_roles else 0
+    return role_priority, specificity
+
+
+def _project_student_block(
+    database: Database,
+    context: StudentProjectionContext,
+    student: Mapping[str, Any],
+    block: Mapping[str, Any],
+    day: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    student_id = str(student["id"])
+    membership_groups = _student_memberships(context, student_id, day)
+    memberships_by_group: defaultdict[str, list[str]] = defaultdict(list)
+    for membership in context.memberships:
+        group_id = str(membership.get("group_id"))
+        if group_id in membership_groups and str(membership.get("identity_id")) == student_id:
+            memberships_by_group[group_id].append(str(membership.get("id")))
+
+    patch = block.get("patch") if isinstance(block.get("patch"), Mapping) else {}
+    assignments = [] if block.get("change_kind") == "cancelled" else _assignments(database, block.get("canonical_block_id"), patch)
+    claims: list[dict[str, Any]] = []
+    residual_claims: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    assignment_traces: list[dict[str, Any]] = []
+
+    for index, assignment in enumerate(assignments):
+        assignment_id = _assignment_id(block, assignment, index)
+        activity = str(assignment.get("activity") or "").strip()
+        role = _assignment_role(assignment)
+        group_ids = _assignment_group_ids(assignment)
+        source_cells = assignment.get("source_cells") or []
+        unknown_group_ids = [group_id for group_id in group_ids if group_id not in context.groups or not bool(context.groups[group_id].get("canonical"))]
+        matched_group_ids = sorted(set(group_ids).intersection(membership_groups))
+        dimensions = []
+        dimension_evidence = []
+        group_roles = []
+        for group_id in matched_group_ids:
+            group = context.groups[group_id]
+            dimension, evidence = _group_dimension(group)
+            dimensions.append(dimension)
+            dimension_evidence.append({"group_id": group_id, "dimension": dimension, "source": evidence})
+            group_role = str(group.get("role") or "")
+            if not group_role:
+                group_role = "base_class" if group.get("group_type") == "class" else "instructional_partition" if group.get("group_type") in {"instructional", "instructional_group", "subject_group"} else "unknown"
+            group_roles.append(group_role)
+        trace = {
+            "assignment_id": assignment_id,
+            "activity": activity,
+            "role": role,
+            "audience_group_ids": group_ids,
+            "matched_group_ids": matched_group_ids,
+            "matched_membership_ids": sorted({value for group_id in matched_group_ids for value in memberships_by_group[group_id]}),
+            "dimensions": dimensions,
+            "dimension_evidence": dimension_evidence,
+            "source_cells": source_cells,
+            "matched": bool(matched_group_ids),
+        }
+        assignment_traces.append(trace)
+        common = {
+            "assignment_id": assignment_id,
+            "activity": activity,
+            "role": role,
+            "group_ids": matched_group_ids,
+            "group_roles": group_roles,
+            "dimensions": dimensions,
+            "dimension_evidence": dimension_evidence,
+            "membership_ids": trace["matched_membership_ids"],
+            "source_cells": source_cells,
+            "assignment": assignment,
+        }
+        if unknown_group_ids:
+            issue_trace = {
+                "assignment_ids": [assignment_id], "group_ids": unknown_group_ids,
+                "group_names": [str(context.groups.get(value, {}).get("display_name") or context.groups.get(value, {}).get("name") or value) for value in unknown_group_ids],
+                "source_cells": source_cells, "final_state": "UNRESOLVED", "assignments": assignment_traces,
+            }
+            issues.append(_projection_issue("UNKNOWN_CANONICAL_GROUP", f"canonical group not found or inactive: {', '.join(unknown_group_ids)}", student=student, block=block, day=day, trace=issue_trace))
+            continue
+        is_residual = role in _RESIDUAL_ROLES or str(assignment.get("audience_kind") or "") in {"complement", "remaining"}
+        if not group_ids:
+            if is_residual:
+                residual_claims.append(common)
+            else:
+                issue_trace = {"assignment_ids": [assignment_id], "source_cells": source_cells, "final_state": "UNRESOLVED", "assignments": assignment_traces}
+                issues.append(_projection_issue("GROUPLESS_PRIMARY_ASSIGNMENT", "non-residual assignment has no canonical audience", student=student, block=block, day=day, trace=issue_trace))
+            continue
+        if matched_group_ids:
+            claims.append(common)
+
+    partition_groups: defaultdict[str, set[str]] = defaultdict(set)
+    partition_evidence: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for assignment in assignments:
+        for group_id in _assignment_group_ids(assignment):
+            group = context.groups.get(group_id)
+            if not group or not bool(group.get("canonical")):
+                continue
+            role = str(group.get("role") or "")
+            group_type = str(group.get("group_type") or "")
+            if role not in {"base_class", "instructional_partition"} and group_type not in {"class", "instructional", "instructional_group", "subject_group"}:
+                continue
+            dimension, evidence = _group_dimension(group)
+            if dimension != "unknown":
+                partition_groups[dimension].add(group_id)
+                partition_evidence[dimension].append({"group_id": group_id, "source": evidence})
+    uncovered_dimensions = [
+        dimension for dimension, group_ids in partition_groups.items()
+        if len(group_ids) >= 2 and not membership_groups.intersection(group_ids)
+    ]
+    for dimension in uncovered_dimensions:
+        group_ids = sorted(partition_groups[dimension])
+        issue_trace = {
+            "group_ids": group_ids,
+            "group_names": [str(context.groups[value].get("display_name") or context.groups[value].get("name") or value) for value in group_ids],
+            "dimension": dimension,
+            "dimension_evidence": partition_evidence[dimension],
+            "source_cells": sorted({str(cell) for item in assignments for cell in item.get("source_cells") or []}),
+            "final_state": "UNRESOLVED", "assignments": assignment_traces,
+        }
+        issues.append(_projection_issue("UNCOVERED_PARTITION_MEMBER", f"student is not covered by active partition {dimension}", student=student, block=block, day=day, trace=issue_trace))
+
+    dimension_groups: defaultdict[str, set[str]] = defaultdict(set)
+    dimension_claims: defaultdict[str, list[str]] = defaultdict(list)
+    dimension_evidence: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for claim in claims:
+        for group_id, dimension, evidence in zip(claim["group_ids"], claim["dimensions"], claim["dimension_evidence"]):
+            if dimension == "unknown" or dimension.endswith(":unknown"):
+                continue
+            dimension_groups[dimension].add(group_id)
+            dimension_claims[dimension].append(claim["assignment_id"])
+            dimension_evidence[dimension].append(evidence)
+    for dimension, group_ids in dimension_groups.items():
+        if len(group_ids) <= 1:
+            continue
+        issue_trace = {
+            "assignment_ids": sorted(set(dimension_claims[dimension])), "group_ids": sorted(group_ids),
+            "group_names": [str(context.groups[value].get("display_name") or context.groups[value].get("name") or value) for value in sorted(group_ids)],
+            "membership_ids": sorted({value for group_id in group_ids for value in memberships_by_group[group_id]}),
+            "dimension": dimension, "dimension_evidence": dimension_evidence[dimension],
+            "source_cells": sorted({str(cell) for claim in claims for cell in claim["source_cells"]}),
+            "final_state": "UNRESOLVED", "assignments": assignment_traces,
+        }
+        issues.append(_projection_issue("INCOMPATIBLE_MEMBERSHIP_OVERLAP", f"student belongs to multiple mutually exclusive groups in {dimension}", student=student, block=block, day=day, trace=issue_trace))
+
+    for raw_issue in block.get("unresolved") or []:
+        if student_id in {str(value) for value in raw_issue.get("student_ids") or []}:
+            trace = {"final_state": "UNRESOLVED", "assignments": assignment_traces, "source_cells": raw_issue.get("source_cells") or []}
+            issues.append(_projection_issue("CANONICAL_BLOCK_UNRESOLVED", str(raw_issue.get("reason") or "canonical block unresolved"), student=student, block=block, day=day, trace=trace))
+
+    blocking = [issue for issue in issues if issue["code"] in {"UNKNOWN_CANONICAL_GROUP", "GROUPLESS_PRIMARY_ASSIGNMENT", "UNCOVERED_PARTITION_MEMBER", "INCOMPATIBLE_MEMBERSHIP_OVERLAP", "CANONICAL_BLOCK_UNRESOLVED"}]
+    provenance = {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}
+    result: dict[str, Any] | None = None
+    if blocking:
+        result = {"state": "UNRESOLVED", "activity": None, "reason": blocking[0]["reason"], "issue_codes": sorted({issue["code"] for issue in blocking}), "provenance": provenance}
+    else:
+        activity_claims = [claim for claim in claims if claim["activity"] and claim["activity"] != _NO_LESSON and claim["role"] not in {"final_state", "final_unassigned", "explicit_no_lesson"}]
+        selected: dict[str, Any] | None = None
+        if activity_claims:
+            best_priority = max(_claim_priority(claim) for claim in activity_claims)
+            best = [claim for claim in activity_claims if _claim_priority(claim) == best_priority]
+            activities = {claim["activity"] for claim in best}
+            if len(activities) > 1:
+                trace = {
+                    "assignment_ids": sorted(claim["assignment_id"] for claim in best),
+                    "group_ids": sorted({value for claim in best for value in claim["group_ids"]}),
+                    "membership_ids": sorted({value for claim in best for value in claim["membership_ids"]}),
+                    "source_cells": sorted({str(cell) for claim in best for cell in claim["source_cells"]}),
+                    "final_state": "UNRESOLVED", "assignments": assignment_traces,
+                }
+                issue = _projection_issue("MULTIPLE_ACTIVITY_CLAIMS", "multiple equally applicable incompatible activities", student=student, block=block, day=day, trace=trace)
+                issues.append(issue)
+                result = {"state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]], "provenance": provenance}
+            else:
+                selected = sorted(best, key=lambda claim: (claim["activity"], claim["assignment_id"]))[0]
+        if selected is not None:
+            assignment = selected["assignment"]
+            metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+            result = {
+                "state": "ACTIVITY", "activity": selected["activity"],
+                "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [],
+                "room": metadata.get("room", ""),
+                "provenance": {**provenance, "source_cells": selected["source_cells"]},
+            }
+        elif result is None:
+            non_no_lesson = [claim for claim in residual_claims if claim["activity"] and claim["activity"] != _NO_LESSON]
+            residual_activities = {claim["activity"] for claim in non_no_lesson}
+            if len(residual_activities) > 1:
+                trace = {"assignment_ids": sorted(claim["assignment_id"] for claim in non_no_lesson), "source_cells": sorted({str(cell) for claim in non_no_lesson for cell in claim["source_cells"]}), "final_state": "UNRESOLVED", "assignments": assignment_traces}
+                issue = _projection_issue("MULTIPLE_ACTIVITY_CLAIMS", "multiple residual activities apply", student=student, block=block, day=day, trace=trace)
+                issues.append(issue)
+                result = {"state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]], "provenance": provenance}
+            elif non_no_lesson:
+                selected = sorted(non_no_lesson, key=lambda claim: (claim["activity"], claim["assignment_id"]))[0]
+                assignment = selected["assignment"]
+                metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+                result = {"state": "ACTIVITY", "activity": selected["activity"], "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [], "room": metadata.get("room", ""), "provenance": {**provenance, "source_cells": selected["source_cells"]}}
+            else:
+                result = {"state": "NO_LESSON", "activity": _NO_LESSON, "reason": "no applicable canonical activity", "provenance": provenance}
+    assert result is not None
+    result["trace"] = {"memberships": sorted(membership_groups), "assignments": assignment_traces, "final_state": result["state"], "selected_activity": result.get("activity")}
+    if result["state"] == "NO_LESSON" and any(trace["matched"] and trace["activity"] != _NO_LESSON for trace in assignment_traces):
+        trace = {"source_cells": sorted({str(cell) for item in assignment_traces for cell in item["source_cells"]}), "final_state": "NO_LESSON", "assignments": assignment_traces}
+        issue = _projection_issue("UNEXPECTED_NO_LESSON", "applicable activity claim ended as NO_LESSON", student=student, block=block, day=day, trace=trace)
+        issues.append(issue)
+        result = {**result, "state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]]}
+    return result, issues
+
+
+def project_student(
+    database: Database,
+    identity_id: Any,
+    week_start: str,
+    *,
+    context: StudentProjectionContext | None = None,
+) -> dict[str, Any]:
+    context = context or build_student_projection_context(database, week_start)
     student_id = str(identity_id)
-    if not effective:
+    if not context:
         return {"identity_id": student_id, "week_start": week_start, "status": "canonical_not_materialized", "items": [], "issues": []}
-    students = _active_students(database)
-    student = students.get(student_id)
-    if not student:
+    effective = context.effective
+    student = context.students.get(student_id)
+    if not student or student.get("status") != "active":
         return {"identity_id": student_id, "week_start": week_start, "status": "student_not_found", "items": [], "issues": []}
-    memberships_by_group = _membership_sets(database, week_start)
-    canonical_group_ids = _canonical_group_ids(database)
     items, issues = [], []
     start = date.fromisoformat(week_start)
-    for block in _block_rows(database, effective["effective_week_id"]):
+    for block in context.blocks:
         grade = str(block.get("grade_scope") or "")
         if _grade(student.get("class_name")) not in {value for value in grade.split(",") if value}:
             continue
         if block.get("weekday") is None:
             continue
         day = (start + timedelta(days=int(block["weekday"]))).isoformat()
-        patch = block.get("patch") or {}
-        assignments = _assignments(database, block.get("canonical_block_id"), patch)
-        if block.get("change_kind") == "cancelled":
-            assignments = []
-        claims: list[dict[str, Any]] = []
-        remaining = {student_id}
-        unresolved_reason = ""
-        for assignment in assignments:
-            activity = str(assignment.get("activity") or "")
-            role = str(assignment.get("assignment_kind") or assignment.get("role") or assignment.get("kind") or "primary")
-            group_ids = [str(value) for value in assignment.get("canonical_group_ids") or ((assignment.get("audience") or {}).get("canonical_group_ids") if isinstance(assignment.get("audience"), Mapping) else []) or []]
-            unknown_group_ids = [group_id for group_id in group_ids if group_id not in canonical_group_ids]
-            if unknown_group_ids:
-                unresolved_reason = f"canonical group not found: {', '.join(unknown_group_ids)}"
-                continue
-            audience = set().union(*(memberships_by_group.get(group_id, set()) for group_id in group_ids)) if group_ids else set(remaining)
-            if role in {"default", "residual", "final_state", "final_unassigned"} or str(assignment.get("audience_kind") or "") in {"complement", "remaining"}:
-                audience = set(remaining)
-            else:
-                # Parallel assignments are evaluated in row order. A
-                # secondary/parallel canonical group must not re-claim a
-                # student already routed by an earlier applicable assignment.
-                audience &= set(remaining)
-            if student_id in audience:
-                provenance = {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}, "source_cells": assignment.get("source_cells") or []}
-                if activity == _NO_LESSON or role in {"final_state", "final_unassigned", "explicit_no_lesson"}:
-                    claims.append({"state": "NO_LESSON", "activity": _NO_LESSON, "reason": role, "provenance": provenance})
-                else:
-                    metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
-                    claims.append({"state": "ACTIVITY", "activity": activity, "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [], "room": metadata.get("room", ""), "provenance": provenance})
-                remaining.discard(student_id)
-        for issue in block.get("unresolved") or []:
-            if student_id in {str(value) for value in (issue.get("student_ids") or [])}:
-                unresolved_reason = str(issue.get("reason") or "canonical block unresolved")
-        effective_activities = {
-            str(claim.get("activity") or "").strip()
-            for claim in claims
-            if claim.get("state") == "ACTIVITY" and str(claim.get("activity") or "").strip()
-        }
-        if unresolved_reason or len(effective_activities) > 1:
-            state = {"state": "UNRESOLVED", "activity": None, "reason": unresolved_reason or "multiple effective activities", "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
-            issues.append({"block_key": block["block_key"], "reason": state["reason"]})
-        elif claims:
-            state = claims[0]
-        else:
-            state = {"state": "NO_LESSON", "activity": _NO_LESSON, "reason": "no remaining canonical activity", "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
+        state, block_issues = _project_student_block(database, context, student, block, day)
+        issues.extend(block_issues)
         items.append({"block_key": block["block_key"], "date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **state})
     return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
 

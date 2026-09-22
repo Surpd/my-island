@@ -590,7 +590,7 @@ def create_router(database: Database) -> APIRouter:
         if not canonical_admin_backend_enabled():
             return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
         try:
-            return refresh_current_week(database, get_settings(), week_start or "2026-09-14")
+            return refresh_current_week(database, get_settings(), week_start or None)
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             return {"status": "blocked", "ok": False, "message": str(error)}
 

@@ -107,6 +107,26 @@ def canonical_teacher_name(value: str) -> str:
     return TEACHER_ALIASES.get(_key(value), value)
 
 
+def resolve_teacher_id(raw: str, hint: str, teachers: Sequence[Mapping[str, Any]]) -> tuple[str | None, str | None]:
+    """Resolve source teacher text conservatively against the current directory."""
+    names = {_key(item.get("display_name")): str(item["id"]) for item in teachers}
+    value = _key(hint) or _key(raw)
+    if not value:
+        return None, "teacher not stated in source"
+    for alias, full in TEACHER_ALIASES.items():
+        if re.search(rf"(?:^|\s){re.escape(alias)}(?:$|\s)", value):
+            return names.get(_key(full)), None if _key(full) in names else f"teacher alias {full!r} absent from directory"
+    matches = [(name, teacher_id) for name, teacher_id in names.items() if re.search(rf"(?:^|\s){re.escape(name)}(?:$|\s)", value)]
+    if len(matches) == 1:
+        return matches[0][1], None
+    if len(matches) > 1:
+        return None, "multiple teacher directory matches: " + ", ".join(item[0] for item in matches)
+    prefixes = [(name, teacher_id) for name, teacher_id in names.items() if name.startswith(value)]
+    if len(prefixes) == 1 and len(value) >= 4:
+        return prefixes[0][1], None
+    return None, "teacher text is not uniquely resolvable from current directory"
+
+
 def normalize_subjects(value: str) -> tuple[str, ...]:
     result: list[str] = []
     for raw in re.split(r"[,;/]+", _clean(value)):
