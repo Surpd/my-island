@@ -74,11 +74,31 @@ def _grid_tab(client: GoogleLiveClient, spreadsheet_id: str, title: str, sheet_i
 
 
 def _db_corpus(database: Database) -> dict[str, list[dict[str, Any]]]:
+    queries = {
+        "students": "SELECT id,display_name,class_name,status FROM identities WHERE kind='student' ORDER BY id",
+        "teachers": "SELECT id,display_name,status FROM identities WHERE kind='teacher' AND status='active' ORDER BY id",
+        "groups": "SELECT * FROM groups WHERE canonical IS TRUE ORDER BY id",
+        "memberships": "SELECT group_id,identity_id,member_role,active FROM memberships WHERE active IS TRUE ORDER BY group_id,identity_id",
+    }
+    if database.autocommit:
+        result: dict[str, list[dict[str, Any]]] = {}
+        for key, query in queries.items():
+            rows: list[dict[str, Any]] = []
+            offset = 0
+            while True:
+                with database.connection() as connection:
+                    page = database.execute(connection, query + " LIMIT ? OFFSET ?", (50, offset)).fetchall()
+                rows.extend(dict(row) for row in page)
+                if len(page) < 50:
+                    break
+                offset += len(page)
+            result[key] = rows
+        return result
     with database.connection() as connection:
-        students = [dict(row) for row in database.execute(connection, "SELECT id,display_name,class_name,status FROM identities WHERE kind='student'").fetchall()]
-        teachers = [dict(row) for row in database.execute(connection, "SELECT id,display_name,status FROM identities WHERE kind='teacher' AND status='active'").fetchall()]
-        groups = [dict(row) for row in database.execute(connection, "SELECT * FROM groups WHERE canonical IS TRUE").fetchall()]
-        memberships = [dict(row) for row in database.execute(connection, "SELECT group_id,identity_id,member_role,active FROM memberships WHERE active IS TRUE").fetchall()]
+        students = [dict(row) for row in database.execute(connection, queries["students"]).fetchall()]
+        teachers = [dict(row) for row in database.execute(connection, queries["teachers"]).fetchall()]
+        groups = [dict(row) for row in database.execute(connection, queries["groups"]).fetchall()]
+        memberships = [dict(row) for row in database.execute(connection, queries["memberships"]).fetchall()]
     return {"students": students, "teachers": teachers, "groups": groups, "memberships": memberships}
 
 
