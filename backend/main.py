@@ -12,7 +12,7 @@ settings = get_settings()
 database = Database(settings.database_path, settings.database_url)
 database.initialize()
 app = FastAPI(title="My Island API", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_credentials=True, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["*"])
 
 
 @app.middleware("http")

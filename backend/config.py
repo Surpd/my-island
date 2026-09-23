@@ -48,15 +48,19 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        origins = tuple(item.strip() for item in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if item.strip())
+        app_env = os.getenv("APP_ENV", "development").lower()
+        origins = [item.strip() for item in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if item.strip()]
+        if app_env != "production":
+            origins.extend(("http://localhost:3000", "http://localhost:4173"))
+        cors_origins = tuple(dict.fromkeys(origins))
         return cls(
-            app_env=os.getenv("APP_ENV", "development").lower(),
+            app_env=app_env,
             dev_auth_enabled=os.getenv("DEV_AUTH_ENABLED", "false").lower() == "true",
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
             database_url=os.getenv("DATABASE_URL") or None,
             database_path=os.getenv("DATABASE_PATH", "data/my-island.db"),
-            cors_origins=origins,
+            cors_origins=cors_origins,
             backend_public_url=os.getenv("BACKEND_PUBLIC_URL") or None,
             frontend_public_url=os.getenv("FRONTEND_PUBLIC_URL") or None,
             google_sheets_spreadsheet_id=os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID") or None,

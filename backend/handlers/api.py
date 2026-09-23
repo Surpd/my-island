@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import date, datetime, timedelta, timezone
 import json
 import hmac
@@ -18,6 +18,10 @@ from backend.services.google_live import GoogleLiveError
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
 from backend.services.canonical_weekly_refresh import preview_current_week, refresh_current_week
+from backend.services.schedule_drafts import (
+    DraftConflict, DraftNotFound, audience_preview, discard_draft, get_draft,
+    merge_import_changes, preview_changes, publish_draft, save_draft,
+)
 from backend.services.student_schedule_validation import validate_student_projections
 from backend.services.teacher import journal_view
 from backend.config import get_settings
@@ -130,6 +134,34 @@ class BrowserCodePayload(BaseModel):
 
 class ReconciliationReviewPayload(BaseModel):
     approved: bool = True
+
+
+class ScheduleDraftPayload(BaseModel):
+    scope_kind: str
+    scope_key: str
+    expected_revision: int
+    payload: dict
+    base_version_id: str | None = None
+    base_effective_week_id: str | None = None
+    source_context: dict = Field(default_factory=dict)
+
+
+class SchedulePublishPayload(BaseModel):
+    scope_kind: str
+    scope_key: str
+    expected_revision: int
+    comment: str = ""
+
+
+class ScheduleAudiencePreviewPayload(BaseModel):
+    audience: dict
+
+
+class ScheduleImportDraftPayload(BaseModel):
+    week_start: str
+    expected_revision: int
+    proposed_changes: list[dict]
+    source_context: dict
 
 
 def create_router(database: Database) -> APIRouter:
@@ -602,7 +634,10 @@ def create_router(database: Database) -> APIRouter:
         if not canonical_admin_backend_enabled():
             return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
         try:
-            return preview_current_week(database, get_settings(), week_start or None)
+            result = preview_current_week(database, get_settings(), week_start or None)
+            if result.get("status") == "preview":
+                result["draft_changes"] = preview_changes(result)
+            return result
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             return {"status": "blocked", "ok": False, "message": str(error)}
 
@@ -631,6 +666,62 @@ def create_router(database: Database) -> APIRouter:
         """Read-only canonical/effective schedule diagnostics for the admin console."""
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         return schedule_admin_observability(database, week_start)
+
+    @router.get("/admin/schedule/draft")
+    def admin_schedule_draft(scope_kind: str, scope_key: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return get_draft(database, scope_kind, scope_key)
+
+    @router.put("/admin/schedule/draft")
+    def admin_schedule_save_draft(payload: ScheduleDraftPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return save_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, payload=payload.payload, actor_user_id=actor["id"], base_version_id=payload.base_version_id, base_effective_week_id=payload.base_effective_week_id, source_context=payload.source_context)
+        except DraftConflict as error:
+            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.delete("/admin/schedule/draft")
+    def admin_schedule_discard_draft(scope_kind: str, scope_key: str, expected_revision: int, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            discard_draft(database, scope_kind, scope_key, expected_revision=expected_revision)
+            return {"status": "discarded"}
+        except DraftConflict as error:
+            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+        except DraftNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @router.post("/admin/schedule/draft/publish")
+    def admin_schedule_publish_draft(payload: SchedulePublishPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return publish_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, actor_user_id=actor["id"], comment=payload.comment)
+        except DraftConflict as error:
+            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+        except DraftNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/audience-preview")
+    def admin_schedule_audience_preview(payload: ScheduleAudiencePreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return audience_preview(database, payload.audience)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/import-to-draft")
+    def admin_schedule_import_to_draft(payload: ScheduleImportDraftPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return merge_import_changes(database, payload.week_start, expected_revision=payload.expected_revision, proposed_changes=payload.proposed_changes, source_context=payload.source_context, actor_user_id=actor["id"])
+        except DraftConflict as error:
+            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/admin/schedule/lessons")
     def admin_schedule_lessons(week_start: str | None = None, status: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

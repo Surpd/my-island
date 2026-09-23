@@ -268,6 +268,22 @@ CREATE TABLE IF NOT EXISTS canonical_effective_blocks (
 );
 CREATE INDEX IF NOT EXISTS canonical_schedule_blocks_version_idx ON canonical_schedule_blocks(version_id, weekday, start_time);
 CREATE INDEX IF NOT EXISTS canonical_effective_blocks_week_idx ON canonical_effective_blocks(effective_week_id, change_kind);
+CREATE TABLE IF NOT EXISTS schedule_editor_drafts (
+  draft_key TEXT PRIMARY KEY,
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('template','week')),
+  scope_key TEXT NOT NULL,
+  base_version_id TEXT REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT,
+  base_effective_week_id TEXT REFERENCES canonical_effective_weeks(effective_week_id) ON DELETE RESTRICT,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  payload TEXT NOT NULL DEFAULT '{"changes":[]}',
+  source_context TEXT NOT NULL DEFAULT '{}',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(scope_kind, scope_key)
+);
+CREATE INDEX IF NOT EXISTS schedule_editor_drafts_updated_idx ON schedule_editor_drafts(updated_at DESC);
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
@@ -896,6 +912,8 @@ class Database:
         connection.execute("CREATE TABLE IF NOT EXISTS admin_login_challenges (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, consumed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
         connection.execute("CREATE TABLE IF NOT EXISTS admin_browser_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, revoked_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
         connection.execute("CREATE TABLE IF NOT EXISTS admin_reconciliation_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id INTEGER REFERENCES users(id), status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_at TEXT, applied_at TEXT)")
+        connection.execute("CREATE TABLE IF NOT EXISTS schedule_editor_drafts (draft_key TEXT PRIMARY KEY, scope_kind TEXT NOT NULL CHECK (scope_kind IN ('template','week')), scope_key TEXT NOT NULL, base_version_id TEXT REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT, base_effective_week_id TEXT REFERENCES canonical_effective_weeks(effective_week_id) ON DELETE RESTRICT, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0), payload TEXT NOT NULL DEFAULT '{\"changes\":[]}', source_context TEXT NOT NULL DEFAULT '{}', created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(scope_kind, scope_key))")
+        connection.execute("CREATE INDEX IF NOT EXISTS schedule_editor_drafts_updated_idx ON schedule_editor_drafts(updated_at DESC)")
 
     @staticmethod
     def _token_hash(token: str) -> str:

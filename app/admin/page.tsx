@@ -7,15 +7,18 @@ import {
   AlertTriangle,
   ArrowLeft,
   BookOpen,
+  CalendarDays,
   CheckCircle2,
   ChevronRight,
   Database,
   FileSearch,
   LayoutDashboard,
+  Home,
   LogOut,
   RefreshCw,
   Search,
   Server,
+  Settings,
   ShieldCheck,
   Users,
 } from 'lucide-react';
@@ -34,17 +37,11 @@ const API_BASE = String(
 ).replace(/\/$/, '');
 
 const nav = [
-  { href: '/admin', label: 'Обзор', icon: LayoutDashboard },
-  { href: '/admin/people', label: 'Люди', icon: Users },
-  { href: '/admin/groups', label: 'Группы', icon: Database },
-  { href: '/admin/issues', label: 'Проблемы', icon: AlertTriangle },
-  { href: '/admin/candidates', label: 'Изменения источников', icon: FileSearch },
-  { href: '/admin/sources', label: 'Школьные данные', icon: FileSearch },
-  { href: '/admin/reconciliation', label: 'Сверка данных', icon: ShieldCheck },
-  { href: '/admin/schedule', label: 'Расписание', icon: Activity },
-  { href: '/admin/journals', label: 'Журналы / Классрум', icon: BookOpen },
-  { href: '/admin/audit', label: 'Журнал аудита', icon: FileSearch },
-  { href: '/admin/system', label: 'Система', icon: Server },
+  { href: '/admin', label: 'Сегодня', icon: Home },
+  { href: '/admin/schedule', label: 'Расписание', icon: CalendarDays },
+  { href: '/admin/people', label: 'Люди и группы', icon: Users },
+  { href: '/admin/journals', label: 'Учёба', icon: BookOpen },
+  { href: '/admin/settings', label: 'Настройки', icon: Settings },
 ];
 
 function localDevAuth() {
@@ -224,6 +221,7 @@ function useRoute() {
     };
   }, []);
   const navigate = (href: string) => {
+    if ((window as Window & { __scheduleDraftDirty?: boolean }).__scheduleDraftDirty && !window.confirm('Черновик ещё не сохранён на сервере. Всё равно уйти со страницы?')) return;
     const search = window.location.search;
     window.history.pushState({}, '', `/admin${search}#${href}`);
     window.dispatchEvent(new PopStateEvent('popstate'));
@@ -254,11 +252,11 @@ function Login({ onLoggedIn }: { onLoggedIn: (session: Session) => void }) {
 }
 
 function Sidebar({ path, navigate, onLogout }: { path: string; navigate: (href: string) => void; onLogout: () => void }) {
-  return <aside className="admin-console-sidebar"><div className="admin-console-brand"><div className="admin-logo admin-logo--small">MI</div><div><strong>My Island</strong><small>Панель администратора</small></div></div><nav>{nav.map((item) => { const Icon = item.icon; const active = item.href === '/admin' ? path === '/admin' : path.startsWith(item.href); return <button key={item.href} className={active ? 'is-active' : ''} onClick={() => navigate(item.href)}><Icon size={17} /><span>{item.label}</span>{active && <ChevronRight size={14} />}</button>; })}</nav><div className="admin-console-sidebar__footer"><span><span className="admin-online-dot" /> Сессия браузера</span><button onClick={onLogout}><LogOut size={16} /> Выйти</button></div></aside>;
+  return <aside className="admin-console-sidebar"><div className="admin-console-brand"><div className="admin-logo admin-logo--small">MI</div><div><strong>My Island</strong><small>Больше, чем школа</small></div></div><nav>{nav.map((item) => { const Icon = item.icon; const active = item.href === '/admin' ? path === '/admin' : path.startsWith(item.href); return <button key={item.href} className={active ? 'is-active' : ''} onClick={() => navigate(item.href)}><Icon size={18} /><span>{item.label}</span>{active && <ChevronRight size={14} />}</button>; })}</nav><div className="admin-console-sidebar__footer"><span><span className="admin-online-dot" /> Администратор</span><button onClick={onLogout}><LogOut size={16} /> Выйти</button></div></aside>;
 }
 
 function Header({ path, navigate, session }: { path: string; navigate: (href: string) => void; session: Session }) {
-  const title = path === '/admin' ? 'Обзор системы' : path.includes('/people/') ? 'Карточка человека' : path.includes('/groups/') ? 'Карточка группы' : nav.find((item) => path.startsWith(item.href) && item.href !== '/admin')?.label || 'Панель администратора';
+  const title = path === '/admin' ? 'Сегодня' : path.includes('/people/') ? 'Карточка человека' : path.includes('/groups/') ? 'Карточка группы' : nav.find((item) => path.startsWith(item.href) && item.href !== '/admin')?.label || 'Панель администратора';
   return <header className="admin-console-header"><div><div className="admin-breadcrumb"><button onClick={() => navigate('/admin')}>Админ</button><ChevronRight size={13} /><span>{title}</span></div><h1>{title}</h1></div><div className="admin-console-header__meta"><Status value="подключено" tone="good" /><span>Админ №{display(session.id)}</span></div></header>;
 }
 
@@ -436,6 +434,7 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   if (path === '/admin/schedule') return <ScheduleAdmin api={api} />;
   if (path === '/admin/journals') return <Journals />;
   if (path === '/admin/audit') return <Audit />;
+  if (path === '/admin/settings') return <System navigate={navigate} />;
   if (path === '/admin/system') return <System navigate={navigate} />;
   return <Overview navigate={navigate} />;
 }
@@ -444,9 +443,16 @@ export default function AdminPage() {
   const { path, navigate } = useRoute();
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
-  useEffect(() => { api<{ user: Session }>('/api/admin/auth/session').then((result) => setSession(result.user)).catch(() => setSession(null)).finally(() => setChecking(false)); }, []);
+  useEffect(() => {
+    if (localDevAuth()) {
+      setSession({ id: 1, role: 'admin' });
+      setChecking(false);
+      return;
+    }
+    api<{ user: Session }>('/api/admin/auth/session').then((result) => setSession(result.user)).catch(() => setSession(null)).finally(() => setChecking(false));
+  }, []);
   const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); setSession(null); };
   if (checking) return <main className="admin-login"><Loading /></main>;
   if (!session) return <Login onLoggedIn={setSession} />;
-  return <div className="admin-console"><Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main className="admin-console-main"><Header path={path} navigate={navigate} session={session} /><AppContent path={path} navigate={navigate} /></main></div>;
+  return <div className={`admin-console ${path === '/admin/schedule' ? 'admin-console--schedule' : ''}`}><Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main className="admin-console-main">{path !== '/admin/schedule' ? <Header path={path} navigate={navigate} session={session} /> : null}<AppContent path={path} navigate={navigate} /></main></div>;
 }

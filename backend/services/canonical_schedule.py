@@ -722,6 +722,12 @@ def _assignment_group_ids(assignment: Mapping[str, Any]) -> list[str]:
     return [str(value) for value in assignment.get("canonical_group_ids") or audience.get("canonical_group_ids") or []]
 
 
+def _assignment_audience_rule(assignment: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+    rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), Mapping) else {}
+    return dict(rule)
+
+
 def _assignment_role(assignment: Mapping[str, Any]) -> str:
     return str(assignment.get("assignment_kind") or assignment.get("role") or assignment.get("kind") or "primary")
 
@@ -1131,9 +1137,28 @@ def _project_student_block(
         activity = str(assignment.get("activity") or "").strip()
         role = _assignment_role(assignment)
         group_ids = _assignment_group_ids(assignment)
+        audience_rule = _assignment_audience_rule(assignment)
+        audience_kind = str(audience_rule.get("kind") or assignment.get("audience_kind") or "groups")
+        include_student_ids = {str(value) for value in audience_rule.get("include_student_ids") or []}
+        exclude_student_ids = {str(value) for value in audience_rule.get("exclude_student_ids") or []}
+        if student_id in exclude_student_ids:
+            continue
         source_cells = assignment.get("source_cells") or []
         unknown_group_ids = [group_id for group_id in group_ids if group_id not in context.groups or not bool(context.groups[group_id].get("canonical"))]
         matched_group_ids = sorted(set(group_ids).intersection(membership_groups))
+        explicit_match = student_id in include_student_ids
+        if audience_kind == "whole_grade":
+            grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
+            explicit_match = explicit_match or (bool(grade) and str(student.get("class_name") or "").strip().startswith(grade))
+        elif audience_kind == "students":
+            explicit_match = student_id in include_student_ids
+        elif audience_kind == "remaining":
+            grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
+            partition_ids = {str(value) for value in audience_rule.get("partition_group_ids") or []}
+            dimension = str(audience_rule.get("partition_dimension") or "")
+            if dimension:
+                partition_ids.update(group_id for group_id, group in context.groups.items() if _group_dimension(group)[0] == dimension)
+            explicit_match = bool(not grade or str(student.get("class_name") or "").strip().startswith(grade)) and not bool(membership_groups.intersection(partition_ids))
         dimensions = []
         dimension_evidence = []
         group_roles = []
@@ -1156,7 +1181,8 @@ def _project_student_block(
             "dimensions": dimensions,
             "dimension_evidence": dimension_evidence,
             "source_cells": source_cells,
-            "matched": bool(matched_group_ids),
+            "audience_rule": audience_rule,
+            "matched": bool(matched_group_ids or explicit_match),
         }
         assignment_traces.append(trace)
         common = {
@@ -1179,7 +1205,15 @@ def _project_student_block(
             }
             issues.append(_projection_issue("UNKNOWN_CANONICAL_GROUP", f"canonical group not found or inactive: {', '.join(unknown_group_ids)}", student=student, block=block, day=day, trace=issue_trace))
             continue
-        is_residual = role in _RESIDUAL_ROLES or str(assignment.get("audience_kind") or "") in {"complement", "remaining"}
+        is_residual = role in _RESIDUAL_ROLES or str(assignment.get("audience_kind") or "") in {"complement", "remaining"} or audience_kind == "remaining"
+        if explicit_match and audience_kind != "remaining":
+            claims.append(common)
+            continue
+        if explicit_match and audience_kind == "remaining":
+            residual_claims.append(common)
+            continue
+        if audience_kind in {"remaining", "whole_grade", "students"}:
+            continue
         if not group_ids:
             if is_residual:
                 residual_claims.append(common)
