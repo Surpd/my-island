@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from backend.database import Database
 from backend.services.google_sheets import _parse_lesson_semantics
-from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, classify_tab, diff_template_week, parse_date_range, parse_schedule_matrix, recalculate_current_schedule, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
+from backend.services.schedule_pipeline import _baseline_for_date_range, _date_for_weekday, _json, _parse_cell, _resolve_lesson, classify_tab, diff_template_week, lesson_kind, parse_date_range, parse_schedule_matrix, recalculate_current_schedule, reconcile_current_schedule, refresh_schedule_pipeline, schedule_reconciliation_needs_refresh, schedule_reconciliation_view
 
 
 def cell(value: str, color: dict | None = None) -> dict:
@@ -102,6 +102,32 @@ class ScheduleIntegrationTests(unittest.TestCase):
         self.assertEqual(lessons[0]["merged_audiences"], ["9-А"])
         self.assertEqual(lessons[0]["source_cell"], "B3")
         self.assertTrue(lessons[0]["source_color"])
+
+    def test_source_day_marker_and_optional_teacher_activities_are_preserved(self):
+        tab = {"sheet_id": 17, "title": "14-18 сентября", "values": [
+            ["", "10", "", "11"],
+            ["", "Пт SDEP", "", "Пт SDEP"],
+            ["9:00 - 9:45", "Математика", "", "Русский"],
+            ["9:55 - 10:40", "Физика", "", "Литература"],
+        ], "merges": []}
+        lessons = parse_schedule_matrix(tab, "Расписание 2026/27")
+        self.assertEqual([item["weekday"] for item in lessons], [4, 4, 4, 4])
+        self.assertEqual([item["source_day_label"] for item in lessons], ["Пт SDEP"] * 4)
+        for raw, canonical, kind in (
+            ("Творчество", "Творчество", "simple_activity"),
+            ("Тренинг", "Тренинг", "simple_activity"),
+            ("Курс по выбору: проект", "Курс по выбору", "course_choice"),
+            ("ШУМ. Медиамастерская", "Цифровой трек", "digital_track"),
+            ("Машинная графика", "Цифровой трек", "digital_track"),
+        ):
+            parsed = _parse_cell(raw, "7-А")
+            self.assertEqual(parsed["subject"], canonical)
+            self.assertEqual(parsed["activity_type"], kind)
+            resolved = _resolve_lesson({**parsed, "raw_text": raw}, [], [], [], [], {})
+            self.assertEqual(resolved["resolution_status"], "RESOLVED")
+            self.assertEqual(resolved["teacher_hint"], "")
+            self.assertTrue(resolved["evidence"]["teacher_optional"])
+        self.assertEqual(lesson_kind("⚪ПРОГРАММИРОВАНИЕ\nТарас"), "extracurricular")
 
     def test_snapshot_resolution_color_conflict_baseline_diff_and_rename(self):
         with tempfile.TemporaryDirectory() as directory:

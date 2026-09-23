@@ -1,7 +1,8 @@
-"""Deterministic, auditable Schedule Integration v1.
+"""Legacy Schedule Integration v1 compatibility implementation.
 
-The adapter reads School Directory data but never mutates identities, groups,
-memberships, teacher assignments, journals, Classroom, or notifications.
+It is retained only for historical records and migration reads. API and cron
+entry points do not invoke it: canonical templates and effective-week overlays
+are the semantic architecture. Do not add new routing behaviour here.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from backend.database import Database
 from backend.services.google_sheets import _parse_lesson_semantics
 from backend.services.schedule_allocation import rebuild_schedule_allocations
+from backend.services.schedule_parser_v2 import classify_simple_activity
 
 
 _MONTHS = {
@@ -106,12 +108,17 @@ def lesson_kind(raw_text: str) -> str:
         return "cancelled"
     if any(token in text for token in _SPECIAL):
         return "special_event"
-    if "курс" in text and "выбор" in text or "электив" in text:
-        return "course_choice"
-    if "цифров" in text and "трек" in text or any(token in text for token in ("программирован", "машинная графика", "медиамастерская", "шум медиамастерская")):
-        return "digital_track"
+    # A circle-marked item is an extracurricular even when its title happens
+    # to contain a normal activity marker such as "programming".
     if "клуб" in text or "круж" in text or "внеуроч" in text or raw_text.strip().startswith("⚪"):
         return "extracurricular"
+    simple = classify_simple_activity(raw_text)
+    if simple == "Курс по выбору":
+        return "course_choice"
+    if simple == "Цифровой трек":
+        return "digital_track"
+    if simple:
+        return "simple_activity"
     if "классн" in text and "час" in text or re.search(r"\bкл\s*час\b", text):
         return "class_hour"
     if "практик" in text:
@@ -185,7 +192,8 @@ def looks_like_schedule_matrix(values: Sequence[Sequence[Any]]) -> bool:
     if header is None:
         return False
     time_rows = sum(bool(_TIME.fullmatch(_cell_value(row[0]))) for row in values[header + 1:] if row)
-    weekday_rows = sum(sum(_norm(_cell_value(cell)) in _WEEKDAYS for cell in row[1:]) >= 2 for row in values[header + 1:])
+    weekday_rows = sum(sum((_norm(_cell_value(cell)).split(" ", 1)[0] if _norm(_cell_value(cell)) else "") in _WEEKDAYS
+                           for cell in row[1:]) >= 2 for row in values[header + 1:])
     return time_rows >= 2 and weekday_rows >= 1
 
 
@@ -211,10 +219,9 @@ def _parse_cell(raw_text: str, audience: str) -> dict[str, Any]:
         "delivery_mode": parsed.get("delivery_mode") or ("online" if kind == "online" else ""),
         "parser_diagnostics": parsed.get("parse_diagnostics") or "",
     }
-    if kind == "course_choice":
-        subject = "Курс по выбору"
-    elif kind == "digital_track":
-        subject = "Цифровой трек"
+    simple = classify_simple_activity(raw_text) if kind != "extracurricular" else None
+    if simple:
+        subject = simple
     elif kind == "nonlesson":
         subject = "Обед / перерыв" if raw_text.strip() == "🥨" else (parsed.get("subject") or raw_text.strip())
     else:
@@ -244,19 +251,37 @@ def parse_schedule_matrix(tab: Mapping[str, Any], spreadsheet_title: str = "") -
     title_range = parse_date_range(str(tab.get("title", "")), school_year)
     current_date: str | None = None
     current_weekday: int | None = None
+    current_day_labels: list[str] = [""] * width
     lessons: list[dict[str, Any]] = []
     for row_index, row in enumerate(values[header_index + 1:], start=header_index + 1):
         if not row:
             continue
         first = _cell_value(row[0]).strip()
         marker = _parse_marker(first, school_year)
-        weekday_hits = [_WEEKDAYS[_norm(_cell_value(cell))] for cell in row[1:] if _norm(_cell_value(cell)) in _WEEKDAYS]
+        weekday_hits = []
+        for cell in row[1:]:
+            normalized = _norm(_cell_value(cell))
+            token = normalized.split(" ", 1)[0] if normalized else ""
+            if token in _WEEKDAYS:
+                weekday_hits.append(_WEEKDAYS[token])
         if marker:
             current_date = marker
             current_weekday = date.fromisoformat(marker).weekday()
             continue
         if len(weekday_hits) >= 2:
             current_weekday = Counter(weekday_hits).most_common(1)[0][0]
+            current_day_labels = [""] * width
+            inherited = ""
+            inherited_owner = ""
+            for column in range(1, width):
+                owner = owners[column] if column < len(owners) else ""
+                raw_label = _cell_value(row[column]).strip() if column < len(row) else ""
+                if owner != inherited_owner:
+                    inherited = ""
+                    inherited_owner = owner
+                if raw_label:
+                    inherited = raw_label
+                current_day_labels[column] = inherited
             current_date = None
             if title_range:
                 start = date.fromisoformat(title_range[0])
@@ -285,7 +310,8 @@ def parse_schedule_matrix(tab: Mapping[str, Any], spreadsheet_title: str = "") -
             lessons.append({
                 "record_key": f"{sheet_id}:{coordinate}", "slot_key": slot_key, "sheet_id": sheet_id,
                 "tab_title": str(tab.get("title", "")), "source_cell": coordinate, "source_row": row_index,
-                "source_column": column, "week_start": title_range[0] if title_range else None,
+                "source_column": column, "source_day_label": current_day_labels[column] if column < len(current_day_labels) else "",
+                "week_start": title_range[0] if title_range else None,
                 "week_end": title_range[1] if title_range else None, "weekday": current_weekday,
                 "lesson_date": current_date, "start_time": start_time, "end_time": end_time,
                 "audience": audience, "merged_audiences": merged_audiences, "raw_text": raw_text,
@@ -432,11 +458,12 @@ def _resolve_lesson(lesson: dict[str, Any], identities: Sequence[Mapping[str, An
                 "resolved_identity_ids": [], "resolved_group_ids": [], "resolution_status": "EXCLUDED",
                 "confidence": 1.0, "evidence": {"resolver_version": RECONCILIATION_VERSION, "business_rule": "extracurricular_excluded"},
                 "issue_reason": ""}
-    if kind in {"course_choice", "digital_track"}:
-        canonical_subject = "Курс по выбору" if kind == "course_choice" else "Цифровой трек"
-        return {**lesson, "subject": canonical_subject, "resolved_identity_ids": [], "resolved_group_ids": [],
+    simple = classify_simple_activity(lesson.get("raw_text", "")) if kind != "extracurricular" else None
+    if simple:
+        return {**lesson, "subject": simple, "teacher_hint": "", "resolved_identity_ids": [], "resolved_group_ids": [],
                 "resolution_status": "RESOLVED", "confidence": 1.0,
-                "evidence": {"resolver_version": RECONCILIATION_VERSION, "business_rule": f"{kind}_canonical"}, "issue_reason": ""}
+                "evidence": {"resolver_version": RECONCILIATION_VERSION, "business_rule": "simple_activity_canonical",
+                             "teacher_optional": True}, "issue_reason": ""}
     if _norm(lesson.get("subject")) in subject_mappings:
         lesson["subject"] = subject_mappings[_norm(lesson["subject"])]
     teacher_ids = _explicit_teacher_candidates(lesson.get("raw_text", ""), lesson.get("teacher_hint", ""), identities, identity_mappings)

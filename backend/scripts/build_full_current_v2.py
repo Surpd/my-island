@@ -18,7 +18,7 @@ from typing import Any, Mapping
 from backend.services.schedule_canonical_bootstrap import build_bootstrap_canonical
 from backend.services.schedule_pipeline import parse_schedule_matrix
 from backend.services.school_data import stable_fingerprint
-from backend.services.teacher_directory import TEACHER_ALIASES
+from backend.services.teacher_directory import resolve_teacher_id
 
 
 def norm(value: Any) -> str:
@@ -39,24 +39,7 @@ def cell_by_coord(values: list[list[Any]]) -> dict[str, str]:
 
 
 def teacher_id_for(raw: str, hint: str, teachers: list[Mapping[str, Any]]) -> tuple[str | None, str | None]:
-    names = {norm(item.get("display_name")): str(item["id"]) for item in teachers}
-    value = norm(hint) or norm(raw)
-    if not value:
-        return None, "teacher not stated in source"
-    for alias, full in TEACHER_ALIASES.items():
-        if re.search(rf"(?:^|\s){re.escape(alias)}(?:$|\s)", value):
-            return names.get(norm(full)), None if norm(full) in names else f"teacher alias {full!r} absent from directory"
-    matches = [(name, teacher_id) for name, teacher_id in names.items() if re.search(rf"(?:^|\s){re.escape(name)}(?:$|\s)", value)]
-    if len(matches) == 1:
-        return matches[0][1], None
-    if len(matches) > 1:
-        return None, "multiple teacher directory matches: " + ", ".join(item[0] for item in matches)
-    # A short source token can be a unique directory prefix, but only use it
-    # when the directory proves uniqueness.
-    prefixes = [(name, teacher_id) for name, teacher_id in names.items() if name.startswith(value)]
-    if len(prefixes) == 1 and len(value) >= 4:
-        return prefixes[0][1], None
-    return None, "teacher text is not uniquely resolvable from current directory"
+    return resolve_teacher_id(raw, hint, teachers)
 
 
 def add_teacher_resolution(artifact: dict[str, Any], lessons: list[Mapping[str, Any]], teachers: list[Mapping[str, Any]]) -> None:

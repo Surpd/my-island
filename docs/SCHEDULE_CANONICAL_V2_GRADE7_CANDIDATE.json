@@ -1,0 +1,2722 @@
+{
+  "schema_version": "canonical-schedule-v2-candidate-grade7",
+  "version_id": "candidate-v2-grade7-fd6d3f3beccca0fc",
+  "status": "candidate",
+  "authoritative": false,
+  "parent_version_id": "4d21ef71ba1b0cb92b48735f410758b64a882c5f496a4361be02c5a6e229cf93",
+  "source_snapshot": {
+    "spreadsheet_id": "1j5dI2VbT0RoW2A5ZkCpMYVdt7cSY4ZjNxQaMWtu--Fo",
+    "sheet_name": "2026/27 шаблон",
+    "range": "A1:V200",
+    "fingerprint": "c4532841c9daf9a7"
+  },
+  "directory_snapshot": {
+    "canonical_groups_fingerprint": "4890d5c782160e9b572e9f999f0667d5",
+    "active_memberships_fingerprint": "955f3fec37b1b350479b2d522959cb93"
+  },
+  "dimensions": {
+    "base_class": [
+      "7-А",
+      "7-Б"
+    ],
+    "shared_instructional_split": [
+      "1",
+      "2"
+    ],
+    "english": [
+      "3",
+      "4",
+      "5"
+    ],
+    "elective_or_special": "source-specific"
+  },
+  "row_level_rule": "Classify the complete F/G row before assigning either side; an explicit split marker supplies the complementary split to the unnumbered parallel side.",
+  "correction_summary": {
+    "previous_source_cell_assignments": 71,
+    "current_semantic_assignments": 61,
+    "routing_dimension_changes": 6,
+    "pretzel_assignments_removed": 6,
+    "extracurricular_assignments_removed": 4,
+    "projection_validated": true
+  },
+  "evidence": {
+    "shared_split_hypothesis": "CONFIRMED",
+    "subjects_using_shared_split": [
+      "Биология",
+      "Математика",
+      "Русский язык",
+      "Физика"
+    ],
+    "shared_split_rows": [
+      {
+        "day": "Пн",
+        "time": "9:55-10:40",
+        "assignments": [
+          {
+            "coordinate": "F5",
+            "split": "1",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 1 Иван / каб.17"
+          },
+          {
+            "coordinate": "G5",
+            "split": "2",
+            "activity": "Русский язык",
+            "inferred_complement": true,
+            "raw_text": "Русский ИА / каб. 18"
+          }
+        ]
+      },
+      {
+        "day": "Пн",
+        "time": "10:55 -11:40",
+        "assignments": [
+          {
+            "coordinate": "F6",
+            "split": "1",
+            "activity": "Физика",
+            "inferred_complement": false,
+            "raw_text": "Физ 1 Иван / каб.17"
+          },
+          {
+            "coordinate": "G6",
+            "split": "2",
+            "activity": "Пластика",
+            "inferred_complement": true,
+            "raw_text": "Пластика Сергей / зал"
+          }
+        ]
+      },
+      {
+        "day": "Пн",
+        "time": "13:40 - 14:25",
+        "assignments": [
+          {
+            "coordinate": "F9",
+            "split": "1",
+            "activity": "Русский язык",
+            "inferred_complement": true,
+            "raw_text": "Русский ИА / каб. 18"
+          },
+          {
+            "coordinate": "G9",
+            "split": "2",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 2 Иван / каб.17"
+          }
+        ]
+      },
+      {
+        "day": "Пн",
+        "time": "14:35 -15:20",
+        "assignments": [
+          {
+            "coordinate": "F10",
+            "split": "1",
+            "activity": "Пластика",
+            "inferred_complement": true,
+            "raw_text": "Пластика Сергей / зал"
+          },
+          {
+            "coordinate": "G10",
+            "split": "2",
+            "activity": "Физика",
+            "inferred_complement": false,
+            "raw_text": "Физ 2 Иван / каб.17"
+          }
+        ]
+      },
+      {
+        "day": "Вт",
+        "time": "14:35 -15:20",
+        "assignments": [
+          {
+            "coordinate": "F22",
+            "split": "1",
+            "activity": "Пластика",
+            "inferred_complement": true,
+            "raw_text": "Пластика Вадим / зал"
+          },
+          {
+            "coordinate": "G22",
+            "split": "2",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 2 Иван / каб.17"
+          }
+        ]
+      },
+      {
+        "day": "Вт",
+        "time": "15:25 - 16:10",
+        "assignments": [
+          {
+            "coordinate": "F23",
+            "split": "1",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 1 Иван / каб.17"
+          },
+          {
+            "coordinate": "G23",
+            "split": "2",
+            "activity": "Пластика",
+            "inferred_complement": true,
+            "raw_text": "Пластика Вадим / зал"
+          }
+        ]
+      },
+      {
+        "day": "Ср",
+        "time": "10:55 -11:40",
+        "assignments": [
+          {
+            "coordinate": "F30",
+            "split": "1",
+            "activity": "Биология",
+            "inferred_complement": false,
+            "raw_text": "Биология 1 Родион / каб.15"
+          },
+          {
+            "coordinate": "G30",
+            "split": "2",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 2 Иван / каб.17"
+          }
+        ]
+      },
+      {
+        "day": "Ср",
+        "time": "13:40 - 14:25",
+        "assignments": [
+          {
+            "coordinate": "F33",
+            "split": "1",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 1 Иван / каб.17"
+          },
+          {
+            "coordinate": "G33",
+            "split": "2",
+            "activity": "Биология",
+            "inferred_complement": false,
+            "raw_text": "Биология 2 Родион / каб.15"
+          }
+        ]
+      },
+      {
+        "day": "Ср",
+        "time": "14:35 -15:20",
+        "assignments": [
+          {
+            "coordinate": "F34",
+            "split": "1",
+            "activity": "Физика",
+            "inferred_complement": false,
+            "raw_text": "Физ 1 Иван / каб.18"
+          },
+          {
+            "coordinate": "G34",
+            "split": "2",
+            "activity": "Русский язык",
+            "inferred_complement": false,
+            "raw_text": "Русский 2 ИА / каб.15"
+          }
+        ]
+      },
+      {
+        "day": "Ср",
+        "time": "15:30 - 16:15",
+        "assignments": [
+          {
+            "coordinate": "F35",
+            "split": "1",
+            "activity": "Русский язык",
+            "inferred_complement": false,
+            "raw_text": "Русский 1 ИА каб.15"
+          },
+          {
+            "coordinate": "G35",
+            "split": "2",
+            "activity": "Физика",
+            "inferred_complement": false,
+            "raw_text": "Физ 2 Иван / каб.18"
+          }
+        ]
+      },
+      {
+        "day": "Пт",
+        "time": "12:45-13:30",
+        "assignments": [
+          {
+            "coordinate": "F56",
+            "split": "1",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 1 Иван"
+          },
+          {
+            "coordinate": "G56",
+            "split": "2",
+            "activity": "Русский язык",
+            "inferred_complement": false,
+            "raw_text": "Русский 2 ИА"
+          }
+        ]
+      },
+      {
+        "day": "Пт",
+        "time": "13:40 - 14:25",
+        "assignments": [
+          {
+            "coordinate": "F57",
+            "split": "1",
+            "activity": "Русский язык",
+            "inferred_complement": false,
+            "raw_text": "Русский 1 ИА"
+          },
+          {
+            "coordinate": "G57",
+            "split": "2",
+            "activity": "Математика",
+            "inferred_complement": false,
+            "raw_text": "Мат 2 Иван"
+          }
+        ]
+      }
+    ],
+    "evidence_against_subject_specific_rosters": "No Grade 7 subject-specific Physics/Biology/Russian roster found; the current roster provides one disjoint 7-1/7-2 partition under Mathematics."
+  },
+  "summary": {
+    "logical_grade7_blocks": 39,
+    "semantic_assignments": 61,
+    "routing_dimension_counts": {
+      "BASE_CLASS_A_B": 23,
+      "SHARED_SPLIT_1_2": 24,
+      "ENGLISH_3_4_5": 9,
+      "ELECTIVE_OR_SPECIAL": 5
+    },
+    "excluded_rows": 4,
+    "no_lesson_rows": 2,
+    "class_roster_counts": {
+      "7-А": 12,
+      "7-Б": 12
+    },
+    "split_roster_counts": {
+      "1": 11,
+      "2": 13
+    },
+    "english_roster_counts": {
+      "3": 10,
+      "4": 13,
+      "5": 12
+    }
+  },
+  "row_matrix": [
+    {
+      "day": "Пн",
+      "time": "9:00 - 9:45",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Кл. час Иван",
+      "group_2_or_b": "—"
+    },
+    {
+      "day": "Пн",
+      "time": "9:55-10:40",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Математика",
+      "group_2_or_b": "split 2 → Русский язык"
+    },
+    {
+      "day": "Пн",
+      "time": "10:55 -11:40",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Физика",
+      "group_2_or_b": "split 2 → Пластика"
+    },
+    {
+      "day": "Пн",
+      "time": "11:50 - 12:35",
+      "route_by": "ENGLISH_3_4_5",
+      "group_1_or_a": "English 3 → Английский язык",
+      "group_2_or_b": "NO_LESSON"
+    },
+    {
+      "day": "Пн",
+      "time": "12:45-13:30",
+      "route_by": "ENGLISH_3_4_5",
+      "group_1_or_a": "English 4 → Английский язык",
+      "group_2_or_b": "English 5 → Английский язык"
+    },
+    {
+      "day": "Пн",
+      "time": "13:40 - 14:25",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Русский язык",
+      "group_2_or_b": "split 2 → Математика"
+    },
+    {
+      "day": "Пн",
+      "time": "14:35 -15:20",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Пластика",
+      "group_2_or_b": "split 2 → Физика"
+    },
+    {
+      "day": "Пн",
+      "time": "15:30 - 16:15",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "excluded",
+      "group_2_or_b": "—"
+    },
+    {
+      "day": "Вт",
+      "time": "9:55-10:40",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Литература",
+      "group_2_or_b": "7-Б → История"
+    },
+    {
+      "day": "Вт",
+      "time": "10:55 -11:40",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Биология",
+      "group_2_or_b": "7-Б → Литература"
+    },
+    {
+      "day": "Вт",
+      "time": "11:50 - 12:35",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → История",
+      "group_2_or_b": "7-Б → Биология"
+    },
+    {
+      "day": "Вт",
+      "time": "12:45-13:30",
+      "route_by": "ENGLISH_3_4_5",
+      "group_1_or_a": "English 3 → Английский язык",
+      "group_2_or_b": "NO_LESSON"
+    },
+    {
+      "day": "Вт",
+      "time": "13:40 - 14:25",
+      "route_by": "ENGLISH_3_4_5",
+      "group_1_or_a": "English 4 → Английский язык",
+      "group_2_or_b": "English 5 → Английский язык"
+    },
+    {
+      "day": "Вт",
+      "time": "14:35 -15:20",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Пластика",
+      "group_2_or_b": "split 2 → Математика"
+    },
+    {
+      "day": "Вт",
+      "time": "15:25 - 16:10",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Математика",
+      "group_2_or_b": "split 2 → Пластика"
+    },
+    {
+      "day": "Вт",
+      "time": "16:20 -17:05",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "excluded",
+      "group_2_or_b": "—"
+    },
+    {
+      "day": "Ср",
+      "time": "9:00 - 9:45",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Литература",
+      "group_2_or_b": "7-Б → История"
+    },
+    {
+      "day": "Ср",
+      "time": "9:55-10:40",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → История",
+      "group_2_or_b": "7-Б → Литература"
+    },
+    {
+      "day": "Ср",
+      "time": "10:55 -11:40",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Биология",
+      "group_2_or_b": "split 2 → Математика"
+    },
+    {
+      "day": "Ср",
+      "time": "11:50 - 12:35",
+      "route_by": "NO_LESSON",
+      "group_1_or_a": "NO_LESSON",
+      "group_2_or_b": "NO_LESSON"
+    },
+    {
+      "day": "Ср",
+      "time": "12:45-13:30",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "7-А → Курс по выбору",
+      "group_2_or_b": "—"
+    },
+    {
+      "day": "Ср",
+      "time": "13:40 - 14:25",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Математика",
+      "group_2_or_b": "split 2 → Биология"
+    },
+    {
+      "day": "Ср",
+      "time": "14:35 -15:20",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Физика",
+      "group_2_or_b": "split 2 → Русский язык"
+    },
+    {
+      "day": "Ср",
+      "time": "15:30 - 16:15",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Русский язык",
+      "group_2_or_b": "split 2 → Физика"
+    },
+    {
+      "day": "Ср",
+      "time": "16:20 -17:05",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "—",
+      "group_2_or_b": "excluded"
+    },
+    {
+      "day": "Чт",
+      "time": "9:00 - 9:45",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → География",
+      "group_2_or_b": "7-Б → История"
+    },
+    {
+      "day": "Чт",
+      "time": "9:55-10:40",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → История",
+      "group_2_or_b": "7-Б → География"
+    },
+    {
+      "day": "Чт",
+      "time": "10:55 -11:40",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Литература",
+      "group_2_or_b": "7-Б → Русский язык"
+    },
+    {
+      "day": "Чт",
+      "time": "11:50 - 12:35",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Тренинг",
+      "group_2_or_b": "7-Б → Литература"
+    },
+    {
+      "day": "Чт",
+      "time": "12:45-13:30",
+      "route_by": "NO_LESSON",
+      "group_1_or_a": "NO_LESSON",
+      "group_2_or_b": "NO_LESSON"
+    },
+    {
+      "day": "Чт",
+      "time": "13:40 - 14:25",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Творчество",
+      "group_2_or_b": "7-Б → Творчество"
+    },
+    {
+      "day": "Чт",
+      "time": "14:35 -15:20",
+      "route_by": "BASE_CLASS_A_B",
+      "group_1_or_a": "7-А → Русский язык",
+      "group_2_or_b": "7-Б → Тренинг"
+    },
+    {
+      "day": "Чт",
+      "time": "15:30 - 16:15",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "excluded",
+      "group_2_or_b": "—"
+    },
+    {
+      "day": "Пт",
+      "time": "9:00 - 9:45",
+      "route_by": "ENGLISH_3_4_5",
+      "group_1_or_a": "English 3 → Английский язык",
+      "group_2_or_b": "—"
+    },
+    {
+      "day": "Пт",
+      "time": "9:55-10:40",
+      "route_by": "ENGLISH_3_4_5",
+      "group_1_or_a": "English 4 → Английский язык",
+      "group_2_or_b": "English 5 → Английский язык"
+    },
+    {
+      "day": "Пт",
+      "time": "10:55 -11:40",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "7-А → Цифровой трек",
+      "group_2_or_b": "7-Б → Цифровой трек"
+    },
+    {
+      "day": "Пт",
+      "time": "11:50 - 12:35",
+      "route_by": "ELECTIVE_OR_SPECIAL",
+      "group_1_or_a": "7-А → Цифровой трек",
+      "group_2_or_b": "7-Б → Цифровой трек"
+    },
+    {
+      "day": "Пт",
+      "time": "12:45-13:30",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Математика",
+      "group_2_or_b": "split 2 → Русский язык"
+    },
+    {
+      "day": "Пт",
+      "time": "13:40 - 14:25",
+      "route_by": "SHARED_SPLIT_1_2",
+      "group_1_or_a": "split 1 → Русский язык",
+      "group_2_or_b": "split 2 → Математика"
+    }
+  ],
+  "unresolved": [
+    {
+      "code": "BASE_GROUPS_NOT_PERSISTED",
+      "scope": "7-А/7-Б",
+      "reason": "candidate only; base groups do not yet exist in DB"
+    },
+    {
+      "code": "IDENTITY_ALIAS_REVIEW",
+      "scope": "shared split 1/2",
+      "reason": "short-name variants require reviewed identity matching before membership apply"
+    },
+    {
+      "code": "CURRENT_SOURCE_NOT_IMPORTED",
+      "scope": "all",
+      "reason": "current template was read directly; live DB source snapshot remains historical"
+    }
+  ],
+  "validation": {
+    "status": "provisional_student_projection",
+    "student_scope": "25 active DB Grade 7 identities",
+    "routed_rows": 32,
+    "student_slot_states": {
+      "ACTIVITY": 633,
+      "NO_LESSON": 131,
+      "UNRESOLVED": 36
+    },
+    "duplicate_student_slot_allocations": 0,
+    "multiple_distinct_activities": 0,
+    "unknown_group_refs": 0,
+    "unexplained_unresolved": 0,
+    "known_unresolved_reasons": {
+      "missing current base class membership": 12,
+      "missing shared split membership": 12,
+      "missing English membership": 12
+    },
+    "excluded_from_projection": [
+      "⚪ extracurricular circles",
+      "source-only digital track/course rows"
+    ],
+    "canonical_v1_unchanged": true,
+    "memberships_unchanged": true,
+    "production_ui_unchanged": true
+  },
+  "blocks": [
+    {
+      "block_key": "2026/27 шаблон|row-4",
+      "weekday": "Пн",
+      "slot": {
+        "start": "9:00 - 9:45",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F4",
+          "source_audience": "7-А",
+          "raw_text": "Кл. час Иван / каб.8",
+          "activity": "Кл. час Иван",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F4",
+          "source_audience": "7-А",
+          "raw_text": "Кл. час Иван / каб.8"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-5",
+      "weekday": "Пн",
+      "slot": {
+        "start": "9:55-10:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F5",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван / каб.17",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G5",
+          "source_audience": "7-Б",
+          "raw_text": "Русский ИА / каб. 18",
+          "activity": "Русский язык",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": true,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F5",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван / каб.17"
+        },
+        {
+          "coordinate": "G5",
+          "source_audience": "7-Б",
+          "raw_text": "Русский ИА / каб. 18"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-6",
+      "weekday": "Пн",
+      "slot": {
+        "start": "10:55 -11:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F6",
+          "source_audience": "7-А",
+          "raw_text": "Физ 1 Иван / каб.17",
+          "activity": "Физика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G6",
+          "source_audience": "7-Б",
+          "raw_text": "Пластика Сергей / зал",
+          "activity": "Пластика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": true,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F6",
+          "source_audience": "7-А",
+          "raw_text": "Физ 1 Иван / каб.17"
+        },
+        {
+          "coordinate": "G6",
+          "source_audience": "7-Б",
+          "raw_text": "Пластика Сергей / зал"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-7",
+      "weekday": "Пн",
+      "slot": {
+        "start": "11:50 - 12:35",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ENGLISH_3_4_5",
+      "assignments": [
+        {
+          "source_coordinate": "F7",
+          "source_audience": "7-А",
+          "raw_text": "Англ 3 Ангелина / каб.6",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "3",
+            "canonical_group_ids": [
+              "60a6fbfc-4214-431f-94dc-64b414066498"
+            ]
+          },
+          "canonical_group_ids": [
+            "60a6fbfc-4214-431f-94dc-64b414066498"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "remaining_english_students",
+        "state": "NO_LESSON",
+        "covered_groups": [
+          "3"
+        ],
+        "uncovered_groups": [
+          "4",
+          "5"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F7",
+          "source_audience": "7-А",
+          "raw_text": "Англ 3 Ангелина / каб.6"
+        },
+        {
+          "coordinate": "G7",
+          "source_audience": "7-Б",
+          "raw_text": "🥨"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-8",
+      "weekday": "Пн",
+      "slot": {
+        "start": "12:45-13:30",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ENGLISH_3_4_5",
+      "assignments": [
+        {
+          "source_coordinate": "F8",
+          "source_audience": "7-А",
+          "raw_text": "Англ 4 Ангелина / каб.6",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "4",
+            "canonical_group_ids": [
+              "7505223b-af74-4f55-a8e5-cefb302f5c81"
+            ]
+          },
+          "canonical_group_ids": [
+            "7505223b-af74-4f55-a8e5-cefb302f5c81"
+          ]
+        },
+        {
+          "source_coordinate": "G8",
+          "source_audience": "7-Б",
+          "raw_text": "Англ 5 Игорь / каб.8",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "5",
+            "canonical_group_ids": [
+              "cdd3e5b9-e73a-464b-bc56-8bafedd696ea"
+            ]
+          },
+          "canonical_group_ids": [
+            "cdd3e5b9-e73a-464b-bc56-8bafedd696ea"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "remaining_english_students",
+        "state": "NO_LESSON",
+        "covered_groups": [
+          "4",
+          "5"
+        ],
+        "uncovered_groups": [
+          "3"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F8",
+          "source_audience": "7-А",
+          "raw_text": "Англ 4 Ангелина / каб.6"
+        },
+        {
+          "coordinate": "G8",
+          "source_audience": "7-Б",
+          "raw_text": "Англ 5 Игорь / каб.8"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-9",
+      "weekday": "Пн",
+      "slot": {
+        "start": "13:40 - 14:25",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F9",
+          "source_audience": "7-А",
+          "raw_text": "Русский ИА / каб. 18",
+          "activity": "Русский язык",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": true,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G9",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван / каб.17",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F9",
+          "source_audience": "7-А",
+          "raw_text": "Русский ИА / каб. 18"
+        },
+        {
+          "coordinate": "G9",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-10",
+      "weekday": "Пн",
+      "slot": {
+        "start": "14:35 -15:20",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F10",
+          "source_audience": "7-А",
+          "raw_text": "Пластика Сергей / зал",
+          "activity": "Пластика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": true,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G10",
+          "source_audience": "7-Б",
+          "raw_text": "Физ 2 Иван / каб.17",
+          "activity": "Физика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F10",
+          "source_audience": "7-А",
+          "raw_text": "Пластика Сергей / зал"
+        },
+        {
+          "coordinate": "G10",
+          "source_audience": "7-Б",
+          "raw_text": "Физ 2 Иван / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-11",
+      "weekday": "Пн",
+      "slot": {
+        "start": "15:30 - 16:15",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [],
+      "residual_behavior": {
+        "type": "excluded_extracurricular",
+        "state": "OUT_OF_CANONICAL_SCHEDULE"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F11",
+          "source_audience": "7-А",
+          "raw_text": "⚪АЙКИДО / Зал"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-17",
+      "weekday": "Вт",
+      "slot": {
+        "start": "9:55-10:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F17",
+          "source_audience": "7-А",
+          "raw_text": "Литер 7-А Юлия / каб.17",
+          "activity": "Литература",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G17",
+          "source_audience": "7-Б",
+          "raw_text": "История 7-Б Антон / каб.18",
+          "activity": "История",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F17",
+          "source_audience": "7-А",
+          "raw_text": "Литер 7-А Юлия / каб.17"
+        },
+        {
+          "coordinate": "G17",
+          "source_audience": "7-Б",
+          "raw_text": "История 7-Б Антон / каб.18"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-18",
+      "weekday": "Вт",
+      "slot": {
+        "start": "10:55 -11:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F18",
+          "source_audience": "7-А",
+          "raw_text": "Биология 7-А Родион / каб.18",
+          "activity": "Биология",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G18",
+          "source_audience": "7-Б",
+          "raw_text": "Литер  7-Б Юлия / каб.17",
+          "activity": "Литература",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F18",
+          "source_audience": "7-А",
+          "raw_text": "Биология 7-А Родион / каб.18"
+        },
+        {
+          "coordinate": "G18",
+          "source_audience": "7-Б",
+          "raw_text": "Литер  7-Б Юлия / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-19",
+      "weekday": "Вт",
+      "slot": {
+        "start": "11:50 - 12:35",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F19",
+          "source_audience": "7-А",
+          "raw_text": "История 7-А Антон / каб.17",
+          "activity": "История",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G19",
+          "source_audience": "7-Б",
+          "raw_text": "Биология 7-Б Родион / каб.18",
+          "activity": "Биология",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F19",
+          "source_audience": "7-А",
+          "raw_text": "История 7-А Антон / каб.17"
+        },
+        {
+          "coordinate": "G19",
+          "source_audience": "7-Б",
+          "raw_text": "Биология 7-Б Родион / каб.18"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-20",
+      "weekday": "Вт",
+      "slot": {
+        "start": "12:45-13:30",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ENGLISH_3_4_5",
+      "assignments": [
+        {
+          "source_coordinate": "F20",
+          "source_audience": "7-А",
+          "raw_text": "Англ 3 Ангелина / каб.9",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "3",
+            "canonical_group_ids": [
+              "60a6fbfc-4214-431f-94dc-64b414066498"
+            ]
+          },
+          "canonical_group_ids": [
+            "60a6fbfc-4214-431f-94dc-64b414066498"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "remaining_english_students",
+        "state": "NO_LESSON",
+        "covered_groups": [
+          "3"
+        ],
+        "uncovered_groups": [
+          "4",
+          "5"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F20",
+          "source_audience": "7-А",
+          "raw_text": "Англ 3 Ангелина / каб.9"
+        },
+        {
+          "coordinate": "G20",
+          "source_audience": "7-Б",
+          "raw_text": "🥨"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-21",
+      "weekday": "Вт",
+      "slot": {
+        "start": "13:40 - 14:25",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ENGLISH_3_4_5",
+      "assignments": [
+        {
+          "source_coordinate": "F21",
+          "source_audience": "7-А",
+          "raw_text": "Англ 4 Ангелина / каб.9",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "4",
+            "canonical_group_ids": [
+              "7505223b-af74-4f55-a8e5-cefb302f5c81"
+            ]
+          },
+          "canonical_group_ids": [
+            "7505223b-af74-4f55-a8e5-cefb302f5c81"
+          ]
+        },
+        {
+          "source_coordinate": "G21",
+          "source_audience": "7-Б",
+          "raw_text": "Англ 5 Игорь / каб.18",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "5",
+            "canonical_group_ids": [
+              "cdd3e5b9-e73a-464b-bc56-8bafedd696ea"
+            ]
+          },
+          "canonical_group_ids": [
+            "cdd3e5b9-e73a-464b-bc56-8bafedd696ea"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "remaining_english_students",
+        "state": "NO_LESSON",
+        "covered_groups": [
+          "4",
+          "5"
+        ],
+        "uncovered_groups": [
+          "3"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F21",
+          "source_audience": "7-А",
+          "raw_text": "Англ 4 Ангелина / каб.9"
+        },
+        {
+          "coordinate": "G21",
+          "source_audience": "7-Б",
+          "raw_text": "Англ 5 Игорь / каб.18"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-22",
+      "weekday": "Вт",
+      "slot": {
+        "start": "14:35 -15:20",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F22",
+          "source_audience": "7-А",
+          "raw_text": "Пластика Вадим / зал",
+          "activity": "Пластика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": true,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G22",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван / каб.17",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F22",
+          "source_audience": "7-А",
+          "raw_text": "Пластика Вадим / зал"
+        },
+        {
+          "coordinate": "G22",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-23",
+      "weekday": "Вт",
+      "slot": {
+        "start": "15:25 - 16:10",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F23",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван / каб.17",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G23",
+          "source_audience": "7-Б",
+          "raw_text": "Пластика Вадим / зал",
+          "activity": "Пластика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": true,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F23",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван / каб.17"
+        },
+        {
+          "coordinate": "G23",
+          "source_audience": "7-Б",
+          "raw_text": "Пластика Вадим / зал"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-24",
+      "weekday": "Вт",
+      "slot": {
+        "start": "16:20 -17:05",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [],
+      "residual_behavior": {
+        "type": "excluded_extracurricular",
+        "state": "OUT_OF_CANONICAL_SCHEDULE"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F24",
+          "source_audience": "7-А",
+          "raw_text": "⚪ИСПАНСКИЙ / Лилиана / каб.10"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-28",
+      "weekday": "Ср",
+      "slot": {
+        "start": "9:00 - 9:45",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F28",
+          "source_audience": "7-А",
+          "raw_text": "Литература 7-А Юлия / каб. 17",
+          "activity": "Литература",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G28",
+          "source_audience": "7-Б",
+          "raw_text": "История 7-Б Антон / каб.Нов",
+          "activity": "История",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F28",
+          "source_audience": "7-А",
+          "raw_text": "Литература 7-А Юлия / каб. 17"
+        },
+        {
+          "coordinate": "G28",
+          "source_audience": "7-Б",
+          "raw_text": "История 7-Б Антон / каб.Нов"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-29",
+      "weekday": "Ср",
+      "slot": {
+        "start": "9:55-10:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F29",
+          "source_audience": "7-А",
+          "raw_text": "История 7-А Антон / каб.Нов",
+          "activity": "История",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G29",
+          "source_audience": "7-Б",
+          "raw_text": "Литература 7-Б Юлия / каб. 17",
+          "activity": "Литература",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F29",
+          "source_audience": "7-А",
+          "raw_text": "История 7-А Антон / каб.Нов"
+        },
+        {
+          "coordinate": "G29",
+          "source_audience": "7-Б",
+          "raw_text": "Литература 7-Б Юлия / каб. 17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-30",
+      "weekday": "Ср",
+      "slot": {
+        "start": "10:55 -11:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F30",
+          "source_audience": "7-А",
+          "raw_text": "Биология 1 Родион / каб.15",
+          "activity": "Биология",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G30",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван / каб.17",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F30",
+          "source_audience": "7-А",
+          "raw_text": "Биология 1 Родион / каб.15"
+        },
+        {
+          "coordinate": "G30",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-31",
+      "weekday": "Ср",
+      "slot": {
+        "start": "11:50 - 12:35",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "NO_LESSON",
+      "assignments": [],
+      "residual_behavior": {
+        "type": "final_residual",
+        "state": "NO_LESSON"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F31",
+          "source_audience": "7-А",
+          "raw_text": "🥨"
+        },
+        {
+          "coordinate": "G31",
+          "source_audience": "7-Б",
+          "raw_text": "🥨"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-32",
+      "weekday": "Ср",
+      "slot": {
+        "start": "12:45-13:30",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [
+        {
+          "source_coordinate": "F32",
+          "source_audience": "7-А",
+          "raw_text": "Курс по выбору: / Елена Викторовна: \"Превед, медвед, и прощай! Стилистика русского языка\" / каб.15 / Ангелина \"English Through Cinema\" / каб.8 / Иван \"Шальная наука\" / каб.5 / Алекс  \"Логикон\"  / каб.Нов",
+          "activity": "Курс по выбору",
+          "routing_dimension": "ELECTIVE_OR_SPECIAL",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": {
+        "type": "source_only_or_excluded",
+        "state": "MANUAL_REVIEW"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F32",
+          "source_audience": "7-А",
+          "raw_text": "Курс по выбору: / Елена Викторовна: \"Превед, медвед, и прощай! Стилистика русского языка\" / каб.15 / Ангелина \"English Through Cinema\" / каб.8 / Иван \"Шальная наука\" / каб.5 / Алекс  \"Логикон\"  / каб.Нов"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-33",
+      "weekday": "Ср",
+      "slot": {
+        "start": "13:40 - 14:25",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F33",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван / каб.17",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G33",
+          "source_audience": "7-Б",
+          "raw_text": "Биология 2 Родион / каб.15",
+          "activity": "Биология",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F33",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван / каб.17"
+        },
+        {
+          "coordinate": "G33",
+          "source_audience": "7-Б",
+          "raw_text": "Биология 2 Родион / каб.15"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-34",
+      "weekday": "Ср",
+      "slot": {
+        "start": "14:35 -15:20",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F34",
+          "source_audience": "7-А",
+          "raw_text": "Физ 1 Иван / каб.18",
+          "activity": "Физика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G34",
+          "source_audience": "7-Б",
+          "raw_text": "Русский 2 ИА / каб.15",
+          "activity": "Русский язык",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F34",
+          "source_audience": "7-А",
+          "raw_text": "Физ 1 Иван / каб.18"
+        },
+        {
+          "coordinate": "G34",
+          "source_audience": "7-Б",
+          "raw_text": "Русский 2 ИА / каб.15"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-35",
+      "weekday": "Ср",
+      "slot": {
+        "start": "15:30 - 16:15",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F35",
+          "source_audience": "7-А",
+          "raw_text": "Русский 1 ИА каб.15",
+          "activity": "Русский язык",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G35",
+          "source_audience": "7-Б",
+          "raw_text": "Физ 2 Иван / каб.18",
+          "activity": "Физика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F35",
+          "source_audience": "7-А",
+          "raw_text": "Русский 1 ИА каб.15"
+        },
+        {
+          "coordinate": "G35",
+          "source_audience": "7-Б",
+          "raw_text": "Физ 2 Иван / каб.18"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-36",
+      "weekday": "Ср",
+      "slot": {
+        "start": "16:20 -17:05",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [],
+      "residual_behavior": {
+        "type": "excluded_extracurricular",
+        "state": "OUT_OF_CANONICAL_SCHEDULE"
+      },
+      "source_cells": [
+        {
+          "coordinate": "G36",
+          "source_audience": "7-Б",
+          "raw_text": "⚪ВОКАЛ / Марина / каб.8"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-40",
+      "weekday": "Чт",
+      "slot": {
+        "start": "9:00 - 9:45",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F40",
+          "source_audience": "7-А",
+          "raw_text": "География 7-А ДК / каб.17",
+          "activity": "География",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G40",
+          "source_audience": "7-Б",
+          "raw_text": "История искусства 7-Б Лида / каб.5",
+          "activity": "История",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F40",
+          "source_audience": "7-А",
+          "raw_text": "География 7-А ДК / каб.17"
+        },
+        {
+          "coordinate": "G40",
+          "source_audience": "7-Б",
+          "raw_text": "История искусства 7-Б Лида / каб.5"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-41",
+      "weekday": "Чт",
+      "slot": {
+        "start": "9:55-10:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F41",
+          "source_audience": "7-А",
+          "raw_text": "История искусства 7-А Лида / каб.5",
+          "activity": "История",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G41",
+          "source_audience": "7-Б",
+          "raw_text": "География 7-Б ДК / каб.17",
+          "activity": "География",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F41",
+          "source_audience": "7-А",
+          "raw_text": "История искусства 7-А Лида / каб.5"
+        },
+        {
+          "coordinate": "G41",
+          "source_audience": "7-Б",
+          "raw_text": "География 7-Б ДК / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-42",
+      "weekday": "Чт",
+      "slot": {
+        "start": "10:55 -11:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F42",
+          "source_audience": "7-А",
+          "raw_text": "Литер 7-А Юлия / каб.17",
+          "activity": "Литература",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G42",
+          "source_audience": "7-Б",
+          "raw_text": "Русский 7-Б ИА / каб.18",
+          "activity": "Русский язык",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F42",
+          "source_audience": "7-А",
+          "raw_text": "Литер 7-А Юлия / каб.17"
+        },
+        {
+          "coordinate": "G42",
+          "source_audience": "7-Б",
+          "raw_text": "Русский 7-Б ИА / каб.18"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-43",
+      "weekday": "Чт",
+      "slot": {
+        "start": "11:50 - 12:35",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F43",
+          "source_audience": "7-А",
+          "raw_text": "Тренинг 7-А АЕ / зал",
+          "activity": "Тренинг",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G43",
+          "source_audience": "7-Б",
+          "raw_text": "Литер  7-Б Юлия / каб.17",
+          "activity": "Литература",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F43",
+          "source_audience": "7-А",
+          "raw_text": "Тренинг 7-А АЕ / зал"
+        },
+        {
+          "coordinate": "G43",
+          "source_audience": "7-Б",
+          "raw_text": "Литер  7-Б Юлия / каб.17"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-44",
+      "weekday": "Чт",
+      "slot": {
+        "start": "12:45-13:30",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "NO_LESSON",
+      "assignments": [],
+      "residual_behavior": {
+        "type": "final_residual",
+        "state": "NO_LESSON"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F44",
+          "source_audience": "7-А",
+          "raw_text": "🥨"
+        },
+        {
+          "coordinate": "G44",
+          "source_audience": "7-Б",
+          "raw_text": "🥨"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-45",
+      "weekday": "Чт",
+      "slot": {
+        "start": "13:40 - 14:25",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F45",
+          "source_audience": "7-А",
+          "raw_text": "Творчество Алекс / каб.15",
+          "activity": "Творчество",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G45",
+          "source_audience": "7-Б",
+          "raw_text": "Творчество Лида / каб.5",
+          "activity": "Творчество",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F45",
+          "source_audience": "7-А",
+          "raw_text": "Творчество Алекс / каб.15"
+        },
+        {
+          "coordinate": "G45",
+          "source_audience": "7-Б",
+          "raw_text": "Творчество Лида / каб.5"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-46",
+      "weekday": "Чт",
+      "slot": {
+        "start": "14:35 -15:20",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "BASE_CLASS_A_B",
+      "assignments": [
+        {
+          "source_coordinate": "F46",
+          "source_audience": "7-А",
+          "raw_text": "Русский 7-А ИА / каб.18",
+          "activity": "Русский язык",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G46",
+          "source_audience": "7-Б",
+          "raw_text": "Тренинг 7-Б АЕ / зал",
+          "activity": "Тренинг",
+          "routing_dimension": "BASE_CLASS_A_B",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": null,
+      "source_cells": [
+        {
+          "coordinate": "F46",
+          "source_audience": "7-А",
+          "raw_text": "Русский 7-А ИА / каб.18"
+        },
+        {
+          "coordinate": "G46",
+          "source_audience": "7-Б",
+          "raw_text": "Тренинг 7-Б АЕ / зал"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-47",
+      "weekday": "Чт",
+      "slot": {
+        "start": "15:30 - 16:15",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [],
+      "residual_behavior": {
+        "type": "excluded_extracurricular",
+        "state": "OUT_OF_CANONICAL_SCHEDULE"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F47",
+          "source_audience": "7-А",
+          "raw_text": "⚪ИСПАНСКИЙ / Лилиана / каб.10"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-52",
+      "weekday": "Пт",
+      "slot": {
+        "start": "9:00 - 9:45",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ENGLISH_3_4_5",
+      "assignments": [
+        {
+          "source_coordinate": "F52",
+          "source_audience": "7-А",
+          "raw_text": "Англ 3 Ангелина",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "3",
+            "canonical_group_ids": [
+              "60a6fbfc-4214-431f-94dc-64b414066498"
+            ]
+          },
+          "canonical_group_ids": [
+            "60a6fbfc-4214-431f-94dc-64b414066498"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "remaining_english_students",
+        "state": "NO_LESSON",
+        "covered_groups": [
+          "3"
+        ],
+        "uncovered_groups": [
+          "4",
+          "5"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F52",
+          "source_audience": "7-А",
+          "raw_text": "Англ 3 Ангелина"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-53",
+      "weekday": "Пт",
+      "slot": {
+        "start": "9:55-10:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ENGLISH_3_4_5",
+      "assignments": [
+        {
+          "source_coordinate": "F53",
+          "source_audience": "7-А",
+          "raw_text": "Англ 4 Ангелина",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "4",
+            "canonical_group_ids": [
+              "7505223b-af74-4f55-a8e5-cefb302f5c81"
+            ]
+          },
+          "canonical_group_ids": [
+            "7505223b-af74-4f55-a8e5-cefb302f5c81"
+          ]
+        },
+        {
+          "source_coordinate": "G53",
+          "source_audience": "7-Б",
+          "raw_text": "Англ  5 Игорь",
+          "activity": "Английский язык",
+          "routing_dimension": "ENGLISH_3_4_5",
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "english",
+            "label": "5",
+            "canonical_group_ids": [
+              "cdd3e5b9-e73a-464b-bc56-8bafedd696ea"
+            ]
+          },
+          "canonical_group_ids": [
+            "cdd3e5b9-e73a-464b-bc56-8bafedd696ea"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "remaining_english_students",
+        "state": "NO_LESSON",
+        "covered_groups": [
+          "4",
+          "5"
+        ],
+        "uncovered_groups": [
+          "3"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F53",
+          "source_audience": "7-А",
+          "raw_text": "Англ 4 Ангелина"
+        },
+        {
+          "coordinate": "G53",
+          "source_audience": "7-Б",
+          "raw_text": "Англ  5 Игорь"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-54",
+      "weekday": "Пт",
+      "slot": {
+        "start": "10:55 -11:40",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [
+        {
+          "source_coordinate": "F54",
+          "source_audience": "7-А",
+          "raw_text": "Программирование / Тарас",
+          "activity": "Цифровой трек",
+          "routing_dimension": "ELECTIVE_OR_SPECIAL",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G54",
+          "source_audience": "7-Б",
+          "raw_text": "ШУМ. Медиамастерская / Даша / группа 1",
+          "activity": "Цифровой трек",
+          "routing_dimension": "ELECTIVE_OR_SPECIAL",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": {
+        "type": "source_only_or_excluded",
+        "state": "MANUAL_REVIEW"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F54",
+          "source_audience": "7-А",
+          "raw_text": "Программирование / Тарас"
+        },
+        {
+          "coordinate": "G54",
+          "source_audience": "7-Б",
+          "raw_text": "ШУМ. Медиамастерская / Даша / группа 1"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-55",
+      "weekday": "Пт",
+      "slot": {
+        "start": "11:50 - 12:35",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "ELECTIVE_OR_SPECIAL",
+      "assignments": [
+        {
+          "source_coordinate": "F55",
+          "source_audience": "7-А",
+          "raw_text": "Машинная графика / Тарас",
+          "activity": "Цифровой трек",
+          "routing_dimension": "ELECTIVE_OR_SPECIAL",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-А"
+          },
+          "canonical_group_ids": []
+        },
+        {
+          "source_coordinate": "G55",
+          "source_audience": "7-Б",
+          "raw_text": "ШУМ. Медиамастерская / Даша / группа 2",
+          "activity": "Цифровой трек",
+          "routing_dimension": "ELECTIVE_OR_SPECIAL",
+          "audience": {
+            "type": "source_only_audience",
+            "label": "7-Б"
+          },
+          "canonical_group_ids": []
+        }
+      ],
+      "residual_behavior": {
+        "type": "source_only_or_excluded",
+        "state": "MANUAL_REVIEW"
+      },
+      "source_cells": [
+        {
+          "coordinate": "F55",
+          "source_audience": "7-А",
+          "raw_text": "Машинная графика / Тарас"
+        },
+        {
+          "coordinate": "G55",
+          "source_audience": "7-Б",
+          "raw_text": "ШУМ. Медиамастерская / Даша / группа 2"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-56",
+      "weekday": "Пт",
+      "slot": {
+        "start": "12:45-13:30",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F56",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G56",
+          "source_audience": "7-Б",
+          "raw_text": "Русский 2 ИА",
+          "activity": "Русский язык",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F56",
+          "source_audience": "7-А",
+          "raw_text": "Мат 1 Иван"
+        },
+        {
+          "coordinate": "G56",
+          "source_audience": "7-Б",
+          "raw_text": "Русский 2 ИА"
+        }
+      ]
+    },
+    {
+      "block_key": "2026/27 шаблон|row-57",
+      "weekday": "Пт",
+      "slot": {
+        "start": "13:40 - 14:25",
+        "end": null
+      },
+      "grade_scope": "7",
+      "row_routing_dimension": "SHARED_SPLIT_1_2",
+      "assignments": [
+        {
+          "source_coordinate": "F57",
+          "source_audience": "7-А",
+          "raw_text": "Русский 1 ИА",
+          "activity": "Русский язык",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "1",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "1",
+            "canonical_group_ids": [
+              "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+            ]
+          },
+          "canonical_group_ids": [
+            "824dacf3-28dd-4342-8c62-8f3a94b7337f"
+          ]
+        },
+        {
+          "source_coordinate": "G57",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван",
+          "activity": "Математика",
+          "routing_dimension": "SHARED_SPLIT_1_2",
+          "split_label": "2",
+          "inferred_complement": false,
+          "audience": {
+            "type": "canonical_group",
+            "dimension": "shared_instructional_split",
+            "label": "2",
+            "canonical_group_ids": [
+              "84e97d6d-f596-4dec-8053-0a98b1a39339"
+            ]
+          },
+          "canonical_group_ids": [
+            "84e97d6d-f596-4dec-8053-0a98b1a39339"
+          ]
+        }
+      ],
+      "residual_behavior": {
+        "type": "partition_complete",
+        "state": "NO_LESSON",
+        "covered_splits": [
+          "1",
+          "2"
+        ]
+      },
+      "source_cells": [
+        {
+          "coordinate": "F57",
+          "source_audience": "7-А",
+          "raw_text": "Русский 1 ИА"
+        },
+        {
+          "coordinate": "G57",
+          "source_audience": "7-Б",
+          "raw_text": "Мат 2 Иван"
+        }
+      ]
+    }
+  ]
+}

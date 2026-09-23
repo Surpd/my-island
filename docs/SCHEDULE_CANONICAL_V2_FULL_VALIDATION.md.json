@@ -1,0 +1,2108 @@
+{
+  "artifact": {
+    "version_id": "dc75b478bcb40c544e2bd37d61ebefc7b2f699e95354e8d71fac7e4a5c4206c8",
+    "parent_version_id": "4d21ef71ba1b0cb92b48735f410758b64a882c5f496a4361be02c5a6e229cf93",
+    "blocks": 255,
+    "assignments": 399,
+    "status": "approved_with_exceptions",
+    "authoritative": false
+  },
+  "student_projection": {
+    "states": {
+      "ACTIVITY": 3170,
+      "NO_LESSON": 1031,
+      "UNRESOLVED": 33
+    },
+    "duplicate_student_slots": [],
+    "multiple_activities": [],
+    "unknown_group_refs": [],
+    "unresolved_count": 33,
+    "unresolved_by_reason": {
+      "student is missing from the active English instructional partition": 9,
+      "student is missing from the active math instructional partition": 15,
+      "student is missing from the active english instructional partition": 7,
+      "contradictory elective memberships": 2
+    },
+    "active_students": 114
+  },
+  "teacher_projection": {
+    "resolved_assignments": 269,
+    "unresolved_assignments": [
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-0|09:55|10:40|9",
+        "source_cells": [
+          "L5"
+        ],
+        "reason": "L5: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-0|15:30|16:15|9",
+        "source_cells": [
+          "L11"
+        ],
+        "reason": "L11: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-0|16:20|17:05|9",
+        "source_cells": [
+          "L12"
+        ],
+        "reason": "L12: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|09:55|10:40|11",
+        "source_cells": [
+          "T17"
+        ],
+        "reason": "T17: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|10:55|11:40|9",
+        "source_cells": [
+          "L18"
+        ],
+        "reason": "L18: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|11:50|12:35|11",
+        "source_cells": [
+          "S19"
+        ],
+        "reason": "S19: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|11:50|12:35|9",
+        "source_cells": [
+          "N19"
+        ],
+        "reason": "N19: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|15:25|16:10|11",
+        "source_cells": [
+          "T23"
+        ],
+        "reason": "T23: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|15:25|16:10|9",
+        "source_cells": [
+          "M23"
+        ],
+        "reason": "M23: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|16:20|17:05|9",
+        "source_cells": [
+          "N24"
+        ],
+        "reason": "N24: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|09:00|09:45|9",
+        "source_cells": [
+          "L28"
+        ],
+        "reason": "L28: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|09:00|09:45|9",
+        "source_cells": [
+          "M28"
+        ],
+        "reason": "M28: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|09:55|10:40|11",
+        "source_cells": [
+          "T29"
+        ],
+        "reason": "T29: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|13:40|14:25|9",
+        "source_cells": [
+          "L33"
+        ],
+        "reason": "L33: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|15:30|16:15|11",
+        "source_cells": [
+          "T35"
+        ],
+        "reason": "T35: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|15:30|16:15|11",
+        "source_cells": [
+          "S35"
+        ],
+        "reason": "S35: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|09:00|09:45|9",
+        "source_cells": [
+          "M40"
+        ],
+        "reason": "M40: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|09:55|10:40|9",
+        "source_cells": [
+          "M41"
+        ],
+        "reason": "M41: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|10:55|11:40|10",
+        "source_cells": [
+          "P42"
+        ],
+        "reason": "P42: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|10:55|11:40|11",
+        "source_cells": [
+          "S42"
+        ],
+        "reason": "S42: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|10:55|11:40|9",
+        "source_cells": [
+          "N42"
+        ],
+        "reason": "N42: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|11:50|12:35|10",
+        "source_cells": [
+          "P43"
+        ],
+        "reason": "P43: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|11:50|12:35|11",
+        "source_cells": [
+          "S43"
+        ],
+        "reason": "S43: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|11:50|12:35|9",
+        "source_cells": [
+          "L43"
+        ],
+        "reason": "L43: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|12:45|13:30|9",
+        "source_cells": [
+          "L44"
+        ],
+        "reason": "L44: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|13:40|14:25|11",
+        "source_cells": [
+          "S45"
+        ],
+        "reason": "S45: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|14:35|15:20|11",
+        "source_cells": [
+          "S46"
+        ],
+        "reason": "S46: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|14:35|15:20|6",
+        "source_cells": [
+          "D46"
+        ],
+        "reason": "D46: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|15:30|16:15|11",
+        "source_cells": [
+          "T47"
+        ],
+        "reason": "T47: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|09:55|10:40|8",
+        "source_cells": [
+          "I53"
+        ],
+        "reason": "I53: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|10:55|11:40|5",
+        "source_cells": [
+          "C54"
+        ],
+        "reason": "C54: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|10:55|11:40|7",
+        "source_cells": [
+          "G54"
+        ],
+        "reason": "G54: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|11:50|12:35|7",
+        "source_cells": [
+          "G55"
+        ],
+        "reason": "G55: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|15:30|16:15|9",
+        "source_cells": [
+          "M59",
+          "N59"
+        ],
+        "reason": "M59: teacher text is not uniquely resolvable from current directory; N59: teacher text is not uniquely resolvable from current directory"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|SDEP|10",
+        "source_cells": [],
+        "reason": "teacher_id=null: source does not provide a unique teacher"
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|SDEP|11",
+        "source_cells": [],
+        "reason": "teacher_id=null: source does not provide a unique teacher"
+      }
+    ],
+    "orphan_expected_teacher": [
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-0|09:55|10:40|9",
+        "activity": "Классный час",
+        "source_cells": [
+          "L5"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-0|15:30|16:15|9",
+        "activity": "Химия",
+        "source_cells": [
+          "L11"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-0|16:20|17:05|9",
+        "activity": "Химия",
+        "source_cells": [
+          "L12"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|09:55|10:40|11",
+        "activity": "Математика",
+        "source_cells": [
+          "T17"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|10:55|11:40|9",
+        "activity": "История искусств",
+        "source_cells": [
+          "L18"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|11:50|12:35|11",
+        "activity": "Классный час",
+        "source_cells": [
+          "S19"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|11:50|12:35|9",
+        "activity": "История искусств",
+        "source_cells": [
+          "N19"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|15:25|16:10|11",
+        "activity": "Математика",
+        "source_cells": [
+          "T23"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|15:25|16:10|9",
+        "activity": "Физика",
+        "source_cells": [
+          "M23"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-1|16:20|17:05|9",
+        "activity": "Физика",
+        "source_cells": [
+          "N24"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|09:00|09:45|9",
+        "activity": "Физика",
+        "source_cells": [
+          "L28"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|09:00|09:45|9",
+        "activity": "Химия",
+        "source_cells": [
+          "M28"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|09:55|10:40|11",
+        "activity": "Математика",
+        "source_cells": [
+          "T29"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|13:40|14:25|9",
+        "activity": "Химия",
+        "source_cells": [
+          "L33"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-2|15:30|16:15|11",
+        "activity": "Математика",
+        "source_cells": [
+          "T35"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|10:55|11:40|10",
+        "activity": "История искусств",
+        "source_cells": [
+          "P42"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|10:55|11:40|11",
+        "activity": "История искусств",
+        "source_cells": [
+          "S42"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|10:55|11:40|9",
+        "activity": "Физика",
+        "source_cells": [
+          "N42"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|11:50|12:35|10",
+        "activity": "История искусств",
+        "source_cells": [
+          "P43"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|11:50|12:35|11",
+        "activity": "История искусств",
+        "source_cells": [
+          "S43"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|11:50|12:35|9",
+        "activity": "Естествознание",
+        "source_cells": [
+          "L43"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|12:45|13:30|9",
+        "activity": "Естествознание",
+        "source_cells": [
+          "L44"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|13:40|14:25|11",
+        "activity": "Русский язык",
+        "source_cells": [
+          "S45"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|14:35|15:20|11",
+        "activity": "Русский язык",
+        "source_cells": [
+          "S46"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|14:35|15:20|6",
+        "activity": "Творчество",
+        "source_cells": [
+          "D46"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-3|15:30|16:15|11",
+        "activity": "Математика",
+        "source_cells": [
+          "T47"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|09:55|10:40|8",
+        "activity": "Английский язык",
+        "source_cells": [
+          "I53"
+        ]
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|SDEP|10",
+        "activity": "SDEP",
+        "source_cells": []
+      },
+      {
+        "block_key": "638874869|2026/27 шаблон|weekday-4|SDEP|11",
+        "activity": "SDEP",
+        "source_cells": []
+      }
+    ],
+    "simultaneous_conflicts": []
+  },
+  "semantic_diff": {
+    "counts": {
+      "changed": 111,
+      "activity": 66,
+      "teacher": 70,
+      "unchanged": 128,
+      "removed": 16,
+      "audience/routing": 28,
+      "routing dimension": 29,
+      "added": 16
+    },
+    "details": [
+      {
+        "key": [
+          "0",
+          "09:00",
+          "09:45",
+          "10"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "09:00",
+          "09:45",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "09:00",
+          "09:45",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "0",
+          "09:00",
+          "09:45",
+          "8"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "0",
+          "09:55",
+          "10:40",
+          "10"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "09:55",
+          "10:40",
+          "11"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "09:55",
+          "10:40",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "09:55",
+          "10:40",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "09:55",
+          "10:40",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "0",
+          "09:55",
+          "10:40",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "10:55",
+          "11:40",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "10:55",
+          "11:40",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "10:55",
+          "11:40",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "11:50",
+          "12:35",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "11:50",
+          "12:35",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "11:50",
+          "12:35",
+          "8"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "12:45",
+          "13:30",
+          "10"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "12:45",
+          "13:30",
+          "11"
+        ],
+        "change": [
+          "audience/routing"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "12:45",
+          "13:30",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "12:45",
+          "13:30",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "12:45",
+          "13:30",
+          "8"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "13:40",
+          "14:25",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "13:40",
+          "14:25",
+          "5"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "13:40",
+          "14:25",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "14:35",
+          "15:20",
+          "11"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "14:35",
+          "15:20",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "14:35",
+          "15:20",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "15:30",
+          "16:15",
+          "6"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "0",
+          "15:30",
+          "16:15",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "15:30",
+          "16:15",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "16:20",
+          "17:05",
+          "5"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "0",
+          "16:20",
+          "17:05",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "0",
+          "9:00",
+          "9:45",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "0",
+          "9:55",
+          "10:40",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "1",
+          "09:55",
+          "10:40",
+          "11"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "09:55",
+          "10:40",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "1",
+          "10:55",
+          "11:40",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "10:55",
+          "11:40",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "10:55",
+          "11:40",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "10:55",
+          "11:40",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "11:50",
+          "12:35",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "11:50",
+          "12:35",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "11:50",
+          "12:35",
+          "8"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "11:50",
+          "12:35",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "12:45",
+          "13:30",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "12:45",
+          "13:30",
+          "8"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "13:40",
+          "14:25",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "13:40",
+          "14:25",
+          "8"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "14:35",
+          "15:20",
+          "10"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "14:35",
+          "15:20",
+          "11"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "14:35",
+          "15:20",
+          "5"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "14:35",
+          "15:20",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "15:25",
+          "16:10",
+          "11"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "15:25",
+          "16:10",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "15:25",
+          "16:10",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "15:25",
+          "16:10",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "16:20",
+          "17:05",
+          "11"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "1",
+          "16:20",
+          "17:05",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "16:20",
+          "17:05",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "1",
+          "9:55",
+          "10:40",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "2",
+          "09:00",
+          "09:45",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "09:00",
+          "09:45",
+          "5,6"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "2",
+          "09:00",
+          "09:45",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "2",
+          "09:00",
+          "09:45",
+          "8"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "09:00",
+          "09:45",
+          "9"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "09:55",
+          "10:40",
+          "11"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "09:55",
+          "10:40",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "09:55",
+          "10:40",
+          "6"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "2",
+          "09:55",
+          "10:40",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "2",
+          "10:55",
+          "11:40",
+          "5"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "10:55",
+          "11:40",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "10:55",
+          "11:40",
+          "8"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "11:50",
+          "12:35",
+          "10"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "11:50",
+          "12:35",
+          "11"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "11:50",
+          "12:35",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "12:45",
+          "13:30",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "12:45",
+          "13:30",
+          "6"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "12:45",
+          "13:30",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "2",
+          "12:45",
+          "13:30",
+          "7,8"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "2",
+          "13:40",
+          "14:25",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "13:40",
+          "14:25",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "13:40",
+          "14:25",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "13:40",
+          "14:25",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "14:35",
+          "15:20",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "14:35",
+          "15:20",
+          "5"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "14:35",
+          "15:20",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "14:35",
+          "15:20",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "15:30",
+          "16:15",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "15:30",
+          "16:15",
+          "5"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "2",
+          "15:30",
+          "16:15",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "15:30",
+          "16:15",
+          "7"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "15:30",
+          "16:15",
+          "8"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "15:30",
+          "16:15",
+          "9"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "16:20",
+          "17:05",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "16:20",
+          "17:05",
+          "6"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "2",
+          "16:20",
+          "17:05",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "2",
+          "9:00",
+          "9:45",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "2",
+          "9:55",
+          "10:40",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "3",
+          "09:00",
+          "09:45",
+          "11"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "3",
+          "09:00",
+          "09:45",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "3",
+          "09:00",
+          "09:45",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "09:55",
+          "10:40",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "09:55",
+          "10:40",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "3",
+          "09:55",
+          "10:40",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "10:55",
+          "11:40",
+          "10"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "10:55",
+          "11:40",
+          "11"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "10:55",
+          "11:40",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "10:55",
+          "11:40",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "11:50",
+          "12:35",
+          "10"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "11:50",
+          "12:35",
+          "11"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "11:50",
+          "12:35",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "11:50",
+          "12:35",
+          "8"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "11:50",
+          "12:35",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "12:45",
+          "13:30",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "12:45",
+          "13:30",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "12:45",
+          "13:30",
+          "9"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "13:40",
+          "14:25",
+          "11"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "13:40",
+          "14:25",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "14:35",
+          "15:20",
+          "11"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "14:35",
+          "15:20",
+          "6"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "14:35",
+          "15:20",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "15:30",
+          "16:15",
+          "10"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "15:30",
+          "16:15",
+          "11"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "15:30",
+          "16:15",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "3",
+          "15:30",
+          "16:15",
+          "8"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "3",
+          "9:00",
+          "9:45",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "3",
+          "9:55",
+          "10:40",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "4",
+          "09:00",
+          "09:45",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "4",
+          "09:00",
+          "09:45",
+          "8"
+        ],
+        "change": [
+          "activity"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "09:55",
+          "10:40",
+          "7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "4",
+          "09:55",
+          "10:40",
+          "8"
+        ],
+        "change": [
+          "activity",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "10:55",
+          "11:40",
+          "5"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "10:55",
+          "11:40",
+          "6"
+        ],
+        "change": [
+          "activity",
+          "audience/routing",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "10:55",
+          "11:40",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "10:55",
+          "11:40",
+          "8"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "11:50",
+          "12:35",
+          "7"
+        ],
+        "change": [
+          "audience/routing",
+          "routing dimension",
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "11:50",
+          "12:35",
+          "8"
+        ],
+        "change": [
+          "teacher"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "12:45",
+          "13:30",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "13:40",
+          "14:25",
+          "7"
+        ],
+        "change": [
+          "routing dimension"
+        ]
+      },
+      {
+        "key": [
+          "4",
+          "15:30",
+          "16:15",
+          "6"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "4",
+          "15:30",
+          "16:15",
+          "6,7"
+        ],
+        "change": "removed"
+      },
+      {
+        "key": [
+          "4",
+          "9:00",
+          "9:45",
+          "7"
+        ],
+        "change": "added"
+      },
+      {
+        "key": [
+          "4",
+          "9:55",
+          "10:40",
+          "7"
+        ],
+        "change": "added"
+      }
+    ]
+  },
+  "grade7_reuse": {
+    "candidate_version_id": "candidate-v2-grade7-fd6d3f3beccca0fc",
+    "replaced_block_count": 39
+  },
+  "source_metadata": {
+    "structured_values": true,
+    "source_cells": 398,
+    "sheet": "2026/27 шаблон",
+    "sheet_id": "638874869",
+    "source_of_truth": "live Google Sheet current template",
+    "historical_week_excluded": "7-11 Сентября",
+    "structured_cell_metadata_cells": 579,
+    "structured_cell_metadata_attached": 397
+  },
+  "current_week": {
+    "tab": "14-18 сентября",
+    "available": true,
+    "used_as_ground_truth": false
+  }
+}

@@ -22,7 +22,11 @@ Journal roster is deliberately outside that approval sequence. `journal_students
 
 Journal source markers are mapped independently across `base_class_name`, `subject_subgroup`, `classroom_course_id`, and `exam_track`. An optional `group_id` is only an explicit internal app link; it must not be used to encode all of those dimensions in one group name. The confirmed Grade 9 Mathematics structure is three canonical instructional groups: `A`, `B`, and `C`. Old `9-1`/`9-2`/`9-3` markers are bounded source aliases only, never runtime group identifiers. Base classes, Classroom courses, and exam tracks remain separate dimensions and are linked only by explicit evidence.
 
-The schedule importer deterministically establishes a class block before parsing lesson cells. A non-class header terminates the block; uncertain ownership stays unresolved, and adjacent-class cells never enter parser context or diagnostics. Validation finishes before transactional replacement, so a failed parse leaves the last valid snapshot intact. Semantic LLM enrichment, when added, belongs only in background sync and must receive the already-bounded block.
+Schedule architecture is defined in `SCHEDULE_ARCHITECTURE.md`. The approved
+canonical template is the semantic source of truth; raw ingestion retains
+values, formatting, merges, notes, provenance and structural fingerprints.
+Legacy Schedule Integration v1 is a migration-only compatibility boundary and
+must never be used as an automatic fallback for canonical routing.
 
 ## School Directory sync boundary
 
