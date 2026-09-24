@@ -320,6 +320,12 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
             start = block.get("start_time") or previous.get("start_time")
             end = block.get("end_time") or previous.get("end_time")
             if not start or not end:
+                # SDEP is a day-level rule, not a lesson in one bell slot.
+                # Keep it untimed in the immutable template; every ordinary
+                # lesson still needs an explicit start and end time.
+                if str(block.get("mode") or "").upper() == "SDEP_DAY":
+                    block.pop("slot", None)
+                    continue
                 raise ValueError(f"Cannot publish template: time is missing for block {key}")
             block["slot"] = {
                 "start": start,
