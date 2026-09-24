@@ -847,7 +847,7 @@ def _assignments(database: Database, block_id: Any, patch: Mapping[str, Any] | N
     cache_key = str(block_id)
     if cache_key in cache:
         return cache[cache_key]
-    if database.autocommit and not getattr(database, "_canonical_assignments_loaded", False):
+    if database.database_url and not getattr(database, "_canonical_assignments_loaded", False):
         offset = 0
         while True:
             page = _single_fetchall(database, "SELECT * FROM canonical_schedule_assignments ORDER BY id LIMIT ? OFFSET ?", (1000, offset))
