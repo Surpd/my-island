@@ -390,6 +390,7 @@ def read_canonical_template(database: Database, version_id: str | None = None) -
     return {
         "schema_version": version.get("artifact_schema_version") or "",
         "version_id": version["version_id"],
+        "parent_version_id": version.get("parent_version_id"),
         "status": version["status"],
         "source_snapshot": {
             "id": version["source_snapshot_id"],

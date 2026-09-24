@@ -313,6 +313,20 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
         if not base:
             raise ValueError("A canonical template is required")
         blocks = deepcopy(base["blocks"])
+        parent = read_canonical_template(database, base.get("parent_version_id")) if base.get("parent_version_id") else None
+        parent_blocks = (parent or {}).get("blocks") or {}
+        for key, block in blocks.items():
+            previous = parent_blocks.get(key) or {}
+            start = block.get("start_time") or previous.get("start_time")
+            end = block.get("end_time") or previous.get("end_time")
+            if not start or not end:
+                raise ValueError(f"Cannot publish template: time is missing for block {key}")
+            block["slot"] = {
+                "start": start,
+                "end": end,
+            }
+            if not block.get("derived_from"):
+                block["derived_from"] = block.get("source_provenance") or {}
         for key, block_changes in grouped.items():
             existing = blocks.get(key, {})
             ordered = sorted(block_changes, key=lambda item: int(item.get("assignment_index") or 0), reverse=True)

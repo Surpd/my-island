@@ -145,9 +145,40 @@ class ScheduleDraftTests(unittest.TestCase):
         self.assertEqual(readback["blocks"][0]["baseline_assignments"][0]["activity"], "Русский")
         self.assertEqual(readback["blocks"][0]["effective_assignments"][0]["activity"], "Английский")
 
+    def test_template_publish_keeps_time_of_untouched_blocks(self):
+        extra = self.change(activity="Физика")
+        extra["block_key"] = "manual-later-block"
+        extra["assignment_index"] = 0
+        extra["lesson"]["start_time"] = "09:50"
+        extra["lesson"]["end_time"] = "10:40"
+        saved = save_draft(self.database, "template", "base-v1", expected_revision=0, payload={"changes": [extra]}, base_version_id="base-v1")
+        result = publish_draft(self.database, "template", "base-v1", expected_revision=saved["revision"])
+        blocks = read_canonical_template(self.database, result["published_id"])["blocks"]
+        self.assertEqual(blocks[self.block_key]["start_time"], "09:00")
+        self.assertEqual(blocks[self.block_key]["end_time"], "09:45")
+        self.assertEqual(blocks["manual-later-block"]["start_time"], "09:50")
+
+    def test_next_template_publish_repairs_missing_time_from_immutable_parent(self):
+        original = read_canonical_template(self.database, "base-v1")["blocks"][self.block_key]
+        import_canonical_artifact(self.database, {
+            "schema_version": "test-v1", "version_id": "broken-v1", "parent_version_id": "base-v1",
+            "source_snapshot": {"id": "broken-source", "fingerprint": "broken-source"},
+            "blocks": {self.block_key: {"weekday": 0, "slot": {"start": None, "end": None}, "grade_scope": "9", "assignments": original["assignments"]}},
+        }, status="approved_with_exceptions")
+        self.assertIsNone(read_canonical_template(self.database, "broken-v1")["blocks"][self.block_key]["start_time"])
+        extra = self.change(activity="Физика")
+        extra["block_key"] = "manual-later-block"
+        extra["assignment_index"] = 0
+        extra["lesson"]["start_time"] = "09:50"
+        extra["lesson"]["end_time"] = "10:40"
+        saved = save_draft(self.database, "template", "broken-v1", expected_revision=0, payload={"changes": [extra]}, base_version_id="broken-v1")
+        result = publish_draft(self.database, "template", "broken-v1", expected_revision=saved["revision"])
+        repaired = read_canonical_template(self.database, result["published_id"])["blocks"][self.block_key]
+        self.assertEqual((repaired["start_time"], repaired["end_time"]), ("09:00", "09:45"))
+
     def test_editing_one_parallel_assignment_preserves_the_other(self):
         original = read_canonical_template(self.database, "base-v1")["blocks"][self.block_key]
-        parallel = {**original, "assignments": [
+        parallel = {**original, "slot": {"start": original["start_time"], "end": original["end_time"]}, "assignments": [
             original["assignments"][0],
             {"activity": "Математика", "audience_kind": "canonical_groups", "canonical_group_ids": [str(self.base["id"])], "teacher_ids": [str(self.teacher["id"])], "source_cells": ["C3"]},
         ]}
