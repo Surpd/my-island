@@ -135,6 +135,13 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(result["blocks"][0]["affected_students"]["count"], 2)
         self.assertEqual(result["blocks"][0]["affected_students"]["states"], {"ACTIVITY": 1, "NO_LESSON": 1})
 
+        editor_result = schedule_admin_observability(
+            self.database, "2026-09-07", include_student_projection=False
+        )
+        self.assertTrue(editor_result["student_projection"]["skipped"])
+        self.assertEqual(len(editor_result["blocks"]), 2)
+        self.assertEqual(editor_result["blocks"][0]["affected_students"]["count"], 0)
+
     def test_optional_activity_without_teacher_is_not_teacher_issue(self):
         artifact = self.artifact()
         artifact["version_id"] = "runtime-optional-teacher"

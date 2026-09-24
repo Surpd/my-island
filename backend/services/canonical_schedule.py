@@ -895,7 +895,7 @@ def effective_status(database: Database, week_start: str | None = None) -> dict[
     return result
 
 
-def schedule_admin_observability(database: Database, week_start: str | None = None) -> dict[str, Any]:
+def schedule_admin_observability(database: Database, week_start: str | None = None, *, include_student_projection: bool = True) -> dict[str, Any]:
     """Return a read-only, human-oriented view of persisted canonical schedule state."""
     version = canonical_version(database)
     if not version:
@@ -926,9 +926,9 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
     group_names = {str(row["id"]): str(row["display_name"] or row["name"]) for row in group_rows}
     teacher_rows = _single_fetchall(database, "SELECT id,display_name FROM identities WHERE kind='teacher'")
     teacher_names = {str(row["id"]): str(row["display_name"] or row["id"]) for row in teacher_rows}
-    active_students = _active_students(database)
     memberships = _membership_sets(database, selected_week)
-    projection_context = build_student_projection_context(database, selected_week, version_id=version_id)
+    active_students = _active_students(database) if include_student_projection else {}
+    projection_context = build_student_projection_context(database, selected_week, version_id=version_id) if include_student_projection else None
 
     def assignment_group_ids(assignment: Mapping[str, Any]) -> list[str]:
         audience = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
@@ -1064,7 +1064,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
         "weeks": [{"week_start": value, "current": value == selected_week, "historical": value != selected_week} for value in available_values],
         "canonical": {"version_id": version_id, "status": version.get("status"), "authoritative": bool((version.get("metadata") or {}).get("authoritative", False)), "source_snapshot_id": version.get("source_snapshot_id"), "source_fingerprint": version.get("source_fingerprint"), "blocks": len(canonical_blocks), "assignments": sum(len(item.get("assignments") or []) for item in canonical_blocks.values())},
         "effective_week": {"effective_week_id": effective.get("effective_week_id"), "week_start": selected_week, "source_snapshot": snapshot, "overlay_patch_count": sum(value for key, value in diff_counts.items() if key != "UNCHANGED"), "effective_blocks": len(rendered_blocks), "diff_counts": dict(diff_counts)},
-        "student_projection": {"active_students": len(active_students), "states": dict(projection_states), "conflicts": sum(1 for item in projection_issues if item.get("code") in {"INCOMPATIBLE_MEMBERSHIP_OVERLAP", "MULTIPLE_ACTIVITY_CLAIMS"}), "unresolved": len(projection_issues), "unresolved_by_reason": dict(Counter(str(item.get("reason") or "") for item in projection_issues)), "issues": projection_issues, "samples": dict(projection_samples)},
+        "student_projection": {"active_students": len(active_students), "states": dict(projection_states), "conflicts": sum(1 for item in projection_issues if item.get("code") in {"INCOMPATIBLE_MEMBERSHIP_OVERLAP", "MULTIPLE_ACTIVITY_CLAIMS"}), "unresolved": len(projection_issues), "unresolved_by_reason": dict(Counter(str(item.get("reason") or "") for item in projection_issues)), "issues": projection_issues, "samples": dict(projection_samples), "skipped": not include_student_projection},
         "teacher_projection": {"resolved": teacher_resolved, "unresolved": len(teacher_unresolved), "orphan": len(teacher_orphans), "conflicts": len(teacher_conflicts), "unresolved_items": teacher_unresolved, "orphan_items": teacher_orphans, "conflict_items": teacher_conflicts},
         "blocks": rendered_blocks,
     }
