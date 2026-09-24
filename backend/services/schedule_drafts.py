@@ -8,6 +8,9 @@ from typing import Any, Mapping, Sequence
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
+    _assignments,
+    _block_rows,
+    _effective_week,
     canonical_version,
     import_canonical_artifact,
     materialize_effective_week,
@@ -15,7 +18,7 @@ from backend.services.canonical_schedule import (
 )
 
 
-AUDIENCE_KINDS = {"groups", "whole_grade", "base_class", "remaining", "students"}
+AUDIENCE_KINDS = {"groups", "whole_grade", "base_class", "remaining", "available_slot", "students"}
 
 
 class DraftConflict(Exception):
@@ -103,6 +106,8 @@ def _normalize_audience(value: Any) -> dict[str, Any]:
         raise ValueError("Group audience requires at least one canonical group id")
     if kind == "remaining" and not (result["partition_dimension"] or result["partition_group_ids"]):
         raise ValueError("Remaining audience requires a partition dimension or group ids")
+    if kind == "available_slot" and not result["grade"]:
+        raise ValueError("Slot audience requires a grade")
     if kind == "students" and not result["include_student_ids"]:
         raise ValueError("Student audience requires include_student_ids")
     return result
@@ -120,6 +125,11 @@ def _normalize_change(value: Any) -> dict[str, Any]:
         raise ValueError("Draft change requires block_key")
     change["operation"] = operation
     change["block_key"] = block_key
+    if change.get("assignment_index") is not None:
+        index = int(change["assignment_index"])
+        if index < 0:
+            raise ValueError("assignment_index must be non-negative")
+        change["assignment_index"] = index
     if operation == "upsert":
         lesson = dict(change.get("lesson") or {})
         lesson["audience"] = _normalize_audience(lesson.get("audience"))
@@ -194,16 +204,17 @@ def discard_draft(database: Database, scope_kind: str, scope_key: str, *, expect
 
 def _assignment_from_lesson(lesson: Mapping[str, Any]) -> dict[str, Any]:
     audience = _normalize_audience(lesson.get("audience"))
-    audience_kind = {"groups": "canonical_groups", "base_class": "canonical_groups", "whole_grade": "whole_grade", "remaining": "remaining", "students": "students"}[audience["kind"]]
+    audience_kind = {"groups": "canonical_groups", "base_class": "canonical_groups", "whole_grade": "whole_grade", "remaining": "remaining", "available_slot": "remaining", "students": "students"}[audience["kind"]]
     return {
         "activity": str(lesson.get("activity") or ""),
-        "role": "residual" if audience["kind"] == "remaining" else "primary",
+        "role": "residual" if audience["kind"] in {"remaining", "available_slot"} else "primary",
         "audience_kind": audience_kind,
         "canonical_group_ids": audience["group_ids"],
         "teacher_ids": [str(item) for item in lesson.get("teacher_ids") or []],
         "source_cells": lesson.get("source_cells") or [],
         "metadata": {
             "room": str(lesson.get("room") or ""),
+            "note": str(lesson.get("note") or ""),
             "teachers": lesson.get("teacher_names") or [],
             "audience_rule": audience,
             "manual_override": True,
@@ -229,6 +240,34 @@ def _change_patch(change: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _apply_assignment_changes(
+    existing: Sequence[Mapping[str, Any]], changes: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    assignments = [deepcopy(dict(item)) for item in existing]
+    for change in changes:
+        index = change.get("assignment_index")
+        if index is None:
+            if len(assignments) > 1:
+                raise ValueError("Legacy block edit is ambiguous; reopen and save each assignment before publishing")
+            if change["operation"] == "delete":
+                assignments = []
+            else:
+                assignments = [_assignment_from_lesson(change["lesson"])]
+            continue
+        index = int(index)
+        if change["operation"] == "delete":
+            if index >= len(assignments):
+                raise ValueError("Assignment no longer exists; reload the draft")
+            assignments.pop(index)
+        elif index < len(assignments):
+            assignments[index] = _assignment_from_lesson(change["lesson"])
+        elif index == len(assignments):
+            assignments.append(_assignment_from_lesson(change["lesson"]))
+        else:
+            raise ValueError("Assignment position is stale; reload the draft")
+    return assignments
+
+
 def _hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
@@ -241,12 +280,30 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
         raise DraftConflict(draft)
     changes = draft["payload"].get("changes") or []
     content_hash = _hash({"draft_key": draft["draft_key"], "revision": expected_revision, "changes": changes})
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for change in changes:
+        grouped.setdefault(str(change["block_key"]), []).append(change)
     if scope_kind == "week":
         version_id = str(draft.get("base_version_id") or (canonical_version(database) or {}).get("version_id") or "")
         if not version_id:
             raise ValueError("A canonical base version is required")
+        current = _effective_week(database, version_id, scope_key) or _effective_week(database, None, scope_key)
+        current_blocks = {str(item["block_key"]): item for item in _block_rows(database, current["effective_week_id"])} if current else {}
+        base_blocks = (read_canonical_template(database, version_id) or {}).get("blocks") or {}
+        patches = {key: deepcopy(item["patch"]) for key, item in current_blocks.items() if item.get("patch") and item.get("change_kind") != "unchanged"}
+        for key, block_changes in grouped.items():
+            current_block = current_blocks.get(key)
+            existing = _assignments(database, current_block.get("canonical_block_id"), current_block.get("patch")) if current_block else (base_blocks.get(key) or {}).get("assignments") or []
+            ordered = sorted(block_changes, key=lambda item: int(item.get("assignment_index") or 0), reverse=True)
+            assignments = _apply_assignment_changes(existing, ordered)
+            patch = _change_patch(block_changes[-1])
+            patch["assignments"] = assignments
+            if not assignments:
+                patch["change_kind"] = "cancelled"
+                patch["change_classification"] = "CANCELLED"
+            patches[key] = patch
         result = materialize_effective_week(
-            database, version_id, scope_key, [_change_patch(change) for change in changes],
+            database, version_id, scope_key, list(patches.values()),
             overlay_source_snapshot_id=str(draft.get("source_context", {}).get("source_snapshot_id") or "manual-draft"),
             overlay_fingerprint=f"manual:{content_hash}", overlay_observed_at=_now(),
         )
@@ -256,19 +313,21 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
         if not base:
             raise ValueError("A canonical template is required")
         blocks = deepcopy(base["blocks"])
-        for change in changes:
-            if change["operation"] == "delete":
-                blocks.pop(change["block_key"], None)
+        for key, block_changes in grouped.items():
+            existing = blocks.get(key, {})
+            ordered = sorted(block_changes, key=lambda item: int(item.get("assignment_index") or 0), reverse=True)
+            assignments = _apply_assignment_changes(existing.get("assignments") or [], ordered)
+            if not assignments:
+                blocks.pop(key, None)
                 continue
-            lesson = change["lesson"]
-            existing = blocks.get(change["block_key"], {})
-            blocks[change["block_key"]] = {
+            lesson = next((item["lesson"] for item in reversed(block_changes) if item["operation"] == "upsert"), {})
+            blocks[key] = {
                 "weekday": lesson.get("weekday", existing.get("weekday")),
                 "slot": {"start": lesson.get("start_time", existing.get("start_time")), "end": lesson.get("end_time", existing.get("end_time"))},
                 "grade_scope": str(lesson.get("grade") or existing.get("grade_scope") or ""),
                 "status": "resolved", "mode": existing.get("mode") or "ADMIN_EDIT",
                 "derived_from": {"source_cells": lesson.get("source_cells") or [], "structural_fingerprint": content_hash},
-                "assignments": [_assignment_from_lesson(lesson)],
+                "assignments": assignments,
             }
         version_id = f"manual-{content_hash[:24]}"
         artifact = {
@@ -276,7 +335,7 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
             "parent_version_id": base["version_id"], "source_snapshot": {"id": f"manual:{draft['draft_key']}:{expected_revision}", "fingerprint": content_hash},
             "summary": {"changes": len(changes), "comment": comment, "created_by": actor_user_id}, "blocks": blocks,
         }
-        result = import_canonical_artifact(database, artifact, status="approved_with_exceptions", approved_at=_now())
+        result = import_canonical_artifact(database, artifact, status="authoritative" if base.get("status") == "authoritative" else "approved_with_exceptions", approved_at=_now())
         published_id = result["version_id"]
     discard_draft(database, scope_kind, scope_key, expected_revision=expected_revision)
     return {"status": "published", "scope_kind": scope_kind, "scope_key": scope_key, "published_id": published_id, "changes": len(changes), "result": result}
@@ -367,15 +426,7 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
     return changes
 
 
-def audience_preview(database: Database, rule: Mapping[str, Any]) -> dict[str, Any]:
-    audience = _normalize_audience(rule)
-    with database.connection() as connection:
-        students = [dict(row) for row in database.execute(connection, "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active' ORDER BY display_name,id").fetchall()]
-        memberships = [dict(row) for row in database.execute(connection, "SELECT identity_id,group_id FROM memberships WHERE active IS TRUE AND member_role='student'").fetchall()]
-        groups = [dict(row) for row in database.execute(connection, "SELECT id,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()]
-    by_group: dict[str, set[str]] = {}
-    for membership in memberships:
-        by_group.setdefault(str(membership["group_id"]), set()).add(str(membership["identity_id"]))
+def _audience_ids(audience: Mapping[str, Any], students: Sequence[Mapping[str, Any]], by_group: Mapping[str, set[str]], groups: Sequence[Mapping[str, Any]]) -> set[str]:
     candidates: set[str]
     if audience["kind"] in {"groups", "base_class"}:
         candidates = set().union(*(by_group.get(group_id, set()) for group_id in audience["group_ids"])) if audience["group_ids"] else set()
@@ -392,5 +443,30 @@ def audience_preview(database: Database, rule: Mapping[str, Any]) -> dict[str, A
             candidates.difference_update(assigned)
     candidates.update(audience["include_student_ids"])
     candidates.difference_update(audience["exclude_student_ids"])
+    return candidates
+
+
+def audience_preview(database: Database, rule: Mapping[str, Any], other_rules: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    audience = _normalize_audience(rule)
+    with database.connection() as connection:
+        students = [dict(row) for row in database.execute(connection, "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active' ORDER BY display_name,id").fetchall()]
+        memberships = [dict(row) for row in database.execute(connection, """SELECT identity_id,group_id FROM memberships
+            WHERE active IS TRUE AND member_role='student'
+              AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+              AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)""").fetchall()]
+        groups = [dict(row) for row in database.execute(connection, "SELECT id,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()]
+    by_group: dict[str, set[str]] = {}
+    for membership in memberships:
+        by_group.setdefault(str(membership["group_id"]), set()).add(str(membership["identity_id"]))
+    candidates = _audience_ids(audience, students, by_group, groups)
+    if audience["kind"] == "available_slot":
+        occupied: set[str] = set()
+        for other in other_rules:
+            normalized = _normalize_audience(other)
+            if normalized["kind"] != "available_slot":
+                occupied.update(_audience_ids(normalized, students, by_group, groups))
+        candidates.difference_update(occupied)
+        candidates.update(audience["include_student_ids"])
+        candidates.difference_update(audience["exclude_student_ids"])
     resolved = [item for item in students if str(item["id"]) in candidates]
     return {"count": len(resolved), "students": resolved, "audience": audience, "warning": None}

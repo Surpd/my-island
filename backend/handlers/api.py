@@ -155,6 +155,7 @@ class SchedulePublishPayload(BaseModel):
 
 class ScheduleAudiencePreviewPayload(BaseModel):
     audience: dict
+    occupied_audiences: list[dict] = Field(default_factory=list)
 
 
 class ScheduleImportDraftPayload(BaseModel):
@@ -709,7 +710,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_audience_preview(payload: ScheduleAudiencePreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return audience_preview(database, payload.audience)
+            return audience_preview(database, payload.audience, payload.occupied_audiences)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

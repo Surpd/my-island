@@ -1791,6 +1791,19 @@ class Database:
                 item["is_manual"] = item.get("source") == "admin_override"
                 memberships_by_identity.setdefault(item["identity_id"], {})[item["id"]] = item
 
+            teacher_assignments_by_identity: dict[Any, list[dict[str, Any]]] = {}
+            if kind != "student":
+                assignment_rows = self.execute(
+                    connection,
+                    f"""SELECT teacher_identity_id, group_id, subject FROM teacher_assignments
+                         WHERE teacher_identity_id IN ({placeholders}) AND active IS TRUE
+                           AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
+                           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)""",
+                    tuple(identity_ids),
+                ).fetchall()
+                for row in assignment_rows:
+                    teacher_assignments_by_identity.setdefault(row["teacher_identity_id"], []).append(dict(row))
+
             accounts = self.execute(
                 connection,
                 f"""SELECT u.identity_id, u.id AS user_id, u.telegram_user_id, u.role,
@@ -1848,7 +1861,7 @@ class Database:
                     "exam_profile_memberships": [],
                     "selection_facts": [],
                     "relationship_issue": "multiple_active_base_classes" if len(base_classes) > 1 else None,
-                    "teacher_assignments": [],
+                    "teacher_assignments": teacher_assignments_by_identity.get(identity["id"], []),
                     "homerooms": [],
                     "unresolved": [],
                     "unresolved_count": unresolved_count,
