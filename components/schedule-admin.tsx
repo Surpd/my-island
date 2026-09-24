@@ -24,9 +24,9 @@ const DAYS = [
   { short: 'Ср', date: '23 сен', full: 'Среда' }, { short: 'Чт', date: '24 сен', full: 'Четверг' }, { short: 'Пт', date: '25 сен', full: 'Пятница' },
 ];
 const BELL_SCHEDULE = [
-  { start: '09:00', end: '09:45' }, { start: '09:50', end: '10:40' }, { start: '10:50', end: '11:40' },
+  { start: '09:00', end: '09:45' }, { start: '09:55', end: '10:40' }, { start: '10:55', end: '11:40' },
   { start: '11:50', end: '12:35' }, { start: '12:45', end: '13:30' }, { start: '13:40', end: '14:25' },
-  { start: '14:35', end: '15:20' }, { start: '15:30', end: '16:15' }, { start: '16:20', end: '17:05' },
+  { start: '14:35', end: '15:20' }, { start: '15:30', end: '16:15' }, { start: '16:25', end: '17:10' },
 ];
 const GRADES = [5, 6, 7, 8, 9, 10, 11];
 const TEACHER_COLORS = ['#cfe4d2', '#cfdff5', '#f3d8ce', '#ddd7f1', '#f1e1b9', '#cbe4df', '#e7d5df'];

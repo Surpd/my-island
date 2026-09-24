@@ -387,6 +387,27 @@ def read_canonical_template(database: Database, version_id: str | None = None) -
                 normalized.append(assignment)
             block["assignments"] = normalized
             result_blocks[block["block_key"]] = block
+        parent_version_id = str(version.get("parent_version_id") or "").strip()
+        if parent_version_id and result_blocks:
+            parent_rows = database.execute(
+                connection,
+                "SELECT block_key,start_time,end_time FROM canonical_schedule_blocks WHERE version_id=?",
+                (parent_version_id,),
+            ).fetchall()
+            parent_times = {str(row["block_key"]): row for row in parent_rows}
+            for block_key, block in result_blocks.items():
+                parent = parent_times.get(str(block_key))
+                if not parent:
+                    continue
+                recovered = False
+                if not block.get("start_time") and parent["start_time"]:
+                    block["start_time"] = parent["start_time"]
+                    recovered = True
+                if not block.get("end_time") and parent["end_time"]:
+                    block["end_time"] = parent["end_time"]
+                    recovered = True
+                if recovered:
+                    block["time_recovered_from_parent"] = True
     return {
         "schema_version": version.get("artifact_schema_version") or "",
         "version_id": version["version_id"],
@@ -1180,7 +1201,7 @@ def _student_busy_in_slot(
     database: Database, context: StudentProjectionContext, student: Mapping[str, Any],
     membership_groups: set[str], block: Mapping[str, Any], assignment_index: int,
 ) -> bool:
-    bell_starts = ("09:00", "09:50", "10:50", "11:50", "12:45", "13:40", "14:35", "15:30", "16:20")
+    bell_starts = ("09:00", "09:55", "10:55", "11:50", "12:45", "13:40", "14:35", "15:30", "16:25")
 
     def period(value: Any) -> int:
         try:
