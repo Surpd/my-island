@@ -2,6 +2,7 @@
 'use client';
 
 import { useEffect, useState, type ReactNode, type SyntheticEvent } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Activity,
   AlertTriangle,
@@ -22,7 +23,11 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
-import { ScheduleAdmin } from '@/components/schedule-admin';
+
+const ScheduleAdmin = dynamic(
+  () => import('@/components/schedule-admin').then((module) => module.ScheduleAdmin),
+  { ssr: false },
+);
 
 type RecordValue = Record<string, any>;
 type Session = { id: string | number; role: string; identity_id?: string | number | null };
@@ -33,7 +38,7 @@ const runtimeEnv =
 const isLocalBuild = runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
 const API_BASE = String(
   runtimeEnv.VITE_API_BASE_URL ||
-    (isLocalBuild ? 'http://localhost:8000' : 'https://my-island-api.onrender.com'),
+    (isLocalBuild ? 'http://localhost:8000' : ''),
 ).replace(/\/$/, '');
 
 const nav = [
@@ -67,6 +72,9 @@ function routeQuery() {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!API_BASE) {
+    throw new Error('Для production-сборки My Island не настроен адрес API.');
+  }
   const headers = new Headers(init?.headers);
   const dev = localDevAuth();
   if (dev) headers.set('X-Dev-Auth', dev);
