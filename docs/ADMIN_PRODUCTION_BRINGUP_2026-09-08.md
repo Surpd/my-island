@@ -34,8 +34,11 @@ The worktree contains uncommitted implementation and prior reconciliation files.
 
 ## 3. Public target verification
 
-The public target checked read-only was not this My Island build. It returned an
-unrelated application and did not expose the expected Admin API routes.
+The known public target checked read-only was not this My Island build:
+
+- `https://islandquiz.online/admin` rendered an IslandQuiz application with “Доступ запрещён”.
+- `https://api.islandquiz.online/health` returned 404.
+- `https://api.islandquiz.online/api/admin/auth/session` returned 404.
 
 Therefore no production Admin URL for this repository could be confirmed.
 

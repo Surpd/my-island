@@ -32,7 +32,7 @@ python -m backend.scripts.google_sync
 python -m backend.scripts.google_sync --write
 ```
 
-Расписание не имеет cron entrypoint до завершения canonical reconciliation: legacy daily importer удалён и не является fallback. Для явного shadow-пилота canonical read-side задайте server-side `SCHEDULE_BACKEND=canonical`; по умолчанию `SCHEDULE_BACKEND=disabled`, поэтому ни один schedule semantic engine не активируется и текущий Mini App не переключается глобально.
+Ежедневный entrypoint для cron/Render Cron — `python -m backend.scripts.schedule_daily`.
 
 Текущие журналы 2026/27 читаются только из отдельных таблиц 5–11 классов. Admin запускает синхронизацию нужного класса/предмета, после чего явное сопоставление marker группы с внутренней группой открывает read-only журнал и аналитику преподавателю. Записи обратно в Google Sheets не выполняются.
 

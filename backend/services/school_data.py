@@ -43,9 +43,6 @@ class SemanticRequest:
     record_key: str
     structural_payload: Mapping[str, Any]
     raw_payload: Any
-    system_instruction: str | None = None
-    response_schema: Mapping[str, Any] | None = None
-    visual_context: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -81,7 +78,6 @@ class GroqSemanticProvider:
         self._configured_model = os.getenv("GROQ_MODEL", "") if model is None else model
         self.timeout = timeout
         self._model = self._configured_model or ""
-        self._models: list[str] = []
 
     @property
     def model_name(self) -> str:
@@ -97,15 +93,11 @@ class GroqSemanticProvider:
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
         models = [str(item.get("id")) for item in payload.get("data", []) if item.get("id")]
-        self._models = models
         if self._configured_model and self._configured_model in models:
             self._model = self._configured_model
         elif models:
-            preferred_order = (
-                "openai/gpt-oss-120b", "openai/gpt-oss-20b",
-                "llama-3.3-70b-versatile", "qwen/qwen3-32b",
-            )
-            self._model = next((item for item in preferred_order if item in models), sorted(models)[0])
+            preferred = [item for item in models if any(token in item.lower() for token in ("llama", "qwen", "compound"))]
+            self._model = sorted(preferred or models)[0]
         return models
 
     def interpret(self, request: SemanticRequest) -> SemanticResponse:
@@ -115,60 +107,20 @@ class GroqSemanticProvider:
             self.available_models()
         if not self._model:
             raise RuntimeError("Groq returned no usable models")
-        if request.visual_context:
-            if not self._models:
-                self.available_models()
-            configured_vision = os.getenv("GROQ_VISION_MODEL", "")
-            vision_candidates = (
-                configured_vision,
-                "qwen/qwen3.6-27b",
-                "qwen/qwen3.8-27b",
-            )
-            if not any(token in self._model.casefold() for token in ("vision", "qwen3.6", "qwen3.8")):
-                self._model = next((item for item in vision_candidates if item and item in self._models), "")
-            if not self._model:
-                raise RuntimeError("No configured Groq vision model is available")
         prompt = {
             "source_type": request.source_type,
             "record_key": request.record_key,
             "structural_payload": request.structural_payload,
             "raw_payload": request.raw_payload,
-            "instruction": (
-                "Return an object that conforms exactly to the supplied JSON schema."
-                if request.response_schema
-                else "Return JSON only: identity_id, confidence, evidence, reason. Do not invent identities."
-            ),
+            "instruction": "Return JSON only: identity_id, confidence, evidence, reason. Do not invent identities.",
         }
-        user_content: Any = json.dumps(prompt, ensure_ascii=False)
-        if request.visual_context:
-            user_content = [{"type": "text", "text": user_content}]
-            for visual in request.visual_context:
-                data_url = str(visual.get("data_url") or "")
-                if not data_url.startswith("data:image/"):
-                    raise ValueError("Visual semantic context must be an image data URL")
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": data_url, "detail": str(visual.get("detail") or "high")},
-                })
-        response_format: Mapping[str, Any]
-        if request.response_schema:
-            response_format = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "semantic_response",
-                    "strict": True,
-                    "schema": request.response_schema,
-                },
-            }
-        else:
-            response_format = {"type": "json_object"}
         body = json.dumps({
             "model": self._model,
             "temperature": 0,
-            "response_format": response_format,
+            "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": request.system_instruction or "You are a conservative school-directory reconciliation assistant."},
-                {"role": "user", "content": user_content},
+                {"role": "system", "content": "You are a conservative school-directory reconciliation assistant."},
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
             ],
         }).encode("utf-8")
         request_obj = urllib.request.Request(
