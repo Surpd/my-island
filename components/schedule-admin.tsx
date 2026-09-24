@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSPrope
 import {
   AlertTriangle, Atom, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight,
   CircleUserRound, CloudDownload, Code2, Dumbbell, FlaskConical, FolderKanban,
-  GraduationCap, History, Languages, Leaf, ListFilter, Map, Music2, Palette,
+  GraduationCap, History, Languages, Leaf, ListFilter, Map as MapIcon, Music2, Palette,
   PanelRightClose, Plus, RefreshCw, Save, Search, Sigma, Sparkles, Star, Users, X,
 } from 'lucide-react';
 
@@ -43,7 +43,7 @@ const periodForStart = (time: string) => {
 };
 const SUBJECT_ICON: Record<string, ComponentType<{ size?: number; strokeWidth?: number }>> = {
   Математика: Sigma, Русский: BookOpen, Английский: Languages, Литература: BookOpen, История: GraduationCap,
-  Обществознание: Users, Физика: Atom, Химия: FlaskConical, Биология: Leaf, География: Map,
+  Обществознание: Users, Физика: Atom, Химия: FlaskConical, Биология: Leaf, География: MapIcon,
   Информатика: Code2, Физкультура: Dumbbell, 'Классный час': Star, 'Курс по выбору': Sparkles,
   Тренинг: CircleUserRound, Творчество: Palette, Проект: FolderKanban, Музыка: Music2,
 };
