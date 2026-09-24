@@ -156,7 +156,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const selected = lessons.find((lesson) => lesson.id === selectedId) || null;
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || ''); const savedMode = params.get('mode') as ViewMode | null; if (savedMode && ['week', 'day', 'class'].includes(savedMode)) setModeState(savedMode); const savedGrade = Number(params.get('grade')); if (GRADES.includes(savedGrade)) setGrade(savedGrade);
-    let cancelled = false; Promise.allSettled([api<Item>(`/api/admin/schedule/observability?week_start=${WEEK_START}`), api<Item>('/api/admin/groups'), api<Item>('/api/admin/people?kind=teacher'), api<Item>('/api/admin/people?kind=student')]).then(([scheduleResult, groupResult, teacherResult, studentResult]) => {
+    let cancelled = false; Promise.allSettled([api<Item>(`/api/admin/schedule/observability?week_start=${WEEK_START}&editor=true`), api<Item>('/api/admin/groups'), api<Item>('/api/admin/people?kind=teacher'), api<Item>('/api/admin/people?kind=student')]).then(([scheduleResult, groupResult, teacherResult, studentResult]) => {
       if (cancelled) return;
       if (groupResult.status === 'fulfilled') setGroups((groupResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: String(item.semantic_dimension || item.group_type || '') })));
       if (teacherResult.status === 'fulfilled') setTeachers((teacherResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: 'teacher' })));

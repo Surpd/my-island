@@ -662,10 +662,10 @@ def create_router(database: Database) -> APIRouter:
         return effective_status(database, week_start) if canonical_admin_backend_enabled() else {"status": "canonical_backend_disabled", "authoritative": False, "weeks": [], "summary": {"lessons": 0, "issues": 0}}
 
     @router.get("/admin/schedule/observability")
-    def admin_schedule_observability(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_schedule_observability(week_start: str | None = None, editor: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         """Read-only canonical/effective schedule diagnostics for the admin console."""
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return schedule_admin_observability(database, week_start)
+        return schedule_admin_observability(database, week_start, include_student_projection=not editor)
 
     @router.get("/admin/schedule/draft")
     def admin_schedule_draft(scope_kind: str, scope_key: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
