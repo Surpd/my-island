@@ -16,8 +16,8 @@ from backend.services.admin import (
 )
 from backend.services.google_live import GoogleLiveError
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
-from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
-from backend.services.canonical_weekly_refresh import preview_current_week, refresh_current_week
+from backend.services.canonical_schedule import canonical_version, effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
+from backend.services.canonical_weekly_refresh import confirm_current_template, preview_current_template, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import (
     DraftConflict, DraftNotFound, audience_preview, discard_draft, get_draft,
     merge_import_changes, preview_changes, publish_draft, save_draft,
@@ -163,6 +163,12 @@ class ScheduleImportDraftPayload(BaseModel):
     expected_revision: int
     proposed_changes: list[dict]
     source_context: dict
+    scope_kind: str = "week"
+    scope_key: str | None = None
+
+
+class ScheduleConfirmTemplatePayload(BaseModel):
+    expected_version_id: str
 
 
 def create_router(database: Database) -> APIRouter:
@@ -642,6 +648,29 @@ def create_router(database: Database) -> APIRouter:
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             return {"status": "blocked", "ok": False, "message": str(error)}
 
+    @router.post("/admin/schedule/template/confirm")
+    def admin_schedule_confirm_template(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not canonical_admin_backend_enabled():
+            raise HTTPException(status_code=409, detail="Canonical schedule backend is disabled")
+        try:
+            return confirm_current_template(database, get_settings(), payload.expected_version_id)
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/template/preview")
+    def admin_schedule_template_preview(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not canonical_admin_backend_enabled():
+            return {"status": "blocked", "message": "Canonical schedule backend is disabled"}
+        try:
+            result = preview_current_template(database, get_settings(), payload.expected_version_id)
+            if result.get("status") == "preview":
+                result["draft_changes"] = preview_changes(result)
+            return result
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            return {"status": "blocked", "message": str(error)}
+
     @router.get("/admin/schedule/validate-students")
     def admin_schedule_validate_students(week_start: str, grades: str = "", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
@@ -698,7 +727,18 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_publish_draft(payload: SchedulePublishPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return publish_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, actor_user_id=actor["id"], comment=payload.comment)
+            draft = get_draft(database, payload.scope_kind, payload.scope_key)
+            result = publish_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, actor_user_id=actor["id"], comment=payload.comment)
+            source = draft.get("source_context") or {}
+            if payload.scope_kind == "template" and source.get("source") == "google_sheet" and source.get("fingerprint"):
+                try:
+                    result["source_baseline"] = confirm_current_template(database, get_settings(), result["published_id"],
+                        expected_source_fingerprint=str(source["fingerprint"]))
+                except (GoogleLiveError, ValueError, RuntimeError) as error:
+                    # The immutable publication succeeded; a changed/unavailable source must
+                    # remain pending, never be silently accepted as the new baseline.
+                    result["source_baseline"] = {"status": "pending", "message": str(error)}
+            return result
         except DraftConflict as error:
             raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
         except DraftNotFound as error:
@@ -718,7 +758,12 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_import_to_draft(payload: ScheduleImportDraftPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return merge_import_changes(database, payload.week_start, expected_revision=payload.expected_revision, proposed_changes=payload.proposed_changes, source_context=payload.source_context, actor_user_id=actor["id"])
+            if payload.scope_kind not in {"week", "template"}:
+                raise ValueError("Unsupported schedule import scope")
+            scope_key = payload.scope_key if payload.scope_kind == "template" else payload.week_start
+            if payload.scope_kind == "template" and str((canonical_version(database) or {}).get("version_id") or "") != str(scope_key or ""):
+                raise ValueError("Canonical template changed; reload before importing")
+            return merge_import_changes(database, str(scope_key or ""), expected_revision=payload.expected_revision, proposed_changes=payload.proposed_changes, source_context=payload.source_context, actor_user_id=actor["id"], scope_kind=payload.scope_kind)
         except DraftConflict as error:
             raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
         except ValueError as error:

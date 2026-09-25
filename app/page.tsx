@@ -217,9 +217,7 @@ const isLocalBuild =
   runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
 const API_BASE = String(
   runtimeEnv.VITE_API_BASE_URL ||
-    (isLocalBuild
-      ? 'http://localhost:8000'
-      : 'https://my-island-api.onrender.com'),
+    (isLocalBuild ? 'http://localhost:8000' : ''),
 ).replace(/\/$/, '');
 let activeTelegramInitData = '';
 let activeStudentPreviewId = '';
@@ -261,6 +259,9 @@ class ApiError extends Error {
   }
 }
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (!API_BASE) {
+    throw new Error('Для production-сборки My Island не настроен адрес API.');
+  }
   const headers = new Headers(options.headers);
   headers.set('Accept', 'application/json');
   if (options.body) headers.set('Content-Type', 'application/json');

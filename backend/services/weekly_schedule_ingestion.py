@@ -317,6 +317,35 @@ def comparison_key(block: Mapping[str, Any]) -> tuple[int, str, str, str]:
     return int(block.get("weekday") or 0), padded(slot.get("start") or block.get("start_time")), padded(slot.get("end") or block.get("end_time")), str(block.get("grade_scope") or "")
 
 
+def source_rows(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Keep raw source evidence independently of parser or canonical meaning."""
+    return {"|".join(map(str, key)): list(cells) for key, cells in parsed.items()}
+
+
+def normalized_source_rows(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], *, include_day_label: bool = True) -> dict[str, list[dict[str, Any]]]:
+    result = {}
+    for key, cells in parsed.items():
+        result["|".join(map(str, key))] = [
+            {"column": int(cell.get("source_column") or 0),
+             "audience": norm(cell.get("audience")),
+             "merged_audiences": sorted(norm(value) for value in cell.get("merged_audiences") or []),
+             "raw_text": norm(cell.get("raw_text")),
+             "day_label": norm(cell.get("source_day_label")) if include_day_label else "",
+             "merge_width": int((cell.get("merge_data") or {}).get("endColumnIndex", 0)) - int((cell.get("merge_data") or {}).get("startColumnIndex", 0)) if cell.get("merge_data") else 1}
+            for cell in sorted(cells, key=lambda item: int(item.get("source_column") or 0))
+        ]
+    return result
+
+
+def source_change_keys(old: Mapping[tuple[int, str, str, str], list[dict[str, Any]]],
+                       new: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], *,
+                       include_day_labels: bool = False) -> set[tuple[int, str, str, str]]:
+    old_rows = normalized_source_rows(old, include_day_label=include_day_labels)
+    new_rows = normalized_source_rows(new, include_day_label=include_day_labels)
+    return {tuple([int(parts[0]), *parts[1:]]) for key in old_rows.keys() | new_rows.keys()
+            if old_rows.get(key) != new_rows.get(key) for parts in [key.split("|")]}
+
+
 def _source_map(block: Mapping[str, Any], parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], key: tuple[int, str, str, str]) -> list[str]:
     provenance = block.get("derived_from") or block.get("source_provenance") or {}
     coords = []
@@ -327,20 +356,33 @@ def _source_map(block: Mapping[str, Any], parsed: Mapping[tuple[int, str, str, s
     return coords or [str(item["source_cell"]) for item in parsed.get(key, [])]
 
 
+def _assignment_brief(assignments: Any) -> list[dict[str, Any]]:
+    return [{"activity": item.get("activity"), "teacher_ids": item.get("teacher_ids") or [],
+             "group_ids": item.get("canonical_group_ids") or [],
+             "room": (item.get("metadata") or {}).get("room") or ""}
+            for item in assignments or []]
+
+
 def build_weekly_diff(
     canonical: Mapping[str, Any], template_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]],
     weekly_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], weekly_artifact: Mapping[str, Any],
     template_meta: Mapping[str, Any] | None = None, weekly_meta: Mapping[str, Any] | None = None,
+    confirmed_mapping: Mapping[str, str | None] | None = None,
 ) -> dict[str, Any]:
     canonical_by_key = {comparison_key(block): block for block in (canonical.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
     weekly_by_key = {comparison_key(block): block for block in (weekly_artifact.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
     template_raw, weekly_raw = raw_by_coord(template_parsed), raw_by_coord(weekly_parsed)
     template_meta, weekly_meta = template_meta or {}, weekly_meta or {}
+    source_for_block = {str(block_key): tuple([int(parts[0]), *parts[1:]])
+                        for source_key, block_key in (confirmed_mapping or {}).items() if block_key
+                        for parts in [str(source_key).split("|", 3)] if len(parts) == 4}
+    mapped_source_keys = set(source_for_block.values())
     diffs: list[dict[str, Any]] = []
     for key, base in canonical_by_key.items():
-        source_cells = _source_map(base, template_parsed, key)
-        base_items = [template_raw.get(coord, {"source_cell": coord, "raw_text": ""}) for coord in source_cells]
-        week_items = list(weekly_parsed.get(key, []))
+        source_key = source_for_block.get(str(base.get("block_key")), key)
+        source_cells = [str(item["source_cell"]) for item in template_parsed.get(source_key, [])]
+        base_items = list(template_parsed.get(source_key, []))
+        week_items = list(weekly_parsed.get(source_key, []))
         base_cells, week_cells = by_source_column(base_items), by_source_column(week_items)
         def cell_semantics(item: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
             audiences = item.get("merged_audiences") or [item.get("audience")]
@@ -351,7 +393,9 @@ def build_weekly_diff(
         week_raw_values = {column: norm(item.get("raw_text")) for column, item in week_cells.items()}
         base_format = {column: template_meta.get(str(item.get("source_cell")), {}) for column, item in base_cells.items()}
         week_format = {column: weekly_meta.get(str(item.get("source_cell")), {}) for column, item in week_cells.items()}
-        if not week_cells:
+        if not base_cells and not week_cells:
+            classification, kind = "UNCHANGED", "unchanged"
+        elif not week_cells:
             classification, kind = "CANCELLED", "cancelled"
         elif base_sem != week_sem:
             classification, kind = "REPLACED", "replaced"
@@ -359,37 +403,65 @@ def build_weekly_diff(
             classification, kind = "METADATA_ONLY", "metadata"
         else:
             classification, kind = "UNCHANGED", "unchanged"
-        weekly_block = weekly_by_key.get(key)
-        if weekly_block and classification == "REPLACED" and assignment_signature(base) != assignment_signature(weekly_block):
+        weekly_block = weekly_by_key.get(source_key)
+        if weekly_block and weekly_block.get("status", "resolved") == "resolved" and classification == "REPLACED" and assignment_signature(base) != assignment_signature(weekly_block):
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
         weekly_coords = [str(item["source_cell"]) for item in week_items]
-        patch: dict[str, Any] = {"block_key": base.get("block_key"), "change_kind": kind, "change_classification": classification, "weekly_source_cells": sorted(weekly_coords), "weekly_raw_text": {coord: weekly_raw[coord].get("raw_text") for coord in weekly_coords}}
-        if classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"} and weekly_block:
+        patch: dict[str, Any] = {"block_key": base.get("block_key"), "change_kind": kind, "change_classification": classification, "weekly_source_cells": sorted(weekly_coords), "weekly_raw_text": {coord: weekly_raw[coord].get("raw_text") for coord in weekly_coords}, "source_signature": sorted((column, *semantics) for column, semantics in week_sem.items())}
+        if classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"} and weekly_block and weekly_block.get("status", "resolved") == "resolved":
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
-        elif classification == "REPLACED":
+        elif classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"}:
+            patch["assignments"] = base.get("assignments") or []
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
+        elif classification == "CANCELLED":
+            patch["assignments"] = base.get("assignments") or []
         elif classification == "METADATA_ONLY":
             patch["source_provenance"] = {"source_cells": [{"coordinate": coord, "raw_text": weekly_raw[coord].get("raw_text")} for coord in weekly_coords], "metadata_only": True}
+            if base_raw != week_raw_values and weekly_block and weekly_block.get("status", "resolved") == "resolved":
+                patch["assignments"] = weekly_block.get("assignments") or []
+            elif base_raw != week_raw_values:
+                patch["source_issue"] = "Изменение текста источника не удалось однозначно сопоставить"
+        old_teacher_ids = {str(value) for item in base.get("assignments") or [] for value in item.get("teacher_ids") or []}
+        new_teacher_ids = {str(value) for item in patch.get("assignments") or [] for value in item.get("teacher_ids") or []}
+        if week_cells and patch.get("assignments") and old_teacher_ids and not new_teacher_ids:
+            patch["source_issue"] = "Не удалось подтвердить преподавателя — проверьте предложение"
+        patch["resolution_state"] = ("AUTO_RESOLVED" if classification == "CANCELLED" or
+            patch.get("assignments") and not patch.get("source_issue") else
+            "NEEDS_CONFIRMATION" if patch.get("assignments") else "UNRESOLVED")
+        patch["previous_assignment_count"] = len(base.get("assignments") or [])
+        patch["before"] = {"slot": base.get("slot"), "assignments": _assignment_brief(base.get("assignments"))}
+        patch["after"] = {"slot": {"start": source_key[1], "end": source_key[2]} if week_cells else None,
+                          "assignments": _assignment_brief(patch.get("assignments")),
+                          "source_text": list(week_raw_values.values())}
         diffs.append({"key": key, "canonical_block_key": base.get("block_key"), "classification": classification, "change_kind": kind, "template_cells": source_cells, "weekly_cells": weekly_coords, "patch": patch, "weekly_block": weekly_block})
     for key, block in weekly_by_key.items():
-        if key in canonical_by_key:
+        if key in canonical_by_key or key in mapped_source_keys:
             continue
         cells = weekly_parsed.get(key, [])
         coords = [str(item["source_cell"]) for item in cells]
-        patch = {"block_key": f"weekly-only|{key}", "change_kind": "weekly_only", "change_classification": "ADDED", "assignments": block.get("assignments") or [], "weekday": key[0], "slot": {"start": key[1], "end": key[2]}, "grade_scope": key[3], "source_provenance": block.get("derived_from") or {}, "weekly_source_cells": coords}
+        patch = {"block_key": f"weekly-only|{key}", "change_kind": "weekly_only", "change_classification": "ADDED", "assignments": block.get("assignments") or [] if block.get("status", "resolved") == "resolved" else [], "weekday": key[0], "slot": {"start": key[1], "end": key[2]}, "grade_scope": key[3], "source_provenance": block.get("derived_from") or {}, "weekly_source_cells": coords, "source_signature": normalized_source_rows({key: cells}), "resolution_state": "AUTO_RESOLVED" if block.get("status", "resolved") == "resolved" else "UNRESOLVED", "before": None, "after": {"slot": {"start": key[1], "end": key[2]}, "assignments": _assignment_brief(block.get("assignments")), "source_text": [item.get("raw_text") for item in cells]}}
+        if block.get("status", "resolved") != "resolved":
+            patch["source_issue"] = "new source block has no deterministic audience"
         diffs.append({"key": key, "canonical_block_key": None, "classification": "ADDED", "change_kind": "weekly_only", "template_cells": [], "weekly_cells": coords, "patch": patch, "weekly_block": block})
     cancelled = [item for item in diffs if item["classification"] == "CANCELLED"]
     added = [item for item in diffs if item["classification"] == "ADDED"]
     for old in cancelled:
         old_text = {semantic_norm(template_raw.get(coord, {}).get("raw_text")) for coord in old["template_cells"]} - {""}
-        matches = [new for new in added if old_text and old_text == ({semantic_norm(weekly_raw.get(coord, {}).get("raw_text")) for coord in new["weekly_cells"]} - {""})]
+        matches = [new for new in added if old["key"][3] == new["key"][3]
+                   and old_text and old_text == ({semantic_norm(weekly_raw.get(coord, {}).get("raw_text")) for coord in new["weekly_cells"]} - {""})]
         if len(matches) == 1:
             new = matches[0]
             old["classification"], old["change_kind"] = "MOVED", "moved"
             old["patch"].update({"change_classification": "MOVED", "change_kind": "moved", "weekday": new["key"][0], "slot": {"start": new["key"][1], "end": new["key"][2]}, "grade_scope": new["key"][3], "assignments": new["patch"].get("assignments") or [], "source_provenance": new["patch"].get("source_provenance") or {}, "moved_from": old["key"], "moved_to": new["key"]})
+            old["patch"]["resolution_state"] = new["patch"]["resolution_state"]
+            old["patch"]["after"] = new["patch"].get("after")
+            if new["patch"].get("source_issue"):
+                old["patch"]["source_issue"] = new["patch"]["source_issue"]
             diffs.remove(new)
             added.remove(new)
     counts = Counter(item["classification"] for item in diffs)
-    return {"items": diffs, "counts": dict(counts), "patches": [item["patch"] for item in diffs if item["classification"] != "UNCHANGED"]}
+    return {"items": diffs, "counts": dict(counts), "patches": [item["patch"] for item in diffs
+            if item["classification"] != "UNCHANGED" and (item["classification"] != "METADATA_ONLY"
+            or item["patch"].get("assignments") or item["patch"].get("source_issue"))]}

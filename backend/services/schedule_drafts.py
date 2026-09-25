@@ -11,6 +11,7 @@ from backend.services.canonical_schedule import (
     _assignments,
     _block_rows,
     _effective_week,
+    class_context_group_ids,
     canonical_version,
     import_canonical_artifact,
     materialize_effective_week,
@@ -18,7 +19,7 @@ from backend.services.canonical_schedule import (
 )
 
 
-AUDIENCE_KINDS = {"groups", "whole_grade", "base_class", "remaining", "available_slot", "students"}
+AUDIENCE_KINDS = {"groups", "whole_grade", "base_class", "remaining", "available_slot", "students", "unresolved"}
 
 
 class DraftConflict(Exception):
@@ -96,6 +97,7 @@ def _normalize_audience(value: Any) -> dict[str, Any]:
     result = {
         "kind": kind,
         "group_ids": sorted({str(item) for item in raw.get("group_ids") or [] if str(item)}),
+        "class_group_id": str(raw.get("class_group_id") or ""),
         "grade": str(raw.get("grade") or ""),
         "partition_dimension": str(raw.get("partition_dimension") or ""),
         "partition_group_ids": sorted({str(item) for item in raw.get("partition_group_ids") or [] if str(item)}),
@@ -168,7 +170,7 @@ def save_draft(
                 SET payload={payload_sql}, source_context={payload_sql}, base_version_id=?,
                     base_effective_week_id=?, revision=?, updated_by=?, updated_at=?
                 WHERE draft_key=? AND revision=? RETURNING *""", (
-                _json(database, normalized_payload), _json(database, dict(source_context or _decode(current["source_context"], {}))),
+                _json(database, normalized_payload), _json(database, {**_decode(current["source_context"], {}), **dict(source_context or {})}),
                 base_version_id or current["base_version_id"], base_effective_week_id or current["base_effective_week_id"],
                 next_revision, actor_user_id, now, key, expected_revision,
             )).fetchone()
@@ -257,6 +259,10 @@ def _apply_assignment_changes(
         index = int(index)
         if change["operation"] == "delete":
             if index >= len(assignments):
+                # A manual-* block is created only in the editor draft. Older
+                # clients could leave a delete tombstone after removing that
+                # draft-only lesson; there is nothing in the canonical base to
+                # delete, so treat that stale tombstone as an idempotent no-op.
                 if str(change.get("block_key") or "").startswith("manual-"):
                     continue
                 raise ValueError("Assignment no longer exists; reload the draft")
@@ -281,6 +287,8 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
     if int(draft["revision"]) != int(expected_revision):
         raise DraftConflict(draft)
     changes = draft["payload"].get("changes") or []
+    if any(change.get("review_required") or (change.get("lesson") or {}).get("audience", {}).get("kind") == "unresolved" for change in changes):
+        raise ValueError("Resolve all source changes marked for review before publishing")
     content_hash = _hash({"draft_key": draft["draft_key"], "revision": expected_revision, "changes": changes})
     grouped: dict[str, list[dict[str, Any]]] = {}
     for change in changes:
@@ -296,7 +304,7 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
         for key, block_changes in grouped.items():
             current_block = current_blocks.get(key)
             existing = _assignments(database, current_block.get("canonical_block_id"), current_block.get("patch")) if current_block else (base_blocks.get(key) or {}).get("assignments") or []
-            ordered = sorted(block_changes, key=lambda item: int(item.get("assignment_index") or 0), reverse=True)
+            ordered = sorted(block_changes, key=lambda item: (item["operation"] != "delete", -int(item.get("assignment_index") or 0) if item["operation"] == "delete" else int(item.get("assignment_index") or 0)))
             assignments = _apply_assignment_changes(existing, ordered)
             patch = _change_patch(block_changes[-1])
             patch["assignments"] = assignments
@@ -337,7 +345,7 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
                 block["derived_from"] = block.get("source_provenance") or {}
         for key, block_changes in grouped.items():
             existing = blocks.get(key, {})
-            ordered = sorted(block_changes, key=lambda item: int(item.get("assignment_index") or 0), reverse=True)
+            ordered = sorted(block_changes, key=lambda item: (item["operation"] != "delete", -int(item.get("assignment_index") or 0) if item["operation"] == "delete" else int(item.get("assignment_index") or 0)))
             assignments = _apply_assignment_changes(existing.get("assignments") or [], ordered)
             if not assignments:
                 blocks.pop(key, None)
@@ -348,7 +356,11 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
                 "slot": {"start": lesson.get("start_time", existing.get("start_time")), "end": lesson.get("end_time", existing.get("end_time"))},
                 "grade_scope": str(lesson.get("grade") or existing.get("grade_scope") or ""),
                 "status": "resolved", "mode": existing.get("mode") or "ADMIN_EDIT",
-                "derived_from": {"source_cells": lesson.get("source_cells") or [], "structural_fingerprint": content_hash},
+                "derived_from": {
+                    **(existing.get("derived_from") or existing.get("source_provenance") or {}),
+                    "source_cells": lesson.get("source_cells") or (existing.get("derived_from") or existing.get("source_provenance") or {}).get("source_cells") or [],
+                    "structural_fingerprint": content_hash,
+                },
                 "assignments": assignments,
             }
         version_id = f"manual-{content_hash[:24]}"
@@ -363,17 +375,21 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
     return {"status": "published", "scope_kind": scope_kind, "scope_key": scope_key, "published_id": published_id, "changes": len(changes), "result": result}
 
 
-def merge_import_changes(database: Database, scope_key: str, *, expected_revision: int, proposed_changes: Sequence[Mapping[str, Any]], source_context: Mapping[str, Any], actor_user_id: Any = None) -> dict[str, Any]:
-    draft = get_draft(database, "week", scope_key)
-    existing = {str(item.get("block_key")): deepcopy(item) for item in draft["payload"].get("changes") or []}
+def merge_import_changes(database: Database, scope_key: str, *, expected_revision: int, proposed_changes: Sequence[Mapping[str, Any]], source_context: Mapping[str, Any], actor_user_id: Any = None, scope_kind: str = "week") -> dict[str, Any]:
+    draft = get_draft(database, scope_kind, scope_key)
+    def identity(item: Mapping[str, Any]) -> tuple[str, int]:
+        return str(item.get("block_key") or ""), int(item.get("assignment_index") or 0)
+    existing = {identity(item): deepcopy(item) for item in draft["payload"].get("changes") or []}
     merged: list[dict[str, Any]] = []
     for raw in proposed_changes:
         proposed = _normalize_change(raw)
-        previous = existing.pop(proposed["block_key"], None)
+        previous = existing.pop(identity(proposed), None)
         if previous and previous.get("manual"):
             old_identity = (previous.get("lesson") or {}).get("source_identity") or {}
-            new_identity = (proposed.get("lesson") or {}).get("source_identity") or {}
-            same_source = old_identity == new_identity
+            new_identity = (proposed.get("lesson") or {}).get("source_identity") or proposed.get("source_identity") or {}
+            old_fingerprint = old_identity.get("semantic_fingerprint") or old_identity.get("fingerprint")
+            new_fingerprint = new_identity.get("semantic_fingerprint") or new_identity.get("fingerprint")
+            same_source = bool(old_fingerprint) and old_fingerprint == new_fingerprint
             if previous.get("operation") == "upsert" and proposed.get("operation") == "upsert":
                 proposed["lesson"]["audience"] = previous["lesson"]["audience"]
                 proposed["lesson"]["source_identity"] = new_identity
@@ -381,12 +397,16 @@ def merge_import_changes(database: Database, scope_key: str, *, expected_revisio
                 if not same_source:
                     proposed["review_required"] = True
                     proposed["review_reason"] = "Источник изменился — проверьте ручное назначение"
-            merged.append(proposed)
+                merged.append(proposed)
+            else:
+                previous["review_required"] = True
+                previous["review_reason"] = "Источник изменил или удалил вручную исправленный урок — проверьте его"
+                merged.append(previous)
         else:
             proposed["manual"] = False
             merged.append(proposed)
     merged.extend(existing.values())
-    return save_draft(database, "week", scope_key, expected_revision=expected_revision, payload={"changes": merged, "import_summary": dict(source_context)}, actor_user_id=actor_user_id, base_version_id=draft.get("base_version_id"), base_effective_week_id=draft.get("base_effective_week_id"), source_context=source_context)
+    return save_draft(database, scope_kind, scope_key, expected_revision=expected_revision, payload={"changes": merged, "import_summary": dict(source_context)}, actor_user_id=actor_user_id, base_version_id=draft.get("base_version_id") or (scope_key if scope_kind == "template" else None), base_effective_week_id=draft.get("base_effective_week_id"), source_context=source_context)
 
 
 def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -399,34 +419,45 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
             continue
         source_identity = {
             "semantic_fingerprint": _hash({
-                "weekly_raw_text": patch.get("weekly_raw_text") or {},
-                "assignments": patch.get("assignments") or [],
+                "source_signature": patch.get("source_signature") or sorted(str(value) for value in (patch.get("weekly_raw_text") or {}).values()),
                 "change_kind": patch.get("change_kind"),
                 "weekday": patch.get("weekday"),
                 "slot": patch.get("slot") or {},
                 "grade_scope": patch.get("grade_scope"),
             }),
             "block_key": block_key,
-            "source_cells": sorted(str(item) for item in patch.get("weekly_source_cells") or []),
         }
+        common = {"resolution_state": patch.get("resolution_state") or ("UNRESOLVED" if patch.get("source_issue") else "AUTO_RESOLVED"),
+                  "before": patch.get("before"), "after": patch.get("after")}
         if str(patch.get("change_kind") or "") == "cancelled":
-            changes.append({"operation": "delete", "block_key": block_key, "manual": False, "source_identity": source_identity})
+            for index in reversed(range(max(1, int(patch.get("previous_assignment_count") or len(patch.get("assignments") or []))))):
+                changes.append({"operation": "delete", "block_key": block_key, "assignment_index": index,
+                                "manual": False, "source_identity": source_identity, **common})
             continue
         assignments = patch.get("assignments") or []
         if not assignments:
+            if patch.get("source_issue"):
+                raw_text = next((str(value).strip() for value in (patch.get("weekly_raw_text") or {}).values() if str(value).strip()), "Требует уточнения")
+                changes.append({"operation": "upsert", "block_key": block_key, "assignment_index": 0,
+                    "manual": False, "change_kind": patch.get("change_kind") or "added", **common,
+                    "review_required": True, "review_reason": str(patch["source_issue"]),
+                    "lesson": {"activity": raw_text, "weekday": patch.get("weekday"),
+                               "start_time": (patch.get("slot") or {}).get("start"),
+                               "end_time": (patch.get("slot") or {}).get("end"),
+                               "grade": str(patch.get("grade_scope") or ""), "teacher_ids": [],
+                               "source_cells": patch.get("weekly_source_cells") or [],
+                               "source_identity": source_identity,
+                               "audience": {"kind": "unresolved", "grade": str(patch.get("grade_scope") or "")}}})
             continue
-        assignment = dict(assignments[0])
-        metadata = dict(assignment.get("metadata") or {})
-        raw_rule = metadata.get("audience_rule") or {}
-        if raw_rule:
-            audience = dict(raw_rule)
-        else:
-            audience = {
-                "kind": "groups",
-                "group_ids": assignment.get("canonical_group_ids") or [],
+        for index, raw_assignment in enumerate(assignments):
+            assignment = dict(raw_assignment)
+            metadata = dict(assignment.get("metadata") or {})
+            raw_rule = metadata.get("audience_rule") or {}
+            audience = dict(raw_rule) if raw_rule else {
+                "kind": "groups", "group_ids": assignment.get("canonical_group_ids") or [],
                 "grade": str(patch.get("grade_scope") or ""),
             }
-        lesson = {
+            lesson = {
             "activity": str(assignment.get("activity") or ""),
             "weekday": patch.get("weekday"),
             "start_time": (patch.get("slot") or {}).get("start"),
@@ -438,19 +469,25 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
             "source_cells": patch.get("weekly_source_cells") or assignment.get("source_cells") or [],
             "source_identity": source_identity,
             "audience": audience,
-        }
-        changes.append({
-            "operation": "upsert", "block_key": block_key, "manual": False,
-            "change_kind": patch.get("change_kind") or "replaced", "lesson": lesson,
-            "review_required": bool(patch.get("source_issue")),
-            "review_reason": patch.get("source_issue"),
-        })
+            }
+            changes.append({
+                "operation": "upsert", "block_key": block_key, "assignment_index": index, "manual": False,
+                "change_kind": patch.get("change_kind") or "replaced", "lesson": lesson,
+                "review_required": common["resolution_state"] != "AUTO_RESOLVED",
+                "review_reason": patch.get("source_issue"),
+                **common,
+            })
+        for index in reversed(range(len(assignments), int(patch.get("previous_assignment_count") or 0))):
+            changes.append({"operation": "delete", "block_key": block_key, "assignment_index": index,
+                            "manual": False, "source_identity": source_identity, **common})
     return changes
 
 
 def _audience_ids(audience: Mapping[str, Any], students: Sequence[Mapping[str, Any]], by_group: Mapping[str, set[str]], groups: Sequence[Mapping[str, Any]]) -> set[str]:
     candidates: set[str]
-    if audience["kind"] in {"groups", "base_class"}:
+    if audience["kind"] == "unresolved":
+        candidates = set()
+    elif audience["kind"] in {"groups", "base_class"}:
         candidates = set().union(*(by_group.get(group_id, set()) for group_id in audience["group_ids"])) if audience["group_ids"] else set()
     elif audience["kind"] == "students":
         candidates = set(audience["include_student_ids"])
@@ -463,6 +500,20 @@ def _audience_ids(audience: Mapping[str, Any], students: Sequence[Mapping[str, A
                 partition_ids.update(str(item["id"]) for item in groups if str(item.get("semantic_dimension") or "") == audience["partition_dimension"])
             assigned = set().union(*(by_group.get(group_id, set()) for group_id in partition_ids)) if partition_ids else set()
             candidates.difference_update(assigned)
+    grade = str(audience.get("grade") or "")
+    if grade or audience.get("class_group_id"):
+        class_groups = class_context_group_ids(
+            {str(item["id"]): item for item in groups}, grade, str(audience.get("class_group_id") or ""),
+        )
+        if class_groups:
+            cohort = set().union(*(by_group.get(group_id, set()) for group_id in class_groups))
+            candidates.intersection_update(cohort)
+        elif audience.get("class_group_id"):
+            candidates.clear()
+        elif grade:
+            candidates.intersection_update(str(item["id"]) for item in students if str(item.get("class_name") or "").strip().startswith(grade))
+        else:
+            candidates.clear()
     candidates.update(audience["include_student_ids"])
     candidates.difference_update(audience["exclude_student_ids"])
     return candidates
@@ -476,7 +527,7 @@ def audience_preview(database: Database, rule: Mapping[str, Any], other_rules: S
             WHERE active IS TRUE AND member_role='student'
               AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
               AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)""").fetchall()]
-        groups = [dict(row) for row in database.execute(connection, "SELECT id,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()]
+        groups = [dict(row) for row in database.execute(connection, "SELECT id,name,group_type,base_class_name,canonical,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()]
     by_group: dict[str, set[str]] = {}
     for membership in memberships:
         by_group.setdefault(str(membership["group_id"]), set()).add(str(membership["identity_id"]))

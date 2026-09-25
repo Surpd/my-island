@@ -775,6 +775,20 @@ def _grade(value: Any) -> str:
     return match.group(1) if match else ""
 
 
+def class_context_group_ids(groups: Mapping[str, Mapping[str, Any]], grade: str, class_group_id: str = "") -> set[str]:
+    """Resolve a single grid's base-class cohort from canonical directory groups."""
+    if class_group_id:
+        group = groups.get(class_group_id)
+        return {class_group_id} if group and group.get("canonical") and group.get("group_type") == "class" and (not grade or _grade(group.get("base_class_name") or group.get("name")) == grade) else set()
+    if not grade or not grade.isdigit():
+        return set()
+    return {
+        group_id for group_id, group in groups.items()
+        if group.get("canonical") and group.get("group_type") == "class"
+        and _grade(group.get("base_class_name") or group.get("name")) == grade
+    }
+
+
 def _block_rows(database: Database, effective_week_id: str) -> list[dict[str, Any]]:
     cache = getattr(database, "_canonical_block_cache", None)
     if cache is None:
@@ -1255,6 +1269,10 @@ def _project_student_block(
         group_ids = _assignment_group_ids(assignment)
         audience_rule = _assignment_audience_rule(assignment)
         audience_kind = str(audience_rule.get("kind") or assignment.get("audience_kind") or "groups")
+        scope = str(block.get("grade_scope") or "")
+        class_group_id = str(audience_rule.get("class_group_id") or "")
+        class_ids = class_context_group_ids(context.groups, scope if "," not in scope else "", class_group_id)
+        in_class_context = (not class_group_id and not class_ids) or bool(membership_groups.intersection(class_ids))
         include_student_ids = {str(value) for value in audience_rule.get("include_student_ids") or []}
         exclude_student_ids = {str(value) for value in audience_rule.get("exclude_student_ids") or []}
         if student_id in exclude_student_ids:
@@ -1265,7 +1283,7 @@ def _project_student_block(
         explicit_match = student_id in include_student_ids
         if audience_kind == "whole_grade":
             grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
-            explicit_match = explicit_match or (bool(grade) and str(student.get("class_name") or "").strip().startswith(grade))
+            explicit_match = explicit_match or (bool(grade) and in_class_context and _grade(student.get("class_name")) == grade)
         elif audience_kind == "students":
             explicit_match = student_id in include_student_ids
         elif audience_kind == "remaining":
@@ -1274,10 +1292,13 @@ def _project_student_block(
             dimension = str(audience_rule.get("partition_dimension") or "")
             if dimension:
                 partition_ids.update(group_id for group_id, group in context.groups.items() if _group_dimension(group)[0] == dimension)
-            explicit_match = bool(not grade or str(student.get("class_name") or "").strip().startswith(grade)) and not bool(membership_groups.intersection(partition_ids))
+            explicit_match = bool(not grade or _grade(student.get("class_name")) == grade) and in_class_context and not bool(membership_groups.intersection(partition_ids))
         elif audience_kind == "available_slot":
             grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
-            explicit_match = bool(grade and str(student.get("class_name") or "").strip().startswith(grade)) and not _student_busy_in_slot(database, context, student, membership_groups, block, index)
+            explicit_match = bool(grade and _grade(student.get("class_name")) == grade) and in_class_context and not _student_busy_in_slot(database, context, student, membership_groups, block, index)
+        if not in_class_context and audience_kind not in {"students"}:
+            matched_group_ids = []
+            explicit_match = False
         dimensions = []
         dimension_evidence = []
         group_roles = []

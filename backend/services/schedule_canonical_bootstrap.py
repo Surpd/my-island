@@ -25,7 +25,7 @@ from backend.services.school_data import stable_fingerprint
 
 
 _GRADE = re.compile(r"^\s*(\d{1,2})")
-_ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*(\d{1,2})(?:\s*/\s*(\d{1,2}))?", re.IGNORECASE)
+_ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*(?:группа|group)?\s*(\d{1,2})(?:\s*/\s*(\d{1,2}))?", re.IGNORECASE)
 _EXAM = re.compile(r"\b(?:огэ|егэ|oge)\b", re.IGNORECASE)
 
 
@@ -173,18 +173,14 @@ def audit_groups(corpus: Mapping[str, Any]) -> dict[str, Any]:
 
     partitions = [
         partition("grade9_math", named(("grade9-math-A", "grade9-math-B", "grade9-math-C")), "9"),
-        partition("grade9_english", named(("english:6", "english:7", "english:8")), "9"),
-        partition("grade5_6_english", named(("english:1", "english:2")), "5"),
-        partition("grade5_6_english", named(("english:1", "english:2")), "6"),
-        partition("grade7_8_english", named(("english:3", "english:4", "english:5")), "7"),
-        partition("grade7_8_english", named(("english:3", "english:4", "english:5")), "8"),
-        partition("grade10_11_english", named(("english:9", "english:10")), "10"),
-        partition("grade10_11_english", named(("english:9", "english:10")), "11"),
         partition("grade11_math", named(("math:11:base", "math:11:advanced")), "11"),
         partition("grade11_literature", named(("instructional:литература:11:база", "instructional:литература:11:егэ")), "11"),
         partition("grade10_social", named(("instructional:обществознание:10:база", "instructional:обществознание:10:угл")), "10"),
         partition("grade11_social", named(("instructional:обществознание:11:база", "instructional:обществознание:11:угл")), "11"),
     ]
+    partitions.extend(partition(f"grade{grade}_english", [group_id for group_id, group in by_id.items()
+        if _subject(group.get("subject")) == "английский" and set(memberships.get(group_id, ())) & cohort], grade)
+        for grade, cohort in sorted(base_by_grade.items()) if cohort)
     return {"classification": classification, "base_coverage": base_coverage, "partitions": partitions}
 
 
@@ -192,8 +188,8 @@ def _ninth_context(corpus: Mapping[str, Any], memberships: Mapping[str, frozense
     groups = list(corpus.get("groups") or [])
     students = {str(item["id"]) for item in corpus.get("students") or [] if _grade(item.get("class_name")) == "9"}
     base = tuple(group for group in groups if _norm(group.get("group_type")) == "class" and _grade(group.get("base_class_name") or group.get("name")) == "9")
-    math = tuple(group for group in groups if _subject(group.get("subject")) == "математика" and _norm(group.get("subject_subgroup")) in {"a", "b", "c", "а", "в", "с"})
-    english = tuple(group for group in groups if str(group.get("name") or "") in {"english:6", "english:7", "english:8"})
+    math = tuple(group for group in groups if _subject(group.get("subject")) == "математика" and _norm(group.get("subject_subgroup")) in {"a", "b", "c", "а", "в", "с"} and bool(set(memberships.get(str(group["id"]), ())) & students))
+    english = tuple(group for group in groups if _subject(group.get("subject")) == "английский" and bool(group.get("subject_subgroup")) and bool(set(memberships.get(str(group["id"]), ())) & students))
     exam = tuple(group for group in groups if _norm(group.get("exam_track")) in {"огэ", "oge"} and bool(set(memberships.get(str(group.get("id")), ())) & students))
     return NinthGradeContext(frozenset(students), base, math, english, exam, memberships)
 
@@ -208,18 +204,18 @@ def _exact_class_groups(cell: Any, groups: Sequence[Mapping[str, Any]]) -> list[
     return [str(group["id"]) for group in groups if _norm(group.get("group_type")) == "class" and _norm(group.get("base_class_name") or group.get("name")) in names]
 
 
-def _english_group_for_cell(cell: Any, target_grade: str, groups: Sequence[Mapping[str, Any]]) -> str | None:
+def _english_group_for_cell(cell: Any, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> str | None:
     match = _ENGLISH_NUMBER.search(cell.raw_text)
     if not match:
         return None
-    numbers = [match.group(1), match.group(2)]
-    number = numbers[0]
-    if numbers[1] and target_grade == "6":
-        number = numbers[1]
-    for group in groups:
-        if str(group.get("name") or "") == f"english:{number}":
-            return str(group["id"])
-    return None
+    if match.group(2) and match.group(2) != match.group(1):
+        return None
+    number = match.group(1)
+    candidates = [str(group["id"]) for group in groups
+                  if _subject(group.get("subject")) == "английский"
+                  and re.search(rf"(?:^|\D){re.escape(number)}$", str(group.get("subject_subgroup") or group.get("name") or ""))
+                  and bool(set(memberships.get(str(group["id"]), ())) & universe)]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _explicit_instructional_marker(cell: Any) -> bool:
@@ -237,9 +233,15 @@ def _explicit_instructional_marker(cell: Any) -> bool:
 
 
 def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> str | None:
-    english = _english_group_for_cell(cell, grade, groups)
+    english = _english_group_for_cell(cell, groups, universe, memberships)
     if english:
         return english
+    resolved = {str(value) for value in cell.parsed.get("resolved_group_ids") or []}
+    matched = [group for group in groups if str(group["id"]) in resolved
+               and _norm(group.get("group_type")) != "class"
+               and bool(set(memberships.get(str(group["id"]), ())) & universe)]
+    if len(matched) == 1:
+        return str(matched[0]["id"])
     raw = _norm(cell.raw_text)
     subject = _subject(cell.parsed.get("subject"))
     candidates = []
@@ -277,7 +279,11 @@ def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, An
     return None
 
 
-def _assignment_payload(activity: str, role: str, group_ids: Sequence[str], student_ids: set[str], cells: Sequence[Any], teachers: Mapping[str, str], teacher_ids: Sequence[str]) -> dict[str, Any]:
+def _assignment_payload(activity: str, role: str, group_ids: Sequence[str], student_ids: set[str], cells: Sequence[Any], teachers: Mapping[str, str], teacher_ids: Sequence[str], *, grade: str = "", class_group_id: str = "", excluded_group_ids: Sequence[str] = ()) -> dict[str, Any]:
+    context = {"grade": grade, **({"class_group_id": class_group_id} if class_group_id else {})}
+    rule = ({"kind": "remaining", **context, "partition_group_ids": list(excluded_group_ids)}
+            if excluded_group_ids and role in {"residual", "default", "explicit_no_lesson"} else
+            {"kind": "groups", **context, "group_ids": list(group_ids)} if group_ids else {})
     return {
         "activity": activity,
         "role": role,
@@ -285,12 +291,14 @@ def _assignment_payload(activity: str, role: str, group_ids: Sequence[str], stud
         "student_ids": sorted(student_ids),
         "student_count": len(student_ids),
         "teacher_ids": list(teacher_ids),
+        "metadata": {**({"audience_rule": rule} if rule else {}),
+                     **({"room": str(cells[0].parsed.get("room"))} if cells and cells[0].parsed.get("room") else {})},
         "teachers": [teachers[item] for item in teacher_ids if item in teachers],
         "source_cells": [cell.source_cell for cell in cells],
     }
 
 
-def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow], corpus: Mapping[str, Any], memberships: Mapping[str, frozenset[str]], teachers: Mapping[str, str]) -> dict[str, Any]:
+def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships: Mapping[str, frozenset[str]], teachers: Mapping[str, str]) -> dict[str, Any]:
     groups = list(corpus.get("groups") or [])
     group_by_id = {str(group["id"]): group for group in groups}
     students = {str(item["id"]): item for item in corpus.get("students") or []}
@@ -305,22 +313,7 @@ def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow]
     base_members = set().union(*(set(memberships.get(str(group["id"]), ())) for group in base)) if base else set()
     base_gaps = universe - base_members
     cells = list(row.cells)
-    # English partitions cross adjacent class columns. Bring the complete
-    # parallel line into each grade block, then intersect by its base cohort.
     english_partition = any(_ENGLISH_NUMBER.search(cell.raw_text) for cell in cells)
-    if english_partition:
-        families = {"5": {"5", "6"}, "6": {"5", "6"}, "7": {"7", "8"}, "8": {"7", "8"}, "10": {"10", "11"}, "11": {"10", "11"}}
-        target = next(iter(row_grades), "")
-        related = families.get(target, {target})
-        # The instructional group may span adjacent grades, but each source
-        # column still has an owner.  Do not copy Grade 11's rendered cell
-        # into Grade 10's block (or vice versa); that creates duplicate teacher
-        # routes while losing source ownership evidence.
-        cells = [
-            cell for item in slot_rows if set(item.grade_scope.split(",")) & related
-            for cell in item.cells
-            if _ENGLISH_NUMBER.search(cell.raw_text) and _grade(cell.audience) in row_grades
-        ]
     assignments: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     grouped_cells: set[str] = set()
@@ -332,12 +325,16 @@ def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow]
         if group_id:
             group = group_by_id[group_id]
             members = (set(memberships.get(group_id, ())) & universe) - base_gaps
+            class_groups = _exact_class_groups(cell, groups)
+            if len(class_groups) == 1:
+                members.intersection_update(memberships.get(class_groups[0], ()))
             role = "primary" if semantic_roles[group_id] == "instructional_partition" else "elective_overlay"
             teacher_ids = [str(item) for item in cell.parsed.get("resolved_identity_ids", ())]
             activity = classify_simple_activity(cell.raw_text) or str(group.get("subject") or cell.parsed.get("subject") or cell.raw_text)
-            assignments.append(_assignment_payload(activity, role, [group_id], members, [cell], teachers, teacher_ids))
+            assignments.append(_assignment_payload(activity, role, [group_id], members, [cell], teachers, teacher_ids,
+                grade=row.grade_scope, class_group_id=class_groups[0] if len(class_groups) == 1 else ""))
             grouped_cells.add(cell.source_cell)
-        elif _explicit_instructional_marker(cell):
+        elif _explicit_instructional_marker(cell) or cell.parsed.get("resolved_group_ids"):
             # A source marker such as English 6 or Physics EGE is an
             # audience claim, not an ordinary whole-class lesson.  Do not
             # fall through to the base class when the canonical partition is
@@ -353,13 +350,21 @@ def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow]
         if cell.source_cell in grouped_cells or cell.parsed.get("activity_type") == "extracurricular" or cell.raw_text.lstrip().startswith("⚪"):
             continue
         exact_groups = _exact_class_groups(cell, groups)
-        audience = set().union(*(set(memberships.get(group_id, ())) for group_id in exact_groups)) & universe if exact_groups else set(universe)
+        if not exact_groups and len(base) == 1 and row.grade_scope.isdigit():
+            exact_groups = [str(base[0]["id"])]
+        if not exact_groups:
+            unresolved.append({"source_cell": cell.source_cell, "reason": "base class context is ambiguous", "raw_text": cell.raw_text})
+            continue
+        audience = set().union(*(set(memberships.get(group_id, ())) for group_id in exact_groups)) & universe
         audience -= base_gaps
         no_lesson = normalize_no_lesson(cell.raw_text)
         if no_lesson:
             audience -= active_students
             if audience:
-                assignments.append(_assignment_payload(NO_LESSON, "explicit_no_lesson", exact_groups, audience, [cell], teachers, ()))
+                excluded_group_ids = sorted({group_id for item in assignments for group_id in item["audience"]["canonical_group_ids"]})
+                assignments.append(_assignment_payload(NO_LESSON, "explicit_no_lesson", exact_groups, audience, [cell], teachers, (),
+                    grade=row.grade_scope, class_group_id=exact_groups[0] if len(exact_groups) == 1 else "",
+                    excluded_group_ids=excluded_group_ids))
             continue
         activity = classify_simple_activity(cell.raw_text) or str(cell.parsed.get("subject") or cell.raw_text)
         role = "residual" if assignments else "primary"
@@ -367,7 +372,10 @@ def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow]
             audience -= active_students
         teacher_ids = [str(item) for item in cell.parsed.get("resolved_identity_ids", ())]
         if audience:
-            assignments.append(_assignment_payload(activity, role, exact_groups, audience, [cell], teachers, teacher_ids))
+            excluded_group_ids = sorted({group_id for item in assignments for group_id in item["audience"]["canonical_group_ids"]}) if role == "residual" else []
+            assignments.append(_assignment_payload(activity, role, exact_groups, audience, [cell], teachers, teacher_ids,
+                grade=row.grade_scope, class_group_id=exact_groups[0] if len(exact_groups) == 1 else "",
+                excluded_group_ids=excluded_group_ids))
             active_students.update(audience)
         elif not exact_groups and universe:
             unresolved.append({"source_cell": cell.source_cell, "reason": "canonical audience cannot be proven"})
@@ -380,10 +388,14 @@ def _simple_block(row: ScheduleSourceRow, slot_rows: Sequence[ScheduleSourceRow]
     partition_gaps: set[str] = set()
     if english_partition:
         english_members = {
-            student_id for group in groups if str(group.get("name") or "").startswith("english:")
+            student_id for group in groups if _subject(group.get("subject")) == "английский"
             for student_id in memberships.get(str(group["id"]), ())
         }
-        partition_gaps = universe - english_members
+        covered_by_other = {
+            student_id for item in assignments if item["activity"] != NO_LESSON or item["role"] == "explicit_no_lesson"
+            for student_id in item["student_ids"]
+        }
+        partition_gaps = universe - english_members - covered_by_other
         if partition_gaps:
             unresolved.append({"reason": "student is missing from the active English instructional partition", "student_ids": sorted(partition_gaps)})
     if base_gaps:
@@ -412,7 +424,8 @@ def _ninth_block(row: ScheduleSourceRow, resolver: NinthGradeResolver, teachers:
     for item in semantic_assignments:
         source = [cell for cell in row.cells if cell.source_cell in item.source_cells]
         teacher_ids = sorted({str(value) for cell in source for value in cell.parsed.get("resolved_identity_ids", ())})
-        assignments.append(_assignment_payload(item.activity, item.kind, item.group_ids, set(item.student_ids), source, teachers, teacher_ids))
+        assignments.append(_assignment_payload(item.activity, item.kind, item.group_ids, set(item.student_ids), source, teachers, teacher_ids,
+            grade=row.grade_scope, excluded_group_ids=sorted({group_id for prior in assignments for group_id in prior["audience"]["canonical_group_ids"]})))
     per_student: dict[str, list[str]] = defaultdict(list)
     for assignment in assignments:
         if assignment["activity"] != NO_LESSON:
@@ -467,15 +480,12 @@ def build_bootstrap_canonical(corpus: Mapping[str, Any], *, explicit_sdep: Seque
             sdep_rows[(row.weekday, row.grade_scope)].append(row)
         else:
             regular_rows.append(row)
-    by_slot: dict[tuple[Any, ...], list[ScheduleSourceRow]] = defaultdict(list)
-    for row in regular_rows:
-        by_slot[(row.weekday, row.start_time, row.end_time)].append(row)
     blocks: dict[str, Any] = {}
     student_routes: dict[str, list[dict[str, Any]]] = defaultdict(list)
     unresolved_blocks: list[dict[str, Any]] = []
     warning_count = 0
     for row in regular_rows:
-        data = _ninth_block(row, ninth_resolver, teachers) if row.grade_scope == "9" else _simple_block(row, by_slot[(row.weekday, row.start_time, row.end_time)], corpus, memberships, teachers)
+        data = _ninth_block(row, ninth_resolver, teachers) if row.grade_scope == "9" else _simple_block(row, corpus, memberships, teachers)
         universe = set(data.pop("universe"))
         conflict_students = set(data.pop("conflict_students"))
         status = "unresolved" if data["unresolved"] or conflict_students else "resolved"
