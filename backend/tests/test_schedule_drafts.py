@@ -158,6 +158,19 @@ class ScheduleDraftTests(unittest.TestCase):
         self.assertEqual(blocks[self.block_key]["end_time"], "09:45")
         self.assertEqual(blocks["manual-later-block"]["start_time"], "09:50")
 
+    def test_template_publish_ignores_orphan_delete_for_manual_block(self):
+        orphan_delete = {
+            "operation": "delete", "block_key": "manual-orphan-block",
+            "assignment_index": 0, "manual": True,
+        }
+        saved = save_draft(self.database, "template", "base-v1", expected_revision=0,
+            payload={"changes": [self.change(), orphan_delete]}, base_version_id="base-v1")
+        result = publish_draft(self.database, "template", "base-v1", expected_revision=saved["revision"])
+        self.assertEqual(result["status"], "published")
+        blocks = read_canonical_template(self.database, result["published_id"])["blocks"]
+        self.assertEqual(blocks[self.block_key]["assignments"][0]["activity"], "Русский")
+        self.assertNotIn("manual-orphan-block", blocks)
+
     def test_next_template_publish_repairs_missing_time_from_immutable_parent(self):
         original = read_canonical_template(self.database, "base-v1")["blocks"][self.block_key]
         import_canonical_artifact(self.database, {

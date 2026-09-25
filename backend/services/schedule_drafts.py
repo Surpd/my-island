@@ -257,6 +257,8 @@ def _apply_assignment_changes(
         index = int(index)
         if change["operation"] == "delete":
             if index >= len(assignments):
+                if str(change.get("block_key") or "").startswith("manual-"):
+                    continue
                 raise ValueError("Assignment no longer exists; reload the draft")
             assignments.pop(index)
         elif index < len(assignments):
