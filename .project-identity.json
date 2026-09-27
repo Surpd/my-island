@@ -1,0 +1,17 @@
+{
+  "project": "My Island",
+  "projectId": "my-island-school",
+  "approvedExternalTargets": {
+    "renderWorkspaceId": "tea-dae3dcgu01pc73culo30",
+    "renderServiceId": "srv-daeie9m7bikc739usge0"
+  },
+  "forbiddenExternalTargets": {
+    "domains": [
+      "islandquiz.online",
+      "api.islandquiz.online"
+    ],
+    "repositories": [
+      "https://github.com/Surpd/IslandQuiz-2.0"
+    ]
+  }
+}

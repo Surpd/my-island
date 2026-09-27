@@ -280,6 +280,54 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
+def _template_logical_slot(block: Mapping[str, Any]) -> tuple[Any, str, str, str] | None:
+    start = block.get("start_time") or (block.get("slot") or {}).get("start")
+    end = block.get("end_time") or (block.get("slot") or {}).get("end")
+    if not start or not end:
+        return None
+    def bell_time(value: Any) -> str:
+        text = str(value)[:5]
+        hour, separator, minute = text.partition(":")
+        return f"{int(hour):02d}:{minute}" if separator and hour.isdigit() else text
+    return (
+        int(block.get("weekday") or 0), bell_time(start), bell_time(end),
+        str(block.get("grade_scope") or "").strip(),
+    )
+
+
+def _merge_duplicate_template_slots(blocks: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Keep one canonical block per logical bell slot, retaining every distinct assignment."""
+    by_slot: dict[tuple[Any, str, str, str], str] = {}
+    merged: dict[str, dict[str, Any]] = {}
+    for block_key, raw_block in blocks.items():
+        block = deepcopy(raw_block)
+        slot = _template_logical_slot(block)
+        primary_key = by_slot.get(slot) if slot is not None else None
+        if primary_key is None:
+            merged[block_key] = block
+            if slot is not None:
+                by_slot[slot] = block_key
+            continue
+
+        primary = merged[primary_key]
+        assignments = list(primary.get("assignments") or [])
+        seen = {_hash(item) for item in assignments}
+        for assignment in block.get("assignments") or []:
+            fingerprint = _hash(assignment)
+            if fingerprint not in seen:
+                assignments.append(deepcopy(assignment))
+                seen.add(fingerprint)
+        primary["assignments"] = assignments
+        provenance = primary.get("derived_from") or primary.get("source_provenance") or {}
+        extra_provenance = block.get("derived_from") or block.get("source_provenance") or {}
+        cells = list(dict.fromkeys([
+            *(provenance.get("source_cells") or []),
+            *(extra_provenance.get("source_cells") or []),
+        ]))
+        primary["derived_from"] = {**provenance, **extra_provenance, "source_cells": cells}
+    return merged
+
+
 def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expected_revision: int, actor_user_id: Any = None, comment: str = "") -> dict[str, Any]:
     draft = get_draft(database, scope_kind, scope_key)
     if not draft.get("has_changes"):
@@ -363,6 +411,7 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
                 },
                 "assignments": assignments,
             }
+        blocks = _merge_duplicate_template_slots(blocks)
         version_id = f"manual-{content_hash[:24]}"
         artifact = {
             "schema_version": "schedule-studio-draft-v1", "version_id": version_id,

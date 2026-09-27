@@ -1,5 +1,5 @@
 {
-  "name": "sites-project",
+  "name": "my-island-school",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -7,7 +7,8 @@
   },
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
+    "verify:identity": "node scripts/verify-project-identity.mjs",
+    "build": "npm run verify:identity && vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

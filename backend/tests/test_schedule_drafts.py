@@ -62,6 +62,35 @@ class ScheduleDraftTests(unittest.TestCase):
             save_draft(self.database, "week", "2026-09-21", expected_revision=1, payload={"changes": [self.change(activity="История")]})
         self.assertEqual(get_draft(self.database, "week", "2026-09-21")["payload"]["changes"][0]["lesson"]["activity"], "Литература")
 
+    def test_import_context_survives_later_editor_autosave(self):
+        imported = merge_import_changes(self.database, "base-v1", expected_revision=0, scope_kind="template",
+            proposed_changes=[self.change()], source_context={"source": "google_sheet", "fingerprint": "source-new"})
+        saved = save_draft(self.database, "template", "base-v1", expected_revision=imported["revision"],
+            payload=imported["payload"], source_context={"editor": "schedule-studio"})
+        self.assertEqual(saved["source_context"]["fingerprint"], "source-new")
+        self.assertEqual(saved["source_context"]["editor"], "schedule-studio")
+
+    def test_bulk_import_stages_safe_and_keeps_ambiguous_pending(self):
+        preview = {"overlay_patches": [
+            {"block_key": self.block_key, "change_kind": "replaced", "weekday": 0,
+             "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+             "resolution_state": "AUTO_RESOLVED", "assignments": [{"activity": "Русский",
+                 "canonical_group_ids": [str(self.base["id"])], "teacher_ids": []}]},
+            {"block_key": "new-block", "change_kind": "added", "weekday": 0,
+             "slot": {"start": "09:55", "end": "10:40"}, "grade_scope": "9",
+             "resolution_state": "UNRESOLVED", "source_issue": "Unknown group",
+             "weekly_raw_text": {"C4": "Английский группа 999"}, "assignments": []},
+        ]}
+        changes = preview_changes(preview)
+        self.assertEqual(len(changes), 2)
+        self.assertFalse(changes[0].get("review_required"))
+        self.assertTrue(changes[1]["review_required"])
+        self.assertEqual(changes[1]["lesson"]["audience"]["kind"], "unresolved")
+        draft = merge_import_changes(self.database, "base-v1", expected_revision=0, scope_kind="template",
+            proposed_changes=changes, source_context={"source": "google_sheet", "fingerprint": "changed"})
+        with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
+            publish_draft(self.database, "template", "base-v1", expected_revision=draft["revision"])
+
     def test_publish_creates_immutable_effective_revision_and_clears_draft(self):
         saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0, payload={"changes": [self.change()]}, base_version_id="base-v1")
         result = publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
@@ -75,13 +104,22 @@ class ScheduleDraftTests(unittest.TestCase):
         self.assertEqual(projected["items"][0]["activity"], "Русский")
         self.assertEqual(project_student(self.database, str(self.student["id"]), "2026-09-21")["items"][0]["state"], "NO_LESSON")
 
+    def test_template_publish_keeps_source_provenance_when_editor_omits_it(self):
+        change = self.change()
+        change["lesson"].pop("source_cells")
+        saved = save_draft(self.database, "template", "base-v1", expected_revision=0,
+                           payload={"changes": [change]}, base_version_id="base-v1")
+        published = publish_draft(self.database, "template", "base-v1", expected_revision=saved["revision"])
+        template = read_canonical_template(self.database, published["published_id"])
+        self.assertEqual(template["blocks"][self.block_key]["source_provenance"]["source_cells"], ["B3"])
+
     def test_second_week_publish_keeps_the_first_published_patch(self):
         first = save_draft(self.database, "week", "2026-09-21", expected_revision=0, payload={"changes": [self.change()]}, base_version_id="base-v1")
         first_result = publish_draft(self.database, "week", "2026-09-21", expected_revision=first["revision"])
         second_change = self.change(activity="Физика")
         second_change["block_key"] = "manual-second-block"
         second_change["assignment_index"] = 0
-        second_change["lesson"]["start_time"] = "09:50"
+        second_change["lesson"]["start_time"] = "09:55"
         second_change["lesson"]["end_time"] = "10:40"
         second = save_draft(self.database, "week", "2026-09-21", expected_revision=0, payload={"changes": [second_change]}, base_version_id="base-v1")
         second_result = publish_draft(self.database, "week", "2026-09-21", expected_revision=second["revision"])
@@ -127,6 +165,20 @@ class ScheduleDraftTests(unittest.TestCase):
         with self.database.connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM canonical_effective_weeks").fetchone()[0], 0)
 
+    def test_new_unresolved_source_is_editable_but_not_publishable(self):
+        changes = preview_changes({"overlay_patches": [{"block_key": "new-source", "change_kind": "weekly_only",
+            "weekday": 0, "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+            "weekly_source_cells": ["B3"], "weekly_raw_text": {"B3": "Английский, неизвестная группа"},
+            "source_issue": "Группа не определена", "assignments": []}]})
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["lesson"]["audience"]["kind"], "unresolved")
+        self.assertTrue(changes[0]["review_required"])
+        self.assertEqual(audience_preview(self.database, changes[0]["lesson"]["audience"])["count"], 0)
+        saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0,
+                           payload={"changes": changes}, base_version_id="base-v1")
+        with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
+            publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
+
     def test_template_publish_creates_new_immutable_canonical_version(self):
         with self.database.connection() as connection:
             connection.execute("UPDATE canonical_schedule_versions SET status='authoritative' WHERE version_id='base-v1'")
@@ -145,31 +197,65 @@ class ScheduleDraftTests(unittest.TestCase):
         self.assertEqual(readback["blocks"][0]["baseline_assignments"][0]["activity"], "Русский")
         self.assertEqual(readback["blocks"][0]["effective_assignments"][0]["activity"], "Английский")
 
+    def test_orphan_delete_for_draft_only_manual_block_does_not_block_template_publish(self):
+        orphan_delete = {
+            "operation": "delete", "block_key": "manual-unsaved-lesson",
+            "assignment_index": 0, "manual": True,
+        }
+        saved = save_draft(
+            self.database, "template", "base-v1", expected_revision=0,
+            payload={"changes": [self.change(activity="Физика"), orphan_delete]},
+            base_version_id="base-v1",
+        )
+
+        result = publish_draft(self.database, "template", "base-v1", expected_revision=saved["revision"])
+
+        self.assertEqual(result["status"], "published")
+        blocks = read_canonical_template(self.database, result["published_id"])["blocks"]
+        self.assertEqual(blocks[self.block_key]["assignments"][0]["activity"], "Физика")
+        self.assertNotIn("manual-unsaved-lesson", blocks)
+
     def test_template_publish_keeps_time_of_untouched_blocks(self):
         extra = self.change(activity="Физика")
         extra["block_key"] = "manual-later-block"
         extra["assignment_index"] = 0
-        extra["lesson"]["start_time"] = "09:50"
+        extra["lesson"]["start_time"] = "09:55"
         extra["lesson"]["end_time"] = "10:40"
         saved = save_draft(self.database, "template", "base-v1", expected_revision=0, payload={"changes": [extra]}, base_version_id="base-v1")
         result = publish_draft(self.database, "template", "base-v1", expected_revision=saved["revision"])
         blocks = read_canonical_template(self.database, result["published_id"])["blocks"]
         self.assertEqual(blocks[self.block_key]["start_time"], "09:00")
         self.assertEqual(blocks[self.block_key]["end_time"], "09:45")
-        self.assertEqual(blocks["manual-later-block"]["start_time"], "09:50")
+        self.assertEqual(blocks["manual-later-block"]["start_time"], "09:55")
 
-    def test_template_publish_ignores_orphan_delete_for_manual_block(self):
-        orphan_delete = {
-            "operation": "delete", "block_key": "manual-orphan-block",
-            "assignment_index": 0, "manual": True,
-        }
-        saved = save_draft(self.database, "template", "base-v1", expected_revision=0,
-            payload={"changes": [self.change(), orphan_delete]}, base_version_id="base-v1")
-        result = publish_draft(self.database, "template", "base-v1", expected_revision=saved["revision"])
-        self.assertEqual(result["status"], "published")
+    def test_template_publish_preserves_untimed_day_level_sdep_block(self):
+        sdep_key = "2026-09-25|SDEP|10"
+        base = read_canonical_template(self.database, "base-v1")["blocks"]
+        import_canonical_artifact(self.database, {
+            "schema_version": "test-v1", "version_id": "sdep-v1", "parent_version_id": "base-v1",
+            "source_snapshot": {"id": "sdep-source", "fingerprint": "sdep-source"},
+            "blocks": {
+                **base,
+                sdep_key: {
+                    "weekday": 4, "slot": {"start": None, "end": None}, "grade_scope": "10",
+                    "status": "resolved", "mode": "SDEP_DAY",
+                    "assignments": [{"activity": "SDEP", "role": "day_special", "audience": {
+                        "type": "canonical_groups", "canonical_group_ids": [str(self.base["id"])],
+                    }}],
+                },
+            },
+        }, status="approved_baseline")
+        saved = save_draft(
+            self.database, "template", "sdep-v1", expected_revision=0,
+            payload={"changes": [self.change(activity="Физика")]}, base_version_id="sdep-v1",
+        )
+
+        result = publish_draft(self.database, "template", "sdep-v1", expected_revision=saved["revision"])
+
         blocks = read_canonical_template(self.database, result["published_id"])["blocks"]
-        self.assertEqual(blocks[self.block_key]["assignments"][0]["activity"], "Русский")
-        self.assertNotIn("manual-orphan-block", blocks)
+        self.assertEqual((blocks[sdep_key]["start_time"], blocks[sdep_key]["end_time"]), (None, None))
+        self.assertEqual(blocks[sdep_key]["mode"], "SDEP_DAY")
+        self.assertEqual(blocks[self.block_key]["assignments"][0]["activity"], "Физика")
 
     def test_next_template_publish_repairs_missing_time_from_immutable_parent(self):
         original = read_canonical_template(self.database, "base-v1")["blocks"][self.block_key]
@@ -178,11 +264,20 @@ class ScheduleDraftTests(unittest.TestCase):
             "source_snapshot": {"id": "broken-source", "fingerprint": "broken-source"},
             "blocks": {self.block_key: {"weekday": 0, "slot": {"start": None, "end": None}, "grade_scope": "9", "assignments": original["assignments"]}},
         }, status="approved_with_exceptions")
-        self.assertIsNone(read_canonical_template(self.database, "broken-v1")["blocks"][self.block_key]["start_time"])
+        recovered = read_canonical_template(self.database, "broken-v1")["blocks"][self.block_key]
+        self.assertEqual((recovered["start_time"], recovered["end_time"]), ("09:00", "09:45"))
+        self.assertTrue(recovered["time_recovered_from_parent"])
+        with self.database.connection() as connection:
+            persisted = connection.execute(
+                "SELECT start_time,end_time FROM canonical_schedule_blocks WHERE version_id='broken-v1' AND block_key=?",
+                (self.block_key,),
+            ).fetchone()
+        self.assertIsNone(persisted["start_time"])
+        self.assertIsNone(persisted["end_time"])
         extra = self.change(activity="Физика")
         extra["block_key"] = "manual-later-block"
         extra["assignment_index"] = 0
-        extra["lesson"]["start_time"] = "09:50"
+        extra["lesson"]["start_time"] = "09:55"
         extra["lesson"]["end_time"] = "10:40"
         saved = save_draft(self.database, "template", "broken-v1", expected_revision=0, payload={"changes": [extra]}, base_version_id="broken-v1")
         result = publish_draft(self.database, "template", "broken-v1", expected_revision=saved["revision"])
@@ -205,6 +300,43 @@ class ScheduleDraftTests(unittest.TestCase):
         result = publish_draft(self.database, "template", "parallel-v1", expected_revision=saved["revision"])
         assignments = read_canonical_template(self.database, result["published_id"])["blocks"][self.block_key]["assignments"]
         self.assertEqual([item["activity"] for item in assignments], ["Физика", "Математика"])
+
+    def test_template_publish_consolidates_duplicate_logical_slots(self):
+        original = read_canonical_template(self.database, "base-v1")["blocks"][self.block_key]
+        source_block = {**original, "slot": {"start": original["start_time"], "end": original["end_time"]}}
+        duplicate_key = "2026-09-21|0|09:00|9|duplicate"
+        duplicate = {
+            **source_block,
+            "start_time": "09:00", "end_time": "09:45",
+            "slot": {"start": "09:00", "end": "09:45"},
+            "derived_from": {"source_cells": ["C3"]},
+            "assignments": [{
+                "activity": "Математика", "audience_kind": "canonical_groups",
+                "canonical_group_ids": [str(self.base["id"])],
+                "teacher_ids": [str(self.teacher["id"])], "source_cells": ["C3"],
+            }],
+        }
+        import_canonical_artifact(self.database, {
+            "schema_version": "test-v1", "version_id": "duplicate-slot-v1",
+            "source_snapshot": {"id": "duplicate-slot-source", "fingerprint": "duplicate-slot-fp"},
+            "blocks": {self.block_key: source_block, duplicate_key: duplicate},
+        }, status="approved_baseline")
+        change = self.change(activity="Физика")
+        change["assignment_index"] = 0
+        saved = save_draft(
+            self.database, "template", "duplicate-slot-v1", expected_revision=0,
+            payload={"changes": [change]}, base_version_id="duplicate-slot-v1",
+        )
+
+        result = publish_draft(self.database, "template", "duplicate-slot-v1", expected_revision=saved["revision"])
+
+        blocks = read_canonical_template(self.database, result["published_id"])["blocks"]
+        same_slot = [block for block in blocks.values() if
+                     (block.get("weekday"), block.get("start_time"), block.get("end_time"), block.get("grade_scope"))
+                     == (0, "09:00", "09:45", "9")]
+        self.assertEqual(len(same_slot), 1)
+        self.assertEqual([item["activity"] for item in same_slot[0]["assignments"]], ["Физика", "Математика"])
+        self.assertEqual(same_slot[0]["source_provenance"]["derived_from"]["source_cells"], ["B3", "C3"])
 
     def test_no_lesson_can_be_saved_as_an_explicit_activity(self):
         change = self.change(activity="NO_LESSON")

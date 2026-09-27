@@ -12,9 +12,9 @@ class SettingsCorsTests(unittest.TestCase):
         self.assertEqual(settings.cors_origins, ("http://localhost:3000", "http://localhost:4173"))
 
     def test_production_does_not_expand_configured_origins(self):
-        with patch.dict(os.environ, {"APP_ENV": "production", "CORS_ORIGINS": "https://islandquiz.online"}, clear=False):
+        with patch.dict(os.environ, {"APP_ENV": "production", "CORS_ORIGINS": "https://my-island.example"}, clear=False):
             settings = Settings.from_env()
-        self.assertEqual(settings.cors_origins, ("https://islandquiz.online",))
+        self.assertEqual(settings.cors_origins, ("https://my-island.example",))
 
 
 if __name__ == "__main__":

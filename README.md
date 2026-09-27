@@ -2,6 +2,18 @@
 
 Telegram Mini App + school backend с единым responsive Student / Teacher / Admin frontend. Student и Teacher работают как scene-based Mini App, а Admin — как desktop-friendly control center.
 
+## Идентичность проекта и production safety
+
+Этот репозиторий относится только к **My Island**. Он не связан с IslandQuiz,
+Island Quiz или Island Kingdom. Запрещённые внешние targets и точные ID нашего
+Render workspace/service перечислены в `.project-identity.json`.
+
+Production-сборка требует явный `VITE_API_BASE_URL`; hard-coded fallback запрещён.
+Перед любым Render/Supabase/Sites действием необходимо сверить точные account,
+workspace ID, service ID, repository и domain. Команда `npm run verify:identity`
+останавливает сборку при отсутствии API target или совпадении с известным чужим
+проектом.
+
 ## Запуск
 
 ```powershell
@@ -32,7 +44,7 @@ python -m backend.scripts.google_sync
 python -m backend.scripts.google_sync --write
 ```
 
-Ежедневный entrypoint для cron/Render Cron — `python -m backend.scripts.schedule_daily`.
+Расписание не имеет cron entrypoint до завершения canonical reconciliation: legacy daily importer удалён и не является fallback. Для явного shadow-пилота canonical read-side задайте server-side `SCHEDULE_BACKEND=canonical`; по умолчанию `SCHEDULE_BACKEND=disabled`, поэтому ни один schedule semantic engine не активируется и текущий Mini App не переключается глобально.
 
 Текущие журналы 2026/27 читаются только из отдельных таблиц 5–11 классов. Admin запускает синхронизацию нужного класса/предмета, после чего явное сопоставление marker группы с внутренней группой открывает read-only журнал и аналитику преподавателю. Записи обратно в Google Sheets не выполняются.
 
