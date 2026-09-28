@@ -3067,3 +3067,13 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 @media (max-width: 900px) {
   .admin-console--schedule { display: block; }.admin-console--schedule .admin-console-sidebar { position: sticky; width: 100%; height: auto; }.admin-console--schedule .admin-console-sidebar nav { display: flex; overflow-x: auto; }.admin-console--schedule .admin-console-brand, .admin-console--schedule .admin-console-sidebar__footer { display: none; }.studio-main, .schedule-studio.has-inspector .studio-main { padding: 18px; }.studio-topbar, .studio-context-bar, .studio-footer { align-items: stretch; flex-direction: column; }.studio-toolbar { grid-template-columns: 1fr; }.studio-mode-switch { grid-column: auto; justify-self: stretch; }.studio-mode-switch button { flex: 1; }.studio-week-board, .studio-day-board { overflow-x: auto; }.studio-week-board { min-width: 1000px; }.studio-day-board > * { min-width: 1000px; }.studio-inspector, .studio-side-dialog { width: min(100%, 460px); }.studio-class-days { grid-template-columns: repeat(5, 260px); }
 }
+.studio-import-route { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 15px 20px 0; }
+.studio-import-route > div { display: grid; align-content: start; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid #dfe2dc; border-radius: 7px; background: #f8f8f3; }
+.studio-import-route > div:first-child { background: #edf6f1; border-color: #d1e4da; }
+.studio-import-route > div:last-child { grid-column: 1 / -1; background: #f2f5f3; }
+.studio-import-route small { color: #788985; font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.studio-import-route strong { overflow-wrap: anywhere; color: #244e56; font-size: 11px; }
+.studio-import-route span { color: #718481; font-size: 9px; }
+.studio-import-empty { display: grid; gap: 4px; padding: 24px 16px; color: #667d78; font-size: 11px; text-align: center; }
+.studio-import-empty strong { color: #2c6255; font-size: 13px; }
+@media (max-width: 600px) { .studio-import-route { grid-template-columns: 1fr; }.studio-import-route > div:last-child { grid-column: auto; } }
