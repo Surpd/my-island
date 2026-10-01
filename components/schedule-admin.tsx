@@ -242,12 +242,26 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const selected = lessons.find((lesson) => lesson.id === selectedId) || null;
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || ''); const savedMode = params.get('mode') as ViewMode | null; if (savedMode && ['week', 'day', 'class'].includes(savedMode)) setModeState(savedMode); const savedGrade = Number(params.get('grade')); if (GRADES.includes(savedGrade)) setGrade(savedGrade);
-    let cancelled = false; setLoading(true); Promise.allSettled([api<Item>(`/api/admin/schedule/observability?week_start=${weekStart}&editor=true`), api<Item>('/api/admin/groups'), api<Item>('/api/admin/people?kind=teacher'), api<Item>('/api/admin/people?kind=student')]).then(([scheduleResult, groupResult, teacherResult, studentResult]) => {
+    let cancelled = false; setLoading(true); Promise.allSettled([api<Item>(`/api/admin/schedule/observability?week_start=${weekStart}&editor=true`), api<Item>(`/api/admin/schedule/observability?week_start=${WEEK_START}&editor=true`), api<Item>('/api/admin/groups'), api<Item>('/api/admin/people?kind=teacher'), api<Item>('/api/admin/people?kind=student')]).then(([scheduleResult, templateResult, groupResult, teacherResult, studentResult]) => {
       if (cancelled) return;
       if (groupResult.status === 'fulfilled') setGroups((groupResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: String(item.subject || item.semantic_dimension || item.group_type || '') })));
       if (teacherResult.status === 'fulfilled') setTeachers((teacherResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: 'teacher', subjects: (item.teacher_assignments || []).map((assignment: Item) => String(assignment.subject || '')).filter(Boolean) })));
       if (studentResult.status === 'fulfilled') setStudents((studentResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: String(item.class_name || '') })));
-      if (scheduleResult.status === 'fulfilled') { const data = scheduleResult.value; baseVersionRef.current = String(data.canonical?.version_id || 'current'); setBaseVersion(baseVersionRef.current); const mapped = (data.blocks || []).flatMap((block: Item) => (block.effective_assignments || []).map((assignment: Item, index: number) => assignmentToLesson(block, assignment, index, weekStart))); const templateMapped = (data.blocks || []).flatMap((block: Item) => (block.baseline_assignments || []).map((assignment: Item, index: number) => assignmentToLesson({ ...block, weekday: block.baseline_weekday, start_time: block.baseline_start_time, end_time: block.baseline_end_time, grade_scope: block.baseline_grade_scope }, assignment, index, weekStart))); setWeekBaseLessons(mapped); setTemplateBaseLessons(templateMapped); setLessons(mapped); setSelectedId(''); setLoadedWeek(weekStart); }
+      if (scheduleResult.status === 'fulfilled') {
+        const data = scheduleResult.value;
+        const templateData = templateResult.status === 'fulfilled' ? templateResult.value : data;
+        baseVersionRef.current = String(data.canonical?.version_id || templateData.canonical?.version_id || 'current'); setBaseVersion(baseVersionRef.current);
+        const mapEffective = (source: Item, date: string) => (source.blocks || []).flatMap((block: Item) => (block.effective_assignments || []).map((assignment: Item, index: number) => assignmentToLesson(block, assignment, index, date)));
+        const mapTemplate = (source: Item, date: string) => (source.blocks || []).flatMap((block: Item) => (block.baseline_assignments || []).map((assignment: Item, index: number) => assignmentToLesson({ ...block, weekday: block.baseline_weekday, start_time: block.baseline_start_time, end_time: block.baseline_end_time, grade_scope: block.baseline_grade_scope }, assignment, index, date)));
+        // This endpoint may fall back to the latest published week. Load the template
+        // independently and never show an older week's overrides under the selected date.
+        const templateMapped = mapTemplate(templateData, weekStart);
+        const hasSelectedEffectiveWeek = String(data.effective_week?.week_start || data.selected_week || '') === weekStart && Boolean(data.effective_week?.effective_week_id);
+        const mapped = hasSelectedEffectiveWeek ? mapEffective(data, weekStart) : templateMapped.map((lesson: Lesson) => ({ ...lesson, changed: false }));
+        setWeekBaseLessons(mapped); setTemplateBaseLessons(templateMapped); setLessons(mapped); setSelectedId(''); setLoadedWeek(weekStart);
+        if (!hasSelectedEffectiveWeek && templateMapped.length) setNotice(`Для недели ${weekRangeLabel(weekStart)} отдельной опубликованной версии пока нет — показан базовый шаблон. Недельные изменения можно загрузить через импорт.`);
+        else if (!templateMapped.length && !mapped.length) setNotice('Не удалось получить уроки шаблона с сервера. Проверьте соединение и повторите загрузку.');
+      }
       else setNotice('Сервер расписания недоступен; редактирование отключено до восстановления соединения.');
     }).finally(() => { if (!cancelled) setLoading(false); }); return () => { cancelled = true; };
   }, [api, weekStart]);
