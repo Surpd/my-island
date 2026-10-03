@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week, read_canonical_template
-from backend.services.canonical_weekly_refresh import _grid_tab, _persist_source_snapshot, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
+from backend.services.canonical_weekly_refresh import _db_corpus, _grid_tab, _persist_source_snapshot, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import merge_import_changes, preview_changes, publish_draft, get_draft
 from backend.services.schedule_parser_v2 import group_schedule_rows
 from backend.services.weekly_schedule_ingestion import (
@@ -235,7 +235,51 @@ class SharedDiffTests(unittest.TestCase):
         changed = build_weekly_diff({"blocks": {"base": base}}, before, after,
                                     {"blocks": {"weekly": weekly}})
         self.assertEqual(changed["counts"], {"REPLACED": 1})
-        self.assertEqual(changed["patches"][0]["resolution_state"], "NEEDS_CONFIRMATION")
+        self.assertEqual(changed["patches"][0]["resolution_state"], "UNRESOLVED")
+        self.assertEqual(changed["patches"][0]["after"]["assignments"], [])
+
+    def test_roster_drift_does_not_create_weekly_change_for_same_lesson(self):
+        base = block("base", "Русский", "g8")
+        base["assignments"][0]["student_ids"] = ["s8a", "s8b"]
+        weekly = block("weekly", "Русский язык", "g8")
+        weekly["assignments"][0]["student_ids"] = ["s8a"]
+        diff = build_weekly_diff({"blocks": {"base": base}}, parsed("Русский"),
+                                 parsed("Русский язык"), {"blocks": {"weekly": weekly}})
+        self.assertEqual(diff["patches"], [])
+
+    def test_unresolved_replacement_shows_new_source_not_old_assignment(self):
+        key = (1, "11:50", "12:35", "8")
+        base = block("base", "Математика", "g8", weekday=1, start="11:50")
+        base["slot"]["end"] = "12:35"
+        base["grade_scope"] = "8"
+        base["assignments"][0]["teacher_ids"] = ["maria"]
+        old = {key: [{"source_cell": "I19", "source_column": 8,
+                      "raw_text": "Матем Мария\nкаб.9", "audience": "8"}]}
+        new = {key: [{"source_cell": "I19", "source_column": 8,
+                      "raw_text": "Химия Родион\nкаб.18", "audience": "8"}]}
+        weekly = {**base, "status": "unresolved", "assignments": [],
+                  "unresolved": [{"reason": "student is missing from the canonical base-class membership"}]}
+        diff = build_weekly_diff({"blocks": {"base": base}}, old, new,
+                                 {"blocks": {"weekly": weekly}})
+        patch = diff["patches"][0]
+        self.assertEqual(patch["before"]["assignments"][0]["activity"], "Математика")
+        self.assertEqual(patch["after"]["assignments"], [])
+        self.assertIn("Химия Родион", patch["after"]["source_text"][0])
+        self.assertEqual(patch["resolution_state"], "UNRESOLVED")
+        proposal = preview_changes({"overlay_patches": diff["patches"]})[0]
+        self.assertIn("Химия Родион", proposal["lesson"]["activity"])
+        self.assertEqual(proposal["lesson"]["audience"]["kind"], "unresolved")
+
+    def test_weekly_corpus_excludes_inactive_students(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "corpus.db")
+            database.initialize()
+            active = database.create_identity("student", "Active", "8")
+            inactive = database.create_identity("student", "Inactive", "8")
+            with database.connection() as connection:
+                database.execute(connection, "UPDATE identities SET status='inactive' WHERE id=?", (inactive["id"],))
+            student_ids = {student["id"] for student in _db_corpus(database)["students"]}
+            self.assertEqual(student_ids, {active["id"]})
 
     def test_unchanged_week_has_no_overrides(self):
         result = self._diff("Русский", "Русский")

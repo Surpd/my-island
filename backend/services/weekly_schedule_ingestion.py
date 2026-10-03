@@ -369,7 +369,8 @@ def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, An
                 str(item.get("role") or ""),
                 tuple(sorted(str(value) for value in group_ids)),
                 tuple(sorted(str(value) for value in item.get("teacher_ids") or [])),
-                () if source_only else tuple(sorted(str(value) for value in item.get("student_ids") or [])),
+                # Rosters belong to canonical memberships, not to the source
+                # schedule cell. A roster sync must not create a weekly override.
                 "" if source_only else str(metadata.get("room") or "").strip().casefold(),
             ))
         return sorted(result)
@@ -500,7 +501,9 @@ def build_weekly_diff(
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
         elif classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"}:
-            patch["assignments"] = base.get("assignments") or []
+            # The old canonical lesson is evidence for "before", never a
+            # candidate replacement when the new source is unresolved.
+            patch["assignments"] = []
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
             patch["resolution_details"] = [
                 str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
@@ -529,7 +532,7 @@ def build_weekly_diff(
         patch["before"] = {"slot": base.get("slot"), "assignments": _assignment_brief(base.get("assignments"))}
         patch["after"] = {"slot": {"start": source_key[1], "end": source_key[2]} if week_cells else None,
                           "assignments": _assignment_brief(patch.get("assignments")),
-                          "source_text": list(week_raw_values.values())}
+                          "source_text": [str(item.get("raw_text") or "") for item in week_items]}
         diffs.append({"key": key, "canonical_block_key": base.get("block_key"), "classification": classification, "change_kind": kind, "template_cells": source_cells, "weekly_cells": weekly_coords, "patch": patch, "weekly_block": weekly_block})
     for key, block in weekly_by_key.items():
         if key in canonical_by_key or key in mapped_source_keys:

@@ -78,7 +78,7 @@ def _grid_tab(client: GoogleLiveClient, spreadsheet_id: str, title: str, sheet_i
 
 def _db_corpus(database: Database) -> dict[str, list[dict[str, Any]]]:
     queries = {
-        "students": "SELECT id,display_name,class_name,status FROM identities WHERE kind='student' ORDER BY id",
+        "students": "SELECT id,display_name,class_name,status FROM identities WHERE kind='student' AND status='active' ORDER BY id",
         "teachers": "SELECT id,display_name,status FROM identities WHERE kind='teacher' AND status='active' ORDER BY id",
         "groups": "SELECT * FROM groups WHERE canonical IS TRUE ORDER BY id",
         "memberships": "SELECT group_id,identity_id,member_role,active FROM memberships WHERE active IS TRUE ORDER BY group_id,identity_id",
