@@ -3078,9 +3078,4 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .studio-import-route span { color: #718481; font-size: 9px; }
 .studio-import-empty { display: grid; gap: 4px; padding: 24px 16px; color: #667d78; font-size: 11px; text-align: center; }
 .studio-import-empty strong { color: #2c6255; font-size: 13px; }
-.studio-import-filters { display: flex; gap: 7px; padding: 0 20px 14px; overflow-x: auto; }
-.studio-import-filters button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dedfd9; border-radius: 7px; background: #fffdfa; color: #526c6e; font: inherit; font-size: 10px; cursor: pointer; }
-.studio-import-filters button.is-active { border-color: #327681; background: #eaf3f1; color: #174f58; }
-.studio-import-filters button strong { font-size: 10px; }
-.studio-import-filter-note { margin: 0 20px 10px; color: #718481; font-size: 9px; }
 @media (max-width: 600px) { .studio-import-route { grid-template-columns: 1fr; }.studio-import-route > div:last-child { grid-column: auto; } }

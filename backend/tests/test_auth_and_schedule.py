@@ -54,6 +54,32 @@ class AuthTests(unittest.TestCase):
             self.assertTrue(store.has_refresh_token())
             self.assertEqual(store.load()["refresh_token"], "refresh")
 
+    def test_google_token_store_encrypts_production_credential_in_database(self):
+        from cryptography.fernet import Fernet
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "google.db"))
+            database.initialize()
+            key = Fernet.generate_key().decode("ascii")
+            store = GoogleTokenStore(database=database, encryption_key=key)
+            store.save({"refresh_token": "secret-refresh", "scope": "openid sheets"}, account_email="antischool.island@gmail.com")
+            stored = database.get_google_oauth_credential()
+            self.assertNotIn("secret-refresh", stored["token_ciphertext"])
+            self.assertEqual(stored["account_email"], "antischool.island@gmail.com")
+            self.assertEqual(store.load()["refresh_token"], "secret-refresh")
+
+    def test_google_oauth_state_is_single_use_and_expires(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "google.db"))
+            database.initialize()
+            state_hash = hashlib.sha256(b"one-time-state").hexdigest()
+            database.create_google_oauth_state(state_hash, "admin-1", int(time.time()) + 30)
+            self.assertEqual(database.consume_google_oauth_state(state_hash), "admin-1")
+            self.assertIsNone(database.consume_google_oauth_state(state_hash))
+            expired_hash = hashlib.sha256(b"expired-state").hexdigest()
+            database.create_google_oauth_state(expired_hash, "admin-1", int(time.time()) - 1)
+            self.assertIsNone(database.consume_google_oauth_state(expired_hash))
+
     def test_roles_are_additive_and_preview_is_actor_bound(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(os.path.join(directory, "test.db"))

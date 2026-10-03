@@ -8,11 +8,9 @@ from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
 from backend.services.google_oauth import google_config
-from backend.services.google_sheets import import_school_schedule_tabs
 from backend.services.journal_import import sync_journal_values
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
-from backend.services.schedule_pipeline import classify_tab, looks_like_schedule_matrix, refresh_schedule_pipeline
 
 
 CURRENT_JOURNAL_FOLDER_ID = "1u7LS5hjyiTRe4fgUoEqRB4T9c02Nq18L"
@@ -32,7 +30,7 @@ def _resolve_sheet_title(titles: list[str], requested: str) -> str | None:
     return next((title for title in titles if title.strip().casefold() == normalized), None)
 
 
-def _client(settings: Settings) -> tuple[GoogleLiveClient, str]:
+def _client(settings: Settings, database: Database | None = None) -> tuple[GoogleLiveClient, str]:
     config = google_config(settings)
     missing_config = [
         name
@@ -45,7 +43,7 @@ def _client(settings: Settings) -> tuple[GoogleLiveClient, str]:
     ]
     if missing_config:
         raise GoogleLiveError(f"Google OAuth configuration is missing: {', '.join(missing_config)}")
-    store = GoogleTokenStore()
+    store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
     token = store.load()
     if not token or not token.get("refresh_token"):
         raise GoogleLiveError("Stored Google refresh token is required")
@@ -61,8 +59,8 @@ class TeacherDirectoryApplyBlocked(RuntimeError):
     """The authoritative teacher source is not safe to apply yet."""
 
 
-def _structured_teacher_source(settings: Settings) -> tuple[str, str, str, list[list[str]]]:
-    client, _ = _client(settings)
+def _structured_teacher_source(settings: Settings, database: Database | None = None) -> tuple[str, str, str, list[list[str]]]:
+    client, _ = _client(settings, database)
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
     metadata = client.spreadsheet(spreadsheet_id)
     title = str((metadata.get("properties") or {}).get("title", ""))
@@ -189,63 +187,8 @@ def _reconciliation_inputs(database: Database, connection: Any) -> tuple[list[di
     return teachers, groups, current_assignments, canonical_subjects
 
 
-def refresh_schedule(database: Database, settings: Settings, week_start: str | None = None) -> dict[str, Any]:
-    client, _ = _client(settings)
-    spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
-    spreadsheet = client.spreadsheet(spreadsheet_id)
-    spreadsheet_title = str((spreadsheet.get("properties") or {}).get("title", ""))
-    visible_tabs = [
-        str((sheet.get("properties") or {}).get("title"))
-        for sheet in spreadsheet.get("sheets") or []
-        if not (sheet.get("properties") or {}).get("hidden") and (sheet.get("properties") or {}).get("title")
-    ]
-    values_by_tab = client.sheet_values_many(spreadsheet_id, [f"{name}!A:Z" for name in visible_tabs])
-    result = import_school_schedule_tabs(
-        database,
-        list(zip(visible_tabs, values_by_tab)),
-        spreadsheet_title=spreadsheet_title,
-        source=f"google_sheets:{spreadsheet_id}",
-        week_start=week_start,
-        return_stats=True,
-    )
-    return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "stats": result}
-
-
-def refresh_schedule_v1(database: Database, settings: Settings) -> dict[str, Any]:
-    """Refresh Schedule Integration v1 through the School Data lifecycle."""
-    spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
-    if not spreadsheet_id:
-        reason = "GOOGLE_SHEETS_SPREADSHEET_ID is required"
-        return {"status": "blocked", "auth_state": "missing_spreadsheet_id", "error": reason, "message": reason}
-    if not GoogleTokenStore().has_refresh_token():
-        reason = "Authorize Google OAuth and store a refresh token before refreshing schedule"
-        return {"status": "blocked", "auth_state": "missing_google_token", "error": reason, "message": reason}
-    client, _ = _client(settings)
-    metadata = client.spreadsheet(spreadsheet_id)
-    spreadsheet_title = str((metadata.get("properties") or {}).get("title", ""))
-    visible = [sheet for sheet in metadata.get("sheets") or [] if not (sheet.get("properties") or {}).get("hidden")]
-    visible_titles = [str((sheet.get("properties") or {}).get("title", "")) for sheet in visible]
-    plain_ranges = [f"'{title.replace(chr(39), chr(39) * 2)}'!A1:V200" for title in visible_titles]
-    plain_values = client.sheet_values_many(spreadsheet_id, plain_ranges)
-    tabs = []
-    for sheet, values in zip(visible, plain_values):
-        props = sheet.get("properties") or {}
-        tab_title = str(props.get("title", ""))
-        schedule_like = looks_like_schedule_matrix(values)
-        if classify_tab(tab_title, schedule_like=schedule_like) == "irrelevant":
-            continue
-        grid = client.sheet_grid_range(spreadsheet_id, tab_title, "A1:V200")
-        grid_sheet = (grid.get("sheets") or [{}])[0]
-        data = (grid_sheet.get("data") or [{}])[0]
-        rows = []
-        for row in data.get("rowData") or []:
-            rows.append([value for value in (row.get("values") or [])])
-        tabs.append({"sheet_id": props.get("sheetId"), "title": tab_title, "merges": sheet.get("merges") or grid_sheet.get("merges") or [], "values": rows})
-    return refresh_schedule_pipeline(database, spreadsheet_id, spreadsheet_title, tabs)
-
-
 def refresh_classroom(database: Database, settings: Settings) -> dict[str, Any]:
-    client, teacher_account = _client(settings)
+    client, teacher_account = _client(settings, database)
     courses = client.classroom_courses_for_teacher()
     course_id = settings.google_classroom_course_id or "800979670564"
     course = next((item for item in courses if item.get("id") == course_id), None)
@@ -259,7 +202,7 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
         raise ValueError("Journal grade must be between 5 and 11")
     spreadsheet_id = CURRENT_JOURNAL_SPREADSHEETS[grade]
     try:
-        client, _ = _client(settings)
+        client, _ = _client(settings, database)
         metadata = client.spreadsheet(spreadsheet_id)
         title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
         tabs = [str((sheet.get("properties") or {}).get("title", "")) for sheet in metadata.get("sheets") or []]
@@ -287,7 +230,7 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
 
 def refresh_teacher_directory(database: Database, settings: Settings) -> dict[str, Any]:
     """Read the authoritative teacher-assignment tab and reconcile only teachers."""
-    client, _ = _client(settings)
+    client, _ = _client(settings, database)
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
     metadata = client.spreadsheet(spreadsheet_id)
     title = str((metadata.get("properties") or {}).get("title", ""))
@@ -309,7 +252,7 @@ def refresh_teacher_directory_dry_run(database: Database, settings: Settings) ->
     audit, or membership writes.  It is safe to run against production DB
     credentials for an operator-facing preview.
     """
-    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings)
+    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings, database)
     with database.connection() as connection:
         teachers, groups, current_assignments, canonical_subjects = _reconciliation_inputs(database, connection)
     plan = build_teacher_reconciliation_plan(values, canonical_teachers=teachers, canonical_groups=groups, canonical_subjects=canonical_subjects, current_assignments=current_assignments)
@@ -395,7 +338,7 @@ def _apply_plan(database: Database, connection: Any, plan: TeacherReconciliation
 
 def refresh_teacher_directory_reconciliation_apply(database: Database, settings: Settings) -> dict[str, Any]:
     """Apply the guarded structured teacher-directory reconciliation to production."""
-    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings)
+    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings, database)
     with database.connection() as connection:
         foundation = _ensure_literature_11_base(database, connection)
         teachers, groups, current_assignments, canonical_subjects = _reconciliation_inputs(database, connection)

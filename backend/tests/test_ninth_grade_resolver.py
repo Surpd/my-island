@@ -131,6 +131,15 @@ class NinthGradeResolverTests(unittest.TestCase):
         self.assertEqual(set(result.default_assignment.student_ids), {"d1", "d4", "d5"})
         self.assertEqual(result.default_assignment.activity, "Русский")
 
+    def test_english_pair_marker_resolves_both_groups_in_either_order(self):
+        resolver = NinthGradeResolver(self.context())
+        for marker in ("Англ 6-7", "English группа 7/6"):
+            with self.subTest(marker=marker):
+                result = resolver.interpret(self.row([cell("L3", 12, marker)]))
+                self.assertEqual(result.mode, ScheduleRowMode.ENGLISH)
+                self.assertEqual(set(result.primary_assignments[0].group_ids), {"eng-6", "eng-7"})
+                self.assertEqual(set(result.primary_assignments[0].student_ids), {"d1", "d2"})
+
     def test_ordinary_subject_in_partition_row_uses_its_class_audience(self):
         context = self.learned(self.context(), family="english", columns=(11, 12, 13), lanes=("6", "7", "8"))
         result = NinthGradeResolver(context).interpret(self.row([

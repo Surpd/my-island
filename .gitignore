@@ -7,7 +7,6 @@ dist/
 .env
 .env.*
 !.env.example
-!.env.production
 data/
 backend/__pycache__/
 backend/**/__pycache__/

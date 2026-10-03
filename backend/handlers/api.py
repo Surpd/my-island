@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from datetime import date, datetime, timedelta, timezone
 import json
 import hmac
 import re
+import hashlib
+import secrets
+import time
+from html import escape
+from urllib.parse import urlparse
 
 from backend.database import Database
 from backend.services.auth import AuthError, resolve_auth
@@ -14,10 +20,12 @@ from backend.services.admin import (
     add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
     override_membership, publish_information,
 )
-from backend.services.google_live import GoogleLiveError
+from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, exchange_code
+from backend.services.google_oauth import build_google_authorization_url, google_config
+from backend.services.google_contract import SHEETS_READ_SCOPE
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
-from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
-from backend.services.canonical_weekly_refresh import preview_current_week, refresh_current_week
+from backend.services.canonical_schedule import canonical_version, effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
+from backend.services.canonical_weekly_refresh import confirm_current_template, preview_current_template, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import (
     DraftConflict, DraftNotFound, audience_preview, discard_draft, get_draft,
     merge_import_changes, preview_changes, publish_draft, save_draft,
@@ -155,6 +163,7 @@ class SchedulePublishPayload(BaseModel):
 
 class ScheduleAudiencePreviewPayload(BaseModel):
     audience: dict
+    occupied_audiences: list[dict] = Field(default_factory=list)
 
 
 class ScheduleImportDraftPayload(BaseModel):
@@ -162,6 +171,12 @@ class ScheduleImportDraftPayload(BaseModel):
     expected_revision: int
     proposed_changes: list[dict]
     source_context: dict
+    scope_kind: str = "week"
+    scope_key: str | None = None
+
+
+class ScheduleConfirmTemplatePayload(BaseModel):
+    expected_version_id: str
 
 
 def create_router(database: Database) -> APIRouter:
@@ -197,6 +212,24 @@ def create_router(database: Database) -> APIRouter:
         """Allow read-only admin shadow work without enabling user projections."""
         return get_settings().schedule_backend in {"canonical_shadow", "canonical"}
 
+    def google_reconnect_ready(settings: Any) -> bool:
+        if not (settings.google_oauth_client_id and settings.google_oauth_client_secret and settings.google_oauth_redirect_uri and settings.google_oauth_token_encryption_key):
+            return False
+        redirect = urlparse(settings.google_oauth_redirect_uri)
+        if redirect.path != "/api/integrations/google/callback":
+            return False
+        if settings.app_env == "production":
+            backend = urlparse(settings.backend_public_url or "")
+            return redirect.scheme == "https" and bool(backend.netloc) and redirect.netloc == backend.netloc
+        return redirect.scheme == "http" and redirect.hostname in {"localhost", "127.0.0.1"}
+
+    def google_callback_page(title: str, message: str, status_code: int = 200) -> HTMLResponse:
+        settings = get_settings()
+        return_url = (settings.frontend_public_url or "").rstrip("/") + "/admin/settings"
+        return_link = f'<p><a href="{escape(return_url, quote=True)}">Вернуться в My Island</a></p>' if return_url else "<p>Можно закрыть эту вкладку и вернуться в админку.</p>"
+        body = f'<!doctype html><meta charset="utf-8"><title>{escape(title)}</title><main style="font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px;color:#164b50"><h1>{escape(title)}</h1><p>{escape(message)}</p>{return_link}</main>'
+        return HTMLResponse(body, status_code=status_code, headers={"Cache-Control": "no-store"})
+
     @router.post("/admin/auth/challenge")
     def create_admin_browser_challenge(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -204,6 +237,52 @@ def create_router(database: Database) -> APIRouter:
         code, expires_at = database.create_admin_login_challenge(actor["id"])
         database.record_audit_event("admin_auth.challenge_created", "admin_browser_session", {"expires_at": expires_at}, actor["id"])
         return {"code": code, "expires_at": expires_at, "single_use": True}
+
+    @router.post("/admin/google/reconnect")
+    def google_reconnect_start(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        settings = get_settings()
+        if not google_reconnect_ready(settings):
+            raise HTTPException(status_code=503, detail="Самостоятельное переподключение Google ещё не настроено на сервере")
+        state = secrets.token_urlsafe(32)
+        database.create_google_oauth_state(hashlib.sha256(state.encode("utf-8")).hexdigest(), actor["id"], int(time.time()) + 600)
+        authorization_url = build_google_authorization_url(settings, state, prompt="consent")
+        database.record_audit_event("google_oauth.reconnect_started", "google_oauth", {"expires_in_seconds": 600}, actor["id"])
+        return {"authorization_url": authorization_url, "expires_in_seconds": 600}
+
+    @router.get("/integrations/google/callback", response_class=HTMLResponse)
+    def google_reconnect_callback(state: str = "", code: str | None = None, error: str | None = None):
+        actor_id = database.consume_google_oauth_state(hashlib.sha256(state.encode("utf-8")).hexdigest()) if state else None
+        if actor_id is None:
+            return google_callback_page("Не удалось переподключить Google", "Ссылка устарела или уже использована. Вернитесь в админку и начните подключение заново.", 400)
+        if error:
+            database.record_audit_event("google_oauth.reconnect_cancelled", "google_oauth", {"provider_error": error[:80]}, actor_id)
+            return google_callback_page("Подключение не завершено", "Доступ Google не был подтверждён. Текущее подключение не изменено.", 400)
+        if not code:
+            return google_callback_page("Не удалось переподключить Google", "Google не вернул код авторизации. Текущее подключение не изменено.", 400)
+        settings = get_settings()
+        if not google_reconnect_ready(settings):
+            return google_callback_page("Подключение не настроено", "Администратору сервера нужно завершить одноразовую настройку OAuth.", 503)
+        try:
+            token = exchange_code(google_config(settings), code)
+            if not token.get("refresh_token"):
+                raise GoogleLiveError("Google did not issue a refresh token")
+            scopes = set(str(token.get("scope") or "").split())
+            if SHEETS_READ_SCOPE not in scopes:
+                raise GoogleLiveError("Google did not grant read access to the schedule spreadsheet")
+            store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
+            client = GoogleLiveClient(google_config(settings), token, store)
+            account = str(client.userinfo().get("email") or "").strip().casefold()
+            if not account or account != settings.google_oauth_allowed_email:
+                raise GoogleLiveError(f"Подключите аккаунт {settings.google_oauth_allowed_email}")
+            client.spreadsheet(settings.google_sheets_spreadsheet_id or "")
+            store.save(token, updated_by=actor_id, account_email=account)
+        except GoogleLiveError as exc:
+            database.record_audit_event("google_oauth.reconnect_failed", "google_oauth", {"reason": str(exc)[:180]}, actor_id)
+            return google_callback_page("Подключение не завершено", str(exc), 400)
+        database.record_audit_event("google_oauth.reconnected", "google_oauth", {"account_email": account, "granted_scopes": sorted(scopes)}, actor_id)
+        return google_callback_page("Google подключён", f"Доступ к таблице подтверждён для {account}. Токен сохранён защищённо.")
 
     @router.post("/telegram/webhook")
     async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token")):
@@ -431,9 +510,23 @@ def create_router(database: Database) -> APIRouter:
         require_role(telegram_user, "admin")
         settings = get_settings()
         google_configured = all((settings.google_oauth_client_id, settings.google_oauth_client_secret, settings.google_oauth_redirect_uri))
-        google_token_present = bool(settings.google_oauth_refresh_token)
+        google_store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
+        try:
+            google_token = google_store.load()
+        except GoogleLiveError:
+            google_token = None
+        google_token_present = bool(google_token and google_token.get("refresh_token"))
         google_status = "connected" if google_configured and google_token_present else "reauthorization_required" if google_configured else "configuration_missing"
-        return {"health": database.system_health(), "settings": {"environment": settings.app_env, "database_configured": bool(settings.database_url), "dev_auth_enabled": settings.dev_auth_enabled, "google": {"status": google_status, "configuration_present": google_configured, "refresh_token_present": google_token_present, "message": "Google-соединение готово для синхронизации" if google_status == "connected" else "Необходимо повторно авторизовать Google-соединение" if google_status == "reauthorization_required" else "Google OAuth ещё не настроен"}}}
+        google_credential = database.get_google_oauth_credential()
+        reconnect_available = google_reconnect_ready(settings)
+        google_message = (
+            f"Google подключён: {google_credential['account_email']}" if google_credential and google_token_present else
+            "Google-соединение готово для синхронизации" if google_status == "connected" else
+            "Необходимо повторно авторизовать Google-соединение" if google_status == "reauthorization_required" else
+            "Google OAuth ещё не настроен"
+        )
+        reconnect_message = "" if reconnect_available else "Для переподключения из админки нужна одноразовая настройка callback-адреса и ключа шифрования на сервере."
+        return {"health": database.system_health(), "settings": {"environment": settings.app_env, "database_configured": bool(settings.database_url), "dev_auth_enabled": settings.dev_auth_enabled, "google": {"status": google_status, "configuration_present": google_configured, "refresh_token_present": google_token_present, "account_email": (google_credential or {}).get("account_email") or (google_token or {}).get("google_account_email"), "reconnect_available": reconnect_available, "reconnect_message": reconnect_message, "message": google_message}}}
 
     @router.get("/admin/sources")
     def admin_sources(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -641,6 +734,29 @@ def create_router(database: Database) -> APIRouter:
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             return {"status": "blocked", "ok": False, "message": str(error)}
 
+    @router.post("/admin/schedule/template/confirm")
+    def admin_schedule_confirm_template(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not canonical_admin_backend_enabled():
+            raise HTTPException(status_code=409, detail="Canonical schedule backend is disabled")
+        try:
+            return confirm_current_template(database, get_settings(), payload.expected_version_id)
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/template/preview")
+    def admin_schedule_template_preview(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not canonical_admin_backend_enabled():
+            return {"status": "blocked", "message": "Canonical schedule backend is disabled"}
+        try:
+            result = preview_current_template(database, get_settings(), payload.expected_version_id)
+            if result.get("status") == "preview":
+                result["draft_changes"] = preview_changes(result)
+            return result
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            return {"status": "blocked", "message": str(error)}
+
     @router.get("/admin/schedule/validate-students")
     def admin_schedule_validate_students(week_start: str, grades: str = "", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
@@ -697,7 +813,18 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_publish_draft(payload: SchedulePublishPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return publish_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, actor_user_id=actor["id"], comment=payload.comment)
+            draft = get_draft(database, payload.scope_kind, payload.scope_key)
+            result = publish_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, actor_user_id=actor["id"], comment=payload.comment)
+            source = draft.get("source_context") or {}
+            if payload.scope_kind == "template" and source.get("source") == "google_sheet" and source.get("fingerprint"):
+                try:
+                    result["source_baseline"] = confirm_current_template(database, get_settings(), result["published_id"],
+                        expected_source_fingerprint=str(source["fingerprint"]))
+                except (GoogleLiveError, ValueError, RuntimeError) as error:
+                    # The immutable publication succeeded; a changed/unavailable source must
+                    # remain pending, never be silently accepted as the new baseline.
+                    result["source_baseline"] = {"status": "pending", "message": str(error)}
+            return result
         except DraftConflict as error:
             raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
         except DraftNotFound as error:
@@ -709,7 +836,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_audience_preview(payload: ScheduleAudiencePreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return audience_preview(database, payload.audience)
+            return audience_preview(database, payload.audience, payload.occupied_audiences)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -717,7 +844,12 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_import_to_draft(payload: ScheduleImportDraftPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return merge_import_changes(database, payload.week_start, expected_revision=payload.expected_revision, proposed_changes=payload.proposed_changes, source_context=payload.source_context, actor_user_id=actor["id"])
+            if payload.scope_kind not in {"week", "template"}:
+                raise ValueError("Unsupported schedule import scope")
+            scope_key = payload.scope_key if payload.scope_kind == "template" else payload.week_start
+            if payload.scope_kind == "template" and str((canonical_version(database) or {}).get("version_id") or "") != str(scope_key or ""):
+                raise ValueError("Canonical template changed; reload before importing")
+            return merge_import_changes(database, str(scope_key or ""), expected_revision=payload.expected_revision, proposed_changes=payload.proposed_changes, source_context=payload.source_context, actor_user_id=actor["id"], scope_kind=payload.scope_kind)
         except DraftConflict as error:
             raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
         except ValueError as error:

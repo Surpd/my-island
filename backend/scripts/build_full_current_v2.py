@@ -18,7 +18,184 @@ from typing import Any, Mapping
 from backend.services.schedule_canonical_bootstrap import build_bootstrap_canonical
 from backend.services.schedule_pipeline import parse_schedule_matrix
 from backend.services.school_data import stable_fingerprint
-from backend.services.teacher_directory import TEACHER_ALIASES
+from backend.services.teacher_directory import resolve_teacher_id
+
+
+BELL_SCHEDULE = (
+    ("09:00", "09:45"), ("09:55", "10:40"), ("10:55", "11:40"),
+    ("11:50", "12:35"), ("12:45", "13:30"), ("13:40", "14:25"),
+    ("14:35", "15:20"), ("15:30", "16:15"), ("16:25", "17:10"),
+)
+WEEKDAY_TOKENS = {"пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4}
+
+
+def normalize_bell_times(lessons: list[dict[str, Any]], values: list[list[Any]]) -> int:
+    """Map source timetable rows to the school's fixed bell schedule.
+
+    Source tabs occasionally contain stale or mistyped labels (e.g. 15:25).
+    The row's position within its weekday is the canonical period number.
+    """
+    row_periods: dict[tuple[int, int], int] = {}
+    weekday: int | None = None
+    next_period = 0
+    time_pattern = re.compile(r"^\s*\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}\s*$")
+    for row_index, row in enumerate(values):
+        first = str((row or [""])[0] or "").strip()
+        weekday_hits = []
+        for cell in row[1:]:
+            token = norm(cell).split(" ", 1)[0] if cell else ""
+            if token in WEEKDAY_TOKENS:
+                weekday_hits.append(WEEKDAY_TOKENS[token])
+        if len(weekday_hits) >= 2:
+            weekday = Counter(weekday_hits).most_common(1)[0][0]
+            next_period = 0
+            continue
+        if weekday is None or not time_pattern.fullmatch(first):
+            continue
+        if next_period < len(BELL_SCHEDULE):
+            row_periods[(weekday, row_index)] = next_period
+        next_period += 1
+
+    normalized = 0
+    for lesson in lessons:
+        period = row_periods.get((int(lesson.get("weekday", -1)), int(lesson.get("source_row", -1))))
+        if period is None:
+            continue
+        start, end = BELL_SCHEDULE[period]
+        lesson["start_time"], lesson["end_time"] = start, end
+        lesson["slot_key"] = f"{lesson.get('weekday')}|{start}|{lesson.get('source_column')}"
+        lesson["bell_period"] = period + 1
+        normalized += 1
+    return normalized
+
+
+def add_explicit_grade7_group_fallback(
+    artifact: dict[str, Any], lessons: list[Mapping[str, Any]],
+    groups: list[Mapping[str, Any]], memberships: list[Mapping[str, Any]],
+) -> int:
+    """Keep explicit current Grade 7 labels editable when inference is ambiguous.
+
+    The live sheet's explicit 7-A/7-B and split 1/2 markers map to existing
+    canonical roster groups. This is an intentionally reviewable bootstrap,
+    not a claim that the old Grade 7 interpretation still applies.
+    """
+    group_ids = {str(item.get("name")): str(item["id"]) for item in groups}
+    member_ids: dict[str, list[str]] = {}
+    for item in memberships:
+        member_ids.setdefault(str(item["group_id"]), []).append(str(item["identity_id"]))
+    lesson_by_cell = {str(item.get("source_cell")): item for item in lessons}
+    routed = 0
+    for block in (artifact.get("blocks") or {}).values():
+        if str(block.get("grade_scope")) != "7":
+            continue
+        unresolved = list(block.get("unresolved") or [])
+        keep = []
+        for issue in unresolved:
+            if issue.get("reason") != "explicit instructional audience has no unique canonical group":
+                keep.append(issue)
+                continue
+            cell = str(issue.get("source_cell") or "")
+            lesson = lesson_by_cell.get(cell)
+            raw = str((lesson or {}).get("raw_text") or issue.get("raw_text") or "")
+            base_match = re.search(r"\b7\s*[-–]?\s*([АAБB])\b", raw, re.IGNORECASE)
+            split_match = re.search(r"\b(?:мат\w*|физ\w*|биол\w*)\s*(?:группа\s*)?([12])\b", raw, re.IGNORECASE)
+            group_name = None
+            if base_match:
+                letter = "А" if base_match.group(1).casefold() in {"а", "a"} else "Б"
+                group_name = f"grade7:base:7-{letter}"
+            elif split_match:
+                group_name = f"grade7:split:{split_match.group(1)}"
+            group_id = group_ids.get(group_name or "")
+            if not group_id or not lesson:
+                keep.append(issue)
+                continue
+            teacher_ids = [str(value) for value in lesson.get("resolved_identity_ids") or []]
+            activity = str(lesson.get("subject") or lesson.get("raw_text") or "").strip()
+            block.setdefault("assignments", []).append({
+                "activity": activity, "role": "primary",
+                "audience": {"type": "canonical_groups", "canonical_group_ids": [group_id]},
+                "student_ids": sorted(member_ids.get(group_id, [])),
+                "student_count": len(member_ids.get(group_id, [])),
+                "teacher_ids": teacher_ids,
+                "source_cells": [cell],
+                "metadata": {
+                    "approximate_grade7_audience": True,
+                    "mapping_basis": "explicit class or split marker from current template",
+                    "review_before_accepting": True,
+                },
+            })
+            routed += 1
+        block["unresolved"] = keep
+        if not keep:
+            block["status"] = "resolved"
+
+    previous = {str(item.get("block_key")): item for item in artifact.get("unresolved") or []}
+    artifact["unresolved"] = [
+        {"block_key": key, "weekday": block.get("weekday"), "slot": block.get("slot"),
+         "issues": list(block.get("unresolved") or []),
+         "conflict_student_ids": list(previous.get(str(key), {}).get("conflict_student_ids") or [])}
+        for key, block in (artifact.get("blocks") or {}).items() if block.get("unresolved")
+    ]
+    artifact.setdefault("summary", {})["approximate_grade7_assignments"] = routed
+    artifact["summary"]["unresolved_blocks"] = len(artifact["unresolved"])
+    artifact["summary"]["resolved_blocks"] = max(0, artifact["summary"].get("logical_blocks", 0) - len(artifact["unresolved"]))
+    return routed
+
+
+def add_editable_source_class_fallback(
+    artifact: dict[str, Any], lessons: list[Mapping[str, Any]], groups: list[Mapping[str, Any]],
+) -> int:
+    """Retain a lesson card when semantics are unresolved but its class is explicit."""
+    class_groups: dict[str, list[str]] = {}
+    for group in groups:
+        if norm(group.get("group_type")) != "class":
+            continue
+        label = norm(group.get("base_class_name") or group.get("name"))
+        if label:
+            class_groups.setdefault(label, []).append(str(group["id"]))
+    lesson_by_cell = {str(item.get("source_cell")): item for item in lessons}
+    added = 0
+    for block in (artifact.get("blocks") or {}).values():
+        assigned_cells = {
+            str(cell)
+            for assignment in block.get("assignments") or []
+            for cell in assignment.get("source_cells") or []
+        }
+        for issue in block.get("unresolved") or []:
+            if issue.get("reason") not in {"missing canonical OGE instructional group", "explicit instructional audience has no unique canonical group"}:
+                continue
+            coordinates = list(issue.get("source_cells") or [])
+            if issue.get("source_cell"):
+                coordinates.append(issue["source_cell"])
+            for cell in dict.fromkeys(str(value) for value in coordinates):
+                if cell in assigned_cells:
+                    continue
+                lesson = lesson_by_cell.get(cell)
+                if not lesson:
+                    continue
+                source_class = norm(lesson.get("audience"))
+                candidates = class_groups.get(source_class, [])
+                if len(candidates) != 1:
+                    continue
+                group_id = candidates[0]
+                raw_text = str(lesson.get("raw_text") or "")
+                block.setdefault("assignments", []).append({
+                    "activity": str(lesson.get("subject") or raw_text).strip(),
+                    "role": "primary",
+                    "audience": {"type": "canonical_groups", "canonical_group_ids": [group_id]},
+                    "teacher_ids": [str(value) for value in lesson.get("resolved_identity_ids") or []],
+                    "source_cells": [cell],
+                    "metadata": {
+                        "approximate_source_class_audience": True,
+                        "source_audience_label": str(lesson.get("audience") or ""),
+                        "source_raw_text": raw_text,
+                        "review_before_accepting": True,
+                    },
+                })
+                assigned_cells.add(cell)
+                added += 1
+    artifact.setdefault("summary", {})["editable_source_class_fallbacks"] = added
+    return added
 
 
 def norm(value: Any) -> str:
@@ -39,24 +216,7 @@ def cell_by_coord(values: list[list[Any]]) -> dict[str, str]:
 
 
 def teacher_id_for(raw: str, hint: str, teachers: list[Mapping[str, Any]]) -> tuple[str | None, str | None]:
-    names = {norm(item.get("display_name")): str(item["id"]) for item in teachers}
-    value = norm(hint) or norm(raw)
-    if not value:
-        return None, "teacher not stated in source"
-    for alias, full in TEACHER_ALIASES.items():
-        if re.search(rf"(?:^|\s){re.escape(alias)}(?:$|\s)", value):
-            return names.get(norm(full)), None if norm(full) in names else f"teacher alias {full!r} absent from directory"
-    matches = [(name, teacher_id) for name, teacher_id in names.items() if re.search(rf"(?:^|\s){re.escape(name)}(?:$|\s)", value)]
-    if len(matches) == 1:
-        return matches[0][1], None
-    if len(matches) > 1:
-        return None, "multiple teacher directory matches: " + ", ".join(item[0] for item in matches)
-    # A short source token can be a unique directory prefix, but only use it
-    # when the directory proves uniqueness.
-    prefixes = [(name, teacher_id) for name, teacher_id in names.items() if name.startswith(value)]
-    if len(prefixes) == 1 and len(value) >= 4:
-        return prefixes[0][1], None
-    return None, "teacher text is not uniquely resolvable from current directory"
+    return resolve_teacher_id(raw, hint, teachers)
 
 
 def add_teacher_resolution(artifact: dict[str, Any], lessons: list[Mapping[str, Any]], teachers: list[Mapping[str, Any]]) -> None:
@@ -224,15 +384,19 @@ def merge_grade7(artifact: dict[str, Any], candidate: Mapping[str, Any], groups:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--grade7", type=Path, required=True)
+    parser.add_argument("--values", type=Path, help="Fresh source values JSON; replaces values in --input")
+    parser.add_argument("--grade7", type=Path, help="Optional reviewed Grade 7 override; omitted to use the live source")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--parent-version-id", default="4d21ef71ba1b0cb92b48735f410758b64a882c5f496a4361be02c5a6e229cf93")
     args = parser.parse_args()
     payload = json.loads(args.input.read_text(encoding="utf-8"))
+    if args.values:
+        payload["values"] = json.loads(args.values.read_text(encoding="utf-8"))
     source_values = payload["values"]
     db = payload["db"]
     tab = {"sheet_id": payload["sheet_id"], "title": payload["title"], "values": source_values}
     lessons = parse_schedule_matrix(tab, "Расписание 2026/27")
+    normalized_bell_lessons = normalize_bell_times(lessons, source_values)
     teachers = list(db.get("teachers") or [])
     teacher_names = {norm(item.get("display_name")): str(item["id"]) for item in teachers}
     for lesson in lessons:
@@ -242,7 +406,7 @@ def main() -> None:
     source_fingerprint = stable_fingerprint({"spreadsheet_id": payload["spreadsheet_id"], "sheet_id": payload["sheet_id"], "values": source_values})
     corpus = {
         "snapshot": {
-            "id": f"live-template-{payload['sheet_id']}-2026-09-13",
+            "id": f"live-template-{payload['sheet_id']}-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
             "source_fingerprint": source_fingerprint,
             "fingerprint": source_fingerprint,
             "spreadsheet_id": payload["spreadsheet_id"],
@@ -257,8 +421,11 @@ def main() -> None:
         "teachers": teachers,
     }
     artifact = build_bootstrap_canonical(corpus, explicit_sdep=())
-    candidate = json.loads(args.grade7.read_text(encoding="utf-8"))
-    artifact = merge_grade7(artifact, candidate, corpus["groups"], corpus["memberships"])
+    if args.grade7:
+        candidate = json.loads(args.grade7.read_text(encoding="utf-8"))
+        artifact = merge_grade7(artifact, candidate, corpus["groups"], corpus["memberships"])
+    approximate_grade7_assignments = add_explicit_grade7_group_fallback(artifact, lessons, corpus["groups"], corpus["memberships"])
+    editable_source_class_fallbacks = add_editable_source_class_fallback(artifact, lessons, corpus["groups"])
     add_teacher_resolution(artifact, lessons, teachers)
     artifact["schema_version"] = "canonical-schedule-v2"
     artifact["interpretation_source"] = "live_template_agent_bootstrap_v2"
@@ -270,6 +437,10 @@ def main() -> None:
     artifact["source_metadata"] = {
         "structured_values": True,
         "source_cells": len(lessons),
+        "bell_times_normalized": normalized_bell_lessons,
+        "approximate_grade7_assignments": approximate_grade7_assignments,
+        "editable_source_class_fallbacks": editable_source_class_fallbacks,
+        "bell_schedule": [{"period": index + 1, "start": start, "end": end} for index, (start, end) in enumerate(BELL_SCHEDULE)],
         "sheet": payload["title"],
         "sheet_id": payload["sheet_id"],
         "source_of_truth": "live Google Sheet current template",
@@ -280,7 +451,7 @@ def main() -> None:
     artifact["summary"]["teacher_unresolved_assignments"] = artifact["teacher_resolution"]["unresolved_assignment_count"]
     artifact["summary"]["grade7_reused_blocks"] = artifact.get("grade7_reuse", {}).get("replaced_block_count", 0)
     args.output.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"version_id": artifact["version_id"], "summary": artifact["summary"], "grade7_reuse": artifact["grade7_reuse"], "teacher_resolution": artifact["teacher_resolution"]}, ensure_ascii=False))
+    print(json.dumps({"version_id": artifact["version_id"], "summary": artifact["summary"], "grade7_reuse": artifact.get("grade7_reuse"), "teacher_resolution": artifact["teacher_resolution"], "bell_times_normalized": normalized_bell_lessons}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
