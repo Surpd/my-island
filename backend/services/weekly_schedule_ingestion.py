@@ -364,14 +364,30 @@ def build_weekly_diff(
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
         weekly_coords = [str(item["source_cell"]) for item in week_items]
-        patch: dict[str, Any] = {"block_key": base.get("block_key"), "change_kind": kind, "change_classification": classification, "weekly_source_cells": sorted(weekly_coords), "weekly_raw_text": {coord: weekly_raw[coord].get("raw_text") for coord in weekly_coords}}
+        patch: dict[str, Any] = {
+            "block_key": base.get("block_key"), "change_kind": kind,
+            "change_classification": classification, "weekday": key[0],
+            "slot": {"start": key[1], "end": key[2]}, "grade_scope": key[3],
+            "lesson_date": next((item.get("lesson_date") for item in week_items if item.get("lesson_date")), None),
+            "weekly_source_cells": sorted(weekly_coords),
+            "weekly_raw_text": {coord: weekly_raw[coord].get("raw_text") for coord in weekly_coords},
+        }
         if classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"} and weekly_block:
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
         elif classification == "REPLACED":
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
+            patch["resolution_details"] = [
+                str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
+                if isinstance(issue, Mapping) and issue.get("reason")
+            ]
         elif classification == "METADATA_ONLY":
             patch["source_provenance"] = {"source_cells": [{"coordinate": coord, "raw_text": weekly_raw[coord].get("raw_text")} for coord in weekly_coords], "metadata_only": True}
+            if weekly_block and weekly_block.get("unresolved"):
+                patch["resolution_details"] = [
+                    str(issue.get("reason")) for issue in weekly_block.get("unresolved", [])
+                    if isinstance(issue, Mapping) and issue.get("reason")
+                ]
         diffs.append({"key": key, "canonical_block_key": base.get("block_key"), "classification": classification, "change_kind": kind, "template_cells": source_cells, "weekly_cells": weekly_coords, "patch": patch, "weekly_block": weekly_block})
     for key, block in weekly_by_key.items():
         if key in canonical_by_key:
