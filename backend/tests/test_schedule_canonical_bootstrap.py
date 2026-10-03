@@ -26,27 +26,29 @@ def lesson(cell, text, audience, grade, *, weekday=0, source_day_label="Пн"):
 
 
 class ScheduleCanonicalBootstrapTests(unittest.TestCase):
-    def test_angl_group_number_uses_canonical_english_membership_not_room(self):
+    def test_english_pair_marker_routes_union_of_existing_groups_within_class(self):
         corpus = {
             "snapshot": {"id": "snapshot", "fingerprint": "source"},
-            "students": [{"id": "s1", "class_name": "8"}, {"id": "s2", "class_name": "8"}],
+            "students": [{"id": "5a", "class_name": "5"}, {"id": "5b", "class_name": "5"}, {"id": "6a", "class_name": "6"}],
             "groups": [
-                {"id": "base8", "name": "8", "base_class_name": "8", "group_type": "class"},
-                {"id": "english4", "name": "English 4", "group_type": "instructional",
-                 "subject": "Английский", "subject_subgroup": "4"},
-                {"id": "english5", "name": "English 5", "group_type": "instructional",
-                 "subject": "Английский", "subject_subgroup": "5"},
+                {"id": "base5", "name": "5", "base_class_name": "5", "group_type": "class"},
+                {"id": "base6", "name": "6", "base_class_name": "6", "group_type": "class"},
+                {"id": "eng1", "name": "English 1", "group_type": "instructional", "subject": "Английский", "subject_subgroup": "1"},
+                {"id": "eng2", "name": "English 2", "group_type": "instructional", "subject": "Английский", "subject_subgroup": "2"},
             ],
-            "memberships": [{"group_id": "base8", "identity_id": item} for item in ("s1", "s2")]
-                           + [{"group_id": "english4", "identity_id": "s1"},
-                              {"group_id": "english5", "identity_id": "s2"}],
+            "memberships": [
+                {"group_id": "base5", "identity_id": "5a"}, {"group_id": "base5", "identity_id": "5b"},
+                {"group_id": "base6", "identity_id": "6a"},
+                {"group_id": "eng1", "identity_id": "5a"}, {"group_id": "eng1", "identity_id": "6a"},
+                {"group_id": "eng2", "identity_id": "5b"},
+            ],
             "teachers": [],
-            "lessons": [lesson("I19", "Англ 4 каб 17", "8", "8")],
+            "lessons": [lesson("B3", "Англ 1-2 Ангелина каб.16", "5", "5")],
         }
         block = next(iter(build_bootstrap_canonical(corpus)["blocks"].values()))
-        english = next(item for item in block["assignments"] if item["activity"] != NO_LESSON)
-        self.assertEqual(english["audience"]["canonical_group_ids"], ["english4"])
-        self.assertEqual(english["student_ids"], ["s1"])
+        assignment = block["assignments"][0]
+        self.assertEqual(assignment["audience"]["canonical_group_ids"], ["eng1", "eng2"])
+        self.assertEqual(assignment["student_ids"], ["5a", "5b"])
 
     def test_cross_class_english_group_and_class_remainder_keep_one_group(self):
         group = "english-1"

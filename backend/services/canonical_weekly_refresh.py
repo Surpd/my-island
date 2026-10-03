@@ -78,7 +78,7 @@ def _grid_tab(client: GoogleLiveClient, spreadsheet_id: str, title: str, sheet_i
 
 def _db_corpus(database: Database) -> dict[str, list[dict[str, Any]]]:
     queries = {
-        "students": "SELECT id,display_name,class_name,status FROM identities WHERE kind='student' AND status='active' ORDER BY id",
+        "students": "SELECT id,display_name,class_name,status FROM identities WHERE kind='student' ORDER BY id",
         "teachers": "SELECT id,display_name,status FROM identities WHERE kind='teacher' AND status='active' ORDER BY id",
         "groups": "SELECT * FROM groups WHERE canonical IS TRUE ORDER BY id",
         "memberships": "SELECT group_id,identity_id,member_role,active FROM memberships WHERE active IS TRUE ORDER BY group_id,identity_id",
@@ -316,15 +316,12 @@ def preview_template_snapshot(database: Database, *, spreadsheet_id: str,
             moves[matches[0]] = old_key
     changed.difference_update(moves.values())
     corpus = _db_corpus(database) if changed else {}
-    canonical = _artifact_shape(read_canonical_template(database, expected_version_id) or {})
-    subjects = [str(group.get("subject") or "") for group in corpus.get("groups") or []]
-    subjects.extend(str(item.get("activity") or "") for block in (canonical.get("blocks") or {}).values()
-                    for item in block.get("assignments") or [])
     changed_rows = {key: current[key] for key in changed if key in current}
-    lessons = parse_weekly_lessons(changed_rows, corpus["teachers"], subjects) if changed_rows else []
+    lessons = parse_weekly_lessons(changed_rows, corpus["teachers"]) if changed_rows else []
     artifact = build_bootstrap_canonical({"snapshot": {"id": "template-preview", "fingerprint": "preview"},
                                           "lessons": lessons, **corpus}) if lessons else {"blocks": {}}
     resolved = {comparison_key(block): block for block in (artifact.get("blocks") or {}).values()}
+    canonical = _artifact_shape(read_canonical_template(database, expected_version_id) or {})
     canonical_by_key = {comparison_key(block): block for block in (canonical.get("blocks") or {}).values()}
     mapping = confirmed["structural_payload"].get("source_to_canonical") or {}
     patches = []
@@ -451,17 +448,14 @@ def _prepare_current_week(
     fingerprint = _source_fingerprint(normalized_source_rows(weekly_parsed, include_day_label=False))
     changed_keys = source_change_keys(confirmed_parsed, weekly_parsed)
     changed_parsed = {key: weekly_parsed[key] for key in changed_keys if key in weekly_parsed}
-    subjects = [str(group.get("subject") or "") for group in corpus_db["groups"]]
-    subjects.extend(str(item.get("activity") or "") for block in (current.get("blocks") or {}).values()
-                    for item in block.get("assignments") or [])
-    weekly_lessons = parse_weekly_lessons(changed_parsed, corpus_db["teachers"], subjects) if changed_parsed else []
+    weekly_lessons = parse_weekly_lessons(changed_parsed, corpus_db["teachers"]) if changed_parsed else []
     weekly_artifact = build_bootstrap_canonical({"snapshot": {"id": f"weekly-{weekly_tab['sheet_id']}-{week_start}", "fingerprint": fingerprint}, "lessons": weekly_lessons, **corpus_db}) if weekly_lessons else {"blocks": {}}
     template_meta = meta_map(confirmed["raw_payload"].get("structured_cells") or [], weekly=False)
     weekly_meta = meta_map(weekly_tab["structured_cells"], weekly=True)
     diff = build_weekly_diff(current, confirmed_parsed, weekly_parsed, weekly_artifact, template_meta, weekly_meta,
                              confirmed["structural_payload"].get("source_to_canonical") or {})
-    # The language model sees only changed cells that deterministic resolution
-    # left ambiguous. Its validated output is always review-only.
+    # Ask AI only about changed cells that deterministic resolution left ambiguous.
+    # Its validated output remains review-only and never overrides roster facts.
     proposed_lessons, proposed_cells, semantic_fallback = propose_changed_lessons(
         weekly_lessons, diff["patches"], corpus_db,
     )

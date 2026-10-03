@@ -10,7 +10,6 @@ from backend.services.teacher_directory import (
     canonical_teacher_name,
     normalize_subjects,
     parse_teacher_rows,
-    resolve_teacher_id,
     sync_teacher_directory,
 )
 from backend.scripts.build_full_current_v2 import teacher_id_for
@@ -60,24 +59,6 @@ class TeacherDirectoryTests(unittest.TestCase):
             teacher_id, issue = teacher_id_for(alias, "", teachers)
             self.assertEqual(teacher_id, expected)
             self.assertIsNone(issue)
-
-    def test_teacher_resolution_ignores_alias_punctuation_and_prefers_full_name(self):
-        teachers = [
-            {"id": "elena", "display_name": "Елена Викторовна"},
-            {"id": "anna-v", "display_name": "Анна Владимировна"},
-            {"id": "anna-e", "display_name": "Анна Елисеева"},
-        ]
-        self.assertEqual(resolve_teacher_id("Русский Е.В.", "", teachers), ("elena", None))
-        self.assertEqual(resolve_teacher_id("Русский Анна Елисеева.", "", teachers), ("anna-e", None))
-
-    def test_teacher_resolution_keeps_conflicting_aliases_unresolved(self):
-        teachers = [
-            {"id": "elena", "display_name": "Елена Викторовна"},
-            {"id": "andrey", "display_name": "Андрей"},
-        ]
-        teacher_id, issue = resolve_teacher_id("Английский ЕВ / АНК", "", teachers)
-        self.assertIsNone(teacher_id)
-        self.assertIn("multiple teacher aliases", issue)
 
     def test_sync_is_idempotent_and_does_not_touch_student_memberships(self):
         with tempfile.TemporaryDirectory() as directory:

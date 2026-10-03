@@ -25,7 +25,7 @@ from backend.services.school_data import stable_fingerprint
 
 
 _GRADE = re.compile(r"^\s*(\d{1,2})")
-_ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*(?:группа|group)?\s*(\d{1,2})(?:\s*/\s*(\d{1,2}))?", re.IGNORECASE)
+_ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*(?:группа|group)?\s*(\d{1,2}(?:\s*[/,-]\s*\d{1,2})*)", re.IGNORECASE)
 _EXAM = re.compile(r"\b(?:огэ|егэ|oge)\b", re.IGNORECASE)
 
 
@@ -204,18 +204,21 @@ def _exact_class_groups(cell: Any, groups: Sequence[Mapping[str, Any]]) -> list[
     return [str(group["id"]) for group in groups if _norm(group.get("group_type")) == "class" and _norm(group.get("base_class_name") or group.get("name")) in names]
 
 
-def _english_group_for_cell(cell: Any, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> str | None:
+def _english_groups_for_cell(cell: Any, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> list[str] | None:
     match = _ENGLISH_NUMBER.search(cell.raw_text)
     if not match:
         return None
-    if match.group(2) and match.group(2) != match.group(1):
-        return None
-    number = match.group(1)
-    candidates = [str(group["id"]) for group in groups
-                  if _subject(group.get("subject")) == "английский"
-                  and re.search(rf"(?:^|\D){re.escape(number)}$", str(group.get("subject_subgroup") or group.get("name") or ""))
-                  and bool(set(memberships.get(str(group["id"]), ())) & universe)]
-    return candidates[0] if len(candidates) == 1 else None
+    numbers = list(dict.fromkeys(re.findall(r"\d{1,2}", match.group(1))))
+    resolved: list[str] = []
+    for number in numbers:
+        candidates = [str(group["id"]) for group in groups
+                      if _subject(group.get("subject")) == "английский"
+                      and re.search(rf"(?:^|\D){re.escape(number)}$", str(group.get("subject_subgroup") or group.get("name") or ""))
+                      and bool(set(memberships.get(str(group["id"]), ())) & universe)]
+        if len(candidates) != 1:
+            return None
+        resolved.append(candidates[0])
+    return resolved
 
 
 def _explicit_instructional_marker(cell: Any) -> bool:
@@ -232,8 +235,8 @@ def _explicit_instructional_marker(cell: Any) -> bool:
     ))
 
 
-def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> str | None:
-    english = _english_group_for_cell(cell, groups, universe, memberships)
+def _instructional_groups(cell: Any, grade: str, groups: Sequence[Mapping[str, Any]], universe: set[str], memberships: Mapping[str, frozenset[str]]) -> list[str] | None:
+    english = _english_groups_for_cell(cell, groups, universe, memberships)
     if english:
         return english
     resolved = {str(value) for value in cell.parsed.get("resolved_group_ids") or []}
@@ -241,7 +244,7 @@ def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, An
                and _norm(group.get("group_type")) != "class"
                and bool(set(memberships.get(str(group["id"]), ())) & universe)]
     if len(matched) == 1:
-        return str(matched[0]["id"])
+        return [str(matched[0]["id"])]
     raw = _norm(cell.raw_text)
     subject = _subject(cell.parsed.get("subject"))
     candidates = []
@@ -258,7 +261,7 @@ def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, An
     if _EXAM.search(cell.raw_text):
         exam = [item for item in candidates if _norm(item.get("exam_track")) in {"огэ", "егэ", "oge"}]
         if len(exam) == 1:
-            return str(exam[0]["id"])
+            return [str(exam[0]["id"])]
         # Some current rosters name the canonical exam-preparation
         # partition "Угл" while the schedule says ЕГЭ.  Treat that as an
         # equivalent only when the directory proves there is exactly one
@@ -266,16 +269,16 @@ def _instructional_group(cell: Any, grade: str, groups: Sequence[Mapping[str, An
         # choose among several candidates or fall back to the base class.
         advanced = [item for item in candidates if _norm(item.get("subject_subgroup")) in {"угл", "advanced", "углублённая", "углубленная"}]
         if len(advanced) == 1:
-            return str(advanced[0]["id"])
+            return [str(advanced[0]["id"])]
         return None
     if any(marker in raw for marker in ("база", "базовая")):
         base = [item for item in candidates if _norm(item.get("subject_subgroup")) in {"база", "base", "базовая"}]
         if len(base) == 1:
-            return str(base[0]["id"])
+            return [str(base[0]["id"])]
     if any(marker in raw for marker in ("матпроф", "проф", "угл")):
         advanced = [item for item in candidates if _norm(item.get("subject_subgroup")) in {"угл", "advanced", "углублённая", "углубленная"}]
         if len(advanced) == 1:
-            return str(advanced[0]["id"])
+            return [str(advanced[0]["id"])]
     return None
 
 
@@ -321,17 +324,17 @@ def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships
         if cell.parsed.get("activity_type") == "extracurricular" or cell.raw_text.lstrip().startswith("⚪"):
             continue
         target_grade = next(iter(row_grades), "")
-        group_id = _instructional_group(cell, target_grade, groups, universe, memberships)
-        if group_id:
-            group = group_by_id[group_id]
-            members = (set(memberships.get(group_id, ())) & universe) - base_gaps
+        group_ids = _instructional_groups(cell, target_grade, groups, universe, memberships)
+        if group_ids:
+            members = (set().union(*(set(memberships.get(group_id, ())) for group_id in group_ids)) & universe) - base_gaps
             class_groups = _exact_class_groups(cell, groups)
             if len(class_groups) == 1:
                 members.intersection_update(memberships.get(class_groups[0], ()))
-            role = "primary" if semantic_roles[group_id] == "instructional_partition" else "elective_overlay"
+            role = "primary" if any(semantic_roles[group_id] == "instructional_partition" for group_id in group_ids) else "elective_overlay"
             teacher_ids = [str(item) for item in cell.parsed.get("resolved_identity_ids", ())]
+            group = group_by_id[group_ids[0]]
             activity = classify_simple_activity(cell.raw_text) or str(group.get("subject") or cell.parsed.get("subject") or cell.raw_text)
-            assignments.append(_assignment_payload(activity, role, [group_id], members, [cell], teachers, teacher_ids,
+            assignments.append(_assignment_payload(activity, role, group_ids, members, [cell], teachers, teacher_ids,
                 grade=row.grade_scope, class_group_id=class_groups[0] if len(class_groups) == 1 else ""))
             grouped_cells.add(cell.source_cell)
         elif _explicit_instructional_marker(cell) or cell.parsed.get("resolved_group_ids"):

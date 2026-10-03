@@ -5,8 +5,9 @@ Telegram Mini App + school backend с единым responsive Student / Teacher 
 ## Идентичность проекта и production safety
 
 Этот репозиторий относится только к **My Island**. Он не связан с IslandQuiz,
-Island Quiz или Island Kingdom. Запрещённые внешние targets и точные ID нашего
-Render workspace/service перечислены в `.project-identity.json`.
+Island Quiz или Island Kingdom. Точные запрещённые внешние targets и обязательные
+проверки хранятся в `.project-identity.json`, а правила для автоматизированных
+агентов — в `AGENTS.md`.
 
 Production-сборка требует явный `VITE_API_BASE_URL`; hard-coded fallback запрещён.
 Перед любым Render/Supabase/Sites действием необходимо сверить точные account,

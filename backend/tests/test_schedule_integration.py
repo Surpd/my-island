@@ -191,7 +191,16 @@ class ScheduleIntegrationTests(unittest.TestCase):
             [{"slot_key": "a", "subject": "Математика", "teacher_hint": "ДФ", "room": "17", "modifiers": {}}],
             [{"slot_key": "a", "subject": "Математика", "teacher_hint": "ДФ", "room": "6", "modifiers": {}}, {"slot_key": "b", "subject": "Экскурсия", "activity_type": "special_event"}],
         )
-        self.assertEqual([item["change"] for item in result], ["MODIFIED", "SPECIAL_EVENT"])
+        self.assertEqual([item["change"] for item in result], ["SAME_AS_BASELINE", "SPECIAL_EVENT"])
+
+    def test_room_and_room_diagnostic_do_not_change_template_lesson(self):
+        result = diff_template_week(
+            [{"slot_key": "a", "subject": "Русский язык", "teacher_hint": "ЕВ", "room": "каб. 9",
+              "modifiers": {"parser_diagnostics": "room not provided"}}],
+            [{"slot_key": "a", "subject": "Русский язык", "teacher_hint": "ЕВ", "room": "каб. 16",
+              "modifiers": {"parser_diagnostics": ""}}],
+        )
+        self.assertEqual([item["change"] for item in result], ["SAME_AS_BASELINE"])
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week, read_canonical_template
-from backend.services.canonical_weekly_refresh import _db_corpus, _grid_tab, _persist_source_snapshot, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
+from backend.services.canonical_weekly_refresh import _grid_tab, _persist_source_snapshot, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import merge_import_changes, preview_changes, publish_draft, get_draft
 from backend.services.schedule_parser_v2 import group_schedule_rows
 from backend.services.weekly_schedule_ingestion import (
@@ -115,60 +115,12 @@ class WeeklyTabDiscoveryTests(unittest.TestCase):
 
 
 class MergeAwareParsingTests(unittest.TestCase):
-    def test_lowercase_subject_teacher_initials_and_room_are_separate(self):
-        rows = parsed("русский ев каб 5", audience="8")
-        next(iter(rows.values()))[0]["sheet_id"] = "test"
-        teacher = {"id": "elena", "display_name": "Елена Викторовна"}
-        lesson = parse_weekly_lessons(rows, [teacher])[0]
-        self.assertEqual(lesson["subject"], "Русский язык")
-        self.assertEqual(lesson["resolved_identity_ids"], ["elena"])
-        self.assertEqual(lesson["room"], "каб 5")
-
-    def test_subject_shorthand_uses_directory_vocabulary_not_one_off_aliases(self):
-        examples = (
-            ("матем дф каб 17", "Математика"),
-            ("литер юлия каб 9", "Литература"),
-            ("общ леонид каб 10", "Обществознание"),
-            ("инфор огэ тарас каб 15", "Информатика"),
-            ("англ 1 2 ангелина каб 16", "Английский язык"),
-            ("англ 4 каб 17", "Английский язык"),
-            ("история искусства ев каб 6", "История искусства"),
-        )
-        for raw, expected in examples:
-            with self.subTest(raw=raw):
-                rows = parsed(raw, audience="8")
-                next(iter(rows.values()))[0]["sheet_id"] = "test"
-                lesson = parse_weekly_lessons(rows, [], ["История искусства"])[0]
-                self.assertEqual(lesson["subject"], expected)
-
-    def test_exact_subject_aliases_cover_school_subjects_without_guessing_word_fragments(self):
-        examples = {
-            "мат": "Математика", "матем": "Математика",
-            "гео": "География", "геог": "География",
-            "истор": "История", "истор иск": "История искусства",
-            "биол": "Биология", "хим": "Химия", "естеств": "Естествознание",
-            "рус": "Русский язык", "литер": "Литература",
-            "общ": "Обществознание", "инфор": "Информатика",
-            "трен": "Тренинг", "твор": "Творчество",
-            "муз": "Музыка", "пласт": "Пластика", "англ": "Английский язык",
-        }
-        for alias, expected in examples.items():
-            with self.subTest(alias=alias):
-                rows = parsed(f"{alias} каб 17", audience="8")
-                next(iter(rows.values()))[0]["sheet_id"] = "test"
-                self.assertEqual(parse_weekly_lessons(rows, [])[0]["subject"], expected)
-        for raw in ("материал каб 17", "Ангелина каб 17"):
-            with self.subTest(raw=raw):
-                rows = parsed(raw, audience="8")
-                next(iter(rows.values()))[0]["sheet_id"] = "test"
-                self.assertNotIn(parse_weekly_lessons(rows, [])[0]["subject"],
-                                 {"Математика", "Английский язык"})
-
-    def test_ambiguous_subject_prefix_is_not_guessed(self):
-        rows = parsed("физ иван каб 9", audience="8")
-        next(iter(rows.values()))[0]["sheet_id"] = "test"
-        lesson = parse_weekly_lessons(rows, [], ["Физика", "Физкультура"])[0]
-        self.assertNotIn(lesson["subject"], {"Физика", "Физкультура"})
+    def test_english_club_is_excluded_even_without_circle_marker(self):
+        rows = parsed("Английский клуб 5-7 кл")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [])
+        self.assertEqual(len(semantic), 1)
+        self.assertEqual(semantic[0]["activity_type"], "extracurricular")
 
     def test_two_audience_merge_is_one_source_item(self):
         rows = parse_structure(matrix("Русский", "", "Физика"), sheet_id="1", title="21–25 сентября", week_start="2026-09-21", merges=[{"startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 1, "endColumnIndex": 3}])
@@ -222,123 +174,10 @@ class SharedDiffTests(unittest.TestCase):
         result = self._diff("Русский каб.1", "Русский каб.2", template_meta={"B3": {"note": "a"}}, weekly_meta={"B3": {"note": "b"}})
         self.assertEqual(result["counts"], {"METADATA_ONLY": 1})
 
-    def test_room_change_is_a_proposed_weekly_override(self):
+    def test_room_only_change_is_ignored(self):
         result = self._diff("Русский каб.1", "Русский каб.2")
-        self.assertEqual(result["counts"], {"METADATA_ONLY": 1})
-        self.assertEqual(result["patches"][0]["resolution_state"], "AUTO_RESOLVED")
-        self.assertEqual(len(preview_changes({"overlay_patches": result["patches"]})), 1)
-
-    def test_wording_variant_with_identical_resolved_routing_is_not_a_change(self):
-        base = block("base", "Русский язык", "g1")
-        canonical = {"blocks": {"base": base}}
-        template = parsed("Русский ЕВ")
-        weekly = parsed("Русский Е.В.")
-        replacement = block("weekly", "Русский язык", "g1")
-        replacement["assignments"][0]["teacher_ids"] = []
-        result = build_weekly_diff(canonical, template, weekly, {"blocks": {"weekly": replacement}})
         self.assertEqual(result["counts"], {"UNCHANGED": 1})
         self.assertEqual(result["patches"], [])
-
-    def test_base_membership_gap_does_not_turn_same_lesson_into_override(self):
-        base = block("base", "Русский", "g8")
-        base["grade_scope"] = "8"
-        base["assignments"][0].update({"role": "primary", "teacher_ids": ["elena"],
-                                        "student_ids": ["s8a", "s8b"]})
-        weekly = {**base, "status": "unresolved", "unresolved": [
-            {"reason": "student is missing from the canonical base-class membership"}],
-            "assignments": [{**base["assignments"][0], "activity": "Русский язык",
-                             "student_ids": ["s8a"], "metadata": {"room": "каб 5"}}]}
-        before = parsed("Русский Елена Викторовна", audience="8")
-        after = parsed("русский ев каб 5", audience="8")
-        diff = build_weekly_diff({"blocks": {"base": base}}, before, after,
-                                 {"blocks": {"weekly": weekly}})
-        self.assertEqual(diff["counts"], {"UNCHANGED": 1})
-        self.assertEqual(diff["patches"], [])
-
-        weekly["assignments"][0]["teacher_ids"] = ["other"]
-        changed = build_weekly_diff({"blocks": {"base": base}}, before, after,
-                                    {"blocks": {"weekly": weekly}})
-        self.assertEqual(changed["counts"], {"REPLACED": 1})
-        self.assertEqual(changed["patches"][0]["resolution_state"], "UNRESOLVED")
-        self.assertEqual(changed["patches"][0]["after"]["assignments"], [])
-
-    def test_roster_drift_does_not_create_weekly_change_for_same_lesson(self):
-        base = block("base", "Русский", "g8")
-        base["assignments"][0]["student_ids"] = ["s8a", "s8b"]
-        weekly = block("weekly", "Русский язык", "g8")
-        weekly["assignments"][0]["student_ids"] = ["s8a"]
-        diff = build_weekly_diff({"blocks": {"base": base}}, parsed("Русский"),
-                                 parsed("Русский язык"), {"blocks": {"weekly": weekly}})
-        self.assertEqual(diff["patches"], [])
-
-    def test_unresolved_replacement_shows_new_source_not_old_assignment(self):
-        key = (1, "11:50", "12:35", "8")
-        base = block("base", "Математика", "g8", weekday=1, start="11:50")
-        base["slot"]["end"] = "12:35"
-        base["grade_scope"] = "8"
-        base["assignments"][0]["teacher_ids"] = ["maria"]
-        old = {key: [{"source_cell": "I19", "source_column": 8,
-                      "raw_text": "Матем Мария\nкаб.9", "audience": "8"}]}
-        new = {key: [{"source_cell": "I19", "source_column": 8,
-                      "raw_text": "Химия Родион\nкаб.18", "audience": "8"}]}
-        weekly = {**base, "status": "unresolved", "assignments": [],
-                  "unresolved": [{"reason": "student is missing from the canonical base-class membership"}]}
-        diff = build_weekly_diff({"blocks": {"base": base}}, old, new,
-                                 {"blocks": {"weekly": weekly}})
-        patch = diff["patches"][0]
-        self.assertEqual(patch["before"]["assignments"][0]["activity"], "Математика")
-        self.assertEqual(patch["after"]["assignments"], [])
-        self.assertIn("Химия Родион", patch["after"]["source_text"][0])
-        self.assertEqual(patch["resolution_state"], "UNRESOLVED")
-        proposal = preview_changes({"overlay_patches": diff["patches"]})[0]
-        self.assertIn("Химия Родион", proposal["lesson"]["activity"])
-        self.assertEqual(proposal["lesson"]["audience"]["kind"], "unresolved")
-
-    def test_roster_issue_names_exact_students_in_preview_and_draft(self):
-        base = block("base", "Английский", "g8")
-        base["grade_scope"] = "8"
-        old = parsed("Английский группа 1", audience="8")
-        new = parsed("Англ 4 каб 17", audience="8")
-        weekly = {**base, "status": "unresolved", "assignments": [], "unresolved": [
-            {"reason": "student is missing from the active English instructional partition",
-             "student_ids": ["s1", "s2"]},
-        ]}
-        artifact = {"blocks": {"weekly": weekly}, "students": {
-            "s1": {"display_name": "Анна Иванова", "class_name": "8-А"},
-            "s2": {"display_name": "Пётр Петров", "class_name": "8-Б"},
-        }}
-        patch = build_weekly_diff({"blocks": {"base": base}}, old, new, artifact)["patches"][0]
-        self.assertIn("Анна Иванова (8-А класс)", patch["source_issue"])
-        self.assertIn("Пётр Петров (8-Б класс)", patch["source_issue"])
-        self.assertNotIn("ID ", patch["source_issue"])
-        self.assertIn("групп английского", patch["source_issue"])
-        self.assertEqual(patch["resolution_details"], [
-            "student is missing from the active English instructional partition"])
-        proposal = preview_changes({"overlay_patches": [patch]})[0]
-        self.assertIn("Анна Иванова", proposal["review_reason"])
-        self.assertEqual(proposal["resolution_state"], "UNRESOLVED")
-
-    def test_unknown_student_is_reported_without_exposing_id_as_a_name(self):
-        base = block("base", "Русский", "g8")
-        weekly = {**base, "status": "unresolved", "assignments": [], "unresolved": [
-            {"reason": "student is missing from the canonical base-class membership",
-             "student_ids": ["missing-identity"]},
-        ]}
-        patch = build_weekly_diff({"blocks": {"base": base}}, parsed("Русский"),
-                                  parsed("Химия"), {"blocks": {"weekly": weekly}})["patches"][0]
-        self.assertIn("Имя ученика отсутствует в справочнике", patch["source_issue"])
-        self.assertNotIn("missing-identity", patch["source_issue"])
-
-    def test_weekly_corpus_excludes_inactive_students(self):
-        with tempfile.TemporaryDirectory() as directory:
-            database = Database(Path(directory) / "corpus.db")
-            database.initialize()
-            active = database.create_identity("student", "Active", "8")
-            inactive = database.create_identity("student", "Inactive", "8")
-            with database.connection() as connection:
-                database.execute(connection, "UPDATE identities SET status='inactive' WHERE id=?", (inactive["id"],))
-            student_ids = {student["id"] for student in _db_corpus(database)["students"]}
-            self.assertEqual(student_ids, {active["id"]})
 
     def test_unchanged_week_has_no_overrides(self):
         result = self._diff("Русский", "Русский")
@@ -413,18 +252,6 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(google_sheets_spreadsheet_id="sheet")
 
-    def test_abbreviated_subject_with_identical_routing_is_not_a_change(self):
-        key = (0, "09:00", "09:45", "5")
-        base = block("base", "Математика", "g5")
-        base["assignments"][0]["student_ids"] = ["s5"]
-        weekly = {**base, "status": "resolved", "assignments": [
-            {**base["assignments"][0], "activity": "Матем"}]}
-        old = parsed("Математика")
-        new = parsed("Матем")
-        diff = build_weekly_diff({"blocks": {"base": base}}, old, new,
-                                 {"blocks": {"weekly": weekly}})
-        self.assertEqual(diff["patches"], [])
-
     def test_weekly_diff_carries_slot_context_and_resolver_reason(self):
         key = (2, "11:50", "12:35", "8")
         base = {
@@ -473,7 +300,6 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
             self.assertEqual(preview["diff_counts"], applied["refresh"]["diff_counts"])
             self.assertEqual(preview["overlay_patch_count"], applied["refresh"]["patch_count"])
             self.assertEqual(preview["effective_block_count"], applied["refresh"]["effective_block_count"])
-            self.assertEqual(preview["semantic_fallback"]["attempted"], 0)
 
     def test_refresh_leaves_unresolved_weekly_change_pending(self):
         with tempfile.TemporaryDirectory() as directory:

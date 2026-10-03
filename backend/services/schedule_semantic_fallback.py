@@ -68,7 +68,6 @@ def propose_changed_lessons(
             if not lesson:
                 continue
             raw = str(lesson.get("raw_text") or "")
-            # Do not turn an arbitrary event or a roster defect into a group.
             wants_group = group_issue and bool(_GROUP_MARKER.search(raw))
             wants_teacher = teacher_issue and not lesson.get("resolved_identity_ids")
             if not (wants_group or wants_teacher):

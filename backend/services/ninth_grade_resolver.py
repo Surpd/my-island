@@ -14,7 +14,7 @@ from backend.services.schedule_parser_v2 import (
 )
 
 _MATH_ANCHOR = re.compile(r"\b(?:мат(?:ематика|ем)?|math)\s*(?:группа\s*)?([a-zа-я])\b", re.IGNORECASE)
-_ENGLISH_ANCHOR = re.compile(r"\b(?:англ(?:ийский)?|english)\s*(?:группа\s*)?(\d{1,2})\b", re.IGNORECASE)
+_ENGLISH_ANCHOR = re.compile(r"\b(?:англ(?:ийский)?|english)\s*(?:группа\s*)?(\d{1,2}(?:\s*[/,-]\s*\d{1,2})*)\b", re.IGNORECASE)
 _OGE = re.compile(r"\b(?:огэ|oge)\b", re.IGNORECASE)
 _CLASS = re.compile(r"^\s*\d{1,2}(?:[-а-яёa-z])?(?:-\d+)?\s*$", re.IGNORECASE)
 
@@ -136,7 +136,7 @@ def _anchor(cell: ScheduleSourceCell) -> tuple[str, str] | None:
     if math:
         return "math", math.group(1).upper().replace("А", "A").replace("В", "B").replace("С", "C")
     english = _ENGLISH_ANCHOR.search(text)
-    return ("english", english.group(1)) if english else None
+    return ("english", re.search(r"\d{1,2}", english.group(1)).group(0)) if english else None
 
 
 def _belongs_to_partition(cell: ScheduleSourceCell, family: str) -> bool:
@@ -153,6 +153,10 @@ def _belongs_to_partition(cell: ScheduleSourceCell, family: str) -> bool:
 def _explicit_lane_refs(cell: ScheduleSourceCell, family: str) -> tuple[str, ...]:
     anchor = _anchor(cell)
     if anchor and anchor[0] == family:
+        if family == "english":
+            match = _ENGLISH_ANCHOR.search(_text(cell))
+            if match:
+                return tuple(dict.fromkeys(re.findall(r"\d{1,2}", match.group(1))))
         return (anchor[1],)
     match = re.search(r"\bгрупп\w*\s+([a-zа-яё0-9]+(?:\s*[,/]\s*[a-zа-яё0-9]+)*)", _text(cell), re.IGNORECASE)
     if not match:

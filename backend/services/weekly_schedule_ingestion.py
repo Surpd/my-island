@@ -8,7 +8,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from backend.services.schedule_parser_v2 import classify_simple_activity, normalize_no_lesson
-from backend.services.teacher_directory import SUBJECT_ALIASES, resolve_teacher_id
+from backend.services.teacher_directory import resolve_teacher_id
 
 
 CLASS_RE = re.compile(r"^\s*\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?\s*$", re.IGNORECASE)
@@ -291,48 +291,27 @@ def by_source_column(items: Sequence[Mapping[str, Any]]) -> dict[int, Mapping[st
     return {int(item["source_column"]): item for item in items if item.get("source_column") is not None}
 
 
-def _subject_hint(raw: str, subjects: Sequence[str] = ()) -> str:
+def _subject_hint(raw: str) -> str:
     first = str(raw).splitlines()[0].strip()
     if classify_simple_activity(raw):
         return first
-    # Resolve prefixes against the existing subject directory and canonical
-    # activities. A shorthand is accepted only when it identifies one subject
-    # family; an ambiguous prefix remains unresolved rather than guessed.
-    words = norm(first).split()
-    if words:
-        vocabulary = {norm(value): str(value) for value in (*SUBJECT_ALIASES.values(), *subjects) if norm(value)}
-        explicit_phrase = [value for alias, value in SUBJECT_ALIASES.items()
-                           if len(alias.split()) > 1 and words[:len(alias.split())] == alias.split()]
-        explicit_phrase.extend(value for key, value in vocabulary.items()
-                               if len(key.split()) > 1 and words[:len(key.split())] == key.split())
-        if explicit_phrase:
-            return max(explicit_phrase, key=lambda value: len(norm(value).split()))
-        first_word = words[0]
-        if first_word in SUBJECT_ALIASES:
-            return SUBJECT_ALIASES[first_word]
-        if len(first_word) >= 3:
-            matches = [(key, value) for key, value in vocabulary.items()
-                       if key.split()[0].startswith(first_word)]
-            roots = {key.split()[0] for key, _ in matches}
-            longest = max(roots, key=len) if roots else ""
-            if longest and all(longest.startswith(root) for root in roots):
-                same_root = [value for key, value in matches if key.split()[0] == longest]
-                return min(same_root, key=lambda value: (len(norm(value).split()), len(value)))
     match = re.split(r"\s+(?=\d|[A-ZА-ЯЁ])", first, maxsplit=1)
     return match[0].strip() if match else first
 
 
-def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], teachers: Sequence[Mapping[str, Any]], subjects: Sequence[str] = ()) -> list[dict[str, Any]]:
+def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], teachers: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Adapt merge-aware structural rows to the existing V2 semantic input."""
     lessons = []
     for cells in parsed.values():
         for cell in cells:
             raw = str(cell["raw_text"])
             teacher_id, _teacher_issue = resolve_teacher_id(raw, "", teachers)
-            activity_type = "extracurricular" if raw.lstrip().startswith("⚪") else "nonlesson" if normalize_no_lesson(raw) else "simple_activity" if classify_simple_activity(raw) else "lesson"
+            normalized_raw = norm(raw)
+            is_extracurricular = raw.lstrip().startswith("⚪") or any(token in normalized_raw for token in ("клуб", "кружок", "кружка", "внеурочная"))
+            activity_type = "extracurricular" if is_extracurricular else "nonlesson" if normalize_no_lesson(raw) else "simple_activity" if classify_simple_activity(raw) else "lesson"
             room_match = re.search(r"(?:каб(?:\.|инет)?\s*[^\n]+|зал[^\n]*|онлайн[^\n]*)", raw, re.IGNORECASE)
             parsed_cell = {
-                "subject": _subject_hint(raw, subjects), "teacher_hint": raw,
+                "subject": _subject_hint(raw), "teacher_hint": raw,
                 "room": room_match.group(0).strip() if room_match else "", "activity_type": activity_type,
                 "modifiers": {"exam_track": "ОГЭ" if re.search(r"\bогэ\b", raw, re.IGNORECASE) else "", "subject_subgroup": ""},
                 "parse_status": "validated" if teacher_id else "ambiguous", "resolved_identity_ids": [teacher_id] if teacher_id else [],
@@ -351,34 +330,6 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
         groups = tuple(sorted(str(x) for x in audience.get("canonical_group_ids") or item.get("canonical_group_ids") or []))
         result.add((str(item.get("activity") or ""), groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or []))))
     return result
-
-
-def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, Any], *, source_only: bool = False) -> bool:
-    """Ignore source wording changes when deterministic routing is unchanged."""
-    activities = [str(item.get("activity") or "") for block in (before, after)
-                  for item in block.get("assignments") or []]
-
-    def activity(value: Any) -> str:
-        normalized = norm(_subject_hint(str(value or ""), activities))
-        return normalized.removesuffix(" язык") if normalized.endswith(" язык") else normalized
-
-    def signature(block: Mapping[str, Any]) -> list[tuple[Any, ...]]:
-        result = []
-        for item in block.get("assignments") or []:
-            audience = item.get("audience") if isinstance(item.get("audience"), Mapping) else {}
-            group_ids = item.get("canonical_group_ids") or audience.get("canonical_group_ids") or []
-            metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
-            result.append((
-                activity(item.get("activity")),
-                str(item.get("role") or ""),
-                tuple(sorted(str(value) for value in group_ids)),
-                tuple(sorted(str(value) for value in item.get("teacher_ids") or [])),
-                # Rosters belong to canonical memberships, not to the source
-                # schedule cell. A roster sync must not create a weekly override.
-                "" if source_only else str(metadata.get("room") or "").strip().casefold(),
-            ))
-        return sorted(result)
-    return bool(before.get("assignments")) and signature(before) == signature(after)
 
 
 def comparison_key(block: Mapping[str, Any]) -> tuple[int, str, str, str]:
@@ -436,34 +387,6 @@ def _assignment_brief(assignments: Any) -> list[dict[str, Any]]:
             for item in assignments or []]
 
 
-def _readable_resolution_issues(block: Mapping[str, Any] | None,
-                                students: Mapping[str, Any]) -> list[str]:
-    labels = {
-        "student is missing from the canonical base-class membership": "Нет в составе базового класса",
-        "student is missing from the active English instructional partition": "Нет в составе групп английского",
-        "student is missing from the active english instructional partition": "Нет в составе групп английского",
-        "student is missing from the active math instructional partition": "Нет в составе групп математики",
-        "explicit instructional audience has no unique canonical group": "Не удалось однозначно найти каноническую учебную группу",
-        "base class context is ambiguous": "Не удалось однозначно определить базовый класс",
-        "incompatible double assignment": "Ученик попал на несовместимые занятия одновременно",
-        "Teacher is unresolved": "Не удалось определить преподавателя",
-    }
-    result = []
-    for issue in (block or {}).get("unresolved") or []:
-        if not isinstance(issue, Mapping) or not issue.get("reason"):
-            continue
-        reason = str(issue["reason"])
-        names = []
-        for student_id in issue.get("student_ids") or []:
-            student_id = str(student_id)
-            student = students.get(student_id) or {}
-            name = str(student.get("display_name") or "Имя ученика отсутствует в справочнике")
-            class_name = str(student.get("class_name") or "").strip()
-            names.append(f"{name} ({class_name} класс)" if class_name else name)
-        result.append(f"{labels.get(reason, reason)}: {', '.join(names)}" if names else labels.get(reason, reason))
-    return result
-
-
 def build_weekly_diff(
     canonical: Mapping[str, Any], template_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]],
     weekly_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], weekly_artifact: Mapping[str, Any],
@@ -472,7 +395,6 @@ def build_weekly_diff(
 ) -> dict[str, Any]:
     canonical_by_key = {comparison_key(block): block for block in (canonical.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
     weekly_by_key = {comparison_key(block): block for block in (weekly_artifact.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
-    weekly_students = weekly_artifact.get("students") or {}
     template_raw, weekly_raw = raw_by_coord(template_parsed), raw_by_coord(weekly_parsed)
     template_meta, weekly_meta = template_meta or {}, weekly_meta or {}
     source_for_block = {str(block_key): tuple([int(parts[0]), *parts[1:]])
@@ -491,8 +413,11 @@ def build_weekly_diff(
             return semantic_norm(item.get("raw_text")), tuple(sorted(norm(value) for value in audiences if value))
         base_sem = {column: cell_semantics(item) for column, item in base_cells.items()}
         week_sem = {column: cell_semantics(item) for column, item in week_cells.items()}
-        base_raw = {column: norm(item.get("raw_text")) for column, item in base_cells.items()}
-        week_raw_values = {column: norm(item.get("raw_text")) for column, item in week_cells.items()}
+        # Room/cabinet text is operational metadata, not a schedule change.
+        # Strip it here too, otherwise an otherwise-equal cell would still
+        # turn into a METADATA_ONLY override via the raw-text fallback.
+        base_raw = {column: semantic_norm(item.get("raw_text")) for column, item in base_cells.items()}
+        week_raw_values = {column: semantic_norm(item.get("raw_text")) for column, item in week_cells.items()}
         base_format = {column: template_meta.get(str(item.get("source_cell")), {}) for column, item in base_cells.items()}
         week_format = {column: weekly_meta.get(str(item.get("source_cell")), {}) for column, item in week_cells.items()}
         if not base_cells and not week_cells:
@@ -506,16 +431,6 @@ def build_weekly_diff(
         else:
             classification, kind = "UNCHANGED", "unchanged"
         weekly_block = weekly_by_key.get(source_key)
-        roster_gap_only = bool(weekly_block and weekly_block.get("unresolved") and all(
-            isinstance(issue, Mapping) and issue.get("reason") == "student is missing from the canonical base-class membership"
-            for issue in weekly_block.get("unresolved") or []
-        ))
-        if (classification in {"REPLACED", "METADATA_ONLY"} and weekly_block
-                and (weekly_block.get("status", "resolved") == "resolved" or roster_gap_only)
-                and _same_resolved_assignments(base, weekly_block, source_only=roster_gap_only)):
-            # Different abbreviations, punctuation, or equivalent wording are
-            # not a weekly override when the canonical routing is identical.
-            classification, kind = "UNCHANGED", "unchanged"
         if weekly_block and weekly_block.get("status", "resolved") == "resolved" and classification == "REPLACED" and assignment_signature(base) != assignment_signature(weekly_block):
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
@@ -534,17 +449,12 @@ def build_weekly_diff(
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
         elif classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"}:
-            # The old canonical lesson is evidence for "before", never a
-            # candidate replacement when the new source is unresolved.
-            patch["assignments"] = []
+            patch["assignments"] = base.get("assignments") or []
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
             patch["resolution_details"] = [
                 str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
                 if isinstance(issue, Mapping) and issue.get("reason")
             ]
-            details = _readable_resolution_issues(weekly_block, weekly_students)
-            if details:
-                patch["source_issue"] = "; ".join(details)
         elif classification == "CANCELLED":
             patch["assignments"] = base.get("assignments") or []
         elif classification == "METADATA_ONLY":
@@ -557,9 +467,6 @@ def build_weekly_diff(
                     str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
                     if isinstance(issue, Mapping) and issue.get("reason")
                 ]
-                details = _readable_resolution_issues(weekly_block, weekly_students)
-                if details:
-                    patch["source_issue"] = "; ".join(details)
         old_teacher_ids = {str(value) for item in base.get("assignments") or [] for value in item.get("teacher_ids") or []}
         new_teacher_ids = {str(value) for item in patch.get("assignments") or [] for value in item.get("teacher_ids") or []}
         if week_cells and patch.get("assignments") and old_teacher_ids and not new_teacher_ids:
@@ -571,7 +478,7 @@ def build_weekly_diff(
         patch["before"] = {"slot": base.get("slot"), "assignments": _assignment_brief(base.get("assignments"))}
         patch["after"] = {"slot": {"start": source_key[1], "end": source_key[2]} if week_cells else None,
                           "assignments": _assignment_brief(patch.get("assignments")),
-                          "source_text": [str(item.get("raw_text") or "") for item in week_items]}
+                          "source_text": list(week_raw_values.values())}
         diffs.append({"key": key, "canonical_block_key": base.get("block_key"), "classification": classification, "change_kind": kind, "template_cells": source_cells, "weekly_cells": weekly_coords, "patch": patch, "weekly_block": weekly_block})
     for key, block in weekly_by_key.items():
         if key in canonical_by_key or key in mapped_source_keys:
@@ -581,13 +488,6 @@ def build_weekly_diff(
         patch = {"block_key": f"weekly-only|{key}", "change_kind": "weekly_only", "change_classification": "ADDED", "assignments": block.get("assignments") or [] if block.get("status", "resolved") == "resolved" else [], "weekday": key[0], "slot": {"start": key[1], "end": key[2]}, "grade_scope": key[3], "source_provenance": block.get("derived_from") or {}, "weekly_source_cells": coords, "source_signature": normalized_source_rows({key: cells}), "resolution_state": "AUTO_RESOLVED" if block.get("status", "resolved") == "resolved" else "UNRESOLVED", "before": None, "after": {"slot": {"start": key[1], "end": key[2]}, "assignments": _assignment_brief(block.get("assignments")), "source_text": [item.get("raw_text") for item in cells]}}
         if block.get("status", "resolved") != "resolved":
             patch["source_issue"] = "new source block has no deterministic audience"
-            patch["resolution_details"] = [
-                str(issue.get("reason")) for issue in block.get("unresolved", [])
-                if isinstance(issue, Mapping) and issue.get("reason")
-            ]
-            details = _readable_resolution_issues(block, weekly_students)
-            if details:
-                patch["source_issue"] = "; ".join(details)
         diffs.append({"key": key, "canonical_block_key": None, "classification": "ADDED", "change_kind": "weekly_only", "template_cells": [], "weekly_cells": coords, "patch": patch, "weekly_block": block})
     cancelled = [item for item in diffs if item["classification"] == "CANCELLED"]
     added = [item for item in diffs if item["classification"] == "ADDED"]

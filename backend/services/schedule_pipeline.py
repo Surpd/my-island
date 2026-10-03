@@ -336,7 +336,9 @@ def diff_template_week(baseline: Iterable[Mapping[str, Any]], weekly: Iterable[M
             change = "SPECIAL_EVENT"
         elif _norm(base.get("subject")) != _norm(actual.get("subject")):
             change = "REPLACED"
-        elif any(_norm(base.get(field)) != _norm(actual.get(field)) for field in ("teacher_hint", "room")) or base.get("modifiers") != actual.get("modifiers"):
+        elif (_norm(base.get("teacher_hint")) != _norm(actual.get("teacher_hint"))
+              or {key: value for key, value in (base.get("modifiers") or {}).items() if key != "parser_diagnostics"}
+              != {key: value for key, value in (actual.get("modifiers") or {}).items() if key != "parser_diagnostics"}):
             change = "MODIFIED"
         else:
             change = "SAME_AS_BASELINE"
