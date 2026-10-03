@@ -30,7 +30,7 @@ def _resolve_sheet_title(titles: list[str], requested: str) -> str | None:
     return next((title for title in titles if title.strip().casefold() == normalized), None)
 
 
-def _client(settings: Settings) -> tuple[GoogleLiveClient, str]:
+def _client(settings: Settings, database: Database | None = None) -> tuple[GoogleLiveClient, str]:
     config = google_config(settings)
     missing_config = [
         name
@@ -43,7 +43,7 @@ def _client(settings: Settings) -> tuple[GoogleLiveClient, str]:
     ]
     if missing_config:
         raise GoogleLiveError(f"Google OAuth configuration is missing: {', '.join(missing_config)}")
-    store = GoogleTokenStore()
+    store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
     token = store.load()
     if not token or not token.get("refresh_token"):
         raise GoogleLiveError("Stored Google refresh token is required")
@@ -59,8 +59,8 @@ class TeacherDirectoryApplyBlocked(RuntimeError):
     """The authoritative teacher source is not safe to apply yet."""
 
 
-def _structured_teacher_source(settings: Settings) -> tuple[str, str, str, list[list[str]]]:
-    client, _ = _client(settings)
+def _structured_teacher_source(settings: Settings, database: Database | None = None) -> tuple[str, str, str, list[list[str]]]:
+    client, _ = _client(settings, database)
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
     metadata = client.spreadsheet(spreadsheet_id)
     title = str((metadata.get("properties") or {}).get("title", ""))
@@ -188,7 +188,7 @@ def _reconciliation_inputs(database: Database, connection: Any) -> tuple[list[di
 
 
 def refresh_classroom(database: Database, settings: Settings) -> dict[str, Any]:
-    client, teacher_account = _client(settings)
+    client, teacher_account = _client(settings, database)
     courses = client.classroom_courses_for_teacher()
     course_id = settings.google_classroom_course_id or "800979670564"
     course = next((item for item in courses if item.get("id") == course_id), None)
@@ -202,7 +202,7 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
         raise ValueError("Journal grade must be between 5 and 11")
     spreadsheet_id = CURRENT_JOURNAL_SPREADSHEETS[grade]
     try:
-        client, _ = _client(settings)
+        client, _ = _client(settings, database)
         metadata = client.spreadsheet(spreadsheet_id)
         title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
         tabs = [str((sheet.get("properties") or {}).get("title", "")) for sheet in metadata.get("sheets") or []]
@@ -230,7 +230,7 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
 
 def refresh_teacher_directory(database: Database, settings: Settings) -> dict[str, Any]:
     """Read the authoritative teacher-assignment tab and reconcile only teachers."""
-    client, _ = _client(settings)
+    client, _ = _client(settings, database)
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
     metadata = client.spreadsheet(spreadsheet_id)
     title = str((metadata.get("properties") or {}).get("title", ""))
@@ -252,7 +252,7 @@ def refresh_teacher_directory_dry_run(database: Database, settings: Settings) ->
     audit, or membership writes.  It is safe to run against production DB
     credentials for an operator-facing preview.
     """
-    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings)
+    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings, database)
     with database.connection() as connection:
         teachers, groups, current_assignments, canonical_subjects = _reconciliation_inputs(database, connection)
     plan = build_teacher_reconciliation_plan(values, canonical_teachers=teachers, canonical_groups=groups, canonical_subjects=canonical_subjects, current_assignments=current_assignments)
@@ -338,7 +338,7 @@ def _apply_plan(database: Database, connection: Any, plan: TeacherReconciliation
 
 def refresh_teacher_directory_reconciliation_apply(database: Database, settings: Settings) -> dict[str, Any]:
     """Apply the guarded structured teacher-directory reconciliation to production."""
-    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings)
+    spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings, database)
     with database.connection() as connection:
         foundation = _ensure_literature_11_base(database, connection)
         teachers, groups, current_assignments, canonical_subjects = _reconciliation_inputs(database, connection)

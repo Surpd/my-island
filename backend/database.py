@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import sqlite3
+import time
 from datetime import date, datetime, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
@@ -354,6 +355,20 @@ CREATE TABLE IF NOT EXISTS admin_browser_sessions (
   last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   revoked_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS google_oauth_pending_states (
+  state_hash TEXT PRIMARY KEY,
+  actor_user_id TEXT NOT NULL,
+  expires_at_epoch INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS google_oauth_credentials (
+  credential_key TEXT PRIMARY KEY CHECK (credential_key = 'primary'),
+  token_ciphertext TEXT NOT NULL,
+  account_email TEXT NOT NULL,
+  granted_scopes TEXT NOT NULL DEFAULT '',
+  updated_by TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS admin_reconciliation_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -911,6 +926,8 @@ class Database:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         connection.execute("CREATE TABLE IF NOT EXISTS admin_login_challenges (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, consumed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
         connection.execute("CREATE TABLE IF NOT EXISTS admin_browser_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TEXT NOT NULL, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, revoked_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        connection.execute("CREATE TABLE IF NOT EXISTS google_oauth_pending_states (state_hash TEXT PRIMARY KEY, actor_user_id TEXT NOT NULL, expires_at_epoch INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        connection.execute("CREATE TABLE IF NOT EXISTS google_oauth_credentials (credential_key TEXT PRIMARY KEY CHECK (credential_key = 'primary'), token_ciphertext TEXT NOT NULL, account_email TEXT NOT NULL, granted_scopes TEXT NOT NULL DEFAULT '', updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
         connection.execute("CREATE TABLE IF NOT EXISTS admin_reconciliation_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id INTEGER REFERENCES users(id), status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_at TEXT, applied_at TEXT)")
         connection.execute("CREATE TABLE IF NOT EXISTS schedule_editor_drafts (draft_key TEXT PRIMARY KEY, scope_kind TEXT NOT NULL CHECK (scope_kind IN ('template','week')), scope_key TEXT NOT NULL, base_version_id TEXT REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT, base_effective_week_id TEXT REFERENCES canonical_effective_weeks(effective_week_id) ON DELETE RESTRICT, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0), payload TEXT NOT NULL DEFAULT '{\"changes\":[]}', source_context TEXT NOT NULL DEFAULT '{}', created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(scope_kind, scope_key))")
         connection.execute("CREATE INDEX IF NOT EXISTS schedule_editor_drafts_updated_idx ON schedule_editor_drafts(updated_at DESC)")
@@ -962,6 +979,30 @@ class Database:
     def revoke_admin_browser_session(self, token: str) -> None:
         with self.connection() as connection:
             self.execute(connection, "UPDATE admin_browser_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL", (self._token_hash(token),))
+
+    def create_google_oauth_state(self, state_hash: str, actor_user_id: Any, expires_at_epoch: int) -> None:
+        with self.connection() as connection:
+            self.execute(connection, "DELETE FROM google_oauth_pending_states WHERE expires_at_epoch <= ?", (int(time.time()),))
+            self.execute(connection, "INSERT INTO google_oauth_pending_states(state_hash, actor_user_id, expires_at_epoch) VALUES (?, ?, ?)", (state_hash, str(actor_user_id), int(expires_at_epoch)))
+
+    def consume_google_oauth_state(self, state_hash: str) -> str | None:
+        with self.connection() as connection:
+            row = self.execute(connection, "DELETE FROM google_oauth_pending_states WHERE state_hash = ? AND expires_at_epoch > ? RETURNING actor_user_id", (state_hash, int(time.time()))).fetchone()
+            return str(row["actor_user_id"]) if row else None
+
+    def get_google_oauth_credential(self) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT * FROM google_oauth_credentials WHERE credential_key = 'primary'").fetchone()
+            return dict(row) if row else None
+
+    def save_google_oauth_credential(self, token_ciphertext: str, account_email: str, granted_scopes: str, updated_by: Any = None) -> None:
+        with self.connection() as connection:
+            self.execute(connection, """INSERT INTO google_oauth_credentials(credential_key, token_ciphertext, account_email, granted_scopes, updated_by)
+                VALUES ('primary', ?, ?, ?, ?)
+                ON CONFLICT(credential_key) DO UPDATE SET token_ciphertext = excluded.token_ciphertext,
+                account_email = excluded.account_email, granted_scopes = excluded.granted_scopes,
+                updated_by = COALESCE(excluded.updated_by, google_oauth_credentials.updated_by), updated_at = CURRENT_TIMESTAMP""",
+                (token_ciphertext, account_email, granted_scopes, str(updated_by) if updated_by is not None else None))
 
     def create_reconciliation_run(self, actor_user_id: Any, payload: dict[str, Any]) -> Any:
         with self.connection() as connection:

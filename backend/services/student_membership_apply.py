@@ -393,7 +393,7 @@ def run_apply(settings: Settings, *, reviewed_path: str | Path = "docs/STUDENT_M
     reviewed = json.loads(Path(reviewed_path).read_text(encoding="utf-8"))
     manual = load_manual_resolutions()
     database = Database(database_url=settings.database_url)
-    source_rows, source_meta = fetch_authoritative_sources(settings)
+    source_rows, source_meta = fetch_authoritative_sources(settings, database)
     snapshot = load_production_snapshot(database)
     current_payload, _ = _build_plan(source_rows, source_meta, snapshot, manual)
     _validate_reviewed_payload(current_payload, reviewed)

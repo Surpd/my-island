@@ -10,6 +10,13 @@ from urllib.parse import urlencode, urljoin, quote
 from urllib.request import Request, urlopen
 
 from backend.services.google_contract import GoogleIntegrationConfig
+from backend.database import Database
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ImportError:  # pragma: no cover - dependency installation error is reported when DB storage is used
+    Fernet = None  # type: ignore[assignment,misc]
+    InvalidToken = Exception  # type: ignore[assignment,misc]
 
 
 class GoogleLiveError(RuntimeError):
@@ -57,12 +64,36 @@ def _request_json(request: Request) -> dict[str, Any]:
 
 
 class GoogleTokenStore:
-    """Local-only token store. The ignored data directory is never part of the repository."""
+    """Google token storage for local tooling and encrypted production persistence."""
 
-    def __init__(self, path: str | Path = "data/google-oauth-token.json") -> None:
+    def __init__(self, path: str | Path = "data/google-oauth-token.json", *, database: Database | None = None, encryption_key: str = "") -> None:
         self.path = Path(path)
+        self.database = database
+        self.encryption_key = encryption_key
+
+    def _fernet(self):
+        if not self.encryption_key:
+            raise GoogleLiveError("Google token encryption is not configured")
+        if Fernet is None:
+            raise GoogleLiveError("Google token encryption dependency is unavailable")
+        try:
+            return Fernet(self.encryption_key.encode("ascii"))
+        except (ValueError, UnicodeEncodeError) as error:
+            raise GoogleLiveError("Google token encryption key is invalid") from error
 
     def load(self) -> dict[str, Any] | None:
+        if self.database:
+            stored = self.database.get_google_oauth_credential()
+            if stored:
+                try:
+                    payload = json.loads(self._fernet().decrypt(str(stored["token_ciphertext"]).encode("ascii")).decode("utf-8"))
+                except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, KeyError, ValueError) as error:
+                    raise GoogleLiveError("Stored Google token could not be decrypted") from error
+                if not isinstance(payload, dict) or not payload.get("refresh_token") and not payload.get("access_token"):
+                    raise GoogleLiveError("Stored Google token has an invalid shape")
+                payload.setdefault("scope", stored.get("granted_scopes") or "")
+                payload["google_account_email"] = stored.get("account_email") or ""
+                return payload
         if not self.path.exists():
             refresh_token_value = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN")
             if refresh_token_value:
@@ -76,7 +107,16 @@ class GoogleTokenStore:
             raise GoogleLiveError("Stored Google token file has an invalid shape")
         return payload
 
-    def save(self, token: dict[str, Any]) -> None:
+    def save(self, token: dict[str, Any], *, updated_by: Any = None, account_email: str | None = None) -> None:
+        if self.database:
+            ciphertext = self._fernet().encrypt(json.dumps(token, sort_keys=True).encode("utf-8")).decode("ascii")
+            previous = self.database.get_google_oauth_credential() or {}
+            scopes = str(token.get("scope") or previous.get("granted_scopes") or "")
+            email = str(account_email or token.get("google_account_email") or previous.get("account_email") or "")
+            if not email:
+                raise GoogleLiveError("Google account email is required to save the token")
+            self.database.save_google_oauth_credential(ciphertext, email, scopes, updated_by)
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(token, indent=2, sort_keys=True), encoding="utf-8")
@@ -87,6 +127,9 @@ class GoogleTokenStore:
         os.replace(temporary, self.path)
 
     def has_refresh_token(self) -> bool:
+        if self.database:
+            stored = self.database.get_google_oauth_credential()
+            return bool(stored and stored.get("token_ciphertext"))
         token = self.load()
         return bool(token and token.get("refresh_token"))
 

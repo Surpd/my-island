@@ -37,9 +37,9 @@ def _title(titles: list[str], wanted: str) -> str | None:
     return next((item for item in titles if item.casefold().strip() == key), None)
 
 
-def _client(settings: Settings) -> tuple[GoogleLiveClient, str]:
+def _client(settings: Settings, database: Database | None = None) -> tuple[GoogleLiveClient, str]:
     config = google_config(settings)
-    store = GoogleTokenStore()
+    store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
     token = store.load()
     if not token or not token.get("refresh_token"):
         raise GoogleLiveError("Stored Google refresh token is required")
@@ -277,7 +277,7 @@ def confirm_template_snapshot(database: Database, *, spreadsheet_id: str, spread
 def confirm_current_template(database: Database, settings: Settings, expected_version_id: str,
                              expected_source_fingerprint: str | None = None) -> dict[str, Any]:
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
-    client, account = _client(settings)
+    client, account = _client(settings, database)
     metadata = client.spreadsheet(spreadsheet_id)
     title = str((metadata.get("properties") or {}).get("title") or "")
     sheets = list(metadata.get("sheets") or [])
@@ -376,7 +376,7 @@ def preview_template_snapshot(database: Database, *, spreadsheet_id: str,
 
 def preview_current_template(database: Database, settings: Settings, expected_version_id: str) -> dict[str, Any]:
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
-    client, account = _client(settings)
+    client, account = _client(settings, database)
     metadata = client.spreadsheet(spreadsheet_id)
     sheets = list(metadata.get("sheets") or [])
     selected = next((sheet for sheet in sheets if _title([str((sheet.get("properties") or {}).get("title") or "")], "2026/27 шаблон")), None)
@@ -411,7 +411,7 @@ def _prepare_current_week(
     if not version:
         return {"status": "blocked", "message": "Canonical v2 is not persisted"}
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
-    client, account = _client(settings)
+    client, account = _client(settings, database)
     metadata = client.spreadsheet(spreadsheet_id)
     spreadsheet_title = str((metadata.get("properties") or {}).get("title") or "")
     sheets = list(metadata.get("sheets") or [])
