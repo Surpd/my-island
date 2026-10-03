@@ -25,6 +25,7 @@ from backend.services.canonical_schedule import (
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
 from backend.services.google_oauth import google_config
 from backend.services.schedule_canonical_bootstrap import build_bootstrap_canonical
+from backend.services.schedule_semantic_fallback import merge_review_only_proposals, propose_changed_lessons
 from backend.services.weekly_schedule_ingestion import (
     WeeklyIngestionError, build_weekly_diff, discover_weekly_tab, layout_profile,
     meta_map, normalized_source_rows, parse_structure, parse_weekly_lessons,
@@ -453,6 +454,19 @@ def _prepare_current_week(
     weekly_meta = meta_map(weekly_tab["structured_cells"], weekly=True)
     diff = build_weekly_diff(current, confirmed_parsed, weekly_parsed, weekly_artifact, template_meta, weekly_meta,
                              confirmed["structural_payload"].get("source_to_canonical") or {})
+    # The language model sees only changed cells that deterministic resolution
+    # left ambiguous. Its validated output is always review-only.
+    proposed_lessons, proposed_cells, semantic_fallback = propose_changed_lessons(
+        weekly_lessons, diff["patches"], corpus_db,
+    )
+    if proposed_cells:
+        proposed_artifact = build_bootstrap_canonical({
+            "snapshot": {"id": f"weekly-{weekly_tab['sheet_id']}-{week_start}", "fingerprint": fingerprint},
+            "lessons": proposed_lessons, **corpus_db,
+        })
+        proposed_diff = build_weekly_diff(current, confirmed_parsed, weekly_parsed, proposed_artifact,
+            template_meta, weekly_meta, confirmed["structural_payload"].get("source_to_canonical") or {})
+        semantic_fallback["reviewable"] = merge_review_only_proposals(diff, proposed_diff, proposed_cells)
     structural_payload = {"layout": weekly_layout, "candidate_tabs": candidates, "rows": source_rows(weekly_parsed),
                           "normalized_rows": normalized_source_rows(weekly_parsed, include_day_label=False),
                           "confirmed_template_snapshot_id": confirmed["id"]}
@@ -475,6 +489,7 @@ def _prepare_current_week(
         "current": current,
         "weekly_artifact": weekly_artifact,
         "diff": diff,
+        "semantic_fallback": semantic_fallback,
         "effective_block_count": _effective_block_count(current, diff["patches"]),
     }
 
@@ -510,6 +525,7 @@ def _preview_payload(prepared: Mapping[str, Any]) -> dict[str, Any]:
         "canonical_block_count": len(prepared["current"].get("blocks") or {}),
         "weekly_block_count": len(prepared["weekly_artifact"].get("blocks") or {}),
         "diff_counts": diff["counts"],
+        "semantic_fallback": prepared["semantic_fallback"],
         "overlay_patch_count": len(diff["patches"]),
         "overlay_patches": diff["patches"],
         "effective_block_count": prepared["effective_block_count"],

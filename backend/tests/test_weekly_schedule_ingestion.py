@@ -257,6 +257,18 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(google_sheets_spreadsheet_id="sheet")
 
+    def test_abbreviated_subject_with_identical_routing_is_not_a_change(self):
+        key = (0, "09:00", "09:45", "5")
+        base = block("base", "Математика", "g5")
+        base["assignments"][0]["student_ids"] = ["s5"]
+        weekly = {**base, "status": "resolved", "assignments": [
+            {**base["assignments"][0], "activity": "Матем"}]}
+        old = parsed("Математика")
+        new = parsed("Матем")
+        diff = build_weekly_diff({"blocks": {"base": base}}, old, new,
+                                 {"blocks": {"weekly": weekly}})
+        self.assertEqual(diff["patches"], [])
+
     def test_weekly_diff_carries_slot_context_and_resolver_reason(self):
         key = (2, "11:50", "12:35", "8")
         base = {
@@ -305,6 +317,7 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
             self.assertEqual(preview["diff_counts"], applied["refresh"]["diff_counts"])
             self.assertEqual(preview["overlay_patch_count"], applied["refresh"]["patch_count"])
             self.assertEqual(preview["effective_block_count"], applied["refresh"]["effective_block_count"])
+            self.assertEqual(preview["semantic_fallback"]["attempted"], 0)
 
     def test_refresh_leaves_unresolved_weekly_change_pending(self):
         with tempfile.TemporaryDirectory() as directory:

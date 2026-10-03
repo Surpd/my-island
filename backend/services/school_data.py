@@ -92,7 +92,8 @@ class GroqSemanticProvider:
             return []
         request = urllib.request.Request(
             "https://api.groq.com/openai/v1/models",
-            headers={"Authorization": f"Bearer {self._api_key}", "Accept": "application/json"},
+            headers={"Authorization": f"Bearer {self._api_key}", "Accept": "application/json",
+                     "User-Agent": "MyIslandSchedule/1.0"},
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -174,7 +175,8 @@ class GroqSemanticProvider:
         request_obj = urllib.request.Request(
             "https://api.groq.com/openai/v1/chat/completions",
             data=body,
-            headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json",
+                     "User-Agent": "MyIslandSchedule/1.0"},
             method="POST",
         )
         with urllib.request.urlopen(request_obj, timeout=self.timeout) as response:

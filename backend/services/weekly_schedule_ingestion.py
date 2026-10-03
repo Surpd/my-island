@@ -332,6 +332,16 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
 
 def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
     """Ignore source wording changes when deterministic routing is unchanged."""
+    def activity(value: Any) -> str:
+        normalized = norm(value)
+        return {
+            "мат": "математика", "матем": "математика",
+            "англ": "английский", "рус": "русский",
+            "литер": "литература", "общ": "обществознание",
+            "инфор": "информатика", "физ": "физика",
+            "био": "биология",
+        }.get(normalized, normalized)
+
     def signature(block: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         result = []
         for item in block.get("assignments") or []:
@@ -339,7 +349,7 @@ def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, An
             group_ids = item.get("canonical_group_ids") or audience.get("canonical_group_ids") or []
             metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
             result.append((
-                str(item.get("activity") or ""),
+                activity(item.get("activity")),
                 str(item.get("role") or ""),
                 tuple(sorted(str(value) for value in group_ids)),
                 tuple(sorted(str(value) for value in item.get("teacher_ids") or [])),
@@ -509,6 +519,10 @@ def build_weekly_diff(
         patch = {"block_key": f"weekly-only|{key}", "change_kind": "weekly_only", "change_classification": "ADDED", "assignments": block.get("assignments") or [] if block.get("status", "resolved") == "resolved" else [], "weekday": key[0], "slot": {"start": key[1], "end": key[2]}, "grade_scope": key[3], "source_provenance": block.get("derived_from") or {}, "weekly_source_cells": coords, "source_signature": normalized_source_rows({key: cells}), "resolution_state": "AUTO_RESOLVED" if block.get("status", "resolved") == "resolved" else "UNRESOLVED", "before": None, "after": {"slot": {"start": key[1], "end": key[2]}, "assignments": _assignment_brief(block.get("assignments")), "source_text": [item.get("raw_text") for item in cells]}}
         if block.get("status", "resolved") != "resolved":
             patch["source_issue"] = "new source block has no deterministic audience"
+            patch["resolution_details"] = [
+                str(issue.get("reason")) for issue in block.get("unresolved", [])
+                if isinstance(issue, Mapping) and issue.get("reason")
+            ]
         diffs.append({"key": key, "canonical_block_key": None, "classification": "ADDED", "change_kind": "weekly_only", "template_cells": [], "weekly_cells": coords, "patch": patch, "weekly_block": block})
     cancelled = [item for item in diffs if item["classification"] == "CANCELLED"]
     added = [item for item in diffs if item["classification"] == "ADDED"]
