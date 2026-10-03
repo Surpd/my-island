@@ -1917,6 +1917,8 @@ button {
 .admin-inline-stats span { margin-top: 3px; color: #71888e; font-size: 9px; overflow-wrap: anywhere; }
 .admin-callout { display: flex; align-items: flex-start; gap: 9px; margin-top: 14px; padding: 11px 12px; border-radius: 9px; font-size: 11px; line-height: 1.45; }
 .admin-callout--muted { background: #f3f7f7; color: #5d777e; }
+.admin-help-text { color: #71868d; font-size: 11px; line-height: 1.45; }
+.admin-error-text { margin-top: 10px; color: #9b413a; font-size: 11px; line-height: 1.45; }
 .admin-callout--safe { background: #eaf7f0; color: #27624d; }
 .admin-system-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; color: #6c858d; font-size: 11px; }
 .admin-status { display: inline-flex; width: fit-content; align-items: center; min-height: 22px; padding: 3px 8px; border-radius: 99px; background: #edf2f3; color: #587078; font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
