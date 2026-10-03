@@ -301,11 +301,15 @@ def _subject_hint(raw: str, subjects: Sequence[str] = ()) -> str:
     words = norm(first).split()
     if words:
         vocabulary = {norm(value): str(value) for value in (*SUBJECT_ALIASES.values(), *subjects) if norm(value)}
-        explicit_phrase = [value for key, value in vocabulary.items()
-                           if len(key.split()) > 1 and words[:len(key.split())] == key.split()]
+        explicit_phrase = [value for alias, value in SUBJECT_ALIASES.items()
+                           if len(alias.split()) > 1 and words[:len(alias.split())] == alias.split()]
+        explicit_phrase.extend(value for key, value in vocabulary.items()
+                               if len(key.split()) > 1 and words[:len(key.split())] == key.split())
         if explicit_phrase:
             return max(explicit_phrase, key=lambda value: len(norm(value).split()))
         first_word = words[0]
+        if first_word in SUBJECT_ALIASES:
+            return SUBJECT_ALIASES[first_word]
         if len(first_word) >= 3:
             matches = [(key, value) for key, value in vocabulary.items()
                        if key.split()[0].startswith(first_word)]
@@ -432,6 +436,34 @@ def _assignment_brief(assignments: Any) -> list[dict[str, Any]]:
             for item in assignments or []]
 
 
+def _readable_resolution_issues(block: Mapping[str, Any] | None,
+                                students: Mapping[str, Any]) -> list[str]:
+    labels = {
+        "student is missing from the canonical base-class membership": "Нет в составе базового класса",
+        "student is missing from the active English instructional partition": "Нет в составе групп английского",
+        "student is missing from the active english instructional partition": "Нет в составе групп английского",
+        "student is missing from the active math instructional partition": "Нет в составе групп математики",
+        "explicit instructional audience has no unique canonical group": "Не удалось однозначно найти каноническую учебную группу",
+        "base class context is ambiguous": "Не удалось однозначно определить базовый класс",
+        "incompatible double assignment": "Ученик попал на несовместимые занятия одновременно",
+        "Teacher is unresolved": "Не удалось определить преподавателя",
+    }
+    result = []
+    for issue in (block or {}).get("unresolved") or []:
+        if not isinstance(issue, Mapping) or not issue.get("reason"):
+            continue
+        reason = str(issue["reason"])
+        names = []
+        for student_id in issue.get("student_ids") or []:
+            student_id = str(student_id)
+            student = students.get(student_id) or {}
+            name = str(student.get("display_name") or "Имя ученика отсутствует в справочнике")
+            class_name = str(student.get("class_name") or "").strip()
+            names.append(f"{name} ({class_name} класс)" if class_name else name)
+        result.append(f"{labels.get(reason, reason)}: {', '.join(names)}" if names else labels.get(reason, reason))
+    return result
+
+
 def build_weekly_diff(
     canonical: Mapping[str, Any], template_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]],
     weekly_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], weekly_artifact: Mapping[str, Any],
@@ -440,6 +472,7 @@ def build_weekly_diff(
 ) -> dict[str, Any]:
     canonical_by_key = {comparison_key(block): block for block in (canonical.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
     weekly_by_key = {comparison_key(block): block for block in (weekly_artifact.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
+    weekly_students = weekly_artifact.get("students") or {}
     template_raw, weekly_raw = raw_by_coord(template_parsed), raw_by_coord(weekly_parsed)
     template_meta, weekly_meta = template_meta or {}, weekly_meta or {}
     source_for_block = {str(block_key): tuple([int(parts[0]), *parts[1:]])
@@ -509,6 +542,9 @@ def build_weekly_diff(
                 str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
                 if isinstance(issue, Mapping) and issue.get("reason")
             ]
+            details = _readable_resolution_issues(weekly_block, weekly_students)
+            if details:
+                patch["source_issue"] = "; ".join(details)
         elif classification == "CANCELLED":
             patch["assignments"] = base.get("assignments") or []
         elif classification == "METADATA_ONLY":
@@ -521,6 +557,9 @@ def build_weekly_diff(
                     str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
                     if isinstance(issue, Mapping) and issue.get("reason")
                 ]
+                details = _readable_resolution_issues(weekly_block, weekly_students)
+                if details:
+                    patch["source_issue"] = "; ".join(details)
         old_teacher_ids = {str(value) for item in base.get("assignments") or [] for value in item.get("teacher_ids") or []}
         new_teacher_ids = {str(value) for item in patch.get("assignments") or [] for value in item.get("teacher_ids") or []}
         if week_cells and patch.get("assignments") and old_teacher_ids and not new_teacher_ids:
@@ -546,6 +585,9 @@ def build_weekly_diff(
                 str(issue.get("reason")) for issue in block.get("unresolved", [])
                 if isinstance(issue, Mapping) and issue.get("reason")
             ]
+            details = _readable_resolution_issues(block, weekly_students)
+            if details:
+                patch["source_issue"] = "; ".join(details)
         diffs.append({"key": key, "canonical_block_key": None, "classification": "ADDED", "change_kind": "weekly_only", "template_cells": [], "weekly_cells": coords, "patch": patch, "weekly_block": block})
     cancelled = [item for item in diffs if item["classification"] == "CANCELLED"]
     added = [item for item in diffs if item["classification"] == "ADDED"]

@@ -26,6 +26,28 @@ def lesson(cell, text, audience, grade, *, weekday=0, source_day_label="Пн"):
 
 
 class ScheduleCanonicalBootstrapTests(unittest.TestCase):
+    def test_angl_group_number_uses_canonical_english_membership_not_room(self):
+        corpus = {
+            "snapshot": {"id": "snapshot", "fingerprint": "source"},
+            "students": [{"id": "s1", "class_name": "8"}, {"id": "s2", "class_name": "8"}],
+            "groups": [
+                {"id": "base8", "name": "8", "base_class_name": "8", "group_type": "class"},
+                {"id": "english4", "name": "English 4", "group_type": "instructional",
+                 "subject": "Английский", "subject_subgroup": "4"},
+                {"id": "english5", "name": "English 5", "group_type": "instructional",
+                 "subject": "Английский", "subject_subgroup": "5"},
+            ],
+            "memberships": [{"group_id": "base8", "identity_id": item} for item in ("s1", "s2")]
+                           + [{"group_id": "english4", "identity_id": "s1"},
+                              {"group_id": "english5", "identity_id": "s2"}],
+            "teachers": [],
+            "lessons": [lesson("I19", "Англ 4 каб 17", "8", "8")],
+        }
+        block = next(iter(build_bootstrap_canonical(corpus)["blocks"].values()))
+        english = next(item for item in block["assignments"] if item["activity"] != NO_LESSON)
+        self.assertEqual(english["audience"]["canonical_group_ids"], ["english4"])
+        self.assertEqual(english["student_ids"], ["s1"])
+
     def test_cross_class_english_group_and_class_remainder_keep_one_group(self):
         group = "english-1"
         corpus = {

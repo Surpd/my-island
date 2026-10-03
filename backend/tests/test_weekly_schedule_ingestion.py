@@ -131,6 +131,7 @@ class MergeAwareParsingTests(unittest.TestCase):
             ("общ леонид каб 10", "Обществознание"),
             ("инфор огэ тарас каб 15", "Информатика"),
             ("англ 1 2 ангелина каб 16", "Английский язык"),
+            ("англ 4 каб 17", "Английский язык"),
             ("история искусства ев каб 6", "История искусства"),
         )
         for raw, expected in examples:
@@ -139,6 +140,29 @@ class MergeAwareParsingTests(unittest.TestCase):
                 next(iter(rows.values()))[0]["sheet_id"] = "test"
                 lesson = parse_weekly_lessons(rows, [], ["История искусства"])[0]
                 self.assertEqual(lesson["subject"], expected)
+
+    def test_exact_subject_aliases_cover_school_subjects_without_guessing_word_fragments(self):
+        examples = {
+            "мат": "Математика", "матем": "Математика",
+            "гео": "География", "геог": "География",
+            "истор": "История", "истор иск": "История искусства",
+            "биол": "Биология", "хим": "Химия", "естеств": "Естествознание",
+            "рус": "Русский язык", "литер": "Литература",
+            "общ": "Обществознание", "инфор": "Информатика",
+            "трен": "Тренинг", "твор": "Творчество",
+            "муз": "Музыка", "пласт": "Пластика", "англ": "Английский язык",
+        }
+        for alias, expected in examples.items():
+            with self.subTest(alias=alias):
+                rows = parsed(f"{alias} каб 17", audience="8")
+                next(iter(rows.values()))[0]["sheet_id"] = "test"
+                self.assertEqual(parse_weekly_lessons(rows, [])[0]["subject"], expected)
+        for raw in ("материал каб 17", "Ангелина каб 17"):
+            with self.subTest(raw=raw):
+                rows = parsed(raw, audience="8")
+                next(iter(rows.values()))[0]["sheet_id"] = "test"
+                self.assertNotIn(parse_weekly_lessons(rows, [])[0]["subject"],
+                                 {"Математика", "Английский язык"})
 
     def test_ambiguous_subject_prefix_is_not_guessed(self):
         rows = parsed("физ иван каб 9", audience="8")
@@ -269,6 +293,41 @@ class SharedDiffTests(unittest.TestCase):
         proposal = preview_changes({"overlay_patches": diff["patches"]})[0]
         self.assertIn("Химия Родион", proposal["lesson"]["activity"])
         self.assertEqual(proposal["lesson"]["audience"]["kind"], "unresolved")
+
+    def test_roster_issue_names_exact_students_in_preview_and_draft(self):
+        base = block("base", "Английский", "g8")
+        base["grade_scope"] = "8"
+        old = parsed("Английский группа 1", audience="8")
+        new = parsed("Англ 4 каб 17", audience="8")
+        weekly = {**base, "status": "unresolved", "assignments": [], "unresolved": [
+            {"reason": "student is missing from the active English instructional partition",
+             "student_ids": ["s1", "s2"]},
+        ]}
+        artifact = {"blocks": {"weekly": weekly}, "students": {
+            "s1": {"display_name": "Анна Иванова", "class_name": "8-А"},
+            "s2": {"display_name": "Пётр Петров", "class_name": "8-Б"},
+        }}
+        patch = build_weekly_diff({"blocks": {"base": base}}, old, new, artifact)["patches"][0]
+        self.assertIn("Анна Иванова (8-А класс)", patch["source_issue"])
+        self.assertIn("Пётр Петров (8-Б класс)", patch["source_issue"])
+        self.assertNotIn("ID ", patch["source_issue"])
+        self.assertIn("групп английского", patch["source_issue"])
+        self.assertEqual(patch["resolution_details"], [
+            "student is missing from the active English instructional partition"])
+        proposal = preview_changes({"overlay_patches": [patch]})[0]
+        self.assertIn("Анна Иванова", proposal["review_reason"])
+        self.assertEqual(proposal["resolution_state"], "UNRESOLVED")
+
+    def test_unknown_student_is_reported_without_exposing_id_as_a_name(self):
+        base = block("base", "Русский", "g8")
+        weekly = {**base, "status": "unresolved", "assignments": [], "unresolved": [
+            {"reason": "student is missing from the canonical base-class membership",
+             "student_ids": ["missing-identity"]},
+        ]}
+        patch = build_weekly_diff({"blocks": {"base": base}}, parsed("Русский"),
+                                  parsed("Химия"), {"blocks": {"weekly": weekly}})["patches"][0]
+        self.assertIn("Имя ученика отсутствует в справочнике", patch["source_issue"])
+        self.assertNotIn("missing-identity", patch["source_issue"])
 
     def test_weekly_corpus_excludes_inactive_students(self):
         with tempfile.TemporaryDirectory() as directory:
