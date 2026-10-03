@@ -43,6 +43,8 @@ class Settings:
     google_oauth_refresh_token: str | None
     telegram_bootstrap_user_ids: tuple[int, ...] = ()
     telegram_webhook_secret: str = ""
+    google_oauth_token_encryption_key: str = ""
+    google_oauth_allowed_email: str = "antischool.island@gmail.com"
     # Scheduling is fail-closed until canonical is explicitly enabled for a pilot.
     schedule_backend: str = "disabled"
 
@@ -69,6 +71,8 @@ class Settings:
             google_oauth_client_secret=os.getenv("GOOGLE_OAUTH_CLIENT_SECRET") or None,
             google_oauth_redirect_uri=os.getenv("GOOGLE_OAUTH_REDIRECT_URI") or None,
             google_oauth_refresh_token=os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN") or None,
+            google_oauth_token_encryption_key=os.getenv("GOOGLE_OAUTH_TOKEN_ENCRYPTION_KEY", ""),
+            google_oauth_allowed_email=os.getenv("GOOGLE_OAUTH_ALLOWED_EMAIL", "antischool.island@gmail.com").strip().casefold(),
             telegram_bootstrap_user_ids=_parse_telegram_user_ids(os.getenv("TELEGRAM_BOOTSTRAP_USER_IDS", "")),
             schedule_backend=os.getenv("SCHEDULE_BACKEND", "disabled").strip().casefold() or "disabled",
         )

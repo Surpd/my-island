@@ -39,3 +39,7 @@ services:
         sync: false
       - key: GOOGLE_OAUTH_GRANTED_SCOPES
         sync: false
+      - key: GOOGLE_OAUTH_ALLOWED_EMAIL
+        value: antischool.island@gmail.com
+      - key: GOOGLE_OAUTH_TOKEN_ENCRYPTION_KEY
+        sync: false

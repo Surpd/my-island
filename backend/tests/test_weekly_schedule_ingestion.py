@@ -98,6 +98,15 @@ class WeeklyTabDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(chosen.sheet_id, "2")
 
+    def test_explicit_week_selects_numeric_cross_month_tab(self):
+        chosen, candidates = discover_weekly_tab(
+            [sheet("28.09-02.10", 4), sheet("Архив14-18.09", 5)],
+            explicit_week_start="2026-09-28",
+        )
+        self.assertEqual(chosen.title, "28.09-02.10")
+        self.assertEqual((chosen.week_start, chosen.week_end), ("2026-09-28", "2026-10-02"))
+        self.assertEqual(len(candidates), 1)
+
     def test_ambiguous_and_malformed_tabs_fail_closed(self):
         with self.assertRaisesRegex(WeeklyIngestionError, "ambiguous"):
             discover_weekly_tab([sheet("14–18 сентября", 2), sheet("14-18 сентября", 3)], explicit_week_start="2026-09-14")

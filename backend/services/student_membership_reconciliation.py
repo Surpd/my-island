@@ -682,8 +682,8 @@ def render_plan_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def fetch_authoritative_sources(settings: Settings) -> tuple[dict[str, Sequence[Sequence[Any]]], dict[str, Any]]:
-    token_store = GoogleTokenStore()
+def fetch_authoritative_sources(settings: Settings, database: Database | None = None) -> tuple[dict[str, Sequence[Sequence[Any]]], dict[str, Any]]:
+    token_store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
     token = token_store.load()
     if not token:
         raise GoogleLiveError("Stored Google token is required for read-only student dry-run")
@@ -706,7 +706,7 @@ def fetch_authoritative_sources(settings: Settings) -> tuple[dict[str, Sequence[
 
 
 def run_live_dry_run(database: Database, settings: Settings) -> dict[str, Any]:
-    source_rows, source_meta = fetch_authoritative_sources(settings)
+    source_rows, source_meta = fetch_authoritative_sources(settings, database)
     snapshot = load_production_snapshot(database)
     manual_resolutions = load_manual_resolutions()
     expected, issues, diagnostics = build_expected_memberships(source_rows, snapshot, manual_resolutions)

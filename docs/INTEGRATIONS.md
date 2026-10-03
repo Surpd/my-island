@@ -28,3 +28,13 @@ Fill now for local Telegram verification: `DEV_AUTH_ENABLED=true` is safe only w
 Fill for real Postgres after the migration is approved/applied: `DATABASE_URL`, copied from Supabase’s Connect dialog. The backend uses it server-side via psycopg and does not run migrations on startup.
 
 Hosted deployment also requires correct `CORS_ORIGINS`, `BACKEND_PUBLIC_URL`, and `FRONTEND_PUBLIC_URL`. Apply database migrations before rolling out backend code that queries the new schema.
+
+### Admin self-service Google reconnect
+
+The admin Settings page can start a Google OAuth reconnect. For a hosted deployment, configure these one-time prerequisites before enabling it:
+
+- Add `https://<BACKEND_PUBLIC_URL-host>/api/integrations/google/callback` to the OAuth client's authorized redirect URIs and set the exact same value as `GOOGLE_OAUTH_REDIRECT_URI` in Render.
+- Generate one Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store it as the Render secret `GOOGLE_OAUTH_TOKEN_ENCRYPTION_KEY`. Keep this key stable: it is required to decrypt the token stored in Postgres.
+- Set `GOOGLE_OAUTH_ALLOWED_EMAIL` to the exact school Google account and apply migration `032_google_oauth_self_service.sql`.
+
+The callback validates the one-time state, expected account, Sheets read scope, and access to the configured spreadsheet before replacing the stored credential. It stores the complete token response encrypted in Postgres; refresh tokens never pass through frontend JavaScript or appear in API responses. Existing environment/file tokens remain a fallback until a DB credential is saved. Google OAuth Testing mode still applies Google's token-expiry policy; this flow makes renewal self-service but cannot bypass Google's publishing/verification requirements.

@@ -28,6 +28,9 @@ WEEK_RE = re.compile(
     r"(?<!\d)(\d{1,2})\s*(?:([а-яё]+)\s*)?[-–—]\s*(\d{1,2})\s+([а-яё]+)(?:\s+(\d{4}))?",
     re.IGNORECASE,
 )
+NUMERIC_WEEK_RE = re.compile(
+    r"(?<!\d)(\d{1,2})[./](\d{1,2})\s*[-–—]\s*(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?(?!\d)",
+)
 
 
 class WeeklyIngestionError(ValueError):
@@ -84,6 +87,25 @@ def day_date(week_start: str, weekday: int) -> str:
 def parse_week_title(title: str, *, reference_date: date) -> tuple[date, date] | None:
     if "шаблон" in title.casefold():
         return None
+    numeric = NUMERIC_WEEK_RE.search(title)
+    if numeric:
+        start_day, start_month, end_day, end_month, explicit_year = numeric.groups()
+        first_month, last_month = int(start_month), int(end_month)
+        year = int(explicit_year) if explicit_year else reference_date.year
+        if year < 100:
+            year += 2000
+        if first_month > last_month:
+            start_year, end_year = (year - 1, year) if reference_date.month <= last_month else (year, year + 1)
+        else:
+            start_year = end_year = year
+        try:
+            start = date(start_year, first_month, int(start_day))
+            end = date(end_year, last_month, int(end_day))
+        except ValueError:
+            return None
+        if end < start or (end - start).days > 14:
+            return None
+        return start, end
     match = WEEK_RE.search(title)
     if not match:
         return None
