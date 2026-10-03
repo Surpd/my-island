@@ -179,6 +179,22 @@ class ScheduleDraftTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
             publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
 
+    def test_import_with_empty_canonical_group_becomes_reviewable_unresolved_draft(self):
+        preview = {"overlay_patches": [{"block_key": "missing-group", "change_kind": "replaced",
+            "weekday": 0, "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+            "weekly_source_cells": ["B3"], "weekly_raw_text": {"B3": "Английский, группа без сопоставления"},
+            "resolution_state": "AUTO_RESOLVED", "assignments": [{
+                "activity": "Английский", "teacher_ids": [str(self.teacher["id"])],
+                "canonical_group_ids": [], "metadata": {},
+            }]}]}
+        changes = preview_changes(preview)
+        self.assertEqual(preview["overlay_patches"][0]["resolution_state"], "UNRESOLVED")
+        self.assertEqual(changes[0]["lesson"]["audience"]["kind"], "unresolved")
+        self.assertTrue(changes[0]["review_required"])
+        saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0,
+                           payload={"changes": changes}, base_version_id="base-v1")
+        self.assertTrue(saved["has_changes"])
+
     def test_template_publish_creates_new_immutable_canonical_version(self):
         with self.database.connection() as connection:
             connection.execute("UPDATE canonical_schedule_versions SET status='authoritative' WHERE version_id='base-v1'")

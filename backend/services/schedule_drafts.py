@@ -498,14 +498,42 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
                                "source_identity": source_identity,
                                "audience": {"kind": "unresolved", "grade": str(patch.get("grade_scope") or "")}}})
             continue
+        invalid_group_audience = False
+        for raw_assignment in assignments:
+            assignment = dict(raw_assignment)
+            audience_data = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
+            group_ids = assignment.get("canonical_group_ids") or audience_data.get("canonical_group_ids") or []
+            metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+            rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), Mapping) else {}
+            kind = str(rule.get("kind") or audience_data.get("kind") or "groups")
+            rule_group_ids = rule.get("group_ids") or rule.get("canonical_group_ids") or group_ids
+            if kind in {"groups", "base_class"} and not rule_group_ids:
+                invalid_group_audience = True
+        if invalid_group_audience:
+            issue = "Аудитория занятия не связана ни с одной канонической группой"
+            patch["resolution_state"] = "UNRESOLVED"
+            patch["source_issue"] = patch.get("source_issue") or issue
+            if isinstance(raw, dict):
+                raw.update({"resolution_state": "UNRESOLVED", "source_issue": patch["source_issue"]})
+            common.update({"resolution_state": "UNRESOLVED"})
         for index, raw_assignment in enumerate(assignments):
             assignment = dict(raw_assignment)
             metadata = dict(assignment.get("metadata") or {})
             raw_rule = metadata.get("audience_rule") or {}
-            audience = dict(raw_rule) if raw_rule else {
-                "kind": "groups", "group_ids": assignment.get("canonical_group_ids") or [],
+            source_audience = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
+            group_ids = assignment.get("canonical_group_ids") or source_audience.get("canonical_group_ids") or []
+            audience = dict(raw_rule) if raw_rule else dict(source_audience) if source_audience else {
+                "kind": "groups", "group_ids": group_ids,
                 "grade": str(patch.get("grade_scope") or ""),
             }
+            invalid_assignment_audience = False
+            if str(audience.get("kind") or "groups") in {"groups", "base_class"}:
+                audience_group_ids = audience.get("group_ids") or audience.get("canonical_group_ids") or group_ids
+                if not audience_group_ids:
+                    invalid_assignment_audience = True
+                    audience = {"kind": "unresolved", "grade": str(patch.get("grade_scope") or "")}
+                else:
+                    audience["group_ids"] = audience_group_ids
             lesson = {
             "activity": str(assignment.get("activity") or ""),
             "weekday": patch.get("weekday"),
@@ -522,8 +550,8 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
             changes.append({
                 "operation": "upsert", "block_key": block_key, "assignment_index": index, "manual": False,
                 "change_kind": patch.get("change_kind") or "replaced", "lesson": lesson,
-                "review_required": common["resolution_state"] != "AUTO_RESOLVED",
-                "review_reason": patch.get("source_issue"),
+                "review_required": common["resolution_state"] != "AUTO_RESOLVED" or invalid_assignment_audience,
+                "review_reason": patch.get("source_issue") or ("Аудитория занятия не связана ни с одной канонической группой" if invalid_assignment_audience else None),
                 **common,
             })
         for index in reversed(range(len(assignments), int(patch.get("previous_assignment_count") or 0))):
