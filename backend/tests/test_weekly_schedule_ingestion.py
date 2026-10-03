@@ -115,6 +115,37 @@ class WeeklyTabDiscoveryTests(unittest.TestCase):
 
 
 class MergeAwareParsingTests(unittest.TestCase):
+    def test_lowercase_subject_teacher_initials_and_room_are_separate(self):
+        rows = parsed("русский ев каб 5", audience="8")
+        next(iter(rows.values()))[0]["sheet_id"] = "test"
+        teacher = {"id": "elena", "display_name": "Елена Викторовна"}
+        lesson = parse_weekly_lessons(rows, [teacher])[0]
+        self.assertEqual(lesson["subject"], "Русский язык")
+        self.assertEqual(lesson["resolved_identity_ids"], ["elena"])
+        self.assertEqual(lesson["room"], "каб 5")
+
+    def test_subject_shorthand_uses_directory_vocabulary_not_one_off_aliases(self):
+        examples = (
+            ("матем дф каб 17", "Математика"),
+            ("литер юлия каб 9", "Литература"),
+            ("общ леонид каб 10", "Обществознание"),
+            ("инфор огэ тарас каб 15", "Информатика"),
+            ("англ 1 2 ангелина каб 16", "Английский язык"),
+            ("история искусства ев каб 6", "История искусства"),
+        )
+        for raw, expected in examples:
+            with self.subTest(raw=raw):
+                rows = parsed(raw, audience="8")
+                next(iter(rows.values()))[0]["sheet_id"] = "test"
+                lesson = parse_weekly_lessons(rows, [], ["История искусства"])[0]
+                self.assertEqual(lesson["subject"], expected)
+
+    def test_ambiguous_subject_prefix_is_not_guessed(self):
+        rows = parsed("физ иван каб 9", audience="8")
+        next(iter(rows.values()))[0]["sheet_id"] = "test"
+        lesson = parse_weekly_lessons(rows, [], ["Физика", "Физкультура"])[0]
+        self.assertNotIn(lesson["subject"], {"Физика", "Физкультура"})
+
     def test_two_audience_merge_is_one_source_item(self):
         rows = parse_structure(matrix("Русский", "", "Физика"), sheet_id="1", title="21–25 сентября", week_start="2026-09-21", merges=[{"startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 1, "endColumnIndex": 3}])
         merged = rows[(0, "09:00", "09:45", "5,6")]
@@ -183,6 +214,28 @@ class SharedDiffTests(unittest.TestCase):
         result = build_weekly_diff(canonical, template, weekly, {"blocks": {"weekly": replacement}})
         self.assertEqual(result["counts"], {"UNCHANGED": 1})
         self.assertEqual(result["patches"], [])
+
+    def test_base_membership_gap_does_not_turn_same_lesson_into_override(self):
+        base = block("base", "Русский", "g8")
+        base["grade_scope"] = "8"
+        base["assignments"][0].update({"role": "primary", "teacher_ids": ["elena"],
+                                        "student_ids": ["s8a", "s8b"]})
+        weekly = {**base, "status": "unresolved", "unresolved": [
+            {"reason": "student is missing from the canonical base-class membership"}],
+            "assignments": [{**base["assignments"][0], "activity": "Русский язык",
+                             "student_ids": ["s8a"], "metadata": {"room": "каб 5"}}]}
+        before = parsed("Русский Елена Викторовна", audience="8")
+        after = parsed("русский ев каб 5", audience="8")
+        diff = build_weekly_diff({"blocks": {"base": base}}, before, after,
+                                 {"blocks": {"weekly": weekly}})
+        self.assertEqual(diff["counts"], {"UNCHANGED": 1})
+        self.assertEqual(diff["patches"], [])
+
+        weekly["assignments"][0]["teacher_ids"] = ["other"]
+        changed = build_weekly_diff({"blocks": {"base": base}}, before, after,
+                                    {"blocks": {"weekly": weekly}})
+        self.assertEqual(changed["counts"], {"REPLACED": 1})
+        self.assertEqual(changed["patches"][0]["resolution_state"], "NEEDS_CONFIRMATION")
 
     def test_unchanged_week_has_no_overrides(self):
         result = self._diff("Русский", "Русский")

@@ -8,7 +8,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from backend.services.schedule_parser_v2 import classify_simple_activity, normalize_no_lesson
-from backend.services.teacher_directory import resolve_teacher_id
+from backend.services.teacher_directory import SUBJECT_ALIASES, resolve_teacher_id
 
 
 CLASS_RE = re.compile(r"^\s*\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?\s*$", re.IGNORECASE)
@@ -291,15 +291,34 @@ def by_source_column(items: Sequence[Mapping[str, Any]]) -> dict[int, Mapping[st
     return {int(item["source_column"]): item for item in items if item.get("source_column") is not None}
 
 
-def _subject_hint(raw: str) -> str:
+def _subject_hint(raw: str, subjects: Sequence[str] = ()) -> str:
     first = str(raw).splitlines()[0].strip()
     if classify_simple_activity(raw):
         return first
+    # Resolve prefixes against the existing subject directory and canonical
+    # activities. A shorthand is accepted only when it identifies one subject
+    # family; an ambiguous prefix remains unresolved rather than guessed.
+    words = norm(first).split()
+    if words:
+        vocabulary = {norm(value): str(value) for value in (*SUBJECT_ALIASES.values(), *subjects) if norm(value)}
+        explicit_phrase = [value for key, value in vocabulary.items()
+                           if len(key.split()) > 1 and words[:len(key.split())] == key.split()]
+        if explicit_phrase:
+            return max(explicit_phrase, key=lambda value: len(norm(value).split()))
+        first_word = words[0]
+        if len(first_word) >= 3:
+            matches = [(key, value) for key, value in vocabulary.items()
+                       if key.split()[0].startswith(first_word)]
+            roots = {key.split()[0] for key, _ in matches}
+            longest = max(roots, key=len) if roots else ""
+            if longest and all(longest.startswith(root) for root in roots):
+                same_root = [value for key, value in matches if key.split()[0] == longest]
+                return min(same_root, key=lambda value: (len(norm(value).split()), len(value)))
     match = re.split(r"\s+(?=\d|[A-ZА-ЯЁ])", first, maxsplit=1)
     return match[0].strip() if match else first
 
 
-def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], teachers: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], teachers: Sequence[Mapping[str, Any]], subjects: Sequence[str] = ()) -> list[dict[str, Any]]:
     """Adapt merge-aware structural rows to the existing V2 semantic input."""
     lessons = []
     for cells in parsed.values():
@@ -309,7 +328,7 @@ def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[st
             activity_type = "extracurricular" if raw.lstrip().startswith("⚪") else "nonlesson" if normalize_no_lesson(raw) else "simple_activity" if classify_simple_activity(raw) else "lesson"
             room_match = re.search(r"(?:каб(?:\.|инет)?\s*[^\n]+|зал[^\n]*|онлайн[^\n]*)", raw, re.IGNORECASE)
             parsed_cell = {
-                "subject": _subject_hint(raw), "teacher_hint": raw,
+                "subject": _subject_hint(raw, subjects), "teacher_hint": raw,
                 "room": room_match.group(0).strip() if room_match else "", "activity_type": activity_type,
                 "modifiers": {"exam_track": "ОГЭ" if re.search(r"\bогэ\b", raw, re.IGNORECASE) else "", "subject_subgroup": ""},
                 "parse_status": "validated" if teacher_id else "ambiguous", "resolved_identity_ids": [teacher_id] if teacher_id else [],
@@ -330,17 +349,14 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
     return result
 
 
-def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
+def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, Any], *, source_only: bool = False) -> bool:
     """Ignore source wording changes when deterministic routing is unchanged."""
+    activities = [str(item.get("activity") or "") for block in (before, after)
+                  for item in block.get("assignments") or []]
+
     def activity(value: Any) -> str:
-        normalized = norm(value)
-        return {
-            "мат": "математика", "матем": "математика",
-            "англ": "английский", "рус": "русский",
-            "литер": "литература", "общ": "обществознание",
-            "инфор": "информатика", "физ": "физика",
-            "био": "биология",
-        }.get(normalized, normalized)
+        normalized = norm(_subject_hint(str(value or ""), activities))
+        return normalized.removesuffix(" язык") if normalized.endswith(" язык") else normalized
 
     def signature(block: Mapping[str, Any]) -> list[tuple[Any, ...]]:
         result = []
@@ -353,8 +369,8 @@ def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, An
                 str(item.get("role") or ""),
                 tuple(sorted(str(value) for value in group_ids)),
                 tuple(sorted(str(value) for value in item.get("teacher_ids") or [])),
-                tuple(sorted(str(value) for value in item.get("student_ids") or [])),
-                str(metadata.get("room") or "").strip().casefold(),
+                () if source_only else tuple(sorted(str(value) for value in item.get("student_ids") or [])),
+                "" if source_only else str(metadata.get("room") or "").strip().casefold(),
             ))
         return sorted(result)
     return bool(before.get("assignments")) and signature(before) == signature(after)
@@ -456,9 +472,13 @@ def build_weekly_diff(
         else:
             classification, kind = "UNCHANGED", "unchanged"
         weekly_block = weekly_by_key.get(source_key)
+        roster_gap_only = bool(weekly_block and weekly_block.get("unresolved") and all(
+            isinstance(issue, Mapping) and issue.get("reason") == "student is missing from the canonical base-class membership"
+            for issue in weekly_block.get("unresolved") or []
+        ))
         if (classification in {"REPLACED", "METADATA_ONLY"} and weekly_block
-                and weekly_block.get("status", "resolved") == "resolved"
-                and _same_resolved_assignments(base, weekly_block)):
+                and (weekly_block.get("status", "resolved") == "resolved" or roster_gap_only)
+                and _same_resolved_assignments(base, weekly_block, source_only=roster_gap_only)):
             # Different abbreviations, punctuation, or equivalent wording are
             # not a weekly override when the canonical routing is identical.
             classification, kind = "UNCHANGED", "unchanged"
