@@ -102,6 +102,11 @@ def _key(value: Any) -> str:
     return _clean(value).casefold().replace("ё", "е")
 
 
+def _match_key(value: Any) -> str:
+    """Normalize punctuation and spacing used inconsistently in schedule cells."""
+    return " ".join(re.sub(r"[^0-9a-zа-я]+", " ", _key(value)).split())
+
+
 def canonical_teacher_name(value: str) -> str:
     value = _clean(value)
     return TEACHER_ALIASES.get(_key(value), value)
@@ -109,18 +114,45 @@ def canonical_teacher_name(value: str) -> str:
 
 def resolve_teacher_id(raw: str, hint: str, teachers: Sequence[Mapping[str, Any]]) -> tuple[str | None, str | None]:
     """Resolve source teacher text conservatively against the current directory."""
-    names = {_key(item.get("display_name")): str(item["id"]) for item in teachers}
-    value = _key(hint) or _key(raw)
+    names = {_match_key(item.get("display_name")): str(item["id"]) for item in teachers}
+    value = _match_key(hint) or _match_key(raw)
     if not value:
         return None, "teacher not stated in source"
+
+    # Prefer a full canonical name over a shorter alias inside it (for example,
+    # "Анна Елисеева" must not be mistaken for the alias "Анна").
+    full_name_matches = [
+        (name, teacher_id) for name, teacher_id in names.items()
+        if name and re.search(rf"(?:^| ){re.escape(name)}(?:$| )", value)
+    ]
+    if len(full_name_matches) == 1:
+        return full_name_matches[0][1], None
+    if len(full_name_matches) > 1:
+        return None, "multiple teacher directory matches: " + ", ".join(item[0] for item in full_name_matches)
+
+    alias_matches: dict[str, str] = {}
     for alias, full in TEACHER_ALIASES.items():
-        if re.search(rf"(?:^|\s){re.escape(alias)}(?:$|\s)", value):
-            return names.get(_key(full)), None if _key(full) in names else f"teacher alias {full!r} absent from directory"
-    matches = [(name, teacher_id) for name, teacher_id in names.items() if re.search(rf"(?:^|\s){re.escape(name)}(?:$|\s)", value)]
-    if len(matches) == 1:
-        return matches[0][1], None
-    if len(matches) > 1:
-        return None, "multiple teacher directory matches: " + ", ".join(item[0] for item in matches)
+        normalized_alias = _match_key(alias)
+        if not normalized_alias:
+            continue
+        if " " in normalized_alias:
+            alias_pattern = re.escape(normalized_alias).replace(r"\ ", r"\s+")
+        elif len(normalized_alias) in {2, 3}:
+            # Initials are commonly written as ЕВ, Е.В., or Е. В. in sheets.
+            alias_pattern = r"\s*".join(re.escape(char) for char in normalized_alias)
+        else:
+            alias_pattern = re.escape(normalized_alias)
+        if re.search(rf"(?:^| ){alias_pattern}(?:$| )", value):
+            alias_matches[_match_key(full)] = names.get(_match_key(full), "")
+    resolved_aliases = {teacher_id for teacher_id in alias_matches.values() if teacher_id}
+    if len(resolved_aliases) == 1 and not any(not teacher_id for teacher_id in alias_matches.values()):
+        return next(iter(resolved_aliases)), None
+    if alias_matches:
+        if len(resolved_aliases) > 1:
+            return None, "multiple teacher aliases match source text"
+        missing = sorted(full for full, teacher_id in alias_matches.items() if not teacher_id)
+        return None, f"teacher alias {missing[0]!r} absent from directory"
+
     prefixes = [(name, teacher_id) for name, teacher_id in names.items() if name.startswith(value)]
     if len(prefixes) == 1 and len(value) >= 4:
         return prefixes[0][1], None

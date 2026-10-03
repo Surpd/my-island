@@ -173,6 +173,17 @@ class SharedDiffTests(unittest.TestCase):
         self.assertEqual(result["patches"][0]["resolution_state"], "AUTO_RESOLVED")
         self.assertEqual(len(preview_changes({"overlay_patches": result["patches"]})), 1)
 
+    def test_wording_variant_with_identical_resolved_routing_is_not_a_change(self):
+        base = block("base", "Русский язык", "g1")
+        canonical = {"blocks": {"base": base}}
+        template = parsed("Русский ЕВ")
+        weekly = parsed("Русский Е.В.")
+        replacement = block("weekly", "Русский язык", "g1")
+        replacement["assignments"][0]["teacher_ids"] = []
+        result = build_weekly_diff(canonical, template, weekly, {"blocks": {"weekly": replacement}})
+        self.assertEqual(result["counts"], {"UNCHANGED": 1})
+        self.assertEqual(result["patches"], [])
+
     def test_unchanged_week_has_no_overrides(self):
         result = self._diff("Русский", "Русский")
         self.assertEqual(result["patches"], [])

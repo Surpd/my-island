@@ -330,6 +330,26 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
     return result
 
 
+def _same_resolved_assignments(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
+    """Ignore source wording changes when deterministic routing is unchanged."""
+    def signature(block: Mapping[str, Any]) -> list[tuple[Any, ...]]:
+        result = []
+        for item in block.get("assignments") or []:
+            audience = item.get("audience") if isinstance(item.get("audience"), Mapping) else {}
+            group_ids = item.get("canonical_group_ids") or audience.get("canonical_group_ids") or []
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+            result.append((
+                str(item.get("activity") or ""),
+                str(item.get("role") or ""),
+                tuple(sorted(str(value) for value in group_ids)),
+                tuple(sorted(str(value) for value in item.get("teacher_ids") or [])),
+                tuple(sorted(str(value) for value in item.get("student_ids") or [])),
+                str(metadata.get("room") or "").strip().casefold(),
+            ))
+        return sorted(result)
+    return bool(before.get("assignments")) and signature(before) == signature(after)
+
+
 def comparison_key(block: Mapping[str, Any]) -> tuple[int, str, str, str]:
     slot = block.get("slot") if isinstance(block.get("slot"), Mapping) else {}
     def padded(value: Any) -> str:
@@ -426,6 +446,12 @@ def build_weekly_diff(
         else:
             classification, kind = "UNCHANGED", "unchanged"
         weekly_block = weekly_by_key.get(source_key)
+        if (classification in {"REPLACED", "METADATA_ONLY"} and weekly_block
+                and weekly_block.get("status", "resolved") == "resolved"
+                and _same_resolved_assignments(base, weekly_block)):
+            # Different abbreviations, punctuation, or equivalent wording are
+            # not a weekly override when the canonical routing is identical.
+            classification, kind = "UNCHANGED", "unchanged"
         if weekly_block and weekly_block.get("status", "resolved") == "resolved" and classification == "REPLACED" and assignment_signature(base) != assignment_signature(weekly_block):
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
