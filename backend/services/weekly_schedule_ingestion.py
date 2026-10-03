@@ -430,13 +430,26 @@ def build_weekly_diff(
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
         weekly_coords = [str(item["source_cell"]) for item in week_items]
-        patch: dict[str, Any] = {"block_key": base.get("block_key"), "change_kind": kind, "change_classification": classification, "weekly_source_cells": sorted(weekly_coords), "weekly_raw_text": {coord: weekly_raw[coord].get("raw_text") for coord in weekly_coords}, "source_signature": sorted((column, *semantics) for column, semantics in week_sem.items())}
+        patch: dict[str, Any] = {
+            "block_key": base.get("block_key"), "change_kind": kind,
+            "change_classification": classification, "weekday": source_key[0],
+            "slot": {"start": source_key[1], "end": source_key[2]},
+            "grade_scope": source_key[3],
+            "lesson_date": next((item.get("lesson_date") for item in week_items if item.get("lesson_date")), None),
+            "weekly_source_cells": sorted(weekly_coords),
+            "weekly_raw_text": {coord: weekly_raw[coord].get("raw_text") for coord in weekly_coords},
+            "source_signature": sorted((column, *semantics) for column, semantics in week_sem.items()),
+        }
         if classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"} and weekly_block and weekly_block.get("status", "resolved") == "resolved":
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
         elif classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"}:
             patch["assignments"] = base.get("assignments") or []
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
+            patch["resolution_details"] = [
+                str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
+                if isinstance(issue, Mapping) and issue.get("reason")
+            ]
         elif classification == "CANCELLED":
             patch["assignments"] = base.get("assignments") or []
         elif classification == "METADATA_ONLY":
@@ -445,6 +458,10 @@ def build_weekly_diff(
                 patch["assignments"] = weekly_block.get("assignments") or []
             elif base_raw != week_raw_values:
                 patch["source_issue"] = "Изменение текста источника не удалось однозначно сопоставить"
+                patch["resolution_details"] = [
+                    str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])
+                    if isinstance(issue, Mapping) and issue.get("reason")
+                ]
         old_teacher_ids = {str(value) for item in base.get("assignments") or [] for value in item.get("teacher_ids") or []}
         new_teacher_ids = {str(value) for item in patch.get("assignments") or [] for value in item.get("teacher_ids") or []}
         if week_cells and patch.get("assignments") and old_teacher_ids and not new_teacher_ids:

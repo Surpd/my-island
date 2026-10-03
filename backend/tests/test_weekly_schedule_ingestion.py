@@ -246,6 +246,30 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(google_sheets_spreadsheet_id="sheet")
 
+    def test_weekly_diff_carries_slot_context_and_resolver_reason(self):
+        key = (2, "11:50", "12:35", "8")
+        base = {
+            "block_key": "canonical-8-wed-3", "weekday": key[0],
+            "slot": {"start": key[1], "end": key[2]}, "grade_scope": key[3],
+            "assignments": [{"activity": "Русский", "canonical_group_ids": ["g8"], "teacher_ids": ["t1"]}],
+        }
+        old_rows = {key: [{"source_cell": "D8", "source_column": 3, "raw_text": "Русский ЕВ", "audience": "8", "merged_audiences": []}]}
+        new_rows = {key: [{"source_cell": "D8", "source_column": 3, "raw_text": "Русский неизвестный", "audience": "8", "merged_audiences": [], "lesson_date": "2026-09-23"}]}
+        weekly_block = {**base, "status": "unresolved", "unresolved": [{"reason": "Teacher is unresolved"}], "assignments": []}
+
+        result = build_weekly_diff(
+            {"blocks": {base["block_key"]: base}}, old_rows, new_rows,
+            {"blocks": {"weekly": weekly_block}},
+        )
+
+        patch = result["patches"][0]
+        self.assertEqual(patch["weekday"], 2)
+        self.assertEqual(patch["slot"], {"start": "11:50", "end": "12:35"})
+        self.assertEqual(patch["grade_scope"], "8")
+        self.assertEqual(patch["lesson_date"], "2026-09-23")
+        self.assertEqual(patch["weekly_source_cells"], ["D8"])
+        self.assertEqual(patch["resolution_details"], ["Teacher is unresolved"])
+
     def test_preview_is_read_only_and_matches_apply_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             database = self._database(directory)
