@@ -959,18 +959,25 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
     available_values = [str(row["week_start"]) for row in available_weeks]
     selected_week = requested_week if requested_week in available_values else (available_values[0] if available_values else requested_week)
     effective = _effective_week(database, version_id, selected_week) or _effective_week(database, None, selected_week)
-    if not effective:
-        return {
-            "status": "canonical_not_materialized",
-            "canonical": {"version_id": version_id, "status": version.get("status"), "authoritative": (version.get("metadata") or {}).get("authoritative", False), "source_fingerprint": version.get("source_fingerprint")},
-            "weeks": [{"week_start": value, "current": value == selected_week} for value in available_values],
-            "selected_week": selected_week,
-            "blocks": [],
-        }
-
     canonical = read_canonical_template(database, version_id) or {}
     canonical_blocks = canonical.get("blocks") if isinstance(canonical.get("blocks"), Mapping) else {}
-    effective_blocks = _block_rows(database, effective["effective_week_id"])
+    if effective:
+        effective_blocks = _block_rows(database, effective["effective_week_id"])
+    else:
+        # The canonical template is authoritative independently of whether a
+        # weekly overlay has been materialized. With no overlay, the week
+        # inherits the canonical baseline without creating a database record.
+        effective = {"effective_week_id": None, "version_id": version_id, "overlay_source_snapshot_id": None}
+        effective_blocks = [
+            {
+                "block_key": str(key), "canonical_block_id": block.get("id"),
+                "weekday": block.get("weekday"), "start_time": block.get("start_time"),
+                "end_time": block.get("end_time"), "grade_scope": block.get("grade_scope"),
+                "mode": block.get("mode"), "change_kind": "unchanged", "patch": {},
+                "source_provenance": block.get("source_provenance") or {}, "unresolved": [],
+            }
+            for key, block in canonical_blocks.items()
+        ]
     group_rows = _single_fetchall(database, "SELECT id,name,display_name,role FROM groups WHERE canonical IS TRUE ORDER BY id")
     group_names = {str(row["id"]): str(row["display_name"] or row["name"]) for row in group_rows}
     teacher_rows = _single_fetchall(database, "SELECT id,display_name FROM identities WHERE kind='teacher'")
@@ -1131,7 +1138,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
 
     effective_assignment_count = sum(len(_assignments(database, block.get("canonical_block_id"), block.get("patch") if isinstance(block.get("patch"), Mapping) else {})) for block in effective_blocks)
     return {
-        "status": version.get("status"), "selected_week": selected_week,
+        "status": version.get("status") if effective.get("effective_week_id") else "canonical_not_materialized", "selected_week": selected_week,
         "weeks": [{"week_start": value, "current": value == selected_week, "historical": value != selected_week} for value in available_values],
         "canonical": {"version_id": version_id, "status": version.get("status"), "authoritative": bool((version.get("metadata") or {}).get("authoritative", False)), "source_snapshot_id": version.get("source_snapshot_id"), "source_fingerprint": version.get("source_fingerprint"), "blocks": len(canonical_blocks), "assignments": sum(len(item.get("assignments") or []) for item in canonical_blocks.values())},
         "effective_week": {"effective_week_id": effective.get("effective_week_id"), "version_id": effective.get("version_id"), "week_start": selected_week, "source_snapshot": snapshot, "overlay_patch_count": sum(value for key, value in diff_counts.items() if key != "UNCHANGED"), "effective_blocks": len(rendered_blocks), "diff_counts": dict(diff_counts)},
