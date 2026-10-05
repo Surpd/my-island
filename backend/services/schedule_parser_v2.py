@@ -203,6 +203,24 @@ def normalize_no_lesson(value: Any) -> str | None:
     return None
 
 
+SUBJECT_PREFIX_ALIASES = (
+    ("англ", "английский"), ("english", "английский"),
+    ("мат", "математика"), ("рус", "русский"), ("истор", "история"),
+    ("инфор", "информатика"), ("инф", "информатика"),
+    ("общ", "обществознание"), ("литер", "литература"), ("лит", "литература"),
+    ("био", "биология"), ("физ", "физика"), ("хим", "химия"), ("геог", "география"),
+)
+
+
+def normalize_subject(value: Any) -> str:
+    """Normalize common subject spellings and abbreviations for comparisons."""
+    text = _norm(value)
+    for prefix, canonical in SUBJECT_PREFIX_ALIASES:
+        if text == prefix or text.startswith(prefix):
+            return canonical
+    return text
+
+
 def classify_simple_activity(value: Any) -> str | None:
     text = _norm(value)
     for pattern, canonical in SIMPLE_ACTIVITY_MARKERS:

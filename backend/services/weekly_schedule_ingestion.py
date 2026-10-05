@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import re
 from typing import Any, Mapping, Sequence
 
-from backend.services.schedule_parser_v2 import classify_simple_activity, normalize_no_lesson
+from backend.services.schedule_parser_v2 import NO_LESSON, classify_simple_activity, normalize_no_lesson, normalize_subject
 from backend.services.teacher_directory import resolve_teacher_id
 
 
@@ -327,9 +327,43 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
     result = set()
     for item in block.get("assignments") or []:
         audience = item.get("audience") if isinstance(item.get("audience"), Mapping) else {}
-        groups = tuple(sorted(str(x) for x in audience.get("canonical_group_ids") or item.get("canonical_group_ids") or []))
-        result.add((str(item.get("activity") or ""), groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or []))))
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+        rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), Mapping) else item.get("audience_rule")
+        if not isinstance(rule, Mapping):
+            rule = audience if audience.get("kind") else {}
+        group_ids = audience.get("canonical_group_ids") or audience.get("group_ids") or item.get("canonical_group_ids") or rule.get("group_ids") or []
+        groups = tuple(sorted(str(x) for x in group_ids))
+        if rule.get("kind") == "remaining" or rule.get("partition_group_ids"):
+            groups += ("remaining:" + ":".join((str(rule.get("grade") or ""), str(rule.get("class_group_id") or ""), ",".join(sorted(str(x) for x in rule.get("partition_group_ids") or [])))),)
+        activity = item.get("activity") or ""
+        activity = NO_LESSON if normalize_no_lesson(activity) or norm(activity) == norm(NO_LESSON) else classify_simple_activity(activity) or normalize_subject(activity)
+        result.add((activity, groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or []))))
     return result
+
+
+_MEMBERSHIP_ONLY_ISSUES = {
+    "student is missing from the canonical base-class membership",
+    "student is missing from the active English instructional partition",
+    "contradictory memberships",
+    "incompatible double assignment",
+}
+
+
+def _same_confirmed_assignment(base: Mapping[str, Any], weekly: Mapping[str, Any] | None) -> bool:
+    if not weekly or not (base.get("assignments") or []) or not (weekly.get("assignments") or []):
+        return False
+    issues = weekly.get("unresolved") or []
+    membership_only = bool(issues) and all(
+        isinstance(issue, Mapping) and str(issue.get("reason") or "") in _MEMBERSHIP_ONLY_ISSUES
+        for issue in issues
+    )
+    if weekly.get("status", "resolved") != "resolved" and not membership_only:
+        return False
+    return assignment_signature(base) == assignment_signature(weekly)
+
+
+def _source_text_signature(value: Any) -> str:
+    return NO_LESSON if normalize_no_lesson(value) or norm(value) == norm(NO_LESSON) else semantic_norm(value)
 
 
 def comparison_key(block: Mapping[str, Any]) -> tuple[int, str, str, str]:
@@ -410,14 +444,14 @@ def build_weekly_diff(
         base_cells, week_cells = by_source_column(base_items), by_source_column(week_items)
         def cell_semantics(item: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
             audiences = item.get("merged_audiences") or [item.get("audience")]
-            return semantic_norm(item.get("raw_text")), tuple(sorted(norm(value) for value in audiences if value))
+            return _source_text_signature(item.get("raw_text")), tuple(sorted(norm(value) for value in audiences if value))
         base_sem = {column: cell_semantics(item) for column, item in base_cells.items()}
         week_sem = {column: cell_semantics(item) for column, item in week_cells.items()}
         # Room/cabinet text is operational metadata, not a schedule change.
         # Strip it here too, otherwise an otherwise-equal cell would still
         # turn into a METADATA_ONLY override via the raw-text fallback.
-        base_raw = {column: semantic_norm(item.get("raw_text")) for column, item in base_cells.items()}
-        week_raw_values = {column: semantic_norm(item.get("raw_text")) for column, item in week_cells.items()}
+        base_raw = {column: _source_text_signature(item.get("raw_text")) for column, item in base_cells.items()}
+        week_raw_values = {column: _source_text_signature(item.get("raw_text")) for column, item in week_cells.items()}
         base_format = {column: template_meta.get(str(item.get("source_cell")), {}) for column, item in base_cells.items()}
         week_format = {column: weekly_meta.get(str(item.get("source_cell")), {}) for column, item in week_cells.items()}
         if not base_cells and not week_cells:
@@ -431,6 +465,8 @@ def build_weekly_diff(
         else:
             classification, kind = "UNCHANGED", "unchanged"
         weekly_block = weekly_by_key.get(source_key)
+        if week_cells and str(base.get("block_key") or "") in source_for_block and _same_confirmed_assignment(base, weekly_block):
+            classification, kind = "UNCHANGED", "unchanged"
         if weekly_block and weekly_block.get("status", "resolved") == "resolved" and classification == "REPLACED" and assignment_signature(base) != assignment_signature(weekly_block):
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
@@ -449,7 +485,7 @@ def build_weekly_diff(
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
         elif classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"}:
-            patch["assignments"] = base.get("assignments") or []
+            patch["assignments"] = []
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
             patch["resolution_details"] = [
                 str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])

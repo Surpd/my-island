@@ -211,6 +211,37 @@ class SharedDiffTests(unittest.TestCase):
         self.assertEqual(len(changed["patches"]), 1)
         self.assertEqual(changed["patches"][0]["block_key"], "manual")
 
+    def test_same_confirmed_assignment_ignores_membership_only_warning_and_subject_alias(self):
+        canonical_block = block("base", "Математика", "g1")
+        weekly_block = block("weekly", "матем", "g1")
+        weekly_block["assignments"][0]["canonical_group_ids"] = []
+        weekly_block["assignments"][0]["audience"] = {"group_ids": ["g1"]}
+        weekly_block.update({"status": "unresolved", "unresolved": [{"reason": "student is missing from the canonical base-class membership"}]})
+        result = build_weekly_diff(
+            {"blocks": {"base": canonical_block}}, parsed("Математика"), parsed("Матем"),
+            {"blocks": {"weekly": weekly_block}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+        )
+        self.assertEqual(result["counts"], {"UNCHANGED": 1})
+        self.assertEqual(result["patches"], [])
+
+    def test_no_lesson_wording_variants_do_not_create_weekly_change(self):
+        result = self._diff("Нет урока", "Свободны")
+        self.assertEqual(result["counts"], {"UNCHANGED": 1})
+        self.assertEqual(result["patches"], [])
+
+    def test_unresolved_replacement_shows_new_source_without_copying_old_assignment(self):
+        weekly_block = block("weekly", "Физика", "g1")
+        weekly_block.update({"status": "unresolved", "unresolved": [{"reason": "Teacher is unresolved"}], "assignments": []})
+        result = build_weekly_diff(
+            {"blocks": {"base": block("base", "Русский", "g1")}}, parsed("Русский"), parsed("Физика"),
+            {"blocks": {"weekly": weekly_block}},
+        )
+        patch = result["patches"][0]
+        self.assertEqual(patch["assignments"], [])
+        self.assertEqual(patch["after"]["assignments"], [])
+        self.assertEqual(patch["after"]["source_text"], ["физика"])
+
 
 class WeeklySnapshotPersistenceTests(unittest.TestCase):
     def test_snapshot_is_idempotent_and_linked_to_effective_week(self):
