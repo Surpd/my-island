@@ -91,6 +91,28 @@ class ScheduleDraftTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
             publish_draft(self.database, "template", "base-v1", expected_revision=draft["revision"])
 
+    def test_bulk_import_keeps_missing_group_mapping_unresolved_without_rejecting_batch(self):
+        preview = {"overlay_patches": [
+            {"block_key": self.block_key, "change_kind": "replaced", "weekday": 0,
+             "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+             "resolution_state": "AUTO_RESOLVED", "assignments": [{"activity": "Русский",
+                 "canonical_group_ids": [str(self.base["id"])], "teacher_ids": []}]},
+            {"block_key": "unmapped-group", "change_kind": "replaced", "weekday": 0,
+             "slot": {"start": "09:55", "end": "10:40"}, "grade_scope": "9",
+             "resolution_state": "AUTO_RESOLVED", "assignments": [{"activity": "Английский",
+                 "metadata": {"audience_rule": {"kind": "groups", "group_ids": []}}, "teacher_ids": []}]},
+        ]}
+        proposed = preview_changes(preview)
+        self.assertEqual(len(proposed), 2)
+        self.assertFalse(proposed[0]["review_required"])
+        self.assertTrue(proposed[1]["review_required"])
+        self.assertEqual(proposed[1]["resolution_state"], "UNRESOLVED")
+        self.assertEqual(proposed[1]["lesson"]["audience"], {"kind": "unresolved", "grade": "9"})
+        draft = merge_import_changes(self.database, "2026-09-28", expected_revision=0,
+            proposed_changes=proposed, source_context={"source": "google_sheet", "fingerprint": "batch"})
+        self.assertEqual(len(draft["payload"]["changes"]), 2)
+        self.assertTrue(draft["payload"]["changes"][1]["review_required"])
+
     def test_publish_creates_immutable_effective_revision_and_clears_draft(self):
         saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0, payload={"changes": [self.change()]}, base_version_id="base-v1")
         result = publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
