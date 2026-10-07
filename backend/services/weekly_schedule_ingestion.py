@@ -7,8 +7,8 @@ from datetime import date, timedelta
 import re
 from typing import Any, Mapping, Sequence
 
-from backend.services.schedule_parser_v2 import classify_simple_activity, normalize_no_lesson
-from backend.services.teacher_directory import resolve_teacher_id
+from backend.services.schedule_parser_v2 import NO_LESSON, classify_simple_activity, normalize_no_lesson, normalize_subject
+from backend.services.teacher_directory import TEACHER_ALIASES, resolve_teacher_id
 
 
 CLASS_RE = re.compile(r"^\s*\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?\s*$", re.IGNORECASE)
@@ -22,8 +22,9 @@ MONTHS = {
     "сентября": 9, "сентябрь": 9, "октября": 10, "октябрь": 10,
     "ноября": 11, "ноябрь": 11, "декабря": 12, "декабрь": 12,
 }
-ROOM_LINE_RE = re.compile(r"^\s*(?:каб(?:инет)?\.?\s*[^\n]*|зал(?:\s*[^\n]*)?|\d{1,3})\s*$", re.IGNORECASE)
-ROOM_INLINE_RE = re.compile(r"\s+(?:каб(?:инет)?\.?\s*[^\n]*|зал(?:\s*[^\n]*)?)(?=\s*$)", re.IGNORECASE)
+_HALL_PREFIX = r"(?:в\s+)?(?:один|одну|два|две|три|четыре|первый|второй|третий)?\s*зал"
+ROOM_LINE_RE = re.compile(rf"^\s*(?:каб(?:инет)?\.?\s*[^\n]*|{_HALL_PREFIX}(?:\s*[^\n]*)?|\d{{1,3}})\s*$", re.IGNORECASE)
+ROOM_INLINE_RE = re.compile(rf"\s+(?:каб(?:инет)?\.?\s*[^\n]*|{_HALL_PREFIX}\b[^\n]*)(?=\s*$)", re.IGNORECASE)
 WEEK_RE = re.compile(
     r"(?<!\d)(\d{1,2})\s*(?:([а-яё]+)\s*)?[-–—]\s*(\d{1,2})\s+([а-яё]+)(?:\s+(\d{4}))?",
     re.IGNORECASE,
@@ -291,12 +292,35 @@ def by_source_column(items: Sequence[Mapping[str, Any]]) -> dict[int, Mapping[st
     return {int(item["source_column"]): item for item in items if item.get("source_column") is not None}
 
 
-def _subject_hint(raw: str) -> str:
-    first = str(raw).splitlines()[0].strip()
-    if classify_simple_activity(raw):
-        return first
-    match = re.split(r"\s+(?=\d|[A-ZА-ЯЁ])", first, maxsplit=1)
-    return match[0].strip() if match else first
+def _subject_hint(raw: str, teachers: Sequence[Mapping[str, Any]] = ()) -> str:
+    semantic_lines = [line for line in str(raw).splitlines() if not ROOM_LINE_RE.fullmatch(line)]
+    first = ROOM_INLINE_RE.sub("", semantic_lines[0] if semantic_lines else "").strip()
+    simple_activity = classify_simple_activity(raw)
+    if simple_activity:
+        return simple_activity
+    # Remove teacher names/abbreviations from the cell before falling back to
+    # its free-form title. This preserves multiword new activities while
+    # keeping the subject dictionary authoritative for known subjects.
+    teacher_tokens = {str(item.get("display_name") or "").strip() for item in teachers}
+    teacher_tokens.update(TEACHER_ALIASES)
+    for token in sorted((item for item in teacher_tokens if item), key=len, reverse=True):
+        if not re.search(rf"(?<![\w]){re.escape(token)}(?![\w])", first, re.IGNORECASE):
+            continue
+        if resolve_teacher_id(first, token, teachers)[0]:
+            first = re.sub(rf"(?<![\w]){re.escape(token)}(?![\w])", " ", first, flags=re.IGNORECASE)
+    first = re.sub(r"\s+", " ", first).strip(" ,.;:·—–-")
+    canonical_names = {
+        "английский": "Английский", "математика": "Математика", "русский язык": "Русский язык",
+        "история": "История", "история искусства": "История искусства", "информатика": "Информатика",
+        "обществознание": "Обществознание", "литература": "Литература", "биология": "Биология",
+        "физика": "Физика", "химия": "Химия", "география": "География",
+        "естествознание": "Естествознание", "пластика": "Пластика", "музыка": "Музыка",
+        "классный час": "Классный час",
+    }
+    canonical = normalize_subject(first)
+    if canonical in canonical_names:
+        return canonical_names[canonical]
+    return first
 
 
 def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], teachers: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -305,16 +329,20 @@ def parse_weekly_lessons(parsed: Mapping[tuple[int, str, str, str], list[dict[st
     for cells in parsed.values():
         for cell in cells:
             raw = str(cell["raw_text"])
-            teacher_id, _teacher_issue = resolve_teacher_id(raw, "", teachers)
+            is_no_lesson = bool(normalize_no_lesson(raw))
+            teacher_id, _teacher_issue = (None, None) if is_no_lesson else resolve_teacher_id(raw, "", teachers)
+            teacher_hint = next((str(item.get("display_name") or "") for item in teachers
+                                 if teacher_id and str(item.get("id") or "") == teacher_id), "") or ("" if is_no_lesson else raw)
             normalized_raw = norm(raw)
             is_extracurricular = raw.lstrip().startswith("⚪") or any(token in normalized_raw for token in ("клуб", "кружок", "кружка", "внеурочная"))
-            activity_type = "extracurricular" if is_extracurricular else "nonlesson" if normalize_no_lesson(raw) else "simple_activity" if classify_simple_activity(raw) else "lesson"
-            room_match = re.search(r"(?:каб(?:\.|инет)?\s*[^\n]+|зал[^\n]*|онлайн[^\n]*)", raw, re.IGNORECASE)
+            is_class_hour = bool(re.match(r"\s*(?:классный\s+час|класс\s+час|кл\.?\s*час)\b", raw, re.IGNORECASE))
+            activity_type = "extracurricular" if is_extracurricular else "nonlesson" if normalize_no_lesson(raw) else "class_hour" if is_class_hour else "simple_activity" if classify_simple_activity(raw) else "lesson"
+            room_match = re.search(r"(?:каб(?:\.|инет)?\s*[^\n]+|(?:в\s+)?(?:один|одну|два|две|три|четыре|первый|второй|третий)?\s*зал\b|онлайн[^\n]*)", raw, re.IGNORECASE)
             parsed_cell = {
-                "subject": _subject_hint(raw), "teacher_hint": raw,
+                "subject": _subject_hint(raw, teachers), "teacher_hint": teacher_hint,
                 "room": room_match.group(0).strip() if room_match else "", "activity_type": activity_type,
                 "modifiers": {"exam_track": "ОГЭ" if re.search(r"\bогэ\b", raw, re.IGNORECASE) else "", "subject_subgroup": ""},
-                "parse_status": "validated" if teacher_id else "ambiguous", "resolved_identity_ids": [teacher_id] if teacher_id else [],
+                "parse_status": "validated" if teacher_id or is_no_lesson else "ambiguous", "resolved_identity_ids": [teacher_id] if teacher_id else [],
             }
             lessons.append({**cell, **parsed_cell, "record_key": f"{cell['sheet_id']}:{cell['source_cell']}", "raw_payload": {
                 "raw_text": raw, "source_column": cell["source_column"], "source_row": cell["source_row"],
@@ -327,9 +355,39 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
     result = set()
     for item in block.get("assignments") or []:
         audience = item.get("audience") if isinstance(item.get("audience"), Mapping) else {}
-        groups = tuple(sorted(str(x) for x in audience.get("canonical_group_ids") or item.get("canonical_group_ids") or []))
-        result.add((str(item.get("activity") or ""), groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or []))))
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+        rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), Mapping) else item.get("audience_rule")
+        if not isinstance(rule, Mapping):
+            rule = audience if audience.get("kind") else {}
+        group_ids = audience.get("canonical_group_ids") or audience.get("group_ids") or item.get("canonical_group_ids") or rule.get("group_ids") or []
+        groups = tuple(sorted(str(x) for x in group_ids))
+        if rule.get("kind") == "remaining" or rule.get("partition_group_ids"):
+            groups += ("remaining:" + ":".join((str(rule.get("grade") or ""), str(rule.get("class_group_id") or ""), ",".join(sorted(str(x) for x in rule.get("partition_group_ids") or [])))),)
+        activity = item.get("activity") or ""
+        activity = NO_LESSON if normalize_no_lesson(activity) or norm(activity) == norm(NO_LESSON) else classify_simple_activity(activity) or normalize_subject(activity)
+        result.add((activity, groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or []))))
     return result
+
+
+_MEMBERSHIP_ONLY_ISSUES = {
+    "student is missing from the canonical base-class membership",
+    "student is missing from the active English instructional partition",
+    "contradictory memberships",
+    "incompatible double assignment",
+}
+
+
+def _same_confirmed_assignment(base: Mapping[str, Any], weekly: Mapping[str, Any] | None) -> bool:
+    if not weekly or not (base.get("assignments") or []) or not (weekly.get("assignments") or []):
+        return False
+    issues = weekly.get("unresolved") or []
+    membership_only = bool(issues) and all(
+        isinstance(issue, Mapping) and str(issue.get("reason") or "") in _MEMBERSHIP_ONLY_ISSUES
+        for issue in issues
+    )
+    if weekly.get("status", "resolved") != "resolved" and not membership_only:
+        return False
+    return assignment_signature(base) == assignment_signature(weekly)
 
 
 def comparison_key(block: Mapping[str, Any]) -> tuple[int, str, str, str]:
@@ -387,11 +445,16 @@ def _assignment_brief(assignments: Any) -> list[dict[str, Any]]:
             for item in assignments or []]
 
 
+def _source_text_signature(value: Any) -> str:
+    return NO_LESSON if normalize_no_lesson(value) or norm(value) == norm(NO_LESSON) else semantic_norm(value)
+
+
 def build_weekly_diff(
     canonical: Mapping[str, Any], template_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]],
     weekly_parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]], weekly_artifact: Mapping[str, Any],
     template_meta: Mapping[str, Any] | None = None, weekly_meta: Mapping[str, Any] | None = None,
     confirmed_mapping: Mapping[str, str | None] | None = None,
+    *, baseline_is_effective: bool = False,
 ) -> dict[str, Any]:
     canonical_by_key = {comparison_key(block): block for block in (canonical.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
     weekly_by_key = {comparison_key(block): block for block in (weekly_artifact.get("blocks") or {}).values() if block.get("slot") or block.get("start_time")}
@@ -410,14 +473,14 @@ def build_weekly_diff(
         base_cells, week_cells = by_source_column(base_items), by_source_column(week_items)
         def cell_semantics(item: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
             audiences = item.get("merged_audiences") or [item.get("audience")]
-            return semantic_norm(item.get("raw_text")), tuple(sorted(norm(value) for value in audiences if value))
+            return _source_text_signature(item.get("raw_text")), tuple(sorted(norm(value) for value in audiences if value))
         base_sem = {column: cell_semantics(item) for column, item in base_cells.items()}
         week_sem = {column: cell_semantics(item) for column, item in week_cells.items()}
         # Room/cabinet text is operational metadata, not a schedule change.
         # Strip it here too, otherwise an otherwise-equal cell would still
         # turn into a METADATA_ONLY override via the raw-text fallback.
-        base_raw = {column: semantic_norm(item.get("raw_text")) for column, item in base_cells.items()}
-        week_raw_values = {column: semantic_norm(item.get("raw_text")) for column, item in week_cells.items()}
+        base_raw = {column: _source_text_signature(item.get("raw_text")) for column, item in base_cells.items()}
+        week_raw_values = {column: _source_text_signature(item.get("raw_text")) for column, item in week_cells.items()}
         base_format = {column: template_meta.get(str(item.get("source_cell")), {}) for column, item in base_cells.items()}
         week_format = {column: weekly_meta.get(str(item.get("source_cell")), {}) for column, item in week_cells.items()}
         if not base_cells and not week_cells:
@@ -431,6 +494,21 @@ def build_weekly_diff(
         else:
             classification, kind = "UNCHANGED", "unchanged"
         weekly_block = weekly_by_key.get(source_key)
+        if baseline_is_effective:
+            # In this mode the actual persisted week is authoritative. Ignore
+            # textual/format-only changes when the resolved lesson semantics
+            # match, and compare removals against that week's assignments.
+            if not week_cells:
+                classification, kind = ("CANCELLED", "cancelled") if base.get("assignments") else ("UNCHANGED", "unchanged")
+            elif _same_confirmed_assignment(base, weekly_block):
+                classification, kind = "UNCHANGED", "unchanged"
+            else:
+                classification, kind = "REPLACED", "replaced"
+                if weekly_block and weekly_block.get("status", "resolved") == "resolved" and assignment_signature(base) != assignment_signature(weekly_block):
+                    if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
+                        classification = "SEMANTIC_AUDIENCE_CHANGE"
+        if week_cells and str(base.get("block_key") or "") in source_for_block and _same_confirmed_assignment(base, weekly_block):
+            classification, kind = "UNCHANGED", "unchanged"
         if weekly_block and weekly_block.get("status", "resolved") == "resolved" and classification == "REPLACED" and assignment_signature(base) != assignment_signature(weekly_block):
             if {x[1] for x in assignment_signature(base)} != {x[1] for x in assignment_signature(weekly_block)}:
                 classification = "SEMANTIC_AUDIENCE_CHANGE"
@@ -449,7 +527,7 @@ def build_weekly_diff(
             patch["assignments"] = weekly_block.get("assignments") or []
             patch["source_provenance"] = weekly_block.get("derived_from") or {}
         elif classification in {"REPLACED", "SEMANTIC_AUDIENCE_CHANGE"}:
-            patch["assignments"] = base.get("assignments") or []
+            patch["assignments"] = []
             patch["source_issue"] = "changed source has no deterministic V2 assignment replacement"
             patch["resolution_details"] = [
                 str(issue.get("reason")) for issue in (weekly_block or {}).get("unresolved", [])

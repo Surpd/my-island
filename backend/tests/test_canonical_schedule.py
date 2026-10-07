@@ -146,6 +146,22 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(len(editor_result["blocks"]), 2)
         self.assertEqual(editor_result["blocks"][0]["affected_students"]["count"], 0)
 
+    def test_admin_observability_keeps_template_visible_without_weekly_materialization(self):
+        import_canonical_artifact(self.database, self.artifact())
+
+        result = schedule_admin_observability(
+            self.database, "2026-09-28", include_student_projection=False
+        )
+
+        self.assertEqual(result["status"], "canonical_not_materialized")
+        self.assertEqual(result["selected_week"], "2026-09-28")
+        self.assertEqual(result["canonical"]["blocks"], 2)
+        self.assertIsNone(result["effective_week"]["effective_week_id"])
+        self.assertEqual(len(result["blocks"]), 2)
+        self.assertEqual(result["blocks"][0]["baseline_assignments"][0]["activity"], "Математика")
+        self.assertEqual(result["blocks"][0]["effective_assignments"][0]["activity"], "Математика")
+        self.assertEqual(result["blocks"][0]["change_kind"], "unchanged")
+
     def test_optional_activity_without_teacher_is_not_teacher_issue(self):
         artifact = self.artifact()
         artifact["version_id"] = "runtime-optional-teacher"

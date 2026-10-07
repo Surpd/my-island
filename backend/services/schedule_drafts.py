@@ -134,7 +134,21 @@ def _normalize_change(value: Any) -> dict[str, Any]:
         change["assignment_index"] = index
     if operation == "upsert":
         lesson = dict(change.get("lesson") or {})
-        lesson["audience"] = _normalize_audience(lesson.get("audience"))
+        raw_audience = lesson.get("audience")
+        audience = dict(raw_audience) if isinstance(raw_audience, Mapping) else {}
+        # Imports may identify the lesson but still lack a canonical audience.
+        # Keep that proposal reviewable in the draft without allowing it to be
+        # published as an empty group assignment.
+        if (
+            change.get("review_required")
+            and audience.get("kind", "groups") in {"groups", "base_class"}
+            and not audience.get("group_ids")
+        ):
+            audience = {
+                "kind": "unresolved",
+                "grade": str(audience.get("grade") or lesson.get("grade") or ""),
+            }
+        lesson["audience"] = _normalize_audience(audience)
         lesson["teacher_ids"] = [str(item) for item in lesson.get("teacher_ids") or []]
         lesson["activity"] = str(lesson.get("activity") or "").strip()
         if not lesson["activity"]:
@@ -501,11 +515,48 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
         for index, raw_assignment in enumerate(assignments):
             assignment = dict(raw_assignment)
             metadata = dict(assignment.get("metadata") or {})
-            raw_rule = metadata.get("audience_rule") or {}
-            audience = dict(raw_rule) if raw_rule else {
-                "kind": "groups", "group_ids": assignment.get("canonical_group_ids") or [],
-                "grade": str(patch.get("grade_scope") or ""),
-            }
+            raw_rule = metadata.get("audience_rule") or assignment.get("audience_rule") or assignment.get("audience") or {}
+            audience = dict(raw_rule) if isinstance(raw_rule, Mapping) else {}
+            grade = str(patch.get("grade_scope") or "")
+            audience_kind = str(audience.get("kind") or "groups")
+            audience["kind"] = audience_kind
+            audience["grade"] = str(audience.get("grade") or grade)
+            if audience_kind in {"groups", "base_class"}:
+                nested_audience = assignment.get("audience") if isinstance(assignment.get("audience"), Mapping) else {}
+                group_ids = (audience.get("group_ids") or assignment.get("canonical_group_ids") or
+                             nested_audience.get("canonical_group_ids") or nested_audience.get("group_ids") or
+                             ([audience.get("class_group_id")] if audience.get("class_group_id") else []))
+                if isinstance(group_ids, str):
+                    group_ids = [group_ids] if group_ids else []
+                if group_ids:
+                    audience["group_ids"] = group_ids
+                    audience_issue = ""
+                else:
+                    audience = {"kind": "unresolved", "grade": grade}
+                    audience_issue = "Аудитория не связана с канонической группой"
+            elif audience_kind == "remaining" and not (audience.get("partition_dimension") or audience.get("partition_group_ids")):
+                audience = {"kind": "unresolved", "grade": grade}
+                audience_issue = "Не удалось определить состав остаточной аудитории"
+            elif audience_kind == "students" and not audience.get("include_student_ids"):
+                audience = {"kind": "unresolved", "grade": grade}
+                audience_issue = "Не удалось определить учеников занятия"
+            elif audience_kind == "available_slot" and not audience.get("grade"):
+                audience["grade"] = grade
+                audience_issue = "" if grade else "Не удалось определить класс свободного слота"
+                if audience_issue:
+                    audience = {"kind": "unresolved", "grade": grade}
+            elif audience_kind == "unresolved":
+                audience_issue = "Аудитория занятия требует ручного определения"
+            elif audience_kind == "whole_grade" and not audience.get("grade"):
+                audience = {"kind": "unresolved", "grade": grade}
+                audience_issue = "Не удалось определить класс для аудитории"
+            elif audience_kind not in {"whole_grade", "available_slot", "remaining", "students"}:
+                audience = {"kind": "unresolved", "grade": grade}
+                audience_issue = "Неизвестный тип аудитории требует ручного определения"
+            else:
+                audience_issue = ""
+            assignment_resolution = "UNRESOLVED" if audience_issue else common["resolution_state"]
+            assignment_review_reason = patch.get("source_issue") or audience_issue
             lesson = {
             "activity": str(assignment.get("activity") or ""),
             "weekday": patch.get("weekday"),
@@ -522,9 +573,9 @@ def preview_changes(preview: Mapping[str, Any]) -> list[dict[str, Any]]:
             changes.append({
                 "operation": "upsert", "block_key": block_key, "assignment_index": index, "manual": False,
                 "change_kind": patch.get("change_kind") or "replaced", "lesson": lesson,
-                "review_required": common["resolution_state"] != "AUTO_RESOLVED",
-                "review_reason": patch.get("source_issue"),
-                **common,
+                "review_required": assignment_resolution != "AUTO_RESOLVED",
+                "review_reason": assignment_review_reason,
+                **{**common, "resolution_state": assignment_resolution},
             })
         for index in reversed(range(len(assignments), int(patch.get("previous_assignment_count") or 0))):
             changes.append({"operation": "delete", "block_key": block_key, "assignment_index": index,

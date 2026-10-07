@@ -26,6 +26,26 @@ def lesson(cell, text, audience, grade, *, weekday=0, source_day_label="Пн"):
 
 
 class ScheduleCanonicalBootstrapTests(unittest.TestCase):
+    def test_punctuated_english_group_number_and_teacher_are_split_semantically(self):
+        source = lesson("B3", "Англ. 3 Игорь", "5", "5")
+        source["resolved_identity_ids"] = ["igor"]
+        corpus = {
+            "snapshot": {"id": "snapshot", "fingerprint": "source"},
+            "students": [{"id": "student", "class_name": "5"}],
+            "groups": [
+                {"id": "base5", "name": "5", "base_class_name": "5", "group_type": "class"},
+                {"id": "eng3", "name": "English 3", "group_type": "instructional", "subject": "Английский", "subject_subgroup": "3"},
+            ],
+            "memberships": [{"group_id": "base5", "identity_id": "student"},
+                            {"group_id": "eng3", "identity_id": "student"}],
+            "teachers": [{"id": "igor", "display_name": "Игорь"}],
+            "lessons": [source],
+        }
+        assignment = next(iter(build_bootstrap_canonical(corpus)["blocks"].values()))["assignments"][0]
+        self.assertEqual(assignment["activity"], "Английский")
+        self.assertEqual(assignment["audience"]["canonical_group_ids"], ["eng3"])
+        self.assertEqual(assignment["teacher_ids"], ["igor"])
+
     def test_english_pair_marker_routes_union_of_existing_groups_within_class(self):
         corpus = {
             "snapshot": {"id": "snapshot", "fingerprint": "source"},
