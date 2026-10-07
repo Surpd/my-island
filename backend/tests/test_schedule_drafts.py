@@ -6,6 +6,7 @@ from backend.database import Database
 from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week, project_student, read_canonical_template, schedule_admin_observability
 from backend.services.schedule_drafts import (
     DraftConflict,
+    _assignment_from_lesson,
     audience_preview,
     get_draft,
     merge_import_changes,
@@ -222,6 +223,15 @@ class ScheduleDraftTests(unittest.TestCase):
                            payload={"changes": changes}, base_version_id="base-v1")
         with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
             publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
+
+    def test_unresolved_draft_lesson_survives_schedule_preview_serialization(self):
+        assignment = _assignment_from_lesson({
+            "activity": "Английский",
+            "audience": {"kind": "unresolved", "grade": "9"},
+        })
+
+        self.assertEqual(assignment["audience_kind"], "unresolved")
+        self.assertEqual(assignment["canonical_group_ids"], [])
 
     def test_template_publish_creates_new_immutable_canonical_version(self):
         with self.database.connection() as connection:
