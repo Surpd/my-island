@@ -31,7 +31,7 @@ const ScheduleAdmin = dynamic(
 
 type RecordValue = Record<string, any>;
 type Session = { id: string | number; role: string; identity_id?: string | number | null };
-type ApiError = Error & { status?: number };
+type ApiError = Error & { status?: number; details?: unknown };
 
 const runtimeEnv =
   (import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env || {};
@@ -97,7 +97,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    const raw = String(body.detail || body.error || `Request failed: ${response.status}`);
+    const details = body.detail ?? body.error;
+    const raw = typeof details === 'object' && details !== null
+      ? String((details as Record<string, unknown>).message || `Request failed: ${response.status}`)
+      : String(details || `Request failed: ${response.status}`);
     const message = raw === 'Production requests must include Telegram initData'
       ? 'Сессия администратора не передалась в браузер. Получите новый код и войдите снова.'
       : raw === 'Admin browser session is invalid or expired'
@@ -107,6 +110,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           : raw;
     const error = new Error(message) as ApiError;
     error.status = response.status;
+    error.details = details;
     throw error;
   }
   return body as T;
