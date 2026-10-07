@@ -220,7 +220,7 @@ def discard_draft(database: Database, scope_kind: str, scope_key: str, *, expect
 
 def _assignment_from_lesson(lesson: Mapping[str, Any]) -> dict[str, Any]:
     audience = _normalize_audience(lesson.get("audience"))
-    audience_kind = {"groups": "canonical_groups", "base_class": "canonical_groups", "whole_grade": "whole_grade", "remaining": "remaining", "available_slot": "remaining", "students": "students"}[audience["kind"]]
+    audience_kind = {"groups": "canonical_groups", "base_class": "canonical_groups", "whole_grade": "whole_grade", "remaining": "remaining", "available_slot": "remaining", "students": "students", "unresolved": "unresolved"}[audience["kind"]]
     return {
         "activity": str(lesson.get("activity") or ""),
         "role": "residual" if audience["kind"] in {"remaining", "available_slot"} else "primary",
