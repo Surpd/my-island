@@ -134,7 +134,21 @@ def _normalize_change(value: Any) -> dict[str, Any]:
         change["assignment_index"] = index
     if operation == "upsert":
         lesson = dict(change.get("lesson") or {})
-        lesson["audience"] = _normalize_audience(lesson.get("audience"))
+        raw_audience = lesson.get("audience")
+        audience = dict(raw_audience) if isinstance(raw_audience, Mapping) else {}
+        # Imports may identify the lesson but still lack a canonical audience.
+        # Keep that proposal reviewable in the draft without allowing it to be
+        # published as an empty group assignment.
+        if (
+            change.get("review_required")
+            and audience.get("kind", "groups") in {"groups", "base_class"}
+            and not audience.get("group_ids")
+        ):
+            audience = {
+                "kind": "unresolved",
+                "grade": str(audience.get("grade") or lesson.get("grade") or ""),
+            }
+        lesson["audience"] = _normalize_audience(audience)
         lesson["teacher_ids"] = [str(item) for item in lesson.get("teacher_ids") or []]
         lesson["activity"] = str(lesson.get("activity") or "").strip()
         if not lesson["activity"]:

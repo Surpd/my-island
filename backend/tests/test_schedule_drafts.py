@@ -113,6 +113,28 @@ class ScheduleDraftTests(unittest.TestCase):
         self.assertEqual(len(draft["payload"]["changes"]), 2)
         self.assertTrue(draft["payload"]["changes"][1]["review_required"])
 
+    def test_review_required_group_without_canonical_ids_is_saved_as_unresolved(self):
+        change = self.change()
+        change["manual"] = False
+        change["review_required"] = True
+        change["review_reason"] = "Аудитория не определена"
+        change["lesson"]["audience"] = {"kind": "groups", "group_ids": [], "grade": "9"}
+
+        draft = merge_import_changes(
+            self.database,
+            "2026-09-21",
+            expected_revision=0,
+            proposed_changes=[change],
+            source_context={"source": "google_sheet", "fingerprint": "unresolved-audience"},
+        )
+
+        saved = draft["payload"]["changes"][0]
+        self.assertEqual(saved["lesson"]["activity"], "Русский")
+        self.assertEqual(saved["lesson"]["audience"]["kind"], "unresolved")
+        self.assertEqual(saved["lesson"]["audience"]["grade"], "9")
+        with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
+            publish_draft(self.database, "week", "2026-09-21", expected_revision=draft["revision"])
+
     def test_publish_creates_immutable_effective_revision_and_clears_draft(self):
         saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0, payload={"changes": [self.change()]}, base_version_id="base-v1")
         result = publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
