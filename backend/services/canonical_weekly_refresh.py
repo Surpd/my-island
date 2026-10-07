@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from collections import Counter
+from copy import deepcopy
 import hashlib
 import json
 import re
@@ -17,6 +18,9 @@ from typing import Any, Mapping
 from backend.config import Settings
 from backend.database import Database
 from backend.services.canonical_schedule import (
+    _assignments,
+    _block_rows,
+    _effective_week,
     canonical_version,
     materialize_effective_week,
     read_canonical_template,
@@ -24,8 +28,8 @@ from backend.services.canonical_schedule import (
 )
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
 from backend.services.google_oauth import google_config
+from backend.services.schedule_drafts import _apply_assignment_changes, get_draft
 from backend.services.schedule_canonical_bootstrap import build_bootstrap_canonical
-from backend.services.schedule_semantic_fallback import merge_review_only_proposals, propose_changed_lessons
 from backend.services.weekly_schedule_ingestion import (
     WeeklyIngestionError, build_weekly_diff, discover_weekly_tab, layout_profile,
     meta_map, normalized_source_rows, parse_structure, parse_weekly_lessons,
@@ -400,6 +404,81 @@ def _effective_block_count(current: Mapping[str, Any], patches: list[Mapping[str
     return len(known) + len(added)
 
 
+def _weekly_comparison_baseline(
+    database: Database,
+    canonical: Mapping[str, Any],
+    version_id: str,
+    week_start: str,
+    week_draft: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, dict[str, Any]]]:
+    """Use the exact week's persisted effective schedule when one exists."""
+    # Match schedule rendering and weekly publishing: if the active template
+    # version has no overlay for this date, an exact-week overlay on its prior
+    # canonical version is still the schedule users currently see.
+    effective = _effective_week(database, version_id, week_start) or _effective_week(database, None, week_start)
+    baseline = deepcopy(dict(canonical))
+    baseline["blocks"] = deepcopy(dict(canonical.get("blocks") or {}))
+    preserved_patches: dict[str, dict[str, Any]] = {}
+    effective_rows = _block_rows(database, str(effective["effective_week_id"])) if effective else []
+    for row in effective_rows:
+        key = str(row.get("block_key") or "")
+        if not key:
+            continue
+        block = baseline["blocks"].get(key)
+        block = deepcopy(dict(block)) if isinstance(block, Mapping) else {}
+        patch = row.get("patch") if isinstance(row.get("patch"), Mapping) else {}
+        if patch and row.get("change_kind") != "unchanged":
+            preserved_patches[key] = dict(patch)
+        block.update({
+            "block_key": key,
+            "weekday": row.get("weekday"),
+            "start_time": row.get("start_time"),
+            "end_time": row.get("end_time"),
+            "grade_scope": row.get("grade_scope"),
+            "slot": {"start": str(row.get("start_time") or "")[:5], "end": str(row.get("end_time") or "")[:5]},
+            "assignments": [] if row.get("change_kind") == "cancelled" else _assignments(database, row.get("canonical_block_id"), patch),
+        })
+        if patch.get("source_provenance") is not None:
+            block["source_provenance"] = patch["source_provenance"]
+            block["derived_from"] = patch["source_provenance"]
+        baseline["blocks"][key] = block
+    draft = dict(week_draft) if week_draft is not None else get_draft(database, "week", week_start)
+    draft_changes = list((draft.get("payload") or {}).get("changes") or [])
+    if draft_changes and str(draft.get("base_version_id") or "") == version_id:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for change in draft_changes:
+            grouped.setdefault(str(change.get("block_key") or ""), []).append(change)
+        for key, changes in grouped.items():
+            if not key:
+                continue
+            current = baseline["blocks"].get(key)
+            if current is None:
+                first_lesson = next((item.get("lesson") for item in changes if item.get("lesson")), {})
+                current = {"block_key": key, "weekday": first_lesson.get("weekday"),
+                           "start_time": first_lesson.get("start_time"), "end_time": first_lesson.get("end_time"),
+                           "grade_scope": str(first_lesson.get("grade") or ""),
+                           "slot": {"start": first_lesson.get("start_time"), "end": first_lesson.get("end_time")},
+                           "assignments": []}
+            ordered = sorted(changes, key=lambda item: (
+                item.get("operation") != "delete",
+                -int(item.get("assignment_index") or 0) if item.get("operation") == "delete" else int(item.get("assignment_index") or 0),
+            ))
+            updated = dict(current)
+            updated["assignments"] = _apply_assignment_changes(current.get("assignments") or [], ordered)
+            latest_lesson = next((item.get("lesson") for item in reversed(ordered) if item.get("lesson")), None)
+            if latest_lesson:
+                updated.update({
+                    "weekday": latest_lesson.get("weekday", updated.get("weekday")),
+                    "start_time": latest_lesson.get("start_time", updated.get("start_time")),
+                    "end_time": latest_lesson.get("end_time", updated.get("end_time")),
+                    "grade_scope": str(latest_lesson.get("grade") or updated.get("grade_scope") or ""),
+                    "slot": {"start": latest_lesson.get("start_time") or updated.get("start_time"),
+                             "end": latest_lesson.get("end_time") or updated.get("end_time")},
+                })
+            baseline["blocks"][key] = updated
+    return baseline, dict(effective) if effective else None, preserved_patches
+
+
 def _prepare_current_week(
     database: Database,
     settings: Settings,
@@ -446,27 +525,23 @@ def _prepare_current_week(
         return {"status": "template_changed", "message": "Исходный шаблон изменился; проверьте его перед импортом недели",
                 "changed_source_blocks": ["|".join(map(str, key)) for key in sorted(template_changes)]}
     fingerprint = _source_fingerprint(normalized_source_rows(weekly_parsed, include_day_label=False))
-    changed_keys = source_change_keys(confirmed_parsed, weekly_parsed)
+    week_draft = get_draft(database, "week", week_start)
+    use_week_draft = bool(week_draft.get("has_changes") and str(week_draft.get("base_version_id") or "") == str(version["version_id"]))
+    baseline, effective_week, preserved_patches = _weekly_comparison_baseline(
+        database, current, str(version["version_id"]), week_start, week_draft
+    )
+    # A published weekly edit may differ from the template even when the
+    # spreadsheet has not changed, so resolve all source blocks in that case.
+    compare_to_week = bool(effective_week or use_week_draft)
+    changed_keys = set(weekly_parsed) if compare_to_week else source_change_keys(confirmed_parsed, weekly_parsed)
     changed_parsed = {key: weekly_parsed[key] for key in changed_keys if key in weekly_parsed}
     weekly_lessons = parse_weekly_lessons(changed_parsed, corpus_db["teachers"]) if changed_parsed else []
     weekly_artifact = build_bootstrap_canonical({"snapshot": {"id": f"weekly-{weekly_tab['sheet_id']}-{week_start}", "fingerprint": fingerprint}, "lessons": weekly_lessons, **corpus_db}) if weekly_lessons else {"blocks": {}}
     template_meta = meta_map(confirmed["raw_payload"].get("structured_cells") or [], weekly=False)
     weekly_meta = meta_map(weekly_tab["structured_cells"], weekly=True)
-    diff = build_weekly_diff(current, confirmed_parsed, weekly_parsed, weekly_artifact, template_meta, weekly_meta,
-                             confirmed["structural_payload"].get("source_to_canonical") or {})
-    # Ask AI only about changed cells that deterministic resolution left ambiguous.
-    # Its validated output remains review-only and never overrides roster facts.
-    proposed_lessons, proposed_cells, semantic_fallback = propose_changed_lessons(
-        weekly_lessons, diff["patches"], corpus_db,
-    )
-    if proposed_cells:
-        proposed_artifact = build_bootstrap_canonical({
-            "snapshot": {"id": f"weekly-{weekly_tab['sheet_id']}-{week_start}", "fingerprint": fingerprint},
-            "lessons": proposed_lessons, **corpus_db,
-        })
-        proposed_diff = build_weekly_diff(current, confirmed_parsed, weekly_parsed, proposed_artifact,
-            template_meta, weekly_meta, confirmed["structural_payload"].get("source_to_canonical") or {})
-        semantic_fallback["reviewable"] = merge_review_only_proposals(diff, proposed_diff, proposed_cells)
+    diff = build_weekly_diff(baseline, confirmed_parsed, weekly_parsed, weekly_artifact, template_meta, weekly_meta,
+                             confirmed["structural_payload"].get("source_to_canonical") or {},
+                             baseline_is_effective=compare_to_week)
     structural_payload = {"layout": weekly_layout, "candidate_tabs": candidates, "rows": source_rows(weekly_parsed),
                           "normalized_rows": normalized_source_rows(weekly_parsed, include_day_label=False),
                           "confirmed_template_snapshot_id": confirmed["id"]}
@@ -487,9 +562,15 @@ def _prepare_current_week(
         "structural_payload": structural_payload,
         "fingerprint": fingerprint,
         "current": current,
+        "comparison_baseline": baseline,
+        "preserved_patches": preserved_patches,
+        "comparison_basis": ({"kind": "week_draft", "revision": int(week_draft.get("revision") or 0),
+                              "week_start": week_start} if use_week_draft else
+                             {"kind": "effective_week", "effective_week_id": effective_week.get("effective_week_id"),
+                              "week_start": week_start} if effective_week else
+                             {"kind": "confirmed_template", "version_id": version["version_id"]}),
         "weekly_artifact": weekly_artifact,
         "diff": diff,
-        "semantic_fallback": semantic_fallback,
         "effective_block_count": _effective_block_count(current, diff["patches"]),
     }
 
@@ -516,6 +597,7 @@ def _preview_payload(prepared: Mapping[str, Any]) -> dict[str, Any]:
         "candidate_tabs": prepared["candidate_tabs"],
         "week_start": prepared["week_start"],
         "week_end": prepared["week_end"],
+        "comparison_basis": prepared["comparison_basis"],
         "source_fingerprint": prepared["fingerprint"],
         "layout": prepared["weekly_layout"],
         "structural_row_count": len(rows),
@@ -525,7 +607,6 @@ def _preview_payload(prepared: Mapping[str, Any]) -> dict[str, Any]:
         "canonical_block_count": len(prepared["current"].get("blocks") or {}),
         "weekly_block_count": len(prepared["weekly_artifact"].get("blocks") or {}),
         "diff_counts": diff["counts"],
-        "semantic_fallback": prepared["semantic_fallback"],
         "overlay_patch_count": len(diff["patches"]),
         "overlay_patches": diff["patches"],
         "effective_block_count": prepared["effective_block_count"],
@@ -552,7 +633,11 @@ def refresh_current_week(database: Database, settings: Settings, week_start: str
     structural_payload = prepared["structural_payload"]
     snapshot = _persist_source_snapshot(database, spreadsheet_id=str(prepared["spreadsheet_id"]), spreadsheet_title=str(prepared["spreadsheet_title"]), weekly_tab=weekly_tab, week_start=week_start, week_end=week_end, fingerprint=fingerprint, raw_payload=prepared["raw_payload"], structural_payload=structural_payload)
     safe_patches = [patch for patch in diff["patches"] if patch.get("resolution_state") == "AUTO_RESOLVED"]
-    effective = materialize_effective_week(database, prepared["version"]["version_id"], week_start, safe_patches, overlay_source_snapshot_id=snapshot["id"], overlay_fingerprint=fingerprint, overlay_observed_at=datetime.now(timezone.utc).isoformat())
+    resulting_patches = dict(prepared.get("preserved_patches") or {})
+    for patch in safe_patches:
+        if patch.get("block_key"):
+            resulting_patches[str(patch["block_key"])] = patch
+    effective = materialize_effective_week(database, prepared["version"]["version_id"], week_start, list(resulting_patches.values()), overlay_source_snapshot_id=snapshot["id"], overlay_fingerprint=fingerprint, overlay_observed_at=datetime.now(timezone.utc).isoformat())
     result = schedule_admin_observability(database, week_start)
-    result["refresh"] = {"status": "applied", "google_account": prepared["google_account"], "selected_tab": selected.as_dict(), "candidate_tabs": prepared["candidate_tabs"], "source_snapshot": snapshot, "source_fingerprint": fingerprint, "diff_counts": diff["counts"], "patch_count": len(diff["patches"]), "applied_patch_count": len(safe_patches), "pending_review_count": len(diff["patches"]) - len(safe_patches), "effective_block_count": _effective_block_count(prepared["current"], safe_patches), "effective": effective}
+    result["refresh"] = {"status": "applied", "google_account": prepared["google_account"], "selected_tab": selected.as_dict(), "candidate_tabs": prepared["candidate_tabs"], "source_snapshot": snapshot, "source_fingerprint": fingerprint, "comparison_basis": prepared["comparison_basis"], "diff_counts": diff["counts"], "patch_count": len(diff["patches"]), "applied_patch_count": len(safe_patches), "preserved_patch_count": len(prepared.get("preserved_patches") or {}), "pending_review_count": len(diff["patches"]) - len(safe_patches), "effective_block_count": _effective_block_count(prepared["comparison_baseline"], list(resulting_patches.values())), "effective": effective}
     return result

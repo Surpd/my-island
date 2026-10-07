@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week, read_canonical_template
-from backend.services.canonical_weekly_refresh import _grid_tab, _persist_source_snapshot, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
-from backend.services.schedule_drafts import merge_import_changes, preview_changes, publish_draft, get_draft
+from backend.services.canonical_weekly_refresh import _grid_tab, _persist_source_snapshot, _weekly_comparison_baseline, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
+from backend.services.schedule_drafts import merge_import_changes, preview_changes, publish_draft, get_draft, save_draft
 from backend.services.schedule_parser_v2 import group_schedule_rows
 from backend.services.weekly_schedule_ingestion import (
     WeeklyIngestionError, build_weekly_diff, discover_weekly_tab, layout_profile,
@@ -115,6 +115,85 @@ class WeeklyTabDiscoveryTests(unittest.TestCase):
 
 
 class MergeAwareParsingTests(unittest.TestCase):
+    def test_short_literature_subject_becomes_canonical_name_and_room_is_separate(self):
+        rows = parsed("Литер Юля кабинет 10")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-yulia", "display_name": "Юля"}])
+        self.assertEqual(semantic[0]["subject"], "Литература")
+        self.assertEqual(semantic[0]["resolved_identity_ids"], ["teacher-yulia"])
+        self.assertEqual(semantic[0]["room"].casefold(), "кабинет 10")
+
+    def test_punctuated_english_group_keeps_subject_and_teacher_separate(self):
+        rows = parsed("Англ. 3 Игорь")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-igor", "display_name": "Игорь"}])
+        self.assertEqual(semantic[0]["subject"], "Английский")
+        self.assertEqual(semantic[0]["resolved_identity_ids"], ["teacher-igor"])
+
+    def test_subject_abbreviation_dictionary_normalizes_new_cells_and_keeps_teacher_separate(self):
+        cases = [
+            ("матем с практикум ДФ каб.17", "Математика", "teacher-dmitry"),
+            ("русский язык ЕВ каб.5", "Русский язык", "teacher-elena"),
+            ("истор. Анна", "История", "teacher-anna"),
+            ("лит. Юля", "Литература", "teacher-yulia"),
+            ("био Иван", "Биология", "teacher-ivan"),
+            ("инфор Тарас", "Информатика", "teacher-taras"),
+        ]
+        teachers = [
+            {"id": "teacher-dmitry", "display_name": "Дмитрий Филиппов"},
+            {"id": "teacher-elena", "display_name": "Елена Викторовна"},
+            {"id": "teacher-anna", "display_name": "Анна Владимировна"},
+            {"id": "teacher-yulia", "display_name": "Юля"},
+            {"id": "teacher-ivan", "display_name": "Иван"},
+            {"id": "teacher-taras", "display_name": "Тарас"},
+        ]
+        for raw, subject, teacher_id in cases:
+            with self.subTest(raw=raw):
+                rows = parsed(raw)
+                rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+                semantic = parse_weekly_lessons(rows, teachers)
+                self.assertEqual(semantic[0]["subject"], subject)
+                self.assertEqual(semantic[0]["resolved_identity_ids"], [teacher_id])
+                self.assertEqual(semantic[0]["teacher_hint"], next(item["display_name"] for item in teachers if item["id"] == teacher_id))
+
+    def test_long_subject_name_is_not_collapsed_to_its_prefix(self):
+        rows = parsed("История искусства Анна")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-anna", "display_name": "Анна Владимировна"}])
+        self.assertEqual(semantic[0]["subject"], "История искусства")
+
+    def test_unlisted_multiword_activity_keeps_its_title_without_teacher_or_room(self):
+        rows = parsed("Лаборатория Геометрия живого Родион каб.6")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-rodion", "display_name": "Родион"}])
+        self.assertEqual(semantic[0]["subject"], "Лаборатория Геометрия живого")
+        self.assertEqual(semantic[0]["resolved_identity_ids"], ["teacher-rodion"])
+        self.assertEqual(semantic[0]["room"].casefold(), "каб.6")
+
+    def test_simple_activity_uses_canonical_title_without_appended_teacher(self):
+        rows = parsed("Курс по выбору Алексей каб.5")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-alexey", "display_name": "Алексей"}])
+        self.assertEqual(semantic[0]["subject"], "Курс по выбору")
+        self.assertEqual(semantic[0]["resolved_identity_ids"], ["teacher-alexey"])
+
+    def test_no_lesson_never_resolves_or_requires_a_teacher(self):
+        rows = parsed("Нет урока Анна")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-anna", "display_name": "Анна Владимировна"}])
+        self.assertEqual(semantic[0]["activity_type"], "nonlesson")
+        self.assertEqual(semantic[0]["teacher_hint"], "")
+        self.assertEqual(semantic[0]["resolved_identity_ids"], [])
+        self.assertEqual(semantic[0]["parse_status"], "validated")
+
+    def test_subject_is_separated_from_hall_and_teacher_text(self):
+        rows = parsed("Пластика в один зал Вадим")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-vadim", "display_name": "Вадим"}])
+        self.assertEqual(semantic[0]["subject"], "Пластика")
+        self.assertEqual(semantic[0]["resolved_identity_ids"], ["teacher-vadim"])
+        self.assertIn("зал", semantic[0]["room"].lower())
+
     def test_english_club_is_excluded_even_without_circle_marker(self):
         rows = parsed("Английский клуб 5-7 кл")
         rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
@@ -179,9 +258,93 @@ class SharedDiffTests(unittest.TestCase):
         self.assertEqual(result["counts"], {"UNCHANGED": 1})
         self.assertEqual(result["patches"], [])
 
+    def test_resolved_subject_alias_reuses_confirmed_assignment_despite_membership_gap(self):
+        base = block("base", "Математика", "g1")
+        weekly_assignment = block("weekly", "матем", "g1")["assignments"][0]
+        for assignment in (base["assignments"][0], weekly_assignment):
+            assignment["audience"] = {"type": "canonical_groups", "canonical_group_ids": ["g1"]}
+            assignment.pop("canonical_group_ids", None)
+        canonical = {"blocks": {"base": base}}
+        template = parsed("Математика")
+        weekly = parsed("Матем")
+        weekly_block = {
+            **block("weekly", "матем", "g1"),
+            "assignments": [weekly_assignment],
+            "status": "unresolved",
+            "unresolved": [{"reason": "student is missing from the canonical base-class membership"}],
+        }
+
+        result = build_weekly_diff(
+            canonical, template, weekly, {"blocks": {"weekly": weekly_block}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+        )
+
+        self.assertEqual(result["counts"], {"UNCHANGED": 1})
+        self.assertEqual(result["patches"], [])
+
+    def test_no_lesson_spellings_do_not_trigger_roster_resolution_changes(self):
+        canonical = {"blocks": {"base": block("base", "NO_LESSON", "g1")}}
+        template = parsed("Нет урока")
+        weekly = parsed("Свободны")
+
+        result = build_weekly_diff(
+            canonical, template, weekly, {"blocks": {}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+        )
+
+        self.assertEqual(result["counts"], {"UNCHANGED": 1})
+        self.assertEqual(result["patches"], [])
+
+    def test_unresolved_real_replacement_shows_source_instead_of_copying_old_assignment(self):
+        canonical = {"blocks": {"base": block("base", "Русский", "g1")}}
+        weekly_block = {
+            **block("weekly", "Физика", "g1"),
+            "status": "unresolved",
+            "unresolved": [{"reason": "Teacher is unresolved"}],
+        }
+        result = build_weekly_diff(
+            canonical, parsed("Русский"), parsed("Физика"), {"blocks": {"weekly": weekly_block}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+        )
+
+        patch = result["patches"][0]
+        self.assertEqual(patch["resolution_state"], "UNRESOLVED")
+        self.assertEqual(patch["assignments"], [])
+        self.assertEqual(patch["after"]["assignments"], [])
+        self.assertEqual(patch["after"]["source_text"], ["физика"])
+
     def test_unchanged_week_has_no_overrides(self):
         result = self._diff("Русский", "Русский")
         self.assertEqual(result["patches"], [])
+
+    def test_effective_week_is_the_comparison_baseline_not_the_template(self):
+        # The confirmed template says Russian, while the effective week already
+        # contains Physics. Re-reading Physics from the sheet is a no-op.
+        effective = {"blocks": {"base": block("base", "Физика", "g1")}}
+        result = build_weekly_diff(
+            effective,
+            parsed("Русский"),
+            parsed("Физика"),
+            {"blocks": {"weekly": block("weekly", "Физика", "g1")}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+            baseline_is_effective=True,
+        )
+        self.assertEqual(result["counts"], {"UNCHANGED": 1})
+        self.assertEqual(result["patches"], [])
+
+    def test_effective_week_change_is_proposed_even_when_sheet_matches_template(self):
+        effective = {"blocks": {"base": block("base", "Физика", "g1")}}
+        result = build_weekly_diff(
+            effective,
+            parsed("Русский"),
+            parsed("Русский"),
+            {"blocks": {"weekly": block("weekly", "Русский", "g1")}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+            baseline_is_effective=True,
+        )
+        self.assertEqual(result["counts"], {"REPLACED": 1})
+        self.assertEqual(result["patches"][0]["before"]["assignments"][0]["activity"], "Физика")
+        self.assertEqual(result["patches"][0]["assignments"][0]["activity"], "Русский")
 
     def test_semantic_audience_change(self):
         result = self._diff("Русский", "Русский новая группа", weekly_group="g2")
@@ -211,39 +374,45 @@ class SharedDiffTests(unittest.TestCase):
         self.assertEqual(len(changed["patches"]), 1)
         self.assertEqual(changed["patches"][0]["block_key"], "manual")
 
-    def test_same_confirmed_assignment_ignores_membership_only_warning_and_subject_alias(self):
-        canonical_block = block("base", "Математика", "g1")
-        weekly_block = block("weekly", "матем", "g1")
-        weekly_block["assignments"][0]["canonical_group_ids"] = []
-        weekly_block["assignments"][0]["audience"] = {"group_ids": ["g1"]}
-        weekly_block.update({"status": "unresolved", "unresolved": [{"reason": "student is missing from the canonical base-class membership"}]})
-        result = build_weekly_diff(
-            {"blocks": {"base": canonical_block}}, parsed("Математика"), parsed("Матем"),
-            {"blocks": {"weekly": weekly_block}},
-            confirmed_mapping={"0|09:00|09:45|5": "base"},
-        )
-        self.assertEqual(result["counts"], {"UNCHANGED": 1})
-        self.assertEqual(result["patches"], [])
-
-    def test_no_lesson_wording_variants_do_not_create_weekly_change(self):
-        result = self._diff("Нет урока", "Свободны")
-        self.assertEqual(result["counts"], {"UNCHANGED": 1})
-        self.assertEqual(result["patches"], [])
-
-    def test_unresolved_replacement_shows_new_source_without_copying_old_assignment(self):
-        weekly_block = block("weekly", "Физика", "g1")
-        weekly_block.update({"status": "unresolved", "unresolved": [{"reason": "Teacher is unresolved"}], "assignments": []})
-        result = build_weekly_diff(
-            {"blocks": {"base": block("base", "Русский", "g1")}}, parsed("Русский"), parsed("Физика"),
-            {"blocks": {"weekly": weekly_block}},
-        )
-        patch = result["patches"][0]
-        self.assertEqual(patch["assignments"], [])
-        self.assertEqual(patch["after"]["assignments"], [])
-        self.assertEqual(patch["after"]["source_text"], ["физика"])
-
 
 class WeeklySnapshotPersistenceTests(unittest.TestCase):
+    def test_comparison_uses_only_the_exact_persisted_week(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "baseline.db")
+            database.initialize()
+            import_canonical_artifact(database, {
+                "schema_version": "canonical-schedule-bootstrap-v1",
+                "version_id": "baseline-v1",
+                "source_snapshot": {"id": "canonical", "fingerprint": "base"},
+                "blocks": {"base": block("base", "Русский", "g1")},
+            })
+            template = {"blocks": {"base": block("base", "Русский", "g1")}}
+            materialize_effective_week(database, "baseline-v1", "2026-09-21", patches=[{
+                "block_key": "base", "change_kind": "replaced",
+                "assignments": [{"activity": "Физика", "canonical_group_ids": ["g1"], "teacher_ids": []}],
+            }])
+
+            baseline, effective, _ = _weekly_comparison_baseline(database, template, "baseline-v1", "2026-09-28")
+            self.assertIsNone(effective)
+            self.assertEqual(baseline["blocks"]["base"]["assignments"][0]["activity"], "Русский")
+
+            materialize_effective_week(database, "baseline-v1", "2026-09-28", patches=[{
+                "block_key": "base", "change_kind": "replaced",
+                "assignments": [{"activity": "Физика", "canonical_group_ids": ["g1"], "teacher_ids": []}],
+            }])
+            baseline, effective, preserved = _weekly_comparison_baseline(database, template, "baseline-v1", "2026-09-28")
+            self.assertIsNotNone(effective)
+            self.assertEqual(baseline["blocks"]["base"]["assignments"][0]["activity"], "Физика")
+            self.assertEqual(preserved["base"]["assignments"][0]["activity"], "Физика")
+            save_draft(database, "week", "2026-09-28", expected_revision=0,
+                base_version_id="baseline-v1", payload={"changes": [{
+                    "block_key": "base", "operation": "upsert", "assignment_index": 0,
+                    "lesson": {"activity": "Математика", "audience": {"kind": "groups", "group_ids": ["g1"]},
+                               "teacher_ids": [], "weekday": 0, "start_time": "09:00", "end_time": "09:45", "grade": "5"},
+                }]})
+            draft_baseline, _, _ = _weekly_comparison_baseline(database, template, "baseline-v1", "2026-09-28")
+            self.assertEqual(draft_baseline["blocks"]["base"]["assignments"][0]["activity"], "Математика")
+
     def test_snapshot_is_idempotent_and_linked_to_effective_week(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "weekly.db")
@@ -306,6 +475,7 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
         self.assertEqual(patch["lesson_date"], "2026-09-23")
         self.assertEqual(patch["weekly_source_cells"], ["D8"])
         self.assertEqual(patch["resolution_details"], ["Teacher is unresolved"])
+        self.assertEqual(patch["assignments"], [])
 
     def test_preview_is_read_only_and_matches_apply_plan(self):
         with tempfile.TemporaryDirectory() as directory:

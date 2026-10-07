@@ -20,12 +20,13 @@ from backend.services.schedule_parser_v2 import (
     classify_simple_activity,
     group_schedule_rows,
     normalize_no_lesson,
+    normalize_subject,
 )
 from backend.services.school_data import stable_fingerprint
 
 
 _GRADE = re.compile(r"^\s*(\d{1,2})")
-_ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*(?:группа|group)?\s*(\d{1,2}(?:\s*[/,-]\s*\d{1,2})*)", re.IGNORECASE)
+_ENGLISH_NUMBER = re.compile(r"(?:англ(?:ийский)?|english)\s*[.,:]?\s*(?:группа|group)?\s*(\d{1,2}(?:\s*[/,-]\s*\d{1,2})*)", re.IGNORECASE)
 _EXAM = re.compile(r"\b(?:огэ|егэ|oge)\b", re.IGNORECASE)
 
 
@@ -39,17 +40,7 @@ def _grade(value: Any) -> str:
 
 
 def _subject(value: Any) -> str:
-    text = _norm(value)
-    aliases = (
-        ("англ", "английский"), ("english", "английский"),
-        ("мат", "математика"), ("инфор", "информатика"),
-        ("общ", "обществознание"), ("литер", "литература"),
-        ("био", "биология"), ("физ", "физика"),
-    )
-    for prefix, canonical in aliases:
-        if text == prefix or text.startswith(prefix):
-            return canonical
-    return text
+    return normalize_subject(value)
 
 
 def _lesson_source(lesson: Mapping[str, Any]) -> dict[str, Any]:
