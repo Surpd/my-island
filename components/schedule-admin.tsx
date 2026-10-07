@@ -294,7 +294,7 @@ function applyDraftChanges(base: Lesson[], changes: Item[], groups: DirectoryOpt
 
 export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const [lessons, setLessons] = useState<Lesson[]>([]); const [weekBaseLessons, setWeekBaseLessons] = useState<Lesson[]>([]); const [templateBaseLessons, setTemplateBaseLessons] = useState<Lesson[]>([]); const [mode, setModeState] = useState<ViewMode>('week'); const [layer, setLayerState] = useState<ScheduleLayer>('week'); const [weekStart, setWeekStart] = useState(WEEK_START); const [loadedWeek, setLoadedWeek] = useState<string | null>(null); const [day, setDay] = useState(1); const [grade, setGrade] = useState(9); const [selectedId, setSelectedId] = useState(''); const [loading, setLoading] = useState(true); const [notice, setNotice] = useState(''); const [query, setQuery] = useState(''); const [showImport, setShowImport] = useState(false); const [showVersions, setShowVersions] = useState(false);
-  const [groups, setGroups] = useState<DirectoryOption[]>([]); const [teachers, setTeachers] = useState<DirectoryOption[]>([]); const [students, setStudents] = useState<DirectoryOption[]>([]); const [baseVersion, setBaseVersion] = useState('current'); const [draftRevision, setDraftRevision] = useState(0); const [draftChanges, setDraftChanges] = useState<Item[]>([]); const [draftDirty, setDraftDirty] = useState(false); const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved'); const [saveError, setSaveError] = useState(''); const [draftUpdatedAt, setDraftUpdatedAt] = useState(''); const [showPublish, setShowPublish] = useState(false); const [publishing, setPublishing] = useState(false); const [confirmingTemplate, setConfirmingTemplate] = useState(false);
+  const [groups, setGroups] = useState<DirectoryOption[]>([]); const [teachers, setTeachers] = useState<DirectoryOption[]>([]); const [students, setStudents] = useState<DirectoryOption[]>([]); const [baseVersion, setBaseVersion] = useState('current'); const [draftRevision, setDraftRevision] = useState(0); const [draftChanges, setDraftChanges] = useState<Item[]>([]); const [draftDirty, setDraftDirty] = useState(false); const [saveAttempt, setSaveAttempt] = useState(0); const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved'); const [saveError, setSaveError] = useState(''); const [draftUpdatedAt, setDraftUpdatedAt] = useState(''); const [showPublish, setShowPublish] = useState(false); const [publishing, setPublishing] = useState(false); const [confirmingTemplate, setConfirmingTemplate] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<number | null>(null);
   const revisionRef = useRef(0); const generationRef = useRef(0); const baseVersionRef = useRef(''); const dirtyRef = useRef(false);
   const transferRef = useRef<LessonTransfer | null>(null); const pasteTargetRef = useRef<ScheduleDropTarget | null>(null);
@@ -355,7 +355,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
       }).catch((error: Item) => { setSaveStatus(error?.status === 409 ? 'conflict' : 'error'); setSaveError(String(error?.message || 'Не удалось сохранить черновик.')); setDraftDirty(true); dirtyRef.current = true; });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [api, baseVersion, draftChanges, draftDirty, layer, scopeKey]);
+  }, [api, baseVersion, draftChanges, draftDirty, layer, saveAttempt, scopeKey]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (!dirtyRef.current) return; event.preventDefault(); event.returnValue = ''; };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
@@ -398,12 +398,12 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
         const local = draftChanges;
         const merged = [...remote.filter((item: Item) => !local.some((localItem) => sameChange(localItem, item))), ...local];
         revisionRef.current = Number(current.revision || 0); setDraftRevision(revisionRef.current); setDraftChanges(merged);
-        setDraftDirty(true); dirtyRef.current = true; setSaveStatus('saving'); setSaveError(''); generationRef.current += 1;
+        setDraftDirty(true); dirtyRef.current = true; setSaveStatus('saving'); setSaveError(''); generationRef.current += 1; setSaveAttempt((attempt) => attempt + 1);
         setNotice(`Черновик объединён: сохранены ${local.length} локальных изменений и остальные серверные изменения.`);
       } catch (error: unknown) { setSaveError(`Не удалось прочитать актуальный черновик: ${String((error as Item)?.message || 'ошибка сервера')}`); }
       return;
     }
-    generationRef.current += 1; dirtyRef.current = true; setDraftDirty(true); setSaveStatus('saving'); setSaveError('');
+    generationRef.current += 1; dirtyRef.current = true; setDraftDirty(true); setSaveStatus('saving'); setSaveError(''); setSaveAttempt((attempt) => attempt + 1);
   };
   const approveReview = (lesson: Lesson) => {
     const change = draftChanges.find((item) => item.operation === 'upsert' && String(item.block_key) === String(lesson.block?.block_key || lesson.id) && Number(item.assignment_index ?? 0) === Number(lesson.assignmentIndex ?? 0));
