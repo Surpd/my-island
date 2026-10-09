@@ -2,6 +2,7 @@ import unittest
 
 from backend.services.schedule_canonical_bootstrap import audit_groups, build_bootstrap_canonical
 from backend.services.schedule_parser_v2 import NO_LESSON
+from backend.services.weekly_schedule_ingestion import parse_weekly_lessons
 from backend.scripts.build_full_current_v2 import add_explicit_grade7_group_fallback, normalize_bell_times, normalize_grade7_candidate_block
 
 
@@ -26,6 +27,127 @@ def lesson(cell, text, audience, grade, *, weekday=0, source_day_label="Пн"):
 
 
 class ScheduleCanonicalBootstrapTests(unittest.TestCase):
+    def test_math_subject_groups_are_split_and_resolved_only_to_existing_canonical_groups(self):
+        raw_cells = ["Мат A ДФ каб.17", "Математика B", "Math C", "Мат 1 Иван каб.17", "Математика 7-1"]
+        parsed_cells = {(0, "09:00", "09:45", "7"): [
+            {"sheet_id": "sheet", "tab_title": "week", "source_cell": f"B{index + 3}",
+             "source_column": 1, "source_row": index + 2, "weekday": 0,
+             "start_time": "09:00", "end_time": "09:45", "audience": "7",
+             "merged_audiences": [], "merge_data": None, "raw_text": raw}
+            for index, raw in enumerate(raw_cells)
+        ]}
+        teachers = [{"id": "teacher-df", "display_name": "Дмитрий Филиппов"},
+                    {"id": "teacher-ivan", "display_name": "Иван"}]
+        lessons = parse_weekly_lessons(parsed_cells, teachers)
+        self.assertEqual([(item["subject"], item["subject_subgroup"], item["room"])
+                          for item in lessons], [
+            ("Математика", "A", "каб.17"), ("Математика", "B", ""), ("Математика", "C", ""),
+            ("Математика", "1", "каб.17"), ("Математика", "7-1", ""),
+        ])
+        groups = [{"id": "base7", "name": "7", "base_class_name": "7", "group_type": "class"}]
+        for marker in ("A", "B", "C", "1", "7-1"):
+            groups.append({"id": f"math-{marker}", "name": f"Math {marker}", "group_type": "instructional",
+                           "subject": "Математика", "subject_subgroup": marker})
+        students = [{"id": f"student-{marker}", "class_name": "7"} for marker in ("A", "B", "C", "1", "7-1")]
+        memberships = [{"group_id": "base7", "identity_id": item["id"]} for item in students]
+        memberships.extend({"group_id": f"math-{marker}", "identity_id": f"student-{marker}"}
+                           for marker in ("A", "B", "C", "1", "7-1"))
+        artifact = build_bootstrap_canonical({
+            "snapshot": {"id": "snapshot", "fingerprint": "source"}, "students": students,
+            "groups": groups, "memberships": memberships, "teachers": teachers, "lessons": lessons,
+        })
+        block = next(iter(artifact["blocks"].values()))
+        self.assertEqual([item["audience"]["canonical_group_ids"] for item in block["assignments"]],
+                         [["math-A"], ["math-B"], ["math-C"], ["math-1"], ["math-7-1"]])
+        self.assertEqual(block["assignments"][0]["teacher_ids"], ["teacher-df"])
+        self.assertEqual(block["assignments"][3]["teacher_ids"], ["teacher-ivan"])
+
+    def test_duplicate_same_group_assignments_and_no_lesson_are_collapsed_but_parallel_groups_remain(self):
+        source_cells = [
+            lesson("B3", "Математика A", "8", "8"),
+            lesson("C3", "Математика A", "8", "8"),
+            lesson("D3", "Математика B", "8", "8"),
+            lesson("E3", "Нет урока", "8", "8"),
+            lesson("F3", "Свободны", "8", "8"),
+        ]
+        for item, subgroup in zip(source_cells[:3], ("A", "A", "B")):
+            item["subject"] = "Математика"
+            item["subject_subgroup"] = subgroup
+            item["modifiers"] = {"subject_subgroup": subgroup}
+        corpus = {
+            "snapshot": {"id": "snapshot", "fingerprint": "source"},
+            "students": [{"id": "a", "class_name": "8"}, {"id": "b", "class_name": "8"},
+                         {"id": "c", "class_name": "8"}],
+            "groups": [
+                {"id": "base8", "name": "8", "base_class_name": "8", "group_type": "class"},
+                {"id": "math-a", "name": "Math A", "subject": "Математика", "subject_subgroup": "A", "group_type": "instructional"},
+                {"id": "math-b", "name": "Math B", "subject": "Математика", "subject_subgroup": "B", "group_type": "instructional"},
+            ],
+            "memberships": [{"group_id": "base8", "identity_id": item} for item in ("a", "b", "c")]
+                         + [{"group_id": "math-a", "identity_id": "a"},
+                            {"group_id": "math-b", "identity_id": "b"}],
+            "teachers": [], "lessons": source_cells,
+        }
+        block = next(iter(build_bootstrap_canonical(corpus)["blocks"].values()))
+        assignments = block["assignments"]
+        math = [item for item in assignments if item["activity"] == "Математика"]
+        no_lesson = [item for item in assignments if item["activity"] == NO_LESSON]
+        self.assertEqual([item["audience"]["canonical_group_ids"] for item in math], [["math-a"], ["math-b"]])
+        self.assertEqual(math[0]["source_cells"], ["B3", "C3"])
+        self.assertEqual(len(no_lesson), 1)
+        self.assertEqual(no_lesson[0]["student_ids"], ["c"])
+
+    def test_ambiguous_explicit_group_does_not_fall_through_to_class_or_no_lesson(self):
+        source = lesson("B3", "Математика B", "8", "8")
+        source["subject"] = "Математика"
+        source["subject_subgroup"] = "B"
+        corpus = {
+            "snapshot": {"id": "snapshot", "fingerprint": "source"},
+            "students": [{"id": "student", "class_name": "8"}],
+            "groups": [
+                {"id": "base8", "name": "8", "base_class_name": "8", "group_type": "class"},
+                {"id": "math-b1", "name": "Math B1", "subject": "Математика", "subject_subgroup": "B", "group_type": "instructional"},
+                {"id": "math-b2", "name": "Math B2", "subject": "Математика", "subject_subgroup": "B", "group_type": "instructional"},
+            ],
+            "memberships": [{"group_id": "base8", "identity_id": "student"},
+                            {"group_id": "math-b1", "identity_id": "student"},
+                            {"group_id": "math-b2", "identity_id": "student"}],
+            "teachers": [], "lessons": [source],
+        }
+        block = next(iter(build_bootstrap_canonical(corpus)["blocks"].values()))
+        self.assertEqual(block["assignments"], [])
+        self.assertIn("unique canonical group", block["unresolved"][0]["reason"])
+
+    def test_explicit_grade7_class_suffix_uses_existing_class_memberships(self):
+        raw_cells = ["Литер 7-А Юлия\nкаб.9", "История 7-Б Антон\nкаб.18"]
+        parsed_cells = {(0, "09:00", "09:45", "7"): [
+            {"sheet_id": "sheet", "tab_title": "week", "source_cell": cell,
+             "source_column": 5, "source_row": 17, "weekday": 0,
+             "start_time": "09:00", "end_time": "09:45", "audience": "7",
+             "merged_audiences": [], "merge_data": None, "raw_text": raw}
+            for cell, raw in zip(("F17", "G17"), raw_cells)
+        ]}
+        teachers = [{"id": "julia", "display_name": "Юлия"}, {"id": "anton", "display_name": "Антон"}]
+        lessons = parse_weekly_lessons(parsed_cells, teachers)
+        self.assertEqual([item["subject_subgroup"] for item in lessons], ["", ""])
+        corpus = {
+            "snapshot": {"id": "snapshot", "fingerprint": "source"},
+            "students": [{"id": "a", "class_name": "7-А"}, {"id": "b", "class_name": "7-Б"}],
+            "groups": [
+                {"id": "class-a", "name": "grade7:base:7-А", "base_class_name": "7-А", "group_type": "class"},
+                {"id": "class-b", "name": "grade7:base:7-Б", "base_class_name": "7-Б", "group_type": "class"},
+            ],
+            "memberships": [{"group_id": "class-a", "identity_id": "a"},
+                            {"group_id": "class-b", "identity_id": "b"}],
+            "teachers": teachers, "lessons": lessons,
+        }
+        block = next(iter(build_bootstrap_canonical(corpus)["blocks"].values()))
+        self.assertEqual(block["unresolved"], [])
+        self.assertEqual([(item["activity"], item["audience"]["canonical_group_ids"], item["student_ids"])
+                          for item in block["assignments"]], [
+            ("Литература", ["class-a"], ["a"]), ("История", ["class-b"], ["b"]),
+        ])
+
     def test_punctuated_english_group_number_and_teacher_are_split_semantically(self):
         source = lesson("B3", "Англ. 3 Игорь", "5", "5")
         source["resolved_identity_ids"] = ["igor"]

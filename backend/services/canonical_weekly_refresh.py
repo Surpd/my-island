@@ -35,6 +35,7 @@ from backend.services.weekly_schedule_ingestion import (
     meta_map, normalized_source_rows, parse_structure, parse_weekly_lessons,
     source_change_keys, source_rows, comparison_key,
 )
+from backend.services.schedule_parser_v2 import normalize_subject
 
 
 def _title(titles: list[str], wanted: str) -> str | None:
@@ -128,6 +129,54 @@ def _artifact_shape(template: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _inherit_canonical_group_context(
+    lessons: list[dict[str, Any]], parsed: Mapping[tuple[int, str, str, str], list[dict[str, Any]]],
+    source_to_canonical: Mapping[str, str | None], canonical_blocks: Mapping[str, Any],
+    groups: list[Mapping[str, Any]],
+) -> None:
+    """Use a confirmed same-cell group only when changed text omits its audience.
+
+    This is deliberately a fallback: an explicit subgroup in the changed text
+    always wins and is resolved normally against active canonical groups.
+    """
+    groups_by_id = {str(group.get("id")): group for group in groups}
+    cells_by_record = {str(item.get("source_cell") or ""): (key, item)
+                       for key, cells in parsed.items() for item in cells}
+    for lesson in lessons:
+        if lesson.get("subject_subgroup") or (lesson.get("modifiers") or {}).get("subject_subgroup"):
+            continue
+        raw = str(lesson.get("raw_text") or "")
+        if not raw or lesson.get("activity_type") in {"nonlesson", "extracurricular"}:
+            continue
+        parsed_cell = cells_by_record.get(str(lesson.get("source_cell") or ""))
+        if not parsed_cell:
+            continue
+        key, cell = parsed_cell
+        mapped = source_to_canonical.get("|".join(map(str, key)))
+        block = canonical_blocks.get(str(mapped)) if mapped else None
+        if not block:
+            continue
+        source_columns = {
+            str(item.get("coordinate")): int(item.get("column"))
+            for item in (block.get("derived_from") or {}).get("source_cells") or []
+            if isinstance(item, Mapping) and item.get("coordinate") and item.get("column") is not None
+        }
+        column = int(cell.get("source_column") or -1)
+        matching_group_ids: set[str] = set()
+        subject = normalize_subject(lesson.get("subject"))
+        for assignment in block.get("assignments") or []:
+            coordinates = [str(value) for value in assignment.get("source_cells") or []]
+            if not any(source_columns.get(coordinate) == column for coordinate in coordinates):
+                continue
+            for group_id in (assignment.get("audience") or {}).get("canonical_group_ids") or []:
+                group = groups_by_id.get(str(group_id))
+                if (group and str(group.get("group_type") or "").casefold() != "class"
+                        and normalize_subject(group.get("subject")) == subject):
+                    matching_group_ids.add(str(group_id))
+        if matching_group_ids:
+            lesson["resolved_group_ids"] = sorted(matching_group_ids)
+
+
 def _source_fingerprint(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -195,6 +244,22 @@ def _confirmed_template_snapshot(database: Database, spreadsheet_id: str, sheet_
         return dict(value) if isinstance(value, Mapping) else json.loads(str(value or "{}"))
     return {"id": str(row["id"]), "fingerprint": str(row["fingerprint"]),
             "raw_payload": decoded(row["raw_payload"]), "structural_payload": decoded(row["structural_payload"])}
+
+
+def _latest_weekly_source_snapshot(database: Database, spreadsheet_id: str, sheet_id: str) -> dict[str, Any] | None:
+    """Read the last imported source for this exact weekly tab, without changing snapshot state."""
+    external_key = f"canonical-weekly:{spreadsheet_id}:{sheet_id}"
+    with database.connection() as connection:
+        row = database.execute(connection, """SELECT ss.id,ss.fingerprint,ss.structural_payload
+            FROM school_source_snapshots ss JOIN school_sources s ON s.id=ss.source_id
+            WHERE s.source_type='schedule' AND s.external_key=? AND ss.is_last_known_valid IS TRUE
+            ORDER BY ss.created_at DESC LIMIT 1""", (external_key,)).fetchone()
+    if not row:
+        return None
+    payload = row["structural_payload"]
+    if not isinstance(payload, Mapping):
+        payload = json.loads(str(payload or "{}"))
+    return {"id": str(row["id"]), "fingerprint": str(row["fingerprint"]), "structural_payload": dict(payload)}
 
 
 def _source_move_signature(key: tuple[int, str, str, str], cells: list[dict[str, Any]]) -> tuple[Any, ...]:
@@ -320,14 +385,15 @@ def preview_template_snapshot(database: Database, *, spreadsheet_id: str,
             moves[matches[0]] = old_key
     changed.difference_update(moves.values())
     corpus = _db_corpus(database) if changed else {}
+    canonical = _artifact_shape(read_canonical_template(database, expected_version_id) or {})
+    mapping = confirmed["structural_payload"].get("source_to_canonical") or {}
     changed_rows = {key: current[key] for key in changed if key in current}
     lessons = parse_weekly_lessons(changed_rows, corpus["teachers"]) if changed_rows else []
+    _inherit_canonical_group_context(lessons, changed_rows, mapping, canonical.get("blocks") or {}, corpus.get("groups") or [])
     artifact = build_bootstrap_canonical({"snapshot": {"id": "template-preview", "fingerprint": "preview"},
                                           "lessons": lessons, **corpus}) if lessons else {"blocks": {}}
     resolved = {comparison_key(block): block for block in (artifact.get("blocks") or {}).values()}
-    canonical = _artifact_shape(read_canonical_template(database, expected_version_id) or {})
     canonical_by_key = {comparison_key(block): block for block in (canonical.get("blocks") or {}).values()}
-    mapping = confirmed["structural_payload"].get("source_to_canonical") or {}
     patches = []
     warnings = []
     counts: Counter[str] = Counter()
@@ -339,6 +405,26 @@ def preview_template_snapshot(database: Database, *, spreadsheet_id: str,
         new_block = resolved.get(key)
         cells = current.get(key, [])
         if not cells and not base:
+            removed_cells = old.get(key, [])
+            if removed_cells:
+                issue = "Удалён блок источника, не связанный с canonical-занятием; проверьте вручную."
+                source_cells = [str(item["source_cell"]) for item in removed_cells]
+                patch = {
+                    "block_key": f"source-unmapped|{source_key}",
+                    "change_kind": "unresolved_source_change",
+                    "change_classification": "UNRESOLVED_SOURCE_REMOVAL",
+                    "weekday": key[0], "slot": {"start": key[1], "end": key[2]},
+                    "grade_scope": key[3], "assignments": [],
+                    "weekly_source_cells": source_cells,
+                    "weekly_raw_text": {str(item["source_cell"]): item.get("raw_text") for item in removed_cells},
+                    "resolution_state": "UNRESOLVED", "source_issue": issue,
+                    "previous_assignment_count": 0,
+                    "before": {"source_text": [item.get("raw_text") for item in removed_cells], "assignments": []},
+                    "after": None,
+                }
+                patches.append(patch)
+                warnings.append({"block_key": patch["block_key"], "warning": issue})
+                counts[patch["change_classification"]] += 1
             continue
         classification = "CANCELLED" if not cells else "MOVED" if moved_from else "ADDED" if not base else "REPLACED"
         base_teacher_ids = {str(teacher_id) for item in (base or {}).get("assignments") or [] for teacher_id in item.get("teacher_ids") or []}
@@ -521,27 +607,76 @@ def _prepare_current_week(
         return {"status": "needs_confirmation", "message": "Подтвердите текущий шаблон как эталон перед импортом недели", "canonical_version_id": version["version_id"]}
     confirmed_parsed = _snapshot_rows(confirmed["structural_payload"])
     template_changes = source_change_keys(confirmed_parsed, template_parsed, include_day_labels=True)
-    if template_changes:
-        return {"status": "template_changed", "message": "Исходный шаблон изменился; проверьте его перед импортом недели",
-                "changed_source_blocks": ["|".join(map(str, key)) for key in sorted(template_changes)]}
     fingerprint = _source_fingerprint(normalized_source_rows(weekly_parsed, include_day_label=False))
     week_draft = get_draft(database, "week", week_start)
     use_week_draft = bool(week_draft.get("has_changes") and str(week_draft.get("base_version_id") or "") == str(version["version_id"]))
     baseline, effective_week, preserved_patches = _weekly_comparison_baseline(
         database, current, str(version["version_id"]), week_start, week_draft
     )
-    # A published weekly edit may differ from the template even when the
-    # spreadsheet has not changed, so resolve all source blocks in that case.
+    # Source-vs-template decides which cells are weekly overrides. Source-vs-
+    # last-imported-week decides which cells need a new interpretation. Keep
+    # these comparisons separate: a draft/effective week is not permission to
+    # re-run the parser over every confirmed source cell.
     compare_to_week = bool(effective_week or use_week_draft)
-    changed_keys = set(weekly_parsed) if compare_to_week else source_change_keys(confirmed_parsed, weekly_parsed)
-    changed_parsed = {key: weekly_parsed[key] for key in changed_keys if key in weekly_parsed}
+    template_override_keys = source_change_keys(confirmed_parsed, weekly_parsed)
+    previous_week = _latest_weekly_source_snapshot(database, spreadsheet_id, weekly_tab["sheet_id"])
+    if previous_week:
+        previous_rows = _snapshot_rows(previous_week["structural_payload"])
+        changed_keys = source_change_keys(previous_rows, weekly_parsed)
+        # A prior refresh can record the source even when a review item was
+        # not applied. Keep such unresolved overrides visible until a draft or
+        # effective state exists; do not confuse a snapshot with acceptance.
+        known_week_state = set(preserved_patches)
+        known_week_state.update(str(change.get("block_key") or "") for change in
+            (week_draft.get("payload") or {}).get("changes", []) if change.get("block_key"))
+        source_mapping = confirmed["structural_payload"].get("source_to_canonical") or {}
+        for key in template_override_keys:
+            mapped = source_mapping.get("|".join(map(str, key)))
+            if (mapped and str(mapped) not in known_week_state
+                    or not mapped and f"weekly-only|{key}" not in known_week_state):
+                changed_keys.add(key)
+    else:
+        # On first import, inspect only deviations from the confirmed template.
+        changed_keys = template_override_keys
+
+    # Re-resolve only changed weekly cells which are still overrides. If a cell
+    # reverted to the template, its canonical assignment is the safe proposal;
+    # rooms/format-only changes and unchanged source blocks inherit the baseline.
+    changed_override_keys = changed_keys & template_override_keys
+    changed_parsed = {key: weekly_parsed[key] for key in changed_override_keys if key in weekly_parsed}
     weekly_lessons = parse_weekly_lessons(changed_parsed, corpus_db["teachers"]) if changed_parsed else []
+    source_to_canonical = confirmed["structural_payload"].get("source_to_canonical") or {}
+    _inherit_canonical_group_context(weekly_lessons, changed_parsed, source_to_canonical,
+                                    current.get("blocks") or {}, corpus_db.get("groups") or [])
     weekly_artifact = build_bootstrap_canonical({"snapshot": {"id": f"weekly-{weekly_tab['sheet_id']}-{week_start}", "fingerprint": fingerprint}, "lessons": weekly_lessons, **corpus_db}) if weekly_lessons else {"blocks": {}}
+    for key in changed_keys - template_override_keys:
+        source_key = "|".join(map(str, key))
+        canonical_key = source_to_canonical.get(source_key)
+        canonical_block = current.get("blocks", {}).get(str(canonical_key)) if canonical_key else None
+        if canonical_block:
+            weekly_artifact["blocks"][f"template-revert|{source_key}"] = {
+                **dict(canonical_block), "block_key": f"template-revert|{source_key}",
+                "weekday": key[0], "slot": {"start": key[1], "end": key[2]},
+                "start_time": key[1], "end_time": key[2], "grade_scope": key[3], "status": "resolved",
+            }
+    manual_draft_keys = {
+        str(change.get("block_key") or "")
+        for change in (week_draft.get("payload") or {}).get("changes", [])
+        if change.get("manual") and change.get("block_key")
+    } if use_week_draft else set()
+    manual_draft_keys.update(key for key, patch in preserved_patches.items() if patch.get("manual_override"))
     template_meta = meta_map(confirmed["raw_payload"].get("structured_cells") or [], weekly=False)
     weekly_meta = meta_map(weekly_tab["structured_cells"], weekly=True)
+    student_memberships = {str(group.get("id")): set() for group in corpus_db.get("groups") or []}
+    for membership in corpus_db.get("memberships") or []:
+        if str(membership.get("member_role") or "student") == "student" and membership.get("identity_id") is not None:
+            student_memberships.setdefault(str(membership.get("group_id")), set()).add(str(membership["identity_id"]))
     diff = build_weekly_diff(baseline, confirmed_parsed, weekly_parsed, weekly_artifact, template_meta, weekly_meta,
                              confirmed["structural_payload"].get("source_to_canonical") or {},
-                             baseline_is_effective=compare_to_week)
+                             baseline_is_effective=compare_to_week,
+                             source_evaluation_keys=changed_keys,
+                             manual_conflict_keys=manual_draft_keys,
+                             student_memberships=student_memberships)
     structural_payload = {"layout": weekly_layout, "candidate_tabs": candidates, "rows": source_rows(weekly_parsed),
                           "normalized_rows": normalized_source_rows(weekly_parsed, include_day_label=False),
                           "confirmed_template_snapshot_id": confirmed["id"]}
@@ -558,6 +693,7 @@ def _prepare_current_week(
         "week_end": week_end,
         "template_layout": template_layout,
         "weekly_layout": weekly_layout,
+        "template_source_changes": ["|".join(map(str, key)) for key in sorted(template_changes)],
         "raw_payload": raw_payload,
         "structural_payload": structural_payload,
         "fingerprint": fingerprint,
@@ -588,6 +724,9 @@ def _preview_payload(prepared: Mapping[str, Any]) -> dict[str, Any]:
         for patch in diff["patches"]
         if patch.get("source_issue")
     ]
+    if prepared.get("template_source_changes"):
+        warnings.append({"warning": "Google template source differs from the confirmed canonical baseline; weekly proposals still use the confirmed version.",
+                         "changed_source_block_count": len(prepared["template_source_changes"])})
     return {
         "status": "preview",
         "mode": "read_only",
@@ -598,6 +737,7 @@ def _preview_payload(prepared: Mapping[str, Any]) -> dict[str, Any]:
         "week_start": prepared["week_start"],
         "week_end": prepared["week_end"],
         "comparison_basis": prepared["comparison_basis"],
+        "template_source_changed_block_count": len(prepared.get("template_source_changes") or []),
         "source_fingerprint": prepared["fingerprint"],
         "layout": prepared["weekly_layout"],
         "structural_row_count": len(rows),
@@ -636,7 +776,10 @@ def refresh_current_week(database: Database, settings: Settings, week_start: str
     resulting_patches = dict(prepared.get("preserved_patches") or {})
     for patch in safe_patches:
         if patch.get("block_key"):
-            resulting_patches[str(patch["block_key"])] = patch
+            if patch.get("revert_to_template"):
+                resulting_patches.pop(str(patch["block_key"]), None)
+            else:
+                resulting_patches[str(patch["block_key"])] = patch
     effective = materialize_effective_week(database, prepared["version"]["version_id"], week_start, list(resulting_patches.values()), overlay_source_snapshot_id=snapshot["id"], overlay_fingerprint=fingerprint, overlay_observed_at=datetime.now(timezone.utc).isoformat())
     result = schedule_admin_observability(database, week_start)
     result["refresh"] = {"status": "applied", "google_account": prepared["google_account"], "selected_tab": selected.as_dict(), "candidate_tabs": prepared["candidate_tabs"], "source_snapshot": snapshot, "source_fingerprint": fingerprint, "comparison_basis": prepared["comparison_basis"], "diff_counts": diff["counts"], "patch_count": len(diff["patches"]), "applied_patch_count": len(safe_patches), "preserved_patch_count": len(prepared.get("preserved_patches") or {}), "pending_review_count": len(diff["patches"]) - len(safe_patches), "effective_block_count": _effective_block_count(prepared["comparison_baseline"], list(resulting_patches.values())), "effective": effective}

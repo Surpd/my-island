@@ -8,6 +8,18 @@ dist/
 .env.*
 !.env.example
 data/
+.local-test/
+# Local source captures and generated school-data audits; keep out of Git.
+backend/.current_full_v2_cell_meta.json
+backend/.current_full_v2_input.json
+backend/.current_live_template_candidate.json
+backend/.current_live_template_values.json
+backend/.current_week_input.json
+backend/.full_v2_unenriched.json
+docs/schedule-captures/
+docs/SCHEDULE_CANONICAL_V*.json
+docs/STUDENT_MEMBERSHIP_*
+my-island-*.tar
 backend/__pycache__/
 backend/**/__pycache__/
 .venv/

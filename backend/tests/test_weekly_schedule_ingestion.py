@@ -9,12 +9,13 @@ from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week, read_canonical_template
-from backend.services.canonical_weekly_refresh import _grid_tab, _persist_source_snapshot, _weekly_comparison_baseline, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
+from backend.services.canonical_weekly_refresh import _grid_tab, _inherit_canonical_group_context, _persist_source_snapshot, _weekly_comparison_baseline, _snapshot_rows, confirm_template_snapshot, preview_template_snapshot, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import merge_import_changes, preview_changes, publish_draft, get_draft, save_draft
 from backend.services.schedule_parser_v2 import group_schedule_rows
+from backend.services.schedule_canonical_bootstrap import build_bootstrap_canonical
 from backend.services.weekly_schedule_ingestion import (
     WeeklyIngestionError, build_weekly_diff, discover_weekly_tab, layout_profile,
-    parse_structure, parse_weekly_lessons, source_change_keys,
+    parse_structure, parse_weekly_lessons, source_change_keys, source_rows,
 )
 
 
@@ -70,6 +71,21 @@ class FakeGoogleClient:
         }]}
 
 
+class SingleCellWeeklyClient:
+    def __init__(self, weekly_text: str = "Русский"):
+        self.weekly_text = weekly_text
+
+    def spreadsheet(self, _spreadsheet_id: str) -> dict:
+        return {"properties": {"title": "Расписание"}, "sheets": [
+            sheet("2026/27 шаблон", 1), sheet("21–25 сентября", 3),
+        ]}
+
+    def sheet_grid_range(self, _spreadsheet_id: str, title: str, _range_name: str) -> dict:
+        text = self.weekly_text if title == "21–25 сентября" else "Русский"
+        rows = [["", "5", "6"], ["", "Пн", "Пн"], ["09:00-09:45", text, ""]]
+        return {"sheets": [{"data": [{"rowData": [{"values": [{"formattedValue": v} if v else {} for v in row]} for row in rows]}], "merges": []}]}
+
+
 def table_counts(database: Database) -> dict[str, int]:
     tables = (
         "school_sync_runs", "school_source_snapshots", "school_source_records",
@@ -115,6 +131,63 @@ class WeeklyTabDiscoveryTests(unittest.TestCase):
 
 
 class MergeAwareParsingTests(unittest.TestCase):
+    def test_changed_teacher_inherits_only_confirmed_same_cell_math_group(self):
+        key = (0, "09:00", "09:45", "7")
+        weekly_rows = parsed("Мат ДФ", audience="7")
+        cell = weekly_rows[key][0]
+        cell.update({"sheet_id": "week", "tab_title": "28.09-02.10", "weekday": 0,
+                     "start_time": key[1], "end_time": key[2]})
+        teachers = [{"id": "teacher-df", "display_name": "Дмитрий Филиппов"}]
+        lessons = parse_weekly_lessons(weekly_rows, teachers)
+        source_block = {"confirmed-key": {
+            "derived_from": {"source_cells": [{"coordinate": "B3", "column": 1}]},
+            "assignments": [{"activity": "Математика", "source_cells": ["B3"],
+                             "audience": {"canonical_group_ids": ["math-a"]}}],
+        }}
+        _inherit_canonical_group_context(lessons, weekly_rows,
+            {"|".join(map(str, key)): "confirmed-key"}, source_block,
+            [{"id": "math-a", "group_type": "instructional", "subject": "Математика", "subject_subgroup": "A"},
+             {"id": "math-b", "group_type": "instructional", "subject": "Математика", "subject_subgroup": "B"}])
+        artifact = build_bootstrap_canonical({
+            "students": [{"id": "a1", "class_name": "7"}, {"id": "b1", "class_name": "7"}],
+            "groups": [{"id": "class7", "name": "7", "base_class_name": "7", "group_type": "class"},
+                      {"id": "math-a", "name": "Math A", "group_type": "instructional", "subject": "Математика", "subject_subgroup": "A"},
+                      {"id": "math-b", "name": "Math B", "group_type": "instructional", "subject": "Математика", "subject_subgroup": "B"}],
+            "memberships": [{"group_id": "class7", "identity_id": "a1"}, {"group_id": "class7", "identity_id": "b1"},
+                            {"group_id": "math-a", "identity_id": "a1"}, {"group_id": "math-b", "identity_id": "b1"}],
+            "teachers": teachers, "lessons": lessons,
+        })
+        assignments = next(iter(artifact["blocks"].values()))["assignments"]
+        math = [item for item in assignments if item["activity"] == "Математика"]
+        self.assertEqual(len(math), 1)
+        self.assertEqual(math[0]["audience"]["canonical_group_ids"], ["math-a"])
+        self.assertEqual(math[0]["teacher_ids"], ["teacher-df"])
+        base_block = {"block_key": "confirmed-key", "weekday": 0,
+                      "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "7",
+                      "assignments": [{"activity": "Математика", "canonical_group_ids": ["math-a"],
+                                       "teacher_ids": ["teacher-old"]}]}
+        template_rows = parsed("Мат A Старый", audience="7")
+        diff = build_weekly_diff({"blocks": {"confirmed-key": base_block}}, template_rows,
+            weekly_rows, artifact, confirmed_mapping={"|".join(map(str, key)): "confirmed-key"})
+        proposed = diff["patches"][0]["assignments"]
+        self.assertEqual(proposed[0]["audience"]["canonical_group_ids"], ["math-a"])
+        self.assertEqual(proposed[0]["teacher_ids"], ["teacher-df"])
+
+    def test_explicit_new_subgroup_overrides_inherited_template_group(self):
+        key = (0, "09:00", "09:45", "7")
+        weekly_rows = parsed("Мат B ДФ", audience="7")
+        cell = weekly_rows[key][0]
+        cell.update({"sheet_id": "week", "tab_title": "28.09-02.10", "weekday": 0,
+                     "start_time": key[1], "end_time": key[2]})
+        lessons = parse_weekly_lessons(weekly_rows, [{"id": "teacher-df", "display_name": "Дмитрий Филиппов"}])
+        _inherit_canonical_group_context(lessons, weekly_rows, {"|".join(map(str, key)): "confirmed-key"},
+            {"confirmed-key": {"derived_from": {"source_cells": [{"coordinate": "B3", "column": 1}]},
+                               "assignments": [{"activity": "Математика", "source_cells": ["B3"],
+                                                "audience": {"canonical_group_ids": ["math-a"]}}]}},
+            [{"id": "math-a", "group_type": "instructional", "subject": "Математика", "subject_subgroup": "A"}])
+        self.assertNotIn("resolved_group_ids", lessons[0])
+        self.assertEqual(lessons[0]["subject_subgroup"], "B")
+
     def test_short_literature_subject_becomes_canonical_name_and_room_is_separate(self):
         rows = parsed("Литер Юля кабинет 10")
         rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
@@ -193,6 +266,17 @@ class MergeAwareParsingTests(unittest.TestCase):
         self.assertEqual(semantic[0]["subject"], "Пластика")
         self.assertEqual(semantic[0]["resolved_identity_ids"], ["teacher-vadim"])
         self.assertIn("зал", semantic[0]["room"].lower())
+
+    def test_math_subgroup_teacher_and_room_are_parsed_separately(self):
+        rows = parsed("Мат A ДФ каб.17")
+        rows[(0, "09:00", "09:45", "5")][0]["sheet_id"] = "sheet"
+        semantic = parse_weekly_lessons(rows, [{"id": "teacher-df", "display_name": "Дмитрий Филиппов"}])[0]
+        self.assertEqual(semantic["subject"], "Математика")
+        self.assertEqual(semantic["subject_subgroup"], "A")
+        self.assertEqual(semantic["modifiers"]["subject_subgroup"], "A")
+        self.assertEqual(semantic["resolved_identity_ids"], ["teacher-df"])
+        self.assertEqual(semantic["teacher_hint"], "Дмитрий Филиппов")
+        self.assertEqual(semantic["room"].casefold(), "каб.17")
 
     def test_english_club_is_excluded_even_without_circle_marker(self):
         rows = parsed("Английский клуб 5-7 кл")
@@ -374,6 +458,104 @@ class SharedDiffTests(unittest.TestCase):
         self.assertEqual(len(changed["patches"]), 1)
         self.assertEqual(changed["patches"][0]["block_key"], "manual")
 
+    def test_confirmed_source_mapping_prevents_blank_time_blocks_from_collapsing(self):
+        first = {"block_key": "canonical-first", "weekday": 0, "grade_scope": "5",
+                 "assignments": [{"activity": "Русский", "canonical_group_ids": ["g1"], "teacher_ids": []}]}
+        second = {"block_key": "canonical-second", "weekday": 0, "grade_scope": "5",
+                  "assignments": [{"activity": "Физика", "canonical_group_ids": ["g1"], "teacher_ids": []}]}
+        canonical = {"blocks": {"first": first, "second": second}}
+        template = parsed("Русский", column=1)
+        template.update(parsed("Физика", start="09:55", column=2))
+        weekly = parsed("Русский", column=1)
+        weekly.update(parsed("Математика", start="09:55", column=2))
+        replacement = block("weekly-second", "Математика", "g1", start="09:55")
+
+        result = build_weekly_diff(
+            canonical, template, weekly, {"blocks": {"weekly-second": replacement}},
+            confirmed_mapping={"0|09:00|09:45|5": "canonical-first",
+                              "0|09:55|09:45|5": "canonical-second"},
+        )
+
+        self.assertEqual(result["counts"], {"UNCHANGED": 1, "REPLACED": 1})
+        self.assertEqual(len(result["patches"]), 1)
+        self.assertEqual(result["patches"][0]["block_key"], "canonical-second")
+        self.assertEqual(result["patches"][0]["slot"], {"start": "09:55", "end": "09:45"})
+
+    def test_weekly_parser_keeps_all_explicit_teachers_in_comma_separated_source(self):
+        teachers = [
+            {"id": "ivan", "display_name": "Иван"},
+            {"id": "rodion", "display_name": "Родион"},
+            {"id": "anna", "display_name": "Анна Елисеева"},
+            {"id": "dmitry", "display_name": "Дмитрий К"},
+        ]
+        cells = parsed('''Лаборатория «Опыт»
+Иван, Родион, АЕ, ДК
+каб.17''')
+        key, rows = next(iter(cells.items()))
+        rows[0]["sheet_id"] = "fixture"
+
+        lesson = parse_weekly_lessons({key: rows}, teachers)[0]
+
+        self.assertEqual(lesson["resolved_identity_ids"], ["anna", "dmitry", "ivan", "rodion"])
+        self.assertEqual(lesson["room"], "каб.17")
+        self.assertEqual(lesson["parse_status"], "validated")
+        artifact = build_bootstrap_canonical({
+            "lessons": [lesson], "teachers": teachers,
+            "students": [{"id": "student-1", "class_name": "5A"}],
+            "groups": [{"id": "class-5", "name": "5A", "display_name": "5A",
+                        "group_type": "class", "base_class_name": "5A"}],
+            "memberships": [{"group_id": "class-5", "identity_id": "student-1", "role": "student"}],
+        })
+        assignment = artifact["blocks"][next(iter(artifact["blocks"]))]["assignments"][0]
+        self.assertEqual(assignment["teacher_ids"], ["anna", "dmitry", "ivan", "rodion"])
+        self.assertEqual(assignment["metadata"]["room"], "каб.17")
+        sdep_cell = {**rows[0], "audience": "10", "source_day_label": "SDEP"}
+        sdep_lesson = parse_weekly_lessons({key: [sdep_cell]}, teachers)[0]
+        self.assertEqual(sdep_lesson["resolved_identity_ids"], ["dmitry"])
+
+    def test_parallel_assignment_missing_its_teacher_is_not_auto_resolved(self):
+        base = block("base", "Английский язык", "g1")
+        base["assignments"] = [
+            {"activity": "Английский язык", "canonical_group_ids": ["g1"], "teacher_ids": ["t1"], "source_cells": ["B3"]},
+            {"activity": "Английский язык", "canonical_group_ids": ["g2"], "teacher_ids": ["t2"], "source_cells": ["C3"]},
+        ]
+        template = parsed("Английский 9", column=1)
+        template.update(parsed("Английский 10 Игорь", column=2))
+        weekly = parsed("Английский 9", column=1)
+        weekly.update(parsed("Английский 10 другой текст", column=2))
+        replacement = block("replacement", "Английский язык", "g2")
+        replacement["assignments"] = [
+            {"activity": "Английский язык", "canonical_group_ids": ["g1"], "teacher_ids": [], "source_cells": ["B3"]},
+            {"activity": "Английский язык", "canonical_group_ids": ["g2"], "teacher_ids": ["t2"], "source_cells": ["C3"]},
+        ]
+
+        result = build_weekly_diff({"blocks": {"base": base}}, template, weekly,
+            {"blocks": {"replacement": replacement}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"})
+
+        self.assertEqual(result["patches"][0]["resolution_state"], "NEEDS_CONFIRMATION")
+        self.assertIn("одного из параллельных занятий", result["patches"][0]["source_issue"])
+
+    def test_remainder_with_participant_mismatch_requires_confirmation(self):
+        base = block("base", "Английский", "english3")
+        template = parsed("Английский 3", column=1)
+        weekly = parsed("🥨", column=1)
+        replacement = block("replacement", "NO_LESSON", "class-7b")
+        replacement["assignments"] = [{
+            "activity": "NO_LESSON", "canonical_group_ids": ["class-7b"],
+            "student_ids": ["s1", "s2", "s3", "s4"], "source_cells": ["B3"],
+            "metadata": {"audience_rule": {"kind": "remaining", "class_group_id": "class-7b",
+                "partition_group_ids": ["english3"]}},
+        }]
+
+        result = build_weekly_diff({"blocks": {"base": base}}, template, weekly,
+            {"blocks": {"replacement": replacement}},
+            confirmed_mapping={"0|09:00|09:45|5": "base"},
+            student_memberships={"class-7b": {"s1", "s2", "s3", "s4"}, "english3": {"s4"}})
+
+        self.assertEqual(result["patches"][0]["resolution_state"], "NEEDS_CONFIRMATION")
+        self.assertIn("canonical memberships", result["patches"][0]["source_issue"])
+
 
 class WeeklySnapshotPersistenceTests(unittest.TestCase):
     def test_comparison_uses_only_the_exact_persisted_week(self):
@@ -437,7 +619,7 @@ class WeeklySnapshotPersistenceTests(unittest.TestCase):
 
 
 class WeeklyRefreshPreviewTests(unittest.TestCase):
-    def _database(self, directory: str) -> Database:
+    def _database(self, directory: str, *, canonical_blocks: dict | None = None) -> Database:
         database = Database(Path(directory) / "preview.db")
         database.initialize()
         import_canonical_artifact(database, {
@@ -445,12 +627,34 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
             "version_id": "v2-preview",
             "status": "approved_with_exceptions",
             "source_snapshot": {"id": "canonical", "fingerprint": "base"},
-            "blocks": {},
+            "blocks": canonical_blocks or {},
         })
         return database
 
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(google_sheets_spreadsheet_id="sheet")
+
+    def _single_cell_fixture(self, directory: str, *, assignments: list[dict] | None = None):
+        base = block("base", "Русский", "g5")
+        base["derived_from"] = {"source_cells": ["B3"]}
+        base["assignments"] = assignments or base["assignments"]
+        database = self._database(directory, canonical_blocks={"base": base})
+        client = SingleCellWeeklyClient()
+        template = _grid_tab(client, "sheet", "2026/27 шаблон", "1")
+        confirm_template_snapshot(database, spreadsheet_id="sheet", spreadsheet_title="Расписание",
+            template_tab=template, expected_version_id="v2-preview")
+        return database, client, template
+
+    def _store_previous_week_source(self, database: Database, client: SingleCellWeeklyClient, *, weekly_text: str | None = None) -> None:
+        if weekly_text is not None:
+            client.weekly_text = weekly_text
+        tab = _grid_tab(client, "sheet", "21–25 сентября", "3")
+        parsed_rows = parse_structure(tab["values"], sheet_id=tab["sheet_id"], title=tab["title"],
+            week_start="2026-09-21", merges=tab["merges"])
+        _persist_source_snapshot(database, spreadsheet_id="sheet", spreadsheet_title="Расписание",
+            weekly_tab=tab, week_start="2026-09-21", week_end="2026-09-25",
+            fingerprint=f"test-{client.weekly_text}", raw_payload={},
+            structural_payload={"rows": source_rows(parsed_rows)})
 
     def test_weekly_diff_carries_slot_context_and_resolver_reason(self):
         key = (2, "11:50", "12:35", "8")
@@ -476,6 +680,143 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
         self.assertEqual(patch["weekly_source_cells"], ["D8"])
         self.assertEqual(patch["resolution_details"], ["Teacher is unresolved"])
         self.assertEqual(patch["assignments"], [])
+
+    def test_weekly_preview_preserves_119_manual_template_assignments_without_reparse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manual = [{"activity": "Русский", "canonical_group_ids": ["g5"], "teacher_ids": [],
+                       "metadata": {"manual_override": True}} for _ in range(119)]
+            database, client, _ = self._single_cell_fixture(directory, assignments=manual)
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")), \
+                 patch("backend.services.canonical_weekly_refresh.build_bootstrap_canonical", side_effect=AssertionError("unchanged source was re-resolved")):
+                preview = preview_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(preview["overlay_patch_count"], 0)
+            stored = read_canonical_template(database, "v2-preview")["blocks"]["base"]["assignments"]
+            self.assertEqual(len(stored), 119)
+            self.assertTrue(all((item.get("metadata") or {}).get("manual_override") for item in stored))
+
+    def test_weekly_preview_uses_confirmed_baseline_when_live_template_source_has_drifted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, client, _ = self._single_cell_fixture(directory)
+            client.weekly_text = "Математика"
+            read_grid = client.sheet_grid_range
+
+            def drifted_template(_spreadsheet_id, title, range_name):
+                result = read_grid(_spreadsheet_id, title, range_name)
+                if title == "2026/27 шаблон":
+                    result["sheets"][0]["data"][0]["rowData"][2]["values"][1] = {"formattedValue": "Физика"}
+                return result
+
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")), \
+                 patch.object(client, "sheet_grid_range", side_effect=drifted_template):
+                preview = preview_current_week(database, self._settings(), "2026-09-21")
+
+            self.assertEqual(preview["status"], "preview")
+            self.assertEqual(preview["comparison_basis"]["kind"], "confirmed_template")
+            self.assertEqual(preview["template_source_changed_block_count"], 1)
+            self.assertEqual(preview["overlay_patch_count"], 1)
+            self.assertEqual(preview["overlay_patches"][0]["weekly_source_cells"], ["B3"])
+            stored = read_canonical_template(database, "v2-preview")["blocks"]["base"]["assignments"]
+            self.assertEqual(stored[0]["activity"], "Русский")
+
+    def test_unchanged_imported_source_keeps_l4_m4_n4_manual_week_draft_edit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, client, _ = self._single_cell_fixture(directory)
+            saved = save_draft(database, "week", "2026-09-21", expected_revision=0, base_version_id="v2-preview",
+                payload={"changes": [{"block_key": "base", "operation": "upsert", "assignment_index": 0,
+                    "source_identity": {"source_cells": ["L4", "M4", "N4"]},
+                    "lesson": {"activity": "Математика", "audience": {"kind": "groups", "group_ids": ["g5"]},
+                        "teacher_ids": [], "weekday": 0, "start_time": "09:00", "end_time": "09:45", "grade": "5"}}]})
+            self._store_previous_week_source(database, client)
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")), \
+                 patch("backend.services.canonical_weekly_refresh.build_bootstrap_canonical", side_effect=AssertionError("unchanged source was re-resolved")):
+                preview = preview_current_week(database, self._settings(), "2026-09-21")
+            draft = get_draft(database, "week", "2026-09-21")
+            self.assertEqual(preview["overlay_patch_count"], 0)
+            self.assertEqual(draft["revision"], saved["revision"])
+            self.assertEqual(draft["payload"]["changes"][0]["lesson"]["activity"], "Математика")
+            self.assertEqual(draft["payload"]["changes"][0]["source_identity"]["source_cells"], ["L4", "M4", "N4"])
+
+    def test_changed_source_proposes_once_and_processed_repeat_preview_is_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, client, _ = self._single_cell_fixture(directory)
+            self._store_previous_week_source(database, client)
+            client.weekly_text = "Физика"
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")):
+                first = preview_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(first["overlay_patch_count"], 1)
+            self.assertEqual(first["overlay_patches"][0]["weekly_source_cells"], ["B3"])
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")):
+                refresh_current_week(database, self._settings(), "2026-09-21")
+            materialize_effective_week(database, "v2-preview", "2026-09-21", patches=[{
+                "block_key": "base", "change_kind": "replaced",
+                "assignments": [{"activity": "Физика", "canonical_group_ids": ["g5"], "teacher_ids": []}],
+            }])
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")), \
+                 patch("backend.services.canonical_weekly_refresh.build_bootstrap_canonical", side_effect=AssertionError("processed source was re-resolved")):
+                repeat = preview_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(repeat["overlay_patch_count"], 0)
+
+    def test_unmodified_effective_week_override_is_retained_without_reparse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, client, _ = self._single_cell_fixture(directory)
+            client.weekly_text = "Физика"
+            self._store_previous_week_source(database, client)
+            materialize_effective_week(database, "v2-preview", "2026-09-21", patches=[{
+                "block_key": "base", "change_kind": "replaced",
+                "assignments": [{"activity": "Физика", "canonical_group_ids": ["g5"], "teacher_ids": []}],
+            }])
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")), \
+                 patch("backend.services.canonical_weekly_refresh.build_bootstrap_canonical", side_effect=AssertionError("unchanged override was re-resolved")):
+                preview = preview_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(preview["overlay_patch_count"], 0)
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")):
+                prepared = __import__("backend.services.canonical_weekly_refresh", fromlist=["_prepare_current_week"])._prepare_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(prepared["comparison_baseline"]["blocks"]["base"]["assignments"][0]["activity"], "Физика")
+            self.assertEqual(prepared["preserved_patches"]["base"]["assignments"][0]["activity"], "Физика")
+
+    def test_changed_source_after_manual_edit_is_conflict_not_silent_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, client, _ = self._single_cell_fixture(directory)
+            saved = save_draft(database, "week", "2026-09-21", expected_revision=0, base_version_id="v2-preview",
+                payload={"changes": [{"block_key": "base", "operation": "upsert", "assignment_index": 0,
+                    "lesson": {"activity": "Математика", "audience": {"kind": "groups", "group_ids": ["g5"]},
+                        "teacher_ids": [], "weekday": 0, "start_time": "09:00", "end_time": "09:45", "grade": "5"}}]})
+            self._store_previous_week_source(database, client)
+            client.weekly_text = "Физика"
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")):
+                preview = preview_current_week(database, self._settings(), "2026-09-21")
+            proposal = preview["overlay_patches"][0]
+            self.assertTrue(proposal["manual_conflict"])
+            self.assertEqual(proposal["resolution_state"], "NEEDS_CONFIRMATION")
+            self.assertIn("ручное исправление сохранено", proposal["source_issue"])
+            imported = merge_import_changes(database, "2026-09-21", expected_revision=saved["revision"],
+                proposed_changes=preview_changes(preview), source_context={"fingerprint": "changed-week-source"})
+            change = imported["payload"]["changes"][0]
+            self.assertEqual(change["lesson"]["activity"], "Математика")
+            self.assertTrue(change["review_required"])
+            self.assertEqual(change["conflicting_proposal"]["activity"], "Физика")
+
+    def test_return_to_template_proposes_canonical_assignment_and_does_not_reparse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database, client, _ = self._single_cell_fixture(directory)
+            client.weekly_text = "Физика"
+            self._store_previous_week_source(database, client)
+            materialize_effective_week(database, "v2-preview", "2026-09-21", patches=[{
+                "block_key": "base", "change_kind": "replaced",
+                "assignments": [{"activity": "Физика", "canonical_group_ids": ["g5"], "teacher_ids": []}],
+            }])
+            self._store_previous_week_source(database, client)
+            client.weekly_text = "Русский"
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")), \
+                 patch("backend.services.canonical_weekly_refresh.build_bootstrap_canonical", side_effect=AssertionError("template return must inherit canonical assignment")):
+                preview = preview_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(preview["overlay_patch_count"], 1)
+            self.assertEqual(preview["overlay_patches"][0]["assignments"][0]["activity"], "Русский")
+            self.assertEqual(preview["overlay_patches"][0]["change_classification"], "REPLACED")
+            self.assertTrue(preview["overlay_patches"][0]["revert_to_template"])
+            with patch("backend.services.canonical_weekly_refresh._client", return_value=(client, "operator@example.com")):
+                refreshed = refresh_current_week(database, self._settings(), "2026-09-21")
+            self.assertEqual(refreshed["refresh"]["effective"]["patch_count"], 0)
 
     def test_preview_is_read_only_and_matches_apply_plan(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -583,6 +924,26 @@ class WeeklyRefreshPreviewTests(unittest.TestCase):
             self.assertEqual(preview["changed_source_blocks"], ["0|09:00|09:45|6"])
             self.assertEqual(preview["overlay_patch_count"], 1)
             self.assertEqual(preview["warnings"][0]["block_key"], "source|0|09:00|09:45|6")
+
+    def test_deleted_template_source_without_canonical_mapping_is_shown_for_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database(directory)
+            tab = {"sheet_id": "1", "title": "2026/27 шаблон",
+                   "values": matrix("Химия", "Русский", ""), "merges": [], "structured_cells": []}
+            confirm_template_snapshot(database, spreadsheet_id="sheet", spreadsheet_title="Расписание",
+                template_tab=tab, expected_version_id="v2-preview")
+            changed = {**tab, "values": matrix("", "Русский", "")}
+
+            preview = preview_template_snapshot(database, spreadsheet_id="sheet",
+                template_tab=changed, expected_version_id="v2-preview")
+
+            self.assertEqual(preview["overlay_patch_count"], 1)
+            patch = preview["overlay_patches"][0]
+            self.assertEqual(patch["resolution_state"], "UNRESOLVED")
+            self.assertEqual(patch["change_classification"], "UNRESOLVED_SOURCE_REMOVAL")
+            self.assertEqual(patch["weekly_source_cells"], ["B3"])
+            self.assertEqual(patch["before"]["source_text"], ["Химия"])
+            self.assertIn("не связанный с canonical-занятием", patch["source_issue"])
 
     def test_clear_template_change_publish_and_rebaseline(self):
         with tempfile.TemporaryDirectory() as directory:

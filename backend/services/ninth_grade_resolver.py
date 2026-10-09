@@ -308,6 +308,15 @@ class NinthGradeResolver:
             students = frozenset().union(*(self.context.members(group) for group in groups)) & row_universe
             primary.append(ScheduleAssignment(_activity(cell), students, (cell.source_cell,),
                                               tuple(str(group["id"]) for group in groups), "primary"))
+        unique_primary: dict[tuple[Any, ...], ScheduleAssignment] = {}
+        for item in primary:
+            teacher_ids = tuple(sorted({str(identity) for cell in row.cells if cell.source_cell in item.source_cells
+                                        for identity in cell.parsed.get("resolved_identity_ids", ())}))
+            key = (item.activity, item.kind, item.group_ids, item.student_ids, teacher_ids)
+            previous = unique_primary.get(key)
+            unique_primary[key] = item if previous is None else replace(
+                previous, source_cells=tuple(dict.fromkeys((*previous.source_cells, *item.source_cells))))
+        primary = list(unique_primary.values())
         conflicts = _assignments_conflicts(primary)
         blocked = {str(item["student_id"]) for item in conflicts}
         if conflicts:
@@ -324,6 +333,15 @@ class NinthGradeResolver:
             group = matches[0]
             students = self.context.members(group) & frozenset(available)
             secondary_candidates.append(ScheduleAssignment(subject, students, (cell.source_cell,), (str(group["id"]),), "secondary"))
+        unique_secondary: dict[tuple[Any, ...], ScheduleAssignment] = {}
+        for item in secondary_candidates:
+            teacher_ids = tuple(sorted({str(identity) for cell in row.cells if cell.source_cell in item.source_cells
+                                        for identity in cell.parsed.get("resolved_identity_ids", ())}))
+            key = (item.activity, item.kind, item.group_ids, item.student_ids, teacher_ids)
+            previous = unique_secondary.get(key)
+            unique_secondary[key] = item if previous is None else replace(
+                previous, source_cells=tuple(dict.fromkeys((*previous.source_cells, *item.source_cells))))
+        secondary_candidates = list(unique_secondary.values())
         elective_conflicts = _assignments_conflicts(secondary_candidates)
         elective_blocked = {str(item["student_id"]) for item in elective_conflicts}
         if elective_conflicts:
@@ -413,6 +431,15 @@ class NinthGradeResolver:
                 return self._unresolved(row, ScheduleRowMode.ELECTIVES, "missing canonical OGE instructional group", **evidence, missing_group=subject)
             group = matches[0]
             secondary.append(ScheduleAssignment(subject, self.context.members(group), (cell.source_cell,), (str(group["id"]),), "secondary"))
+        unique_secondary: dict[tuple[Any, ...], ScheduleAssignment] = {}
+        for item in secondary:
+            teacher_ids = tuple(sorted({str(identity) for cell in row.cells if cell.source_cell in item.source_cells
+                                        for identity in cell.parsed.get("resolved_identity_ids", ())}))
+            key = (item.activity, item.kind, item.group_ids, item.student_ids, teacher_ids)
+            previous = unique_secondary.get(key)
+            unique_secondary[key] = item if previous is None else replace(
+                previous, source_cells=tuple(dict.fromkeys((*previous.source_cells, *item.source_cells))))
+        secondary = list(unique_secondary.values())
         conflicts = _assignments_conflicts(secondary)
         blocked = {str(item["student_id"]) for item in conflicts}
         if conflicts:

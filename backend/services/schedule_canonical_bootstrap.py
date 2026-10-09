@@ -192,6 +192,11 @@ def _base_groups(row: ScheduleSourceRow, groups: Sequence[Mapping[str, Any]]) ->
 
 def _exact_class_groups(cell: Any, groups: Sequence[Mapping[str, Any]]) -> list[str]:
     names = {_norm(cell.audience), *(_norm(item) for item in cell.merged_audiences)}
+    # A grade suffix such as "7-А" identifies an existing class, not an
+    # instructional subgroup "7". Resolve it only through canonical classes.
+    names.update(_norm(match.group(1)) for match in re.finditer(
+        r"(?<!\w)(\d{1,2}\s*[-–]\s*[а-яa-z])\b", str(cell.raw_text or ""), re.IGNORECASE,
+    ))
     return [str(group["id"]) for group in groups if _norm(group.get("group_type")) == "class" and _norm(group.get("base_class_name") or group.get("name")) in names]
 
 
@@ -218,9 +223,9 @@ def _explicit_instructional_marker(cell: Any) -> bool:
     if _ENGLISH_NUMBER.search(raw) or _EXAM.search(raw):
         return True
     return bool(re.search(
-        r"\b(?:мат(?:ематика|ем)?|матпроф|физ(?:ика)?|био(?:логия)?|"
+        r"\b(?:мат(?:ематика|ем)?|math|матпроф|физ(?:ика)?|био(?:логия)?|"
         r"информ(?:атика)?|литер(?:атура)?|обществ(?:ознание)?|хим(?:ия)?)"
-        r"\s+(?:группа\s*)?(?:[а-яa-z]|\d+)\b",
+        r"\s+(?:группа\s*)?(?:[а-яa-z]|\d+(?!\s*[-–]\s*[а-яa-z]))\b",
         raw,
         re.IGNORECASE,
     ))
@@ -234,8 +239,8 @@ def _instructional_groups(cell: Any, grade: str, groups: Sequence[Mapping[str, A
     matched = [group for group in groups if str(group["id"]) in resolved
                and _norm(group.get("group_type")) != "class"
                and bool(set(memberships.get(str(group["id"]), ())) & universe)]
-    if len(matched) == 1:
-        return [str(matched[0]["id"])]
+    if matched:
+        return [str(group["id"]) for group in matched]
     raw = _norm(cell.raw_text)
     subject = _subject(cell.parsed.get("subject"))
     candidates = []
@@ -249,6 +254,25 @@ def _instructional_groups(cell: Any, grade: str, groups: Sequence[Mapping[str, A
         if group_grade and group_grade != grade:
             continue
         candidates.append(group)
+    subgroup = str(cell.parsed.get("subject_subgroup") or
+                   (cell.parsed.get("modifiers") or {}).get("subject_subgroup") or "").strip()
+    if subgroup:
+        normalize_marker = lambda value: re.sub(r"\s*", "", str(value or "").casefold()).translate(
+            str.maketrans({"а": "a", "в": "b", "с": "c"}))
+        marker = normalize_marker(subgroup)
+        matching = []
+        for item in candidates:
+            subgroup_value = normalize_marker(item.get("subject_subgroup"))
+            group_name = re.sub(r"\s+", " ", str(item.get("name") or item.get("display_name") or "").casefold()).translate(
+                str.maketrans({"а": "a", "в": "b", "с": "c"}))
+            separator = r"(?:^|[:_\s])" if marker[:1].isdigit() else r"(?:^|[:_\s-])"
+            suffix = re.search(separator + re.escape(marker) + r"$", group_name)
+            if subgroup_value == marker or suffix:
+                matching.append(item)
+        if len(matching) == 1:
+            return [str(matching[0]["id"])]
+        if len(matching) != 1:
+            return None
     if _EXAM.search(cell.raw_text):
         exam = [item for item in candidates if _norm(item.get("exam_track")) in {"огэ", "егэ", "oge"}]
         if len(exam) == 1:
@@ -311,6 +335,7 @@ def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships
     assignments: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     grouped_cells: set[str] = set()
+    unresolved_group_claim = False
     for cell in cells:
         if cell.parsed.get("activity_type") == "extracurricular" or cell.raw_text.lstrip().startswith("⚪"):
             continue
@@ -338,9 +363,11 @@ def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships
                 "reason": "explicit instructional audience has no unique canonical group",
                 "raw_text": cell.raw_text,
             })
+            unresolved_group_claim = True
             grouped_cells.add(cell.source_cell)
     active_students = set().union(*(set(item["student_ids"]) for item in assignments)) if assignments else set()
-    for cell in row.cells:
+    explicit_no_lesson_students: set[str] = set()
+    for cell in sorted(row.cells, key=lambda item: bool(normalize_no_lesson(item.raw_text))):
         if cell.source_cell in grouped_cells or cell.parsed.get("activity_type") == "extracurricular" or cell.raw_text.lstrip().startswith("⚪"):
             continue
         exact_groups = _exact_class_groups(cell, groups)
@@ -353,12 +380,13 @@ def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships
         audience -= base_gaps
         no_lesson = normalize_no_lesson(cell.raw_text)
         if no_lesson:
-            audience -= active_students
+            audience -= active_students | explicit_no_lesson_students
             if audience:
                 excluded_group_ids = sorted({group_id for item in assignments for group_id in item["audience"]["canonical_group_ids"]})
                 assignments.append(_assignment_payload(NO_LESSON, "explicit_no_lesson", exact_groups, audience, [cell], teachers, (),
                     grade=row.grade_scope, class_group_id=exact_groups[0] if len(exact_groups) == 1 else "",
                     excluded_group_ids=excluded_group_ids))
+                explicit_no_lesson_students.update(audience)
             continue
         activity = classify_simple_activity(cell.raw_text) or str(cell.parsed.get("subject") or cell.raw_text)
         role = "residual" if assignments else "primary"
@@ -373,6 +401,17 @@ def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships
             active_students.update(audience)
         elif not exact_groups and universe:
             unresolved.append({"source_cell": cell.source_cell, "reason": "canonical audience cannot be proven"})
+    deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for assignment in assignments:
+        key = (assignment["activity"], assignment["role"],
+               tuple(assignment["audience"]["canonical_group_ids"]),
+               tuple(assignment["student_ids"]), tuple(assignment["teacher_ids"]))
+        previous = deduplicated.get(key)
+        if previous is None:
+            deduplicated[key] = assignment
+            continue
+        previous["source_cells"] = list(dict.fromkeys([*previous["source_cells"], *assignment["source_cells"]]))
+    assignments = list(deduplicated.values())
     per_student: dict[str, list[str]] = defaultdict(list)
     for assignment in assignments:
         if assignment["activity"] != NO_LESSON:
@@ -403,7 +442,7 @@ def _simple_block(row: ScheduleSourceRow, corpus: Mapping[str, Any], memberships
             assignment["student_count"] = len(assignment["student_ids"])
     assigned = {item for assignment in assignments for item in assignment["student_ids"]}
     remaining = universe - assigned - conflict_students
-    if remaining:
+    if remaining and not unresolved_group_claim:
         assignments.append(_assignment_payload(NO_LESSON, "final_unassigned", (), remaining, (), teachers, ()))
     return {"assignments": assignments, "unresolved": unresolved, "universe": universe, "conflict_students": conflict_students}
 
@@ -420,6 +459,17 @@ def _ninth_block(row: ScheduleSourceRow, resolver: NinthGradeResolver, teachers:
         teacher_ids = sorted({str(value) for cell in source for value in cell.parsed.get("resolved_identity_ids", ())})
         assignments.append(_assignment_payload(item.activity, item.kind, item.group_ids, set(item.student_ids), source, teachers, teacher_ids,
             grade=row.grade_scope, excluded_group_ids=sorted({group_id for prior in assignments for group_id in prior["audience"]["canonical_group_ids"]})))
+    deduplicated: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for assignment in assignments:
+        key = (assignment["activity"], assignment["role"],
+               tuple(assignment["audience"]["canonical_group_ids"]),
+               tuple(assignment["student_ids"]), tuple(assignment["teacher_ids"]))
+        previous = deduplicated.get(key)
+        if previous is None:
+            deduplicated[key] = assignment
+            continue
+        previous["source_cells"] = list(dict.fromkeys([*previous["source_cells"], *assignment["source_cells"]]))
+    assignments = list(deduplicated.values())
     per_student: dict[str, list[str]] = defaultdict(list)
     for assignment in assignments:
         if assignment["activity"] != NO_LESSON:

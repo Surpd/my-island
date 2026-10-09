@@ -127,6 +127,8 @@ def _normalize_change(value: Any) -> dict[str, Any]:
         raise ValueError("Draft change requires block_key")
     change["operation"] = operation
     change["block_key"] = block_key
+    if "deferred" in change:
+        change["deferred"] = change.get("deferred") is True
     if change.get("assignment_index") is not None:
         index = int(change["assignment_index"])
         if index < 0:
@@ -349,11 +351,19 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
     if int(draft["revision"]) != int(expected_revision):
         raise DraftConflict(draft)
     changes = draft["payload"].get("changes") or []
-    if any(change.get("review_required") or (change.get("lesson") or {}).get("audience", {}).get("kind") == "unresolved" for change in changes):
+    deferred = [change for change in changes if change.get("deferred")]
+    if deferred and scope_kind != "week":
+        raise ValueError("Only weekly changes requiring review can be deferred")
+    if any(not (change.get("review_required") or (change.get("lesson") or {}).get("audience", {}).get("kind") == "unresolved") for change in deferred):
+        raise ValueError("Only changes requiring review can be deferred")
+    publish_changes = [change for change in changes if not change.get("deferred")]
+    if not publish_changes:
+        raise ValueError("There are no publishable changes; deferred proposals remain in the draft")
+    if any(change.get("review_required") or (change.get("lesson") or {}).get("audience", {}).get("kind") == "unresolved" for change in publish_changes):
         raise ValueError("Resolve all source changes marked for review before publishing")
-    content_hash = _hash({"draft_key": draft["draft_key"], "revision": expected_revision, "changes": changes})
+    content_hash = _hash({"draft_key": draft["draft_key"], "revision": expected_revision, "changes": publish_changes})
     grouped: dict[str, list[dict[str, Any]]] = {}
-    for change in changes:
+    for change in publish_changes:
         grouped.setdefault(str(change["block_key"]), []).append(change)
     if scope_kind == "week":
         version_id = str(draft.get("base_version_id") or (canonical_version(database) or {}).get("version_id") or "")
@@ -434,8 +444,19 @@ def publish_draft(database: Database, scope_kind: str, scope_key: str, *, expect
         }
         result = import_canonical_artifact(database, artifact, status="authoritative" if base.get("status") == "authoritative" else "approved_with_exceptions", approved_at=_now())
         published_id = result["version_id"]
-    discard_draft(database, scope_kind, scope_key, expected_revision=expected_revision)
-    return {"status": "published", "scope_kind": scope_kind, "scope_key": scope_key, "published_id": published_id, "changes": len(changes), "result": result}
+    if deferred:
+        remaining = save_draft(
+            database, scope_kind, scope_key, expected_revision=expected_revision,
+            payload={"changes": deferred, **{key: value for key, value in draft["payload"].items() if key != "changes"}},
+            actor_user_id=actor_user_id, base_version_id=draft.get("base_version_id"),
+            base_effective_week_id=published_id if scope_kind == "week" else draft.get("base_effective_week_id"),
+            source_context=draft.get("source_context") or {},
+        )
+        deferred_revision = remaining["revision"]
+    else:
+        discard_draft(database, scope_kind, scope_key, expected_revision=expected_revision)
+        deferred_revision = 0
+    return {"status": "published", "scope_kind": scope_kind, "scope_key": scope_key, "published_id": published_id, "changes": len(publish_changes), "deferred_count": len(deferred), "deferred_revision": deferred_revision, "result": result}
 
 
 def merge_import_changes(database: Database, scope_key: str, *, expected_revision: int, proposed_changes: Sequence[Mapping[str, Any]], source_context: Mapping[str, Any], actor_user_id: Any = None, scope_kind: str = "week") -> dict[str, Any]:
@@ -447,24 +468,21 @@ def merge_import_changes(database: Database, scope_key: str, *, expected_revisio
     for raw in proposed_changes:
         proposed = _normalize_change(raw)
         previous = existing.pop(identity(proposed), None)
-        if previous and previous.get("manual"):
+        if previous and (previous.get("manual") or previous.get("deferred")):
             old_identity = (previous.get("lesson") or {}).get("source_identity") or {}
             new_identity = (proposed.get("lesson") or {}).get("source_identity") or proposed.get("source_identity") or {}
             old_fingerprint = old_identity.get("semantic_fingerprint") or old_identity.get("fingerprint")
             new_fingerprint = new_identity.get("semantic_fingerprint") or new_identity.get("fingerprint")
             same_source = bool(old_fingerprint) and old_fingerprint == new_fingerprint
-            if previous.get("operation") == "upsert" and proposed.get("operation") == "upsert":
-                proposed["lesson"]["audience"] = previous["lesson"]["audience"]
-                proposed["lesson"]["source_identity"] = new_identity
-                proposed["manual"] = True
-                if not same_source:
-                    proposed["review_required"] = True
-                    proposed["review_reason"] = "Источник изменился — проверьте ручное назначение"
-                merged.append(proposed)
-            else:
+            # The editor draft is an explicit human decision. Re-import may
+            # flag a source conflict, but must not replace any part of that
+            # decision with a newly parsed lesson.
+            if not same_source:
                 previous["review_required"] = True
-                previous["review_reason"] = "Источник изменил или удалил вручную исправленный урок — проверьте его"
-                merged.append(previous)
+                previous["review_reason"] = "Источник изменился — проверьте конфликт с ручным исправлением"
+                if proposed.get("operation") == "upsert":
+                    previous["conflicting_proposal"] = deepcopy(proposed.get("lesson") or {})
+            merged.append(previous)
         else:
             proposed["manual"] = False
             merged.append(proposed)
