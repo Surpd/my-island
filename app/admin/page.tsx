@@ -509,8 +509,8 @@ function System({ navigate }: { navigate: (href: string) => void }) {
 }
 
 function AppContent({ path, navigate }: { path: string; navigate: (href: string) => void }) {
-  if (path === '/admin/teachers') return <TeacherDirectoryAdmin api={schoolMode ? schoolApi : api} schoolMode={schoolMode} navigate={navigate} />;
-  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin api={schoolMode ? schoolApi : api} section="groups" schoolMode={schoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
+  if (path === '/admin/teachers') return <TeacherDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} schoolMode={schoolMode} navigate={navigate} />;
+  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} section="groups" schoolMode={schoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
   if (path === '/admin/people/legacy') return <People navigate={navigate} />;
   if (path.startsWith('/admin/people/')) return <PersonDetail id={path.split('/').pop() || ''} navigate={navigate} />;
   if (path.startsWith('/admin/groups/')) return <GroupDetail id={path.split('/').pop() || ''} navigate={navigate} />;
@@ -554,3 +554,5 @@ export default function AdminPage() {
   if (!session) return <Login onLoggedIn={setSession} />;
   return <div className={`admin-console ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''}`}><Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} session={session} /> : null}<AppContent path={path} navigate={navigate} /></main></div>;
 }
+
+

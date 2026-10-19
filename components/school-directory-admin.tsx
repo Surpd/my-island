@@ -8,7 +8,7 @@ import { assignmentIsActive } from './teacher-directory-logic';
 
 type Row = Record<string, any>;
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
-type Props = { api: Api; section: 'groups' | 'teachers'; schoolMode?: boolean; initialGroupId?: string };
+type Props = { api: Api; section: 'groups' | 'teachers'; schoolMode?: boolean; connectionLabel?: string; initialGroupId?: string };
 type Directory = { groups: Row[]; students: Row[]; teachers: Row[]; write_ready?: boolean; read_only?: boolean; archive_ready?: boolean };
 
 const title = (item: Row) => String(item.display_name || item.name || '');
@@ -17,7 +17,7 @@ const membershipRows = studentMemberships;
 const groupIdOf = (item: Row) => String(item.group_id || item.id || '');
 const subjectOf = (group: Row) => subjectLabel(group.subject || '');
 
-export function SchoolDirectoryAdmin({ api, section, schoolMode = false, initialGroupId }: Props) {
+export function SchoolDirectoryAdmin({ api, section, schoolMode = false, connectionLabel = 'Локальная база', initialGroupId }: Props) {
   const [data, setData] = useState<Directory>({ groups: [], students: [], teachers: [] });
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -333,7 +333,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, initial
   </div>;
 
   return <div className="admin-stack school-editor">
-    <div className="school-editor-heading"><div><p className="admin-eyebrow">ШКОЛЬНЫЙ СПРАВОЧНИК</p><p>Общий справочник классов, состава и учебных групп.</p></div><span className={schoolMode ? `school-connection ${connectionLost ? 'is-disconnected' : 'is-connected'}` : 'school-connection'}><i />{schoolMode ? connectionLost ? 'Supabase · Нет связи' : 'Supabase · Подключено' : 'Локальная база'}</span></div>
+    <div className="school-editor-heading"><div><p className="admin-eyebrow">ШКОЛЬНЫЙ СПРАВОЧНИК</p><p>Общий справочник классов, состава и учебных групп.</p></div><span className={schoolMode ? `school-connection ${connectionLost ? 'is-disconnected' : 'is-connected'}` : 'school-connection'}><i />{schoolMode ? connectionLost ? 'Supabase · Нет связи' : 'Supabase · Подключено' : connectionLabel}</span></div>
     <div className="school-editor-tabs" role="tablist" aria-label="Раздел справочника">{([['board', 'Доска'], ['students', 'Ученики']] as const).map(([key, label]) => <button role="tab" aria-selected={view === key} key={key} className={view === key ? 'is-active' : ''} onClick={() => setView(key)}>{label}</button>)}</div>
     {view === 'board' ? <>
       <div className="admin-toolbar school-editor-toolbar"><select aria-label="Класс или параллель" value={grade} onChange={(e) => setGrade(e.target.value)}><option value="">Все параллели</option>{parallels.map((p) => <option key={p} value={`parallel:${p}`}>{p}-я параллель</option>)}{classNames.map((c) => <option key={c} value={c}>{formatClassLabel(c)}</option>)}</select><select aria-label="Предмет или направление" value={subject} onChange={(e) => { setSubject(e.target.value); setClassesExpanded(!e.target.value); }}><option value="">Все предметы</option>{subjects.map((s) => <option key={s}>{s}</option>)}</select><label className="admin-search"><Search size={16} /><input value={boardQuery} onChange={(e) => setBoardQuery(e.target.value)} placeholder="Поиск групп и учеников" /></label><button className="admin-button admin-button--quiet" onClick={() => void load()}><RefreshCw size={15} /> Обновить</button><button className="admin-button admin-button--primary" disabled={schoolMode && !schoolWritable} onClick={() => setGroupDraft({ name: '', display_name: '', group_type: 'instructional', subject: '', default_teacher_identity_id: '' })}><Plus size={16} /> Создать группу</button></div>
@@ -364,3 +364,5 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, initial
     </dialog></div> : null}
   </div>;
 }
+
+
