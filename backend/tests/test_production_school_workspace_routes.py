@@ -65,14 +65,12 @@ class ProductionSchoolWorkspaceRouteTests(unittest.TestCase):
 
     def test_school_import_uses_canonical_database_without_local_importer(self):
         headers = {"X-Dev-Auth": "browser:valid"}
-        with patch("backend.handlers.api.canonical_version", return_value={"version_id": "canonical-v1"}), \
-                patch("backend.handlers.api.list_experiments", return_value=[]), \
-                patch("backend.handlers.api.create_experiment", return_value={"id": "draft-1"}) as create, \
+        with patch("backend.handlers.api.open_school_canonical_template", return_value={"id": "draft-1"}) as open_template, \
                 patch("backend.handlers.api.import_school_template") as local_import:
             response = self.client.post("/api/admin/schedule/experiments/school/import", headers=headers)
         self.assertEqual(response.status_code, 200)
-        self.assertIs(create.call_args.args[0], self.database)
-        self.assertEqual(create.call_args.kwargs["source"], "canonical")
+        self.assertIs(open_template.call_args.args[0], self.database)
+        self.assertEqual(open_template.call_args.kwargs["actor_user_id"], "admin-uuid")
         local_import.assert_not_called()
 
     def test_school_directory_uses_production_database_without_local_source(self):
