@@ -1,7 +1,58 @@
 {
   "project": "My Island",
   "projectId": "my-island-school",
+  "repository": "https://github.com/Surpd/my-island.git",
+  "localWorkspace": "D:/mitya/Projects/My Island",
   "approvedExternalTargets": {
+    "renderAccountEmail": "antischool.island@gmail.com",
+    "renderWorkspaceName": "Dmitrii's workspace",
+    "renderWorkspaceId": "tea-dae3dcgu01pc73culo30",
+    "renderServiceName": "my-island-api",
+    "renderServiceId": "srv-daeie9m7bikc739usge0",
+    "renderServiceUrl": "https://my-island-api.onrender.com",
+    "repository": "https://github.com/Surpd/my-island",
+    "supabase": {
+      "ownerAccountEmail": "antischool.island@gmail.com",
+      "organizationId": "jnvelhucxsrjexigmchx",
+      "projectId": "kmrcbewmxeqqxfauiwyy",
+      "projectName": "antischool.island@gmail.com's Project",
+      "databaseHost": "db.kmrcbewmxeqqxfauiwyy.supabase.co",
+      "region": "eu-west-1"
+    },
+    "googleSheetsScheduleSource": {
+      "spreadsheetId": "1j5dI2VbT0RoW2A5ZkCpMYVdt7cSY4ZjNxQaMWtu--Fo",
+      "spreadsheetTitle": "Расписание  2026/27",
+      "templateTab": "2026/27 шаблон",
+      "templateSheetId": 638874869,
+      "currentWeekTab": "21-25 сентября",
+      "currentWeekSheetId": 1553117668
+    },
+    "googleCloudOAuth": {
+      "ownerAccountEmail": "antischool.island@gmail.com",
+      "projectName": "My Island",
+      "projectId": "my-island-507717",
+      "projectNumber": "527485591204",
+      "oauthClientName": "My Island Backend",
+      "oauthClientId": "527485591204-plnvki3n358tlb9d52olk98hqrsv6ech.apps.googleusercontent.com"
+    },
+    "sites": {
+      "ownerAccountUserId": "706c9176-5c88-4cba-9feb-2673bc87e1c7",
+      "siteProjectId": "appgprj_6a9d26108af481918318b34094e1d73b",
+      "siteName": "My Island",
+      "publicUrl": "https://my-island.mitya971108.chatgpt.site",
+      "canonicalRepository": "https://github.com/Surpd/my-island",
+      "deploymentSource": {
+        "provider": "cloudflare_artifact",
+        "appRepositoryId": "appgrepo_9f05e3ee7f8c8191983c0a693e66a476",
+        "sourceRepositoryId": "appgprj_6a9d26108af481918318b34094e1d73b",
+        "remoteUrl": "https://git.chatgpt-team.site/250c8b67-5785-439d-9963-5a3d46043d6c/appgprj_6a9d26108af481918318b34094e1d73b.git",
+        "branch": "main",
+        "relationship": "Sites-managed deployment mirror; not a replacement for the canonical GitHub repository."
+      }
+    }
+  },
+  "requiredProductionEnvironment": {
+    "VITE_API_BASE_URL": "explicit value required",
     "renderWorkspaceId": "tea-dae3dcgu01pc73culo30",
     "renderServiceId": "srv-daeie9m7bikc739usge0"
   },

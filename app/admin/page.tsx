@@ -16,16 +16,26 @@ import {
   LayoutDashboard,
   Home,
   LogOut,
+  Pin,
   RefreshCw,
   Search,
   Server,
   Settings,
   ShieldCheck,
   Users,
+  GraduationCap,
+  UserRoundCog,
+  Wrench,
 } from 'lucide-react';
+import { SchoolDirectoryAdmin } from '@/components/school-directory-admin';
+import { TeacherDirectoryAdmin } from '@/components/teacher-directory-admin';
 
 const ScheduleAdmin = dynamic(
   () => import('@/components/schedule-admin').then((module) => module.ScheduleAdmin),
+  { ssr: false },
+);
+const ScheduleConstructor = dynamic(
+  () => import('@/components/schedule-constructor').then((module) => module.ScheduleConstructor),
   { ssr: false },
 );
 
@@ -38,21 +48,35 @@ const runtimeEnv =
 const isLocalBuild = runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
 const API_BASE = String(
   runtimeEnv.VITE_API_BASE_URL ||
-    (isLocalBuild ? 'http://localhost:8000' : ''),
+    (isLocalBuild ? 'http://127.0.0.1:8000' : ''),
 ).replace(/\/$/, '');
+const schoolMode = runtimeEnv.VITE_SCHOOL_DIRECTORY_MODE === 'school';
+const dataSourceLabel = String(runtimeEnv.VITE_DATA_SOURCE_LABEL || 'Источник данных не подтверждён');
 
 const nav = [
   { href: '/admin', label: 'Сегодня', icon: Home },
-  { href: '/admin/schedule', label: 'Расписание', icon: CalendarDays },
-  { href: '/admin/people', label: 'Люди и группы', icon: Users },
-  { href: '/admin/journals', label: 'Учёба', icon: BookOpen },
-  { href: '/admin/settings', label: 'Настройки', icon: Settings },
+  { href: '/admin/schedule/constructor', label: 'Расписание', icon: CalendarDays },
+  { href: '/admin/people', label: 'Ученики и группы', icon: GraduationCap },
+  { href: '/admin/teachers', label: 'Преподаватели', icon: UserRoundCog },
+  { href: '/admin/settings', label: 'Система', icon: Settings },
+];
+const legacyNav = [
+  { href: '/admin/schedule', label: 'Старый редактор расписания', icon: CalendarDays },
+  { href: '/admin/people/legacy', label: 'Люди и аккаунты', icon: Users },
+  { href: '/admin/groups', label: 'Старый список групп', icon: Users },
+  { href: '/admin/journals', label: 'Classroom и учёба', icon: BookOpen },
+  { href: '/admin/sources', label: 'Источники', icon: Database },
+  { href: '/admin/reconciliation', label: 'Сверка', icon: FileSearch },
+  { href: '/admin/audit', label: 'Аудит', icon: Activity },
+  { href: '/admin/issues', label: 'Проблемы', icon: AlertTriangle },
+  { href: '/admin/candidates', label: 'Изменения источников', icon: FileSearch },
 ];
 
 function localDevAuth() {
   if (typeof window === 'undefined') return null;
+  if (schoolMode) return null;
   const query = new URLSearchParams(window.location.search);
-  return window.location.hostname === 'localhost' && query.get('role') === 'admin' ? 'admin:1' : null;
+  return ['localhost', '127.0.0.1'].includes(window.location.hostname) && query.get('role') === 'admin' ? 'admin:1' : null;
 }
 
 function routeFromLocation() {
@@ -79,7 +103,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const dev = localDevAuth();
   if (dev) headers.set('X-Dev-Auth', dev);
   if (typeof window !== 'undefined') {
+    const schoolSession = window.sessionStorage.getItem('my_island_school_admin_session');
     const browserSession = window.sessionStorage.getItem('my_island_admin_session');
+    const schoolAdminSession = schoolSession || (schoolMode ? browserSession : null);
+    if (schoolMode && schoolAdminSession) headers.set('X-School-Admin-Session', schoolAdminSession);
     // The API's auth resolver accepts browser sessions through the existing
     // X-Dev-Auth transport using the explicit browser: prefix. Keeping the
     // transport aligned here makes hosted Sites work even when third-party
@@ -91,7 +118,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
   } catch (cause) {
-    const error = new Error('Не удалось связаться с сервером. Проверьте соединение и адрес API.') as ApiError;
+    const method = (init?.method || 'GET').toUpperCase();
+    const networkState = typeof navigator !== 'undefined' && !navigator.onLine ? 'Браузер сообщает, что сеть отключена.' : 'HTTP-ответ не получен: соединение с API прервалось или браузер заблокировал запрос.';
+    const error = new Error(`${networkState} Запрос: ${method} ${API_BASE}${path}.`) as ApiError;
     error.cause = cause;
     throw error;
   }
@@ -111,6 +140,24 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const error = new Error(message) as ApiError;
     error.status = response.status;
     error.details = details;
+    throw error;
+  }
+  return body as T;
+}
+
+async function schoolApi<T>(path: string, init?: RequestInit): Promise<T> {
+  const schoolPath = path.replace(/^\/api\/admin\/(groups|people|identities|memberships|teacher-assignments)(?=\/|\?|$)/, '/api/admin/school/$1');
+  const headers = new Headers(init?.headers);
+  const token = typeof window !== 'undefined'
+    ? window.sessionStorage.getItem('my_island_school_admin_session') || window.sessionStorage.getItem('my_island_admin_session')
+    : null;
+  if (token) headers.set('X-School-Admin-Session', token);
+  if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`${API_BASE}${schoolPath}`, { ...init, headers, credentials: 'omit' });
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    const error = new Error(String(body.detail || `Запрос к школьной базе завершился ошибкой (${response.status}).`)) as ApiError;
+    error.status = response.status;
     throw error;
   }
   return body as T;
@@ -260,16 +307,20 @@ function Login({ onLoggedIn }: { onLoggedIn: (session: Session) => void }) {
       setBusy(false);
     }
   };
-  return <main className="admin-login"><div className="admin-login-card"><div className="admin-logo">MI</div><p className="admin-eyebrow">MY ISLAND / АДМИН</p><h1>Вход в панель администратора</h1><p>Получите одноразовый код через Telegram-бота, затем введите его здесь. Код действует ограниченное время и используется один раз.</p><form onSubmit={submit}><label>Одноразовый код<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Вставьте код" /></label>{error && <div className="admin-form-error">{error}</div>}<button className="admin-button admin-button--primary" disabled={busy || !code.trim()}>{busy ? 'Проверяем…' : 'Войти безопасно'}</button></form><small>Приложения ученика и учителя продолжают использовать Telegram initData.</small></div></main>;
+  return <main className="admin-login"><div className="admin-login-card"><div className="admin-logo">MI</div><p className="admin-eyebrow">MY ISLAND / АДМИН</p><span className="admin-data-source">{dataSourceLabel}</span><h1>Вход в панель администратора</h1><p>Получите одноразовый код через Telegram-бота, затем введите его здесь. Код действует ограниченное время и используется один раз.</p><form onSubmit={submit}><label>Одноразовый код<input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Вставьте код" /></label>{error && <div className="admin-form-error">{error}</div>}<button className="admin-button admin-button--primary" disabled={busy || !code.trim()}>{busy ? 'Проверяем…' : 'Войти безопасно'}</button></form><small>Приложения ученика и учителя продолжают использовать Telegram initData.</small></div></main>;
 }
 
 function Sidebar({ path, navigate, onLogout }: { path: string; navigate: (href: string) => void; onLogout: () => void }) {
-  return <aside className="admin-console-sidebar"><div className="admin-console-brand"><div className="admin-logo admin-logo--small">MI</div><div><strong>My Island</strong><small>Больше, чем школа</small></div></div><nav>{nav.map((item) => { const Icon = item.icon; const active = item.href === '/admin' ? path === '/admin' : path.startsWith(item.href); return <button key={item.href} className={active ? 'is-active' : ''} onClick={() => navigate(item.href)}><Icon size={18} /><span>{item.label}</span>{active && <ChevronRight size={14} />}</button>; })}</nav><div className="admin-console-sidebar__footer"><span><span className="admin-online-dot" /> Администратор</span><button onClick={onLogout}><LogOut size={16} /> Выйти</button></div></aside>;
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const constructorRoute = path === '/admin/schedule/constructor';
+  const collapsed = constructorRoute && !pinned && !hovered;
+  return <aside className={`admin-console-sidebar ${constructorRoute ? 'constructor-sidebar' : ''} ${collapsed ? 'is-collapsed' : ''} ${pinned ? 'is-pinned' : ''}`} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}><div className="admin-console-brand"><div className="admin-logo admin-logo--small">MI</div><div><strong>My Island</strong><small>Больше, чем школа</small><small className="admin-data-source">{dataSourceLabel}</small></div>{constructorRoute ? <button className="constructor-sidebar-pin" aria-label={pinned ? 'Открепить меню' : 'Закрепить меню'} title={pinned ? 'Открепить меню' : 'Закрепить меню'} onClick={() => setPinned((value) => !value)}><Pin size={15} /></button> : null}</div><nav>{nav.map((item) => { const Icon = item.icon; const active = item.href === '/admin' ? path === item.href : path === item.href || path.startsWith(`${item.href}/`) || (item.href === '/admin/settings' && path.startsWith('/admin/system')); return <button key={item.href} title={item.label} aria-label={item.label} className={active ? 'is-active' : ''} onClick={() => navigate(item.href)}><Icon size={18} /><span>{item.label}</span>{active && <ChevronRight size={14} />}</button>; })}<details className="admin-legacy-nav" open={path === '/admin/schedule' || path.startsWith('/admin/schedule/constructor') || path.startsWith('/admin/people/legacy') || path.startsWith('/admin/groups') || path.startsWith('/admin/journals') || path.startsWith('/admin/sources') || path.startsWith('/admin/reconciliation') || path.startsWith('/admin/audit') || path.startsWith('/admin/issues') || path.startsWith('/admin/candidates')}><summary><Wrench size={17} /><span>Старые инструменты</span></summary>{legacyNav.map((item) => { const Icon = item.icon; const active = path === item.href || (item.href !== '/admin/groups' && path.startsWith(`${item.href}/`)); return <button key={item.href} title={item.label} className={active ? 'is-active' : ''} onClick={() => navigate(item.href)}><Icon size={15} /><span>{item.label}</span></button>; })}</details></nav><div className="admin-console-sidebar__footer"><span><span className="admin-online-dot" /> Администратор</span><button onClick={onLogout}><LogOut size={16} /> Выйти</button></div></aside>;
 }
 
 function Header({ path, navigate, session }: { path: string; navigate: (href: string) => void; session: Session }) {
   const title = path === '/admin' ? 'Сегодня' : path.includes('/people/') ? 'Карточка человека' : path.includes('/groups/') ? 'Карточка группы' : nav.find((item) => path.startsWith(item.href) && item.href !== '/admin')?.label || 'Панель администратора';
-  return <header className="admin-console-header"><div><div className="admin-breadcrumb"><button onClick={() => navigate('/admin')}>Админ</button><ChevronRight size={13} /><span>{title}</span></div><h1>{title}</h1></div><div className="admin-console-header__meta"><Status value="подключено" tone="good" /><span>Админ №{display(session.id)}</span></div></header>;
+  return <header className="admin-console-header"><div><div className="admin-breadcrumb"><button onClick={() => navigate('/admin')}>Админ</button><ChevronRight size={13} /><span>{title}</span></div><h1>{title}</h1></div><div className="admin-console-header__meta"><Status value="подключено" tone="good" /><span>Администратор</span></div></header>;
 }
 
 function Overview({ navigate }: { navigate: (href: string) => void }) {
@@ -451,8 +502,10 @@ function System({ navigate }: { navigate: (href: string) => void }) {
 }
 
 function AppContent({ path, navigate }: { path: string; navigate: (href: string) => void }) {
+  if (path === '/admin/teachers') return <TeacherDirectoryAdmin api={schoolMode ? schoolApi : api} schoolMode={schoolMode} navigate={navigate} />;
+  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin api={schoolMode ? schoolApi : api} section="groups" schoolMode={schoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
+  if (path === '/admin/people/legacy') return <People navigate={navigate} />;
   if (path.startsWith('/admin/people/')) return <PersonDetail id={path.split('/').pop() || ''} navigate={navigate} />;
-  if (path === '/admin/people') return <People navigate={navigate} />;
   if (path.startsWith('/admin/groups/')) return <GroupDetail id={path.split('/').pop() || ''} navigate={navigate} />;
   if (path === '/admin/groups') return <Groups navigate={navigate} />;
   if (path === '/admin/issues') return <Issues navigate={navigate} />;
@@ -460,6 +513,7 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   if (path.startsWith('/admin/sources/')) return <Sources id={path.split('/').pop()} navigate={navigate} />;
   if (path === '/admin/sources') return <Sources navigate={navigate} />;
   if (path === '/admin/reconciliation' || path.startsWith('/admin/reconciliation/')) return <Reconciliation />;
+  if (path === '/admin/schedule/constructor') return <ScheduleConstructor api={api} />;
   if (path === '/admin/schedule') return <ScheduleAdmin api={api} />;
   if (path === '/admin/journals') return <Journals />;
   if (path === '/admin/audit') return <Audit />;
@@ -472,16 +526,24 @@ export default function AdminPage() {
   const { path, navigate } = useRoute();
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
+  const [connectionError, setConnectionError] = useState<unknown>(null);
   useEffect(() => {
     if (localDevAuth()) {
       setSession({ id: 1, role: 'admin' });
       setChecking(false);
       return;
     }
-    api<{ user: Session }>('/api/admin/auth/session').then((result) => setSession(result.user)).catch(() => setSession(null)).finally(() => setChecking(false));
+    api<{ user: Session }>('/api/admin/auth/session')
+      .then((result) => { setConnectionError(null); setSession(result.user); })
+      .catch((error: ApiError) => {
+        if (error.status === 401 || error.status === 403) setSession(null);
+        else setConnectionError(error);
+      })
+      .finally(() => setChecking(false));
   }, []);
   const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); setSession(null); };
   if (checking) return <main className="admin-login"><Loading /></main>;
+  if (connectionError) return <main className="admin-login"><div className="admin-login-card"><span className="admin-data-source">{dataSourceLabel}</span><ErrorState error={connectionError} onRetry={() => window.location.reload()} /></div></main>;
   if (!session) return <Login onLoggedIn={setSession} />;
-  return <div className={`admin-console ${path === '/admin/schedule' ? 'admin-console--schedule' : ''}`}><Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main className="admin-console-main">{path !== '/admin/schedule' ? <Header path={path} navigate={navigate} session={session} /> : null}<AppContent path={path} navigate={navigate} /></main></div>;
+  return <div className={`admin-console ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''}`}><Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} session={session} /> : null}<AppContent path={path} navigate={navigate} /></main></div>;
 }

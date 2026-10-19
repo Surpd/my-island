@@ -1,0 +1,61 @@
+{
+  "status": "preview",
+  "week_start": "2026-09-21",
+  "selected_tab": { "title": "Local E2E fixture · week", "sheet_id": "fixture-only" },
+  "comparison_basis": { "kind": "canonical_template", "version_id": "local-e2e-template" },
+  "source_fingerprint": "local-e2e-week-source-v1",
+  "overlay_patch_count": 3,
+  "overlay_patches": [
+    {
+      "block_key": "2026-09-21|0|09:00|9",
+      "change_kind": "replaced",
+      "weekday": 0,
+      "lesson_date": "2026-09-21",
+      "slot": { "start": "09:00", "end": "09:45" },
+      "grade_scope": "9",
+      "resolution_state": "AUTO_RESOLVED",
+      "previous_assignment_count": 3,
+      "before": { "assignments": [{ "activity": "Математика A/B/C · шаблон" }] },
+      "after": { "assignments": [{ "activity": "Математика · A" }, { "activity": "Математика · B" }, { "activity": "Математика · C" }] },
+      "weekly_source_cells": ["B2", "C2", "D2"],
+      "assignments": [
+        { "activity": "Математика", "canonical_group_ids": ["{{group:Math 9-A}}"], "teacher_ids": ["{{teacher}}"], "audience_rule": { "kind": "groups", "grade": "9", "group_ids": ["{{group:Math 9-A}}"] }, "metadata": { "teachers": ["Тестовый преподаватель"], "room": "17" } },
+        { "activity": "Математика", "canonical_group_ids": ["{{group:Math 9-B}}"], "teacher_ids": ["{{teacher}}"], "audience_rule": { "kind": "groups", "grade": "9", "group_ids": ["{{group:Math 9-B}}"] }, "metadata": { "teachers": ["Тестовый преподаватель"], "room": "17" } },
+        { "activity": "Математика", "canonical_group_ids": ["{{group:Math 9-C}}"], "teacher_ids": ["{{teacher}}"], "audience_rule": { "kind": "groups", "grade": "9", "group_ids": ["{{group:Math 9-C}}"] }, "metadata": { "teachers": ["Тестовый преподаватель"], "room": "17" } }
+      ]
+    },
+    {
+      "block_key": "2026-09-21|1|09:55|7",
+      "change_kind": "replaced",
+      "weekday": 1,
+      "lesson_date": "2026-09-22",
+      "slot": { "start": "09:55", "end": "10:40" },
+      "grade_scope": "7",
+      "resolution_state": "AUTO_RESOLVED",
+      "previous_assignment_count": 2,
+      "before": { "assignments": [{ "activity": "Математика" }, { "activity": "Нет урока" }] },
+      "after": { "assignments": [{ "activity": "Математика · группа 7-1" }, { "activity": "Нет урока · остаток" }] },
+      "weekly_source_cells": ["F10", "G10"],
+      "assignments": [
+        { "activity": "Математика", "canonical_group_ids": ["{{group:Math 7-1}}"], "teacher_ids": ["{{teacher}}"], "audience_rule": { "kind": "groups", "grade": "7", "group_ids": ["{{group:Math 7-1}}"] }, "metadata": { "teachers": ["Тестовый преподаватель"], "room": "17" } },
+        { "activity": "Нет урока", "audience_rule": { "kind": "remaining", "grade": "7", "partition_dimension": "instructional:7:math", "partition_group_ids": ["{{group:Math 7-1}}"] }, "metadata": { "room": "" } }
+      ]
+    },
+    {
+      "block_key": "2026-09-21|2|12:45|10,11",
+      "change_kind": "replaced",
+      "weekday": 2,
+      "lesson_date": "2026-09-23",
+      "slot": { "start": "12:45", "end": "13:30" },
+      "grade_scope": "10,11",
+      "resolution_state": "AUTO_RESOLVED",
+      "previous_assignment_count": 1,
+      "before": { "assignments": [{ "activity": "Английский · группа" }] },
+      "after": { "assignments": [{ "activity": "Английский · 10–11" }] },
+      "weekly_source_cells": ["P21", "Q21"],
+      "assignments": [
+        { "activity": "Английский", "canonical_group_ids": ["{{group:English 10-11}}"], "teacher_ids": ["{{teacher}}"], "audience_rule": { "kind": "groups", "grade": "10", "group_ids": ["{{group:English 10-11}}"] }, "metadata": { "teachers": ["Тестовый преподаватель"], "room": "6" } }
+      ]
+    }
+  ]
+}

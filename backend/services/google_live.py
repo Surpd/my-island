@@ -203,6 +203,15 @@ class GoogleLiveClient:
     def userinfo(self) -> dict[str, Any]:
         return self.get("https://openidconnect.googleapis.com/", "v1/userinfo")
 
+    def batch_update_spreadsheet(self, spreadsheet_id: str, requests: list[dict[str, Any]]) -> dict[str, Any]:
+        # Export target validation belongs to the publishing service. Credentials
+        # are never returned to the browser or embedded in generated requests.
+        return _request_json(Request(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{quote(spreadsheet_id, safe='')}:batchUpdate",
+            data=json.dumps({"requests": requests}).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self._access_token()}", "Content-Type": "application/json"},
+            method="POST"))
+
     def spreadsheet(self, spreadsheet_id: str) -> dict[str, Any]:
         return self.get(
             "https://sheets.googleapis.com/",

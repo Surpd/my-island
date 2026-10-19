@@ -29,6 +29,8 @@ services:
         sync: false
       - key: GOOGLE_CLASSROOM_COURSE_ID
         value: 800979670564
+      - key: GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID
+        value: 11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ
       - key: GOOGLE_OAUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET

@@ -70,6 +70,146 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         )
         self.assertNotEqual(response.status_code, 405)
 
+    def test_directory_editor_crud_uses_stable_ids_and_audits(self):
+        group = self.database.create_group("math-editor", "subject_group", subject="Математика", actor_user_id=self.user_id)
+        renamed = self.database.update_admin_group(group["id"], {"name": "math-editor-renamed", "display_name": "Математика A"}, self.user_id)
+        self.assertEqual(renamed["id"], group["id"])
+        identity = self.database.create_identity("teacher", "Учитель Тест", actor_user_id=self.user_id)
+        updated = self.database.update_admin_identity(identity["id"], {"display_name": "Учитель Тест 2"}, self.user_id)
+        self.assertEqual(updated["id"], identity["id"])
+        with self.database.connection() as connection:
+            audit = self.database.execute(connection, "SELECT action FROM audit_log ORDER BY id").fetchall()
+        self.assertEqual([row["action"] for row in audit], ["group.created", "group.updated", "identity.created", "identity.updated"])
+        with self.assertRaises(ValueError):
+            self.database.create_identity("teacher", "Учитель Тест 2", actor_user_id=self.user_id)
+
+    def test_membership_transfer_preserves_imported_rows_and_hides_excluded_members(self):
+        source = self.database.create_group("9-А", "class", base_class_name="9-А", actor_user_id=self.user_id)
+        target = self.database.create_group("math-A", "subject_group", subject="Математика", base_class_name="9", actor_user_id=self.user_id)
+        student = self.database.create_identity("student", "Тестовый ученик", "9-А", actor_user_id=self.user_id)
+        imported = self.database.create_membership(source["id"], student["id"], "student", "official_import", "source:row:1")
+        self.database.update_student_memberships(student["id"], source["id"], target["id"], self.user_id, "Перевод")
+        with self.database.connection() as connection:
+            preserved = self.database.execute(connection, "SELECT active FROM memberships WHERE id = ?", (imported["id"],)).fetchone()
+            excluded = self.database.execute(connection, "SELECT action FROM membership_overrides WHERE identity_id = ? AND group_id = ? AND active IS TRUE", (student["id"], source["id"])).fetchone()
+            included = self.database.execute(connection, "SELECT action FROM membership_overrides WHERE identity_id = ? AND group_id = ? AND active IS TRUE", (student["id"], target["id"])).fetchone()
+        self.assertTrue(preserved["active"])
+        self.assertEqual(excluded["action"], "exclude")
+        self.assertEqual(included["action"], "include")
+        groups = {item["id"]: item for item in self.database.list_groups_admin()}
+        self.assertEqual(groups[source["id"]]["student_count"], 0)
+        self.assertEqual(groups[target["id"]]["student_count"], 1)
+
+    def test_grade_teacher_assignment_only_uses_existing_class_groups(self):
+        self.database.create_group("9-А", "class", base_class_name="9-А", actor_user_id=self.user_id)
+        self.database.create_group("9-Б", "class", base_class_name="9-Б", actor_user_id=self.user_id)
+        teacher = self.database.create_identity("teacher", "Тестовый преподаватель", actor_user_id=self.user_id)
+        assignments = self.database.set_teacher_grade_assignments(teacher["id"], "9", "Математика", True, self.user_id)
+        self.assertEqual(len(assignments), 2)
+        self.assertEqual({item["base_class_name"] for item in assignments}, {"9"})
+        with self.assertRaises(ValueError):
+            self.database.set_teacher_grade_assignments(teacher["id"], "8", "Математика", True, self.user_id)
+
+    def test_class_change_updates_canonical_membership_and_keeps_identity_id(self):
+        source = self.database.create_group("9-Г", "class", base_class_name="9-Г", actor_user_id=self.user_id)
+        target = self.database.create_group("9-Ан", "class", base_class_name="9-Б", actor_user_id=self.user_id)
+        student = self.database.create_identity("student", "Ученик класса", "9-Г", self.user_id)
+        result = self.database.update_admin_identity(student["id"], {"class_name": "9-Б"}, self.user_id)
+        self.assertEqual(result["id"], student["id"])
+        self.assertEqual(result["class_name"], "9-Б")
+        person = self.database.get_people_library_person(student["id"])
+        self.assertEqual([item["id"] for item in person["base_classes"]], [target["id"]])
+        with self.database.connection() as connection:
+            imported_source_membership = self.database.execute(connection, "SELECT active FROM memberships WHERE identity_id = ? AND group_id = ? AND source = 'admin_override'", (student["id"], source["id"])).fetchone()
+            audit = self.database.execute(connection, "SELECT count(*) AS value FROM audit_log WHERE action = 'identity.updated' AND entity_id = ?", (student["id"],)).fetchone()
+        self.assertFalse(imported_source_membership["active"])
+        self.assertEqual(audit["value"], 1)
+
+    def test_confirmed_class_alias_resolves_to_existing_canonical_group(self):
+        canonical = self.database.create_group("9-Ан", "class", base_class_name="9-Ан", actor_user_id=self.user_id)
+        student = self.database.create_identity("student", "Alias ученик", "9-А", self.user_id)
+        self.assertEqual(student["class_name"], "9-Ан")
+        person = self.database.get_people_library_person(student["id"])
+        self.assertEqual([item["id"] for item in person["base_classes"]], [canonical["id"]])
+        with self.assertRaises(ValueError):
+            self.database.create_group("9-А", "class", base_class_name="9-А", actor_user_id=self.user_id)
+
+    def test_teacher_subjects_group_notes_and_defaults_are_persisted(self):
+        teacher = self.database.create_identity("teacher", "Учитель с предметами", actor_user_id=self.user_id, subjects=["Математика", "Физика"], comment="Сотрудник")
+        group = self.database.create_group("math-default", "subject_group", subject="Математика", comment="Группа", default_teacher_identity_id=teacher["id"], actor_user_id=self.user_id)
+        self.assertEqual(self.database.list_teacher_subjects(teacher["id"]), ["Математика", "Физика"])
+        self.assertEqual(self.database.get_people_library_person(teacher["id"])["comment"], "Сотрудник")
+        detail = self.database.get_group_admin(group["id"])
+        self.assertEqual(detail["comment"], "Группа")
+        self.assertEqual(detail["default_teacher_identity_id"], teacher["id"])
+        self.assertEqual(detail["default_teacher_name"], "Учитель с предметами")
+        self.assertEqual(detail["schedule_usage_count"], 0)
+        # Removing a subject from the profile list must not erase its default
+        # assignment, and case/whitespace variants must not create duplicates.
+        self.database.update_admin_identity(teacher["id"], {"subjects": ["  физика  ", "ФИЗИКА", "Русский   язык"]}, self.user_id)
+        self.assertEqual(self.database.list_teacher_subjects(teacher["id"]), ["Математика", "Русский язык", "физика"])
+        with self.database.connection() as connection:
+            subject_rows = self.database.execute(connection, "SELECT subject FROM teacher_subjects WHERE teacher_identity_id = ? AND active IS TRUE", (teacher["id"],)).fetchall()
+        self.assertEqual(len([row for row in subject_rows if " ".join(row["subject"].split()).casefold() == "физика"]), 1)
+        with self.database.connection() as connection:
+            preserved_assignment = self.database.execute(connection, "SELECT active FROM teacher_assignments WHERE teacher_identity_id = ? AND group_id = ? AND subject = 'Математика'", (teacher["id"], group["id"])).fetchone()
+        self.assertTrue(preserved_assignment["active"])
+        provenance_group = self.database.create_group("math-provenance", "subject_group", subject="Математика", actor_user_id=self.user_id)
+        imported_assignment = self.database.set_teacher_assignment(teacher["id"], provenance_group["id"], "Математика", True, self.user_id)
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE teacher_assignments SET source = 'official_import', source_ref = 'unit-test:teacher-directory' WHERE id = ?", (imported_assignment["id"],))
+        self.database.deactivate_teacher_assignment(imported_assignment["id"], teacher["id"], self.user_id)
+        with self.database.connection() as connection:
+            removed_assignment = self.database.execute(connection, "SELECT active, source, source_ref FROM teacher_assignments WHERE id = ?", (imported_assignment["id"],)).fetchone()
+        self.assertFalse(removed_assignment["active"])
+        self.assertEqual((removed_assignment["source"], removed_assignment["source_ref"]), ("official_import", "unit-test:teacher-directory"))
+        self.database.update_admin_group(group["id"], {"subject": "Физика", "default_teacher_identity_id": teacher["id"]}, self.user_id)
+        self.assertEqual(self.database.get_group_admin(group["id"])["default_teacher_identity_id"], teacher["id"])
+        with self.database.connection() as connection:
+            old_default = self.database.execute(connection, "SELECT active FROM teacher_assignments WHERE group_id = ? AND subject = 'Математика' AND source = 'admin_override'", (group["id"],)).fetchone()
+        self.assertFalse(old_default["active"])
+        self.database.update_admin_group(group["id"], {"subject": "", "default_teacher_identity_id": None}, self.user_id)
+        self.assertIsNone(self.database.get_group_admin(group["id"])["default_teacher_identity_id"])
+
+    def test_editor_api_writes_through_admin_session(self):
+        from fastapi import FastAPI
+
+        code, _ = self.database.create_admin_login_challenge(self.user_id)
+        token, _ = self.database.consume_admin_login_challenge(code)
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        headers = {"X-Dev-Auth": f"browser:{token}"}
+        class_a = client.post("/api/admin/groups", headers=headers, json={"name": "9-А", "group_type": "class", "base_class_name": "9-А"})
+        class_b = client.post("/api/admin/groups", headers=headers, json={"name": "9-Б", "group_type": "class", "base_class_name": "9-Б"})
+        self.assertEqual(class_a.status_code, 200)
+        self.assertEqual(class_b.status_code, 200)
+        student = client.post("/api/admin/identities", headers=headers, json={"display_name": "API ученик", "class_name": "9-А", "kind": "student"})
+        self.assertEqual(student.status_code, 200, student.text)
+        changed = client.patch(f"/api/admin/people/{student.json()['id']}", headers=headers, json={"class_name": "9-Б"})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()["class_name"], "9-Б")
+        teacher = client.post("/api/admin/identities", headers=headers, json={"display_name": "API преподаватель", "kind": "teacher", "subjects": ["Математика"], "comment": "Куратор"})
+        self.assertEqual(teacher.status_code, 200, teacher.text)
+        group = client.post("/api/admin/groups", headers=headers, json={"name": "math-api", "group_type": "subject_group", "subject": "Математика", "comment": "API группа", "default_teacher_identity_id": teacher.json()["id"]})
+        self.assertEqual(group.status_code, 200, group.text)
+        self.assertEqual(group.json()["comment"], "API группа")
+        detail = client.get(f"/api/admin/groups/{group.json()['id']}", headers=headers)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["default_teacher_identity_id"], teacher.json()["id"])
+        assignment = client.post("/api/admin/teacher-assignments", headers=headers, json={"teacher_identity_id": str(teacher.json()["id"]), "group_id": str(group.json()["id"]), "subject": "Математика"})
+        self.assertEqual(assignment.status_code, 200, assignment.text)
+        other_group = client.post("/api/admin/groups", headers=headers, json={"name": "physics-api", "group_type": "subject_group", "subject": "Физика"})
+        self.assertEqual(other_group.status_code, 200, other_group.text)
+        moved = client.post("/api/admin/teacher-assignments", headers=headers, json={"teacher_identity_id": str(teacher.json()["id"]), "assignment_id": str(assignment.json()["id"]), "group_id": str(other_group.json()["id"]), "subject": "Физика", "active": True})
+        self.assertEqual(moved.status_code, 200, moved.text)
+        self.assertNotEqual(moved.json()["id"], assignment.json()["id"])
+        removed = client.post("/api/admin/teacher-assignments", headers=headers, json={"teacher_identity_id": str(teacher.json()["id"]), "assignment_id": str(moved.json()["id"]), "subject": "Физика", "active": False})
+        self.assertEqual(removed.status_code, 200, removed.text)
+        self.assertFalse(removed.json()["active"])
+        duplicate = client.post("/api/admin/groups", headers=headers, json={"name": "math-api", "display_name": "Different label", "group_type": "subject_group", "subject": "Математика"})
+        self.assertEqual(duplicate.status_code, 400)
+
     def test_google_reconnect_requires_admin_and_uses_one_time_callback(self):
         from fastapi import FastAPI
 

@@ -111,6 +111,17 @@ class NinthGradeResolverTests(unittest.TestCase):
         self.assertIsNone(result.default_assignment)
         self.assertEqual(set(result.evidence["remaining_student_ids"]), {"a1", "a2", "a3", "a4", "d1", "d3", "d5"})
 
+    def test_repeated_source_cells_for_same_canonical_group_are_one_assignment(self):
+        resolver = NinthGradeResolver(self.context())
+        math = resolver.interpret(self.row([cell("L3", 12, "Math A"), cell("M3", 13, "Math A")]))
+        self.assertEqual(len(math.primary_assignments), 1)
+        self.assertEqual(math.primary_assignments[0].group_ids, ("math-A",))
+        self.assertEqual(math.primary_assignments[0].source_cells, ("L3", "M3"))
+        electives = resolver.interpret(self.row([cell("L4", 12, "Физика ОГЭ"), cell("M4", 13, "Физика ОГЭ")]))
+        self.assertEqual(len(electives.secondary_assignments), 1)
+        self.assertEqual(electives.secondary_assignments[0].group_ids, ("oge-физика",))
+        self.assertEqual(electives.secondary_assignments[0].student_ids, frozenset({"d2", "d5"}))
+
     def test_math_c_multiple_oge_and_pure_electives(self):
         resolver = NinthGradeResolver(self.context())
         mixed = resolver.interpret(self.row([cell("L3", 12, "Math C"), cell("M3", 13, "Физика OGE"), cell("N3", 14, "Химия ОГЭ"), cell("O3", 15, "Перерыв")]))

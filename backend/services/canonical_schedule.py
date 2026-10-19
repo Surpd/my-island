@@ -366,17 +366,23 @@ def read_canonical_template(database: Database, version_id: str | None = None) -
             "SELECT * FROM canonical_schedule_blocks WHERE version_id=? ORDER BY weekday,start_time,id",
             (version["version_id"],),
         ).fetchall()
+        assignments_by_block: dict[str, list[Any]] = {}
+        if blocks:
+            placeholders = ",".join("?" for _ in blocks)
+            assignment_rows = database.execute(
+                connection,
+                f"SELECT * FROM canonical_schedule_assignments WHERE block_id IN ({placeholders}) ORDER BY block_id,ordinal",
+                tuple(row["id"] for row in blocks),
+            ).fetchall()
+            for assignment_row in assignment_rows:
+                assignments_by_block.setdefault(str(assignment_row["block_id"]), []).append(assignment_row)
         result_blocks: dict[str, Any] = {}
         for row in blocks:
             block = dict(row)
             block["source_provenance"] = _decode(database, block.get("source_provenance"), {})
             block["evidence"] = _decode(database, block.get("evidence"), {})
             block["unresolved"] = _decode(database, block.get("unresolved"), [])
-            assignments = database.execute(
-                connection,
-                "SELECT * FROM canonical_schedule_assignments WHERE block_id=? ORDER BY ordinal",
-                (row["id"],),
-            ).fetchall()
+            assignments = assignments_by_block.get(str(row["id"]), [])
             normalized = []
             for assignment_row in assignments:
                 assignment = dict(assignment_row)

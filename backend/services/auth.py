@@ -2,15 +2,34 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import time
 from urllib.parse import parse_qsl
+from urllib.parse import urlsplit
 
 from backend.config import Settings
 
 
 class AuthError(ValueError):
     pass
+
+
+def is_loopback_dev_auth_request(host: str | None, client_host: str | None, *, local_test_mode: bool = False) -> bool:
+    """Dev role headers are valid only on a direct localhost request.
+
+    Do not trust forwarded-for headers: a reverse proxy can accept attacker
+    traffic while supplying a loopback value there.
+    """
+    if not local_test_mode:
+        return False
+    hostname = (urlsplit(f"//{host}").hostname or "").casefold()
+    if hostname not in {"localhost", "127.0.0.1", "::1"}:
+        return False
+    try:
+        return ipaddress.ip_address(client_host or "").is_loopback
+    except ValueError:
+        return False
 
 
 def verify_telegram_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86400) -> dict:

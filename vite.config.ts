@@ -14,6 +14,11 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === 'seatbelt';
 
 const localBindingConfig = {
   main: 'vinext/server/fetch-handler',
+  // Wrangler otherwise imports `.env` as Miniflare secret bindings. The
+  // local-test profile points it at an intentionally absent, isolated file.
+  envFiles: process.env.MY_ISLAND_LOCAL_TEST_MODE === 'true'
+    ? ['.local-test/frontend-env/empty.env']
+    : undefined,
   compatibility_flags: ['nodejs_compat'],
   d1_databases: d1
     ? [
@@ -45,10 +50,20 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
-    css: { postcss: { plugins: [tailwindcss()] } },
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
+    // The explicit local-test profile must not inherit any project `.env`
+    // values (including server-side integration secrets) into Miniflare.
+    envDir: process.env.MY_ISLAND_LOCAL_TEST_MODE === 'true'
+      ? '.local-test/frontend-env'
       : undefined,
+    css: { postcss: { plugins: [tailwindcss()] } },
+    server: {
+      watch: {
+        ...(isCodexSeatbeltSandbox ? { useFsEvents: false, usePolling: true } : {}),
+        // Tests live beneath the project but must never reload the normal
+        // school browser when reports, copied configs or traces are written.
+        ignored: ['**/.local-test/**', '**/test-results/**', '**/.sites-*/**', '**/.release-worktree/**'],
+      },
+    },
     plugins: [
       vinext(),
       sites(),

@@ -181,6 +181,26 @@ class ScheduleDraftTests(unittest.TestCase):
         item = changed["payload"]["changes"][0]
         self.assertTrue(item["review_required"])
         self.assertEqual(item["lesson"]["audience"]["kind"], "remaining")
+        self.assertEqual(item["lesson"]["activity"], "Русский")
+        self.assertEqual(item["conflicting_proposal"]["activity"], "Литература")
+
+    def test_reimport_replaces_same_block_assignment_instead_of_adding_a_copy(self):
+        proposed = preview_changes({"overlay_patches": [{
+            "block_key": self.block_key, "change_kind": "replaced", "weekday": 0,
+            "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+            "weekly_source_cells": ["B3"], "assignments": [
+                {"activity": "Русский", "canonical_group_ids": [str(self.base["id"])], "teacher_ids": []},
+                {"activity": "Литература", "canonical_group_ids": [str(self.english["id"])], "teacher_ids": []},
+            ],
+        }]})
+        first = merge_import_changes(self.database, "2026-09-21", expected_revision=0,
+                                     proposed_changes=proposed, source_context={"fingerprint": "same"})
+        second = merge_import_changes(self.database, "2026-09-21", expected_revision=first["revision"],
+                                      proposed_changes=proposed, source_context={"fingerprint": "same"})
+        changes = second["payload"]["changes"]
+        self.assertEqual(len(changes), 2)
+        self.assertEqual({(item["block_key"], item["assignment_index"]) for item in changes},
+                         {(self.block_key, 0), (self.block_key, 1)})
 
     def test_membership_change_immediately_affects_audience_preview(self):
         rule = {"kind": "remaining", "grade": "9", "partition_group_ids": [str(self.english["id"])]}
@@ -223,6 +243,53 @@ class ScheduleDraftTests(unittest.TestCase):
                            payload={"changes": changes}, base_version_id="base-v1")
         with self.assertRaisesRegex(ValueError, "Resolve all source changes"):
             publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
+
+    def test_week_publish_skips_explicitly_deferred_unresolved_and_keeps_it_for_later(self):
+        safe = self.change()
+        unresolved = preview_changes({"overlay_patches": [{
+            "block_key": "unresolved-new-block", "change_kind": "weekly_only",
+            "weekday": 1, "slot": {"start": "09:55", "end": "10:40"}, "grade_scope": "9",
+            "weekly_source_cells": ["C4"], "weekly_raw_text": {"C4": "Английский, группа не определена"},
+            "source_issue": "Группа не определена", "assignments": [],
+        }]})[0]
+        unresolved["deferred"] = True
+        saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0,
+                           payload={"changes": [safe, unresolved]}, base_version_id="base-v1")
+
+        result = publish_draft(self.database, "week", "2026-09-21", expected_revision=saved["revision"])
+
+        self.assertEqual(result["changes"], 1)
+        self.assertEqual(result["deferred_count"], 1)
+        retained = get_draft(self.database, "week", "2026-09-21")
+        self.assertTrue(retained["has_changes"])
+        self.assertEqual(len(retained["payload"]["changes"]), 1)
+        self.assertTrue(retained["payload"]["changes"][0]["deferred"])
+        self.assertEqual(retained["payload"]["changes"][0]["lesson"]["audience"]["kind"], "unresolved")
+        with self.assertRaisesRegex(ValueError, "no publishable changes"):
+            publish_draft(self.database, "week", "2026-09-21", expected_revision=retained["revision"])
+        with self.database.connection() as connection:
+            block_keys = {row["block_key"] for row in connection.execute(
+                "SELECT block_key FROM canonical_effective_blocks WHERE effective_week_id=?",
+                (result["published_id"],),
+            ).fetchall()}
+        self.assertIn(self.block_key, block_keys)
+        self.assertNotIn("unresolved-new-block", block_keys)
+
+    def test_reimport_does_not_erase_a_deferred_weekly_proposal(self):
+        unresolved = preview_changes({"overlay_patches": [{
+            "block_key": "unresolved-new-block", "change_kind": "weekly_only",
+            "weekday": 1, "slot": {"start": "09:55", "end": "10:40"}, "grade_scope": "9",
+            "weekly_source_cells": ["C4"], "weekly_raw_text": {"C4": "Английский, группа не определена"},
+            "source_issue": "Группа не определена", "assignments": [],
+        }]})[0]
+        unresolved["deferred"] = True
+        saved = save_draft(self.database, "week", "2026-09-21", expected_revision=0,
+                           payload={"changes": [unresolved]}, base_version_id="base-v1")
+        same_source = merge_import_changes(self.database, "2026-09-21", expected_revision=saved["revision"],
+            proposed_changes=[unresolved], source_context={"fingerprint": "same-source"})
+        retained = same_source["payload"]["changes"][0]
+        self.assertTrue(retained["deferred"])
+        self.assertEqual(retained["lesson"]["audience"]["kind"], "unresolved")
 
     def test_unresolved_draft_lesson_survives_schedule_preview_serialization(self):
         assignment = _assignment_from_lesson({

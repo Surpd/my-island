@@ -17,6 +17,7 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             base = database.create_group("9-А", "class")
             instructional = database.create_group("grade9-math-A", "subject_group")
             exam = database.create_group("9-А · Биология · ОГЭ", "subject_group")
+            editor_group = database.create_group("grade9-chemistry", "instructional", subject="Химия")
             with database.connection() as connection:
                 connection.execute(
                     "UPDATE groups SET display_name = '9-А · базовый класс', base_class_name = '9-А' WHERE id = ?",
@@ -34,6 +35,7 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             database.create_membership(instructional["id"], student["id"], "student", "official_import", "groups!A1")
             database.create_membership(instructional["id"], student["id"], "student", "admin_override", "")
             database.create_membership(exam["id"], student["id"], "student", "official_import", "exam!A1")
+            database.create_membership(editor_group["id"], student["id"], "student", "admin_override", "admin_editor")
             with database.connection() as connection:
                 connection.execute(
                     """INSERT INTO student_selection_facts
@@ -50,14 +52,14 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             self.assertEqual([item["display_name"] for item in people], ["Тестова Алиса"])
             person = people[0]
             self.assertEqual(person["base_class"]["name"], "9-А")
-            self.assertEqual([item["name"] for item in person["instructional_memberships"]], ["9-А · Биология · ОГЭ", "grade9-math-A"])
+            self.assertEqual([item["name"] for item in person["instructional_memberships"]], ["grade9-chemistry", "9-А · Биология · ОГЭ", "grade9-math-A"])
             math_membership = next(
                 item for item in person["instructional_memberships"] if item["name"] == "grade9-math-A"
             )
             self.assertTrue(math_membership["is_manual"])
-            self.assertEqual(len(person["groups"]), 3)
+            self.assertEqual(len(person["groups"]), 4)
             self.assertEqual([item["subject"] for item in person["exam_profile_memberships"]], ["Биология"])
-            self.assertEqual([item["name"] for item in person["instructional_memberships"]], ["9-А · Биология · ОГЭ", "grade9-math-A"])
+            self.assertEqual([item["name"] for item in person["instructional_memberships"]], ["grade9-chemistry", "9-А · Биология · ОГЭ", "grade9-math-A"])
             self.assertEqual(len(database.list_people_library(kind="student", class_name="9-А")), 1)
             self.assertEqual(len(database.list_people_library(kind="student", group_id=instructional["id"])), 1)
             self.assertNotIn(exam["id"], {item["id"] for item in database.list_groups_admin()})
@@ -65,6 +67,11 @@ class SchoolDirectoryAdminProjectionTests(unittest.TestCase):
             group = next(item for item in database.list_groups_admin() if item["id"] == instructional["id"])
             self.assertEqual([item["display_name"] for item in group["students"]], ["Тестова Алиса"])
             self.assertEqual(group["relationship_kind"], "instructional")
+            new_group = next(item for item in database.list_groups_admin() if item["id"] == editor_group["id"])
+            self.assertEqual(new_group["relationship_kind"], "instructional")
+            self.assertEqual(new_group["students"][0]["display_name"], "Тестова Алиса")
+            summary = next(item for item in database.list_people_library_summary(kind="student") if item["id"] == student["id"])
+            self.assertEqual([item["name"] for item in summary["instructional_memberships"] if item["group_type"] == "instructional"], ["grade9-chemistry"])
 
 
 if __name__ == "__main__":
