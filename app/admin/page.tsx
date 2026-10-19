@@ -491,7 +491,7 @@ function System({ navigate }: { navigate: (href: string) => void }) {
     setReconnectBusy(true);
     setReconnectError('');
     try {
-      const result = await api<{ authorization_url: string }>('/api/admin/google/reconnect', { method: 'POST' });
+      const result = await api<{ authorization_url: string }>('/api/admin/google/reconnect?schedule_export=true', { method: 'POST' });
       window.location.assign(result.authorization_url);
     } catch (error) {
       setReconnectError(error instanceof Error ? error.message : 'Не удалось начать подключение Google.');

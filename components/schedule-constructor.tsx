@@ -1940,8 +1940,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       {directoryAccess === 'checking' ? <section className="constructor-school-gate">Проверяем подключение к справочнику…</section> : workspace === 'school' && !draft ? (
         <section className="constructor-start">
           <section className="constructor-source-card"><h3>Школьный источник расписания</h3><p>Сбор создаёт отдельный школьный черновик. Изменения источника попадут в черновик после проверки.</p></section>
-          {readOnlySchoolWorkspace ? <p>Школьная база доступна только для чтения. Черновики сохраняются локально и не изменяют действующее расписание.</p> : null}<div className="constructor-start-actions"><button onClick={async () => { try { const value = await api<Draft>('/api/admin/schedule/experiments/school/import', { method: 'POST' }); await refreshDrafts(); await open(value.id); setStatus(value.payload.import_review?.status === 'source_led_applied' ? `Открыт шаблон Google Sheets: ${value.payload.lessons.length} карточек, ${value.transfer_result?.needs_clarification ?? 0} требуют уточнения.` : `Открыта canonical-копия: ${value.payload.lessons.length} карточек. Сверьте её с актуальным шаблоном.`); } catch (error) { setStatus(String((error as Error).message || error)); } }}><Copy /> Открыть школьный шаблон<small>Создать или открыть локальную копию для проверки.</small></button></div>
-          <div className="constructor-draft-filters"><strong>Школьные черновики · {schoolDrafts.length}</strong></div>
+          {readOnlySchoolWorkspace ? <p>Школьная база доступна только для чтения. Черновики сохраняются локально и не изменяют действующее расписание.</p> : null}<div className="constructor-start-actions"><button onClick={async () => { try { const value = await api<Draft>('/api/admin/schedule/experiments/school/import', { method: 'POST' }); await refreshDrafts(); await open(value.id); setStatus(value.payload.import_review?.status === 'source_led_applied' ? `Открыт шаблон Google Sheets: ${value.payload.lessons.length} карточек, ${value.transfer_result?.needs_clarification ?? 0} требуют уточнения.` : `Открыта canonical-копия: ${value.payload.lessons.length} карточек. Сверьте её с актуальным шаблоном.`); } catch (error) { setStatus(String((error as Error).message || error)); } }}><Copy /> Открыть школьный шаблон<small>Создать или открыть отдельную копию для редактирования.</small></button></div>
+          <div className="constructor-start-actions"><button onClick={() => void create('empty')}><Plus /> Пустой школьный черновик<small>Отдельное расписание с сохранением в школьной базе.</small></button></div><div className="constructor-draft-filters"><strong>Школьные черновики · {schoolDrafts.length}</strong></div>
           {schoolDrafts.map((item) => <article className="constructor-draft" key={item.id}><button className="constructor-draft-open" onClick={() => void open(item.id)}><strong>{item.name}</strong><span>{item.lesson_count} занятий · {item.event_count} событий · {item.group_count} групп</span><ChevronDown size={16} /></button><div className="constructor-draft-actions"><button onClick={() => void rename(item)}>Переименовать</button><button onClick={() => void duplicate(item)}>Дублировать</button><button onClick={() => void remove(item)}>Удалить</button></div></article>)}
           {!schoolDrafts.length ? <p>Школьных черновиков пока нет.</p> : null}
         </section>
@@ -1950,7 +1950,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           <h2>С чего начнём?</h2>
           <section className="constructor-source-card">
             <h3>Основной шаблон школы</h3>
-            <p>Демо использует локальные тестовые справочники. Копия тестового canonical откроется как новый экспериментальный черновик; демо-неделя не становится школьным шаблоном.</p>
+            <p>Создайте отдельный черновик. Изменения в нём не меняют действующее школьное расписание.</p>
           </section>
           <div className="constructor-start-actions">
             <button onClick={() => void create('empty')}>
@@ -1959,7 +1959,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </button>
             <button onClick={() => void create('canonical')}>
               <Copy /> На основе действующего расписания
-              <small>Снимок тестового canonical для безопасного редактирования.</small>
+              <small>Независимая копия действующего шаблона для редактирования.</small>
             </button>
           </div>
           <div className="constructor-draft-filters" role="group" aria-label="Разделы черновиков">
@@ -2882,3 +2882,4 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     </div>
   );
 }
+

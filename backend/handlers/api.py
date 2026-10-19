@@ -903,22 +903,43 @@ def create_router(database: Database) -> APIRouter:
     @router.get("/admin/schedule/experiments/capabilities")
     def admin_schedule_experiment_capabilities(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        school_enabled = os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e"
+        local_workspace = os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e"
+        school_enabled = local_workspace or (bool(database.database_url) and not get_settings().local_test_mode)
         return {"demo_available": get_settings().local_test_mode, "school_available": school_enabled}
 
-    def local_school_stores() -> tuple[Database, Database | None]:
-        if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1" or os.getenv("MY_ISLAND_TEST_PROFILE") == "e2e":
-            raise HTTPException(status_code=404, detail="School workspace is disabled")
-        try:
-            source = school_source()
-            # School data stays read-only; experimental drafts live in the
-            # explicitly local SQLite store in both normal and test modes.
-            return source, school_drafts()
-        except (RuntimeError, ValueError) as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+    def school_stores() -> tuple[Database, Database]:
+        if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e":
+            try:
+                source = school_source()
+                # The explicitly enabled local workspace retains its isolated SQLite drafts.
+                store = school_drafts()
+                return source, store
+            except (RuntimeError, ValueError) as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+        if database.database_url and not get_settings().local_test_mode:
+            # Production drafts and the canonical directory live in the same Postgres database.
+            return database, database
+        raise HTTPException(status_code=404, detail="School workspace is disabled")
+
+    def school_source_database() -> Database:
+        if local_school_workspace_enabled():
+            try:
+                return school_source()
+            except (RuntimeError, ValueError) as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+        if database.database_url and not get_settings().local_test_mode:
+            return database
+        raise HTTPException(status_code=404, detail="School workspace is disabled")
+
+    def local_school_workspace_enabled() -> bool:
+        return os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e"
 
     def require_real_school_admin(token: str | None, authenticated_principal: dict | None = None) -> None:
-        if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1" or os.getenv("MY_ISLAND_TEST_PROFILE") == "e2e":
+        if not local_school_workspace_enabled():
+            # Every production caller has already passed require_role(..., "admin") against
+            # this same database, whether authenticated through Telegram or browser session.
+            if database.database_url and not get_settings().local_test_mode and authenticated_principal:
+                return
             raise HTTPException(status_code=404, detail="School workspace is disabled")
         if not token:
             raise HTTPException(status_code=401, detail="Real school administrator login is required")
@@ -938,12 +959,10 @@ def create_router(database: Database) -> APIRouter:
         if not session or not school.user_has_role(session["user_id"], "admin"):
             raise HTTPException(status_code=401, detail="School administrator session is invalid or expired")
 
-    def activity_store(workspace: str, token: str | None) -> Database:
+    def activity_store(workspace: str, token: str | None, principal: dict | None = None) -> Database:
         if workspace == "school":
-            require_real_school_admin(token)
-            _, store = local_school_stores()
-            if store is None:
-                raise HTTPException(status_code=503, detail="Локальное хранилище кружков недоступно")
+            require_real_school_admin(token, principal)
+            _, store = school_stores()
             return store
         if workspace != "default":
             raise HTTPException(status_code=422, detail="Unknown schedule workspace")
@@ -953,8 +972,8 @@ def create_router(database: Database) -> APIRouter:
     def admin_activities(workspace: str = "default", include_archived: bool = False, init_data: str | None = None,
                          x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
                          x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        store = activity_store(workspace, x_school_admin_session)
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        store = activity_store(workspace, x_school_admin_session, principal)
         if not store.database_url:
             seed_activities(store)
         return {"items": list_activities(store, include_archived=include_archived)}
@@ -965,7 +984,7 @@ def create_router(database: Database) -> APIRouter:
                               x_school_admin_session: str | None = Header(default=None)):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return save_activity(activity_store(workspace, x_school_admin_session), payload, actor_user_id=actor["id"])
+            return save_activity(activity_store(workspace, x_school_admin_session, actor), payload, actor_user_id=actor["id"])
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -978,7 +997,7 @@ def create_router(database: Database) -> APIRouter:
             revision = payload.get("expected_revision")
             if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
                 raise ValueError("expected_revision must be a positive integer")
-            return save_activity(activity_store(workspace, x_school_admin_session), payload,
+            return save_activity(activity_store(workspace, x_school_admin_session, actor), payload,
                                  activity_id=activity_id, expected_revision=revision, actor_user_id=actor["id"])
         except ActivityConflict as error:
             raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
@@ -1010,7 +1029,7 @@ def create_router(database: Database) -> APIRouter:
                           x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
                           x_school_admin_session: str | None = Header(default=None)):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return new_week(activity_store("school", x_school_admin_session), experiment_id, payload, actor)
+        return new_week(activity_store("school", x_school_admin_session, actor), experiment_id, payload, actor)
 
     def saved_week_export(store: Database, source: Database, experiment_id: str, revision: int):
         try:
@@ -1034,135 +1053,56 @@ def create_router(database: Database) -> APIRouter:
     def admin_school_export(experiment_id: str, payload: ScheduleExportPayload, init_data: str | None = None,
                             x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
                             x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        source, store = local_school_stores()
-        return saved_week_export(store, source, experiment_id, payload.expected_revision)
-
-    def activity_store(workspace: str, token: str | None) -> Database:
-        if workspace == "school":
-            require_real_school_admin(token)
-            _, store = local_school_stores()
-            if store is None:
-                raise HTTPException(status_code=503, detail="Локальное хранилище кружков недоступно")
-            return store
-        if workspace != "default":
-            raise HTTPException(status_code=422, detail="Unknown schedule workspace")
-        return database
-
-    @router.get("/admin/schedule/activities")
-    def admin_activities(workspace: str = "default", include_archived: bool = False, init_data: str | None = None,
-                         x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-                         x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        store = activity_store(workspace, x_school_admin_session)
-        if not store.database_url:
-            seed_activities(store)
-        return {"items": list_activities(store, include_archived=include_archived)}
-
-    @router.post("/admin/schedule/activities")
-    def admin_activity_create(payload: dict, workspace: str = "default", init_data: str | None = None,
-                              x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-                              x_school_admin_session: str | None = Header(default=None)):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            return save_activity(activity_store(workspace, x_school_admin_session), payload, actor_user_id=actor["id"])
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-    @router.put("/admin/schedule/activities/{activity_id}")
-    def admin_activity_edit(activity_id: str, payload: dict, workspace: str = "default", init_data: str | None = None,
-                            x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-                            x_school_admin_session: str | None = Header(default=None)):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            revision = payload.get("expected_revision")
-            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
-                raise ValueError("expected_revision must be a positive integer")
-            return save_activity(activity_store(workspace, x_school_admin_session), payload,
-                                 activity_id=activity_id, expected_revision=revision, actor_user_id=actor["id"])
-        except ActivityConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except ActivityNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-    def new_week(store: Database, experiment_id: str, payload: ScheduleWeekPayload, actor: dict):
-        from backend.services.schedule_experiments import create_experiment_week
-        try:
-            return create_experiment_week(store, experiment_id, week_start=payload.week_start,
-                                          expected_revision=payload.expected_revision, actor_user_id=actor["id"])
-        except ExperimentConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except ExperimentNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-    @router.post("/admin/schedule/experiments/{experiment_id}/week")
-    def admin_schedule_week(experiment_id: str, payload: ScheduleWeekPayload, init_data: str | None = None,
-                            x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return new_week(database, experiment_id, payload, actor)
-
-    @router.post("/admin/schedule/experiments/school/{experiment_id}/week")
-    def admin_school_week(experiment_id: str, payload: ScheduleWeekPayload, init_data: str | None = None,
-                          x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-                          x_school_admin_session: str | None = Header(default=None)):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return new_week(activity_store("school", x_school_admin_session), experiment_id, payload, actor)
-
-    def saved_week_export(store: Database, source: Database, experiment_id: str, revision: int):
-        try:
-            return export_saved_week(store, experiment_id, expected_revision=revision, settings=get_settings(), directory_database=source)
-        except ExperimentConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except ExperimentNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except GoogleLiveError as error:
-            raise HTTPException(status_code=502, detail="Google Sheets временно недоступен. Повторный экспорт безопасен.") from error
-
-    @router.post("/admin/schedule/experiments/{experiment_id}/export")
-    def admin_schedule_export(experiment_id: str, payload: ScheduleExportPayload, init_data: str | None = None,
-                              x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return saved_week_export(database, database, experiment_id, payload.expected_revision)
-
-    @router.post("/admin/schedule/experiments/school/{experiment_id}/export")
-    def admin_school_export(experiment_id: str, payload: ScheduleExportPayload, init_data: str | None = None,
-                            x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
-                            x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        source, store = local_school_stores()
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        source, store = school_stores()
         return saved_week_export(store, source, experiment_id, payload.expected_revision)
 
     @router.get("/admin/schedule/experiments/school")
     def admin_school_experiments(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        _, store = local_school_stores()
-        if store is None:
-            return {"items": []}
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        _, store = school_stores()
         return {"items": list_experiments(store)}
 
     @router.get("/admin/schedule/experiments/school/directory")
     def admin_school_directory(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        source, _ = local_school_stores()
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        source = school_source_database()
         return school_directory(source)
+
+    @router.post("/admin/schedule/experiments/school")
+    def admin_school_create_experiment(payload: ScheduleExperimentCreatePayload, init_data: str | None = None,
+                                       x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+                                       x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        _, store = school_stores()
+        content = dict(payload.payload or {})
+        content["draft_kind"] = "school"
+        try:
+            return create_experiment(store, name=payload.name, source=payload.source,
+                                     payload=content, actor_user_id=actor["id"])
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/admin/schedule/experiments/school/import")
     def admin_school_import(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        source, store = local_school_stores()
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        source, store = school_stores()
         try:
-            return import_school_template(source, store)
+            if local_school_workspace_enabled():
+                return import_school_template(source, store)
+            version = canonical_version(source)
+            if not version:
+                raise ValueError("No approved canonical template was found")
+            for item in list_experiments(store):
+                if item["draft_kind"] == "school" and item.get("base_version_id") == str(version["version_id"]):
+                    return get_experiment(store, item["id"])
+            return create_experiment(store, name="Школа · canonical template", source="canonical",
+                                     payload={"draft_kind": "school"}, actor_user_id=principal["id"])
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -1186,7 +1126,7 @@ def create_router(database: Database) -> APIRouter:
         except PostgresOperationalError as error:
             raise HTTPException(status_code=503, detail="Школьная авторизация временно недоступна") from error
         try:
-            source = school_source()
+            source = school_source_database()
         except (RuntimeError, ValueError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
         try:
@@ -1211,11 +1151,9 @@ def create_router(database: Database) -> APIRouter:
 
     @router.get("/admin/schedule/experiments/school/{experiment_id}")
     def admin_school_get(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        _, store = local_school_stores()
-        if store is None:
-            raise HTTPException(status_code=404, detail="No local school draft exists in read-only mode")
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        _, store = school_stores()
         try:
             return get_experiment(store, experiment_id)
         except ExperimentNotFound as error:
@@ -1224,8 +1162,8 @@ def create_router(database: Database) -> APIRouter:
     @router.post("/admin/schedule/experiments/school/{experiment_id}/duplicate")
     def admin_school_duplicate(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        _, store = local_school_stores()
+        require_real_school_admin(x_school_admin_session, actor)
+        _, store = school_stores()
         try:
             return duplicate_experiment(store, experiment_id, actor_user_id=actor["id"])
         except ExperimentNotFound as error:
@@ -1235,10 +1173,8 @@ def create_router(database: Database) -> APIRouter:
     def admin_school_save(experiment_id: str, payload: ScheduleExperimentSavePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
         try:
             actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-            require_real_school_admin(x_school_admin_session)
-            source, store = local_school_stores()
-            if store is None:
-                raise HTTPException(status_code=404, detail="No local school draft exists in read-only mode")
+            require_real_school_admin(x_school_admin_session, actor)
+            source, store = school_stores()
             return save_experiment(store, experiment_id, expected_revision=payload.expected_revision,
                                    payload=payload.payload, name=payload.name, actor_user_id=actor["id"],
                                    audience_database=source)
@@ -1257,9 +1193,9 @@ def create_router(database: Database) -> APIRouter:
 
     @router.delete("/admin/schedule/experiments/school/{experiment_id}")
     def admin_school_delete(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session)
-        _, store = local_school_stores()
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        _, store = school_stores()
         try:
             delete_experiment(store, experiment_id)
             return {"deleted": experiment_id}
