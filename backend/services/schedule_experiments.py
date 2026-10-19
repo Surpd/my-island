@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 import hashlib
 import json
 import os
 from typing import Any, Mapping
 import re
-from uuid import uuid4
+from uuid import UUID, uuid4
+from threading import Lock
 
 from backend.database import Database
 from backend.services.canonical_schedule import canonical_version, read_canonical_template
@@ -20,12 +21,32 @@ DEFAULT_SLOTS = [
     {"start": "14:35", "end": "15:20"}, {"start": "15:30", "end": "16:15"},
 ]
 
+_school_template_open_lock = Lock()
+
 
 def _canonical_time(value: Any) -> str:
     """Postgres TIME and SQLite text must address the same bell slot."""
     text = str(value or "")
     match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::00)?", text)
     return f"{int(match.group(1)):02d}:{match.group(2)}" if match else text
+
+
+def _canonical_provenance(value: Any) -> Any:
+    """Normalize native SQL values only at the canonical-to-draft boundary.
+
+    Display times are already normalized above; the complete nested source
+    block also contains Postgres TIME, timestamps and UUID identifiers.
+    Unknown types remain errors instead of being silently stringified.
+    """
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _canonical_provenance(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_provenance(item) for item in value]
+    return value
 
 
 class ExperimentNotFound(Exception):
@@ -547,8 +568,8 @@ def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
         time_is_valid = bool(start and end and (start, end) in slot_indexes)
         unknown_group_ids = [group_id for group_id in group_ids if group_id not in known_group_ids]
         requires_clarification = not ordered_class_ids and not group_ids and not residual or weekday is None or not time_is_valid or bool(unknown_group_ids)
-        source_assignment = dict(assignment)
-        source_block = dict(block)
+        source_assignment = _canonical_provenance(assignment)
+        source_block = _canonical_provenance(block)
         lessons.append({
             "id": f"{block_key}:{assignment_index}",
             "day": int(weekday) if weekday is not None else -1,
@@ -654,6 +675,10 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     now = datetime.now(timezone.utc).isoformat()
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
+    provenance = clean_payload.get("school_source")
+    provenance = provenance if isinstance(provenance, Mapping) else {}
+    if provenance.get("role") == "primary_school_template" and not provenance.get("primary_draft_id"):
+        clean_payload["school_source"] = {**provenance, "primary_draft_id": experiment_id}
     clean_payload["lessons"] = validate_activity_lessons(clean_payload["lessons"], list_activities(database, include_archived=True))
     encoded = json.dumps(_clean_payload(clean_payload), ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
@@ -666,6 +691,50 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     if transfer_result is not None:
         result["transfer_result"] = transfer_result
     return result
+
+
+def open_school_canonical_template(database: Database, *, actor_user_id: Any = None) -> dict[str, Any]:
+    """Open the persisted primary copy without replacing edits or opening a week.
+
+    The production source is the approved canonical DB, not a local Google
+    capture. Serialize first creation across workers; later opens are reads.
+    """
+    with _school_template_open_lock, database.connection() as lock_connection:
+        if database.database_url:
+            database.execute(lock_connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                             ("my-island:primary-school-template",))
+        version = canonical_version(database)
+        if not version:
+            raise ValueError("No approved canonical template was found")
+        candidates = []
+        for summary in list_experiments(database):
+            if summary["draft_kind"] != "school":
+                continue
+            existing = get_experiment(database, summary["id"])
+            payload = existing["payload"]
+            if payload.get("week_start") or payload.get("source_template"):
+                continue
+            provenance = payload.get("school_source")
+            provenance = provenance if isinstance(provenance, Mapping) else {}
+            if (provenance.get("role") == "primary_school_template"
+                    and provenance.get("primary_draft_id") == existing["id"]):
+                existing["already_exists"] = True
+                return existing
+            if (existing.get("base_version_id") == str(version["version_id"])
+                    and existing["name"] == "Школа · canonical template"):
+                candidates.append(existing)
+        if candidates:
+            existing = min(candidates, key=lambda item: (str(item["created_at"]), item["id"]))
+            existing["already_exists"] = True
+            return existing
+        return create_experiment(database, name="Школа · canonical template", source="canonical",
+            payload={"draft_kind": "school", "school_source": {
+                "kind": "canonical_template", "role": "primary_school_template",
+                "canonical_version_id": str(version["version_id"]),
+                "canonical_fingerprint": str(version.get("source_fingerprint") or ""),
+            }, "import_review": {"status": "canonical_copy", "message":
+                "Копия подтверждённого canonical-расписания из школьной базы. Исходный Google-шаблон при открытии не перечитывается и может отличаться."}},
+            actor_user_id=actor_user_id)
 
 
 def duplicate_experiment(database: Database, experiment_id: str, *, name: str | None = None, actor_user_id: Any = None) -> dict[str, Any]:

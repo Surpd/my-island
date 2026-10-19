@@ -36,7 +36,7 @@ from backend.services.schedule_drafts import (
     merge_import_changes, preview_changes, publish_draft, save_draft,
 )
 from backend.services.schedule_experiments import (
-    ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
+    ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment, open_school_canonical_template,
     duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment,
 )
 from backend.services.school_experiment_workspace import (
@@ -1095,14 +1095,7 @@ def create_router(database: Database) -> APIRouter:
         try:
             if local_school_workspace_enabled():
                 return import_school_template(source, store)
-            version = canonical_version(source)
-            if not version:
-                raise ValueError("No approved canonical template was found")
-            for item in list_experiments(store):
-                if item["draft_kind"] == "school" and item.get("base_version_id") == str(version["version_id"]):
-                    return get_experiment(store, item["id"])
-            return create_experiment(store, name="Школа · canonical template", source="canonical",
-                                     payload={"draft_kind": "school"}, actor_user_id=principal["id"])
+            return open_school_canonical_template(store, actor_user_id=principal["id"])
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
