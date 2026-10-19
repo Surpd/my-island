@@ -217,7 +217,7 @@ const isLocalBuild =
   runtimeEnv.DEV === true || runtimeEnv.MODE === 'development';
 const API_BASE = String(
   runtimeEnv.VITE_API_BASE_URL ||
-    (isLocalBuild ? 'http://localhost:8000' : ''),
+    (isLocalBuild ? 'http://127.0.0.1:8000' : ''),
 ).replace(/\/$/, '');
 let activeTelegramInitData = '';
 let activeStudentPreviewId = '';

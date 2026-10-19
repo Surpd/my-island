@@ -5,18 +5,20 @@ from typing import Any
 from backend.database import Database
 
 
-def create_identity(database: Database, display_name: str, class_name: str | None = None, kind: str = "student") -> Any:
+def create_identity(database: Database, display_name: str, class_name: str | None = None, kind: str = "student", actor_user_id: Any | None = None, subjects: list[str] | None = None, comment: str | None = None, status: str = "active") -> Any:
     if kind not in {"student", "teacher"}:
         raise ValueError("Identity kind must be student or teacher")
     if not display_name.strip():
         raise ValueError("Identity display name is required")
-    return database.create_identity(kind, display_name.strip(), class_name.strip() if class_name else None)
+    if status not in {"active", "inactive"} or (kind == "student" and status != "active"):
+        raise ValueError("Identity status is invalid")
+    return database.create_identity(kind, display_name.strip(), class_name.strip() if class_name else None, actor_user_id, subjects, comment, status)
 
 
-def create_group(database: Database, name: str, group_type: str) -> Any:
+def create_group(database: Database, name: str, group_type: str, *, display_name: str | None = None, subject: str | None = None, base_class_name: str | None = None, subject_subgroup: str | None = None, exam_track: str | None = None, default_teacher_identity_id: Any | None = None, comment: str | None = None, actor_user_id: Any | None = None) -> Any:
     if not name.strip() or not group_type.strip():
         raise ValueError("Group name and type are required")
-    return database.create_group(name.strip(), group_type.strip())
+    return database.create_group(name.strip(), group_type.strip(), display_name=display_name.strip() if display_name else None, subject=subject.strip() if subject else None, base_class_name=base_class_name.strip() if base_class_name else None, subject_subgroup=subject_subgroup.strip() if subject_subgroup else None, exam_track=exam_track.strip() if exam_track else None, default_teacher_identity_id=default_teacher_identity_id, comment=comment, actor_user_id=actor_user_id)
 
 
 def add_membership(

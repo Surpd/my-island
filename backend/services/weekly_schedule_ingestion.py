@@ -11,7 +11,7 @@ from backend.services.schedule_parser_v2 import NO_LESSON, classify_simple_activ
 from backend.services.teacher_directory import TEACHER_ALIASES, resolve_teacher_id
 
 
-CLASS_RE = re.compile(r"^\s*\d{1,2}(?:-[А-ЯЁA-Z])?(?:-\d+)?\s*$", re.IGNORECASE)
+CLASS_RE = re.compile(r"^\s*\d{1,2}(?:-[А-ЯЁA-Z]{1,3})?(?:-\d+)?\s*$", re.IGNORECASE)
 TIME_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})\s*$")
 DAYS = {"пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2, "чт": 3, "четверг": 3, "пт": 4, "пятница": 4}
 MONTHS = {

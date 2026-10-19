@@ -35,6 +35,15 @@ def _schedule_row_is_sdep(row: dict[str, Any], grade: str) -> bool:
         return False
 
 
+def _teacher_assignment_context_ref(exam_track: Any = None, classroom_course_id: Any = None) -> str:
+    track = str(exam_track).strip() if exam_track else None
+    course = str(classroom_course_id) if classroom_course_id else None
+    if track is None and course is None:
+        return ""
+    context = json.dumps({"exam_track": track, "classroom_course_id": course}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"admin_context:{context}"
+
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
@@ -51,7 +60,8 @@ CREATE TABLE IF NOT EXISTS identities (
   class_name TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   origin TEXT,
-  source_ref TEXT
+  source_ref TEXT,
+  admin_note TEXT
 );
 CREATE TABLE IF NOT EXISTS identity_claims (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +84,8 @@ CREATE TABLE IF NOT EXISTS groups (
   exam_track TEXT,
   provenance_source TEXT,
   provenance_ref TEXT,
+  admin_note TEXT,
+  archived_at TEXT,
   role TEXT,
   semantic_dimension TEXT,
   canonical INTEGER NOT NULL DEFAULT 1,
@@ -285,6 +297,50 @@ CREATE TABLE IF NOT EXISTS schedule_editor_drafts (
   UNIQUE(scope_kind, scope_key)
 );
 CREATE INDEX IF NOT EXISTS schedule_editor_drafts_updated_idx ON schedule_editor_drafts(updated_at DESC);
+CREATE TABLE IF NOT EXISTS schedule_experiment_drafts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  base_version_id TEXT REFERENCES canonical_schedule_versions(version_id) ON DELETE SET NULL,
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  payload TEXT NOT NULL DEFAULT '{}',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS schedule_experiment_drafts_updated_idx ON schedule_experiment_drafts(updated_at DESC);
+CREATE TABLE IF NOT EXISTS schedule_activity_catalog (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('club','elective','event')),
+  aliases TEXT NOT NULL DEFAULT '[]',
+  description TEXT NOT NULL DEFAULT '',
+  teacher_ids TEXT NOT NULL DEFAULT '[]',
+  room TEXT NOT NULL DEFAULT '',
+  eligible_grades TEXT NOT NULL DEFAULT '[]',
+  revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS schedule_activity_catalog_active_idx ON schedule_activity_catalog(archived,name);
+CREATE TABLE IF NOT EXISTS schedule_sheet_exports (
+  export_key TEXT PRIMARY KEY,
+  draft_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  target_id TEXT NOT NULL,
+  sheet_id INTEGER NOT NULL,
+  mapping_sheet_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'prepared',
+  snapshot TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  url TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS group_schedule_audiences (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   group_id INTEGER NOT NULL REFERENCES groups(id),
@@ -484,7 +540,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS teacher_assignments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   teacher_identity_id INTEGER NOT NULL REFERENCES identities(id),
-  group_id INTEGER NOT NULL REFERENCES groups(id),
+  group_id INTEGER REFERENCES groups(id),
+  grade_level TEXT,
   subject TEXT NOT NULL DEFAULT '',
   base_class_name TEXT,
   subject_subgroup TEXT,
@@ -498,7 +555,18 @@ CREATE TABLE IF NOT EXISTS teacher_assignments (
   valid_until TEXT,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(teacher_identity_id, group_id, subject, capability, source, source_ref)
+  UNIQUE(teacher_identity_id, group_id, subject, capability, source, source_ref),
+  CHECK ((group_id IS NOT NULL AND grade_level IS NULL) OR (group_id IS NULL AND grade_level IS NOT NULL))
+);
+CREATE TABLE IF NOT EXISTS teacher_subjects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  teacher_identity_id INTEGER NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+  subject TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'admin_override',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(teacher_identity_id, subject, source)
 );
 CREATE TABLE IF NOT EXISTS homeroom_assignments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -801,6 +869,15 @@ class Database:
         finally:
             connection.close()
 
+    def teacher_grade_assignment_schema_ready(self) -> bool:
+        with self.connection() as connection:
+            if self.database_url:
+                row = self.execute(connection, "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'teacher_assignments' AND column_name = 'grade_level'").fetchone()
+            else:
+                row = self.execute(connection, "PRAGMA table_info(teacher_assignments)").fetchall()
+                return any(item[1] == "grade_level" for item in row)
+            return bool(row)
+
     def initialize(self) -> None:
         # Production schema changes are explicit migrations, never app-startup mutations.
         if self.database_url:
@@ -808,6 +885,8 @@ class Database:
         with self.connection() as connection:
             connection.executescript(SCHEMA)
             self._ensure_sqlite_schema_parity(connection)
+            self._upgrade_sqlite_teacher_assignment_targets(connection)
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS teacher_assignments_grade_target_uq ON teacher_assignments(teacher_identity_id, grade_level, subject, capability, source, source_ref) WHERE group_id IS NULL")
             announcement_columns = {row["name"] for row in connection.execute("PRAGMA table_info(announcements)").fetchall()}
             for name, definition in {
                 "audience_kind": "TEXT NOT NULL DEFAULT 'all'",
@@ -824,9 +903,12 @@ class Database:
             if "journal_student_id" not in result_columns:
                 connection.execute("ALTER TABLE journal_results ADD COLUMN journal_student_id INTEGER REFERENCES journal_students(id) ON DELETE SET NULL")
             identity_columns = {row["name"] for row in connection.execute("PRAGMA table_info(identities)").fetchall()}
-            for name, definition in {"origin": "TEXT", "source_ref": "TEXT"}.items():
+            for name, definition in {"origin": "TEXT", "source_ref": "TEXT", "admin_note": "TEXT"}.items():
                 if name not in identity_columns:
                     connection.execute(f"ALTER TABLE identities ADD COLUMN {name} {definition}")
+            group_columns = {row["name"] for row in connection.execute("PRAGMA table_info(groups)").fetchall()}
+            if "archived_at" not in group_columns:
+                connection.execute("ALTER TABLE groups ADD COLUMN archived_at TEXT")
             mapping_columns = {row["name"] for row in connection.execute("PRAGMA table_info(journal_group_mappings)").fetchall()}
             for name, definition in {
                 "base_class_name": "TEXT",
@@ -845,12 +927,49 @@ class Database:
             }.items():
                 if name not in assignment_columns:
                     connection.execute(f"ALTER TABLE teacher_assignments ADD COLUMN {name} {definition}")
+            for table in ("groups",):
+                columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "admin_note" not in columns:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN admin_note TEXT")
             connection.execute(
                 "INSERT OR IGNORE INTO user_roles(user_id, role, source) SELECT id, role, 'legacy_user_role' FROM users"
             )
             connection.execute(
                 "INSERT OR IGNORE INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_at) SELECT id, identity_id, 'confirmed', 'legacy_backfill', 'users.identity_id', created_at FROM users WHERE identity_id IS NOT NULL"
             )
+        from backend.services.schedule_activities import seed_activities
+        seed_activities(self)
+
+    def _upgrade_sqlite_teacher_assignment_targets(self, connection: Any) -> None:
+        columns = {row[1]: row for row in connection.execute("PRAGMA table_info(teacher_assignments)").fetchall()}
+        if "grade_level" in columns and not columns["group_id"][3]:
+            return
+        connection.execute("DROP TABLE IF EXISTS teacher_assignments_grade_target_upgrade")
+        connection.execute("""CREATE TABLE teacher_assignments_grade_target_upgrade (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          teacher_identity_id INTEGER NOT NULL REFERENCES identities(id),
+          group_id INTEGER REFERENCES groups(id),
+          grade_level TEXT,
+          subject TEXT NOT NULL DEFAULT '', base_class_name TEXT, subject_subgroup TEXT,
+          classroom_course_id INTEGER REFERENCES classroom_courses(id), exam_track TEXT,
+          capability TEXT NOT NULL DEFAULT 'teach', source TEXT NOT NULL DEFAULT 'admin_override',
+          source_ref TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
+          valid_from TEXT, valid_until TEXT, created_by INTEGER REFERENCES users(id),
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(teacher_identity_id, group_id, subject, capability, source, source_ref),
+          CHECK ((group_id IS NOT NULL AND grade_level IS NULL) OR (group_id IS NULL AND grade_level IS NOT NULL))
+        )""")
+        target_columns = ["id", "teacher_identity_id", "group_id", "subject", "base_class_name",
+            "subject_subgroup", "classroom_course_id", "exam_track", "capability", "source", "source_ref",
+            "active", "valid_from", "valid_until", "created_by", "created_at"]
+        present = [name for name in target_columns if name in columns]
+        names = ", ".join(present)
+        connection.execute(f"INSERT INTO teacher_assignments_grade_target_upgrade ({names}) SELECT {names} FROM teacher_assignments")
+        connection.execute("DROP TABLE teacher_assignments")
+        connection.execute("ALTER TABLE teacher_assignments_grade_target_upgrade RENAME TO teacher_assignments")
+        connection.execute("CREATE INDEX IF NOT EXISTS teacher_assignments_teacher_idx ON teacher_assignments(teacher_identity_id, active)")
+        connection.execute("CREATE INDEX IF NOT EXISTS teacher_assignments_group_idx ON teacher_assignments(group_id, active)")
+        connection.execute("CREATE INDEX IF NOT EXISTS teacher_assignments_classroom_course_idx ON teacher_assignments(classroom_course_id)")
 
     def _ensure_sqlite_schema_parity(self, connection: Any) -> None:
         """Apply only additive compatibility changes to an existing local SQLite store.
@@ -931,6 +1050,15 @@ class Database:
         connection.execute("CREATE TABLE IF NOT EXISTS admin_reconciliation_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, actor_user_id INTEGER REFERENCES users(id), status TEXT NOT NULL, payload TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, reviewed_at TEXT, applied_at TEXT)")
         connection.execute("CREATE TABLE IF NOT EXISTS schedule_editor_drafts (draft_key TEXT PRIMARY KEY, scope_kind TEXT NOT NULL CHECK (scope_kind IN ('template','week')), scope_key TEXT NOT NULL, base_version_id TEXT REFERENCES canonical_schedule_versions(version_id) ON DELETE RESTRICT, base_effective_week_id TEXT REFERENCES canonical_effective_weeks(effective_week_id) ON DELETE RESTRICT, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0), payload TEXT NOT NULL DEFAULT '{\"changes\":[]}', source_context TEXT NOT NULL DEFAULT '{}', created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(scope_kind, scope_key))")
         connection.execute("CREATE INDEX IF NOT EXISTS schedule_editor_drafts_updated_idx ON schedule_editor_drafts(updated_at DESC)")
+        connection.execute("CREATE TABLE IF NOT EXISTS schedule_experiment_drafts (id TEXT PRIMARY KEY, name TEXT NOT NULL, base_version_id TEXT REFERENCES canonical_schedule_versions(version_id) ON DELETE SET NULL, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0), payload TEXT NOT NULL DEFAULT '{}', created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        connection.execute("CREATE INDEX IF NOT EXISTS schedule_experiment_drafts_updated_idx ON schedule_experiment_drafts(updated_at DESC)")
+        connection.execute("CREATE TABLE IF NOT EXISTS schedule_activity_catalog (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL CHECK (type IN ('club','elective','event')), aliases TEXT NOT NULL DEFAULT '[]', description TEXT NOT NULL DEFAULT '', teacher_ids TEXT NOT NULL DEFAULT '[]', room TEXT NOT NULL DEFAULT '', eligible_grades TEXT NOT NULL DEFAULT '[]', revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0), archived INTEGER NOT NULL DEFAULT 0, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        activity_columns = {row[1] for row in connection.execute("PRAGMA table_info(schedule_activity_catalog)").fetchall()}
+        for name, definition in {"teacher_ids": "TEXT NOT NULL DEFAULT '[]'", "room": "TEXT NOT NULL DEFAULT ''", "eligible_grades": "TEXT NOT NULL DEFAULT '[]'"}.items():
+            if name not in activity_columns:
+                connection.execute(f"ALTER TABLE schedule_activity_catalog ADD COLUMN {name} {definition}")
+        connection.execute("CREATE INDEX IF NOT EXISTS schedule_activity_catalog_active_idx ON schedule_activity_catalog(archived,name)")
+        connection.execute("CREATE TABLE IF NOT EXISTS schedule_sheet_exports (export_key TEXT PRIMARY KEY,draft_id TEXT NOT NULL,revision INTEGER NOT NULL,target_id TEXT NOT NULL,sheet_id INTEGER NOT NULL,mapping_sheet_id INTEGER NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'prepared',snapshot TEXT NOT NULL,plan TEXT NOT NULL,url TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
 
     @staticmethod
     def _token_hash(token: str) -> str:
@@ -1058,6 +1186,11 @@ class Database:
         if self.database_url:
             query = query.replace("?", "%s")
         return connection.execute(query, params)
+
+    def _group_archive_column_available(self, connection: Any) -> bool:
+        if self.database_url:
+            return bool(self.execute(connection, "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='groups' AND column_name='archived_at'").fetchone())
+        return any(row[1] == "archived_at" for row in connection.execute("PRAGMA table_info(groups)").fetchall())
 
     def get_or_create_user(self, telegram_user_id: int | None, role: str) -> Any:
         with self.connection() as connection:
@@ -1515,8 +1648,8 @@ class Database:
                 roles = roles_by_user.get(user["id"], [str(user["role"])])
                 teacher_assignments = self.execute(
                     connection,
-                     """SELECT ta.id, ta.group_id, g.name AS group_name, g.display_name AS group_display_name, ta.subject, ta.capability, ta.source, ta.active
-                         FROM teacher_assignments ta JOIN groups g ON g.id = ta.group_id
+                     """SELECT ta.id, ta.group_id, ta.grade_level, g.name AS group_name, g.display_name AS group_display_name, ta.subject, ta.capability, ta.source, ta.active
+                         FROM teacher_assignments ta LEFT JOIN groups g ON g.id = ta.group_id
                         WHERE ta.teacher_identity_id = ? ORDER BY g.name, ta.subject""",
                     (user["identity_id"],),
                 ).fetchall() if user["identity_id"] else []
@@ -1574,7 +1707,9 @@ class Database:
             clauses.append(
                 "EXISTS (SELECT 1 FROM memberships cm JOIN groups cg ON cg.id = cm.group_id "
                 "WHERE cm.identity_id = i.id AND cm.active IS TRUE AND cg.group_type = 'class' "
-                "AND cg.name = ? AND (cm.valid_from IS NULL OR cm.valid_from <= CURRENT_DATE) "
+                "AND ? IN (cg.name, coalesce(cg.display_name, ''), coalesce(cg.base_class_name, '')) "
+                "AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = cm.identity_id AND mo.group_id = cm.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) "
+                "AND (cm.valid_from IS NULL OR cm.valid_from <= CURRENT_DATE) "
                 "AND (cm.valid_until IS NULL OR cm.valid_until >= CURRENT_DATE))"
             )
             params.append(class_name)
@@ -1582,6 +1717,7 @@ class Database:
             clauses.append(
                 "EXISTS (SELECT 1 FROM memberships gm WHERE gm.identity_id = i.id "
                 "AND gm.group_id = ? AND gm.active IS TRUE "
+                "AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = gm.identity_id AND mo.group_id = gm.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) "
                 "AND (gm.valid_from IS NULL OR gm.valid_from <= CURRENT_DATE) "
                 "AND (gm.valid_until IS NULL OR gm.valid_until >= CURRENT_DATE))"
             )
@@ -1592,7 +1728,7 @@ class Database:
         with self.connection() as connection:
             identities = self.execute(
                 connection,
-                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
+                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
                 params,
             ).fetchall()
             result: list[dict[str, Any]] = []
@@ -1604,6 +1740,7 @@ class Database:
                               g.subject_subgroup, g.exam_track, m.source, m.source_ref
                          FROM memberships m JOIN groups g ON g.id = m.group_id
                         WHERE m.identity_id = ? AND m.active IS TRUE
+                          AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE)
                           AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
                           AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                         ORDER BY g.group_type, g.name""",
@@ -1615,7 +1752,7 @@ class Database:
                     item["membership_kind"] = (
                         "base_class" if item["group_type"] == "class"
                         else "exam_profile" if item["group_type"] == "exam_track"
-                        else "instructional" if item["group_type"] in {"subject_group", "instructional_group"}
+                        else "instructional" if item["group_type"] in {"subject_group", "instructional_group", "instructional"}
                         else "other"
                     )
                     item["is_manual"] = item.get("source") == "admin_override"
@@ -1666,10 +1803,10 @@ class Database:
                 } for item in selection_facts]
                 assignments = self.execute(
                     connection,
-                    """SELECT ta.id, g.id AS group_id, g.name, g.display_name, g.group_type,
+                    """SELECT ta.id, g.id AS group_id, ta.grade_level, g.name, g.display_name, g.group_type,
                               ta.subject, ta.base_class_name, ta.subject_subgroup, ta.exam_track,
                               ta.source, ta.source_ref
-                         FROM teacher_assignments ta JOIN groups g ON g.id = ta.group_id
+                         FROM teacher_assignments ta LEFT JOIN groups g ON g.id = ta.group_id
                         WHERE ta.teacher_identity_id = ? AND ta.active IS TRUE
                           AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
                           AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
@@ -1732,7 +1869,18 @@ class Database:
 
     def get_people_library_person(self, identity_id: Any) -> dict[str, Any] | None:
         items = self.list_people_library(identity_id=identity_id)
-        return next((item for item in items if str(item["id"]) == str(identity_id)), None)
+        person = next((item for item in items if str(item["id"]) == str(identity_id)), None)
+        if person and person.get("kind") == "teacher":
+            person["subjects"] = self.list_teacher_subjects(identity_id)
+        if person:
+            person["comment"] = person.get("admin_note")
+        return person
+
+    def list_teacher_subjects(self, teacher_identity_id: Any) -> list[str]:
+        with self.connection() as connection:
+            explicit = self.execute(connection, "SELECT subject FROM teacher_subjects WHERE teacher_identity_id = ? AND active IS TRUE ORDER BY subject", (teacher_identity_id,)).fetchall()
+            assigned = self.execute(connection, "SELECT DISTINCT subject FROM teacher_assignments WHERE teacher_identity_id = ? AND active IS TRUE AND subject <> '' AND (valid_from IS NULL OR valid_from <= CURRENT_DATE) AND (valid_until IS NULL OR valid_until >= CURRENT_DATE) ORDER BY subject", (teacher_identity_id,)).fetchall()
+            return sorted({str(row["subject"]) for row in (*explicit, *assigned) if row["subject"]})
 
     def list_people_library_summary(
         self,
@@ -1742,6 +1890,7 @@ class Database:
         group_id: str | None = None,
         has_issues: bool | None = None,
         protected: bool | None = None,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         """Return the collection projection without per-person database round trips.
 
@@ -1749,7 +1898,7 @@ class Database:
         compatibility callers. The Admin collection only needs counts and labels, so
         load its relationships in batches instead of issuing several queries per row.
         """
-        clauses = ["i.status = 'active'"]
+        clauses = ["1 = 1"] if include_inactive else ["i.status = 'active'"]
         params: list[Any] = []
         if kind in {"student", "teacher"}:
             clauses.append("i.kind = ?")
@@ -1761,7 +1910,9 @@ class Database:
             clauses.append(
                 "EXISTS (SELECT 1 FROM memberships cm JOIN groups cg ON cg.id = cm.group_id "
                 "WHERE cm.identity_id = i.id AND cm.active IS TRUE AND cg.group_type = 'class' "
-                "AND cg.name = ? AND (cm.valid_from IS NULL OR cm.valid_from <= CURRENT_DATE) "
+                "AND ? IN (cg.name, coalesce(cg.display_name, ''), coalesce(cg.base_class_name, '')) "
+                "AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = cm.identity_id AND mo.group_id = cm.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) "
+                "AND (cm.valid_from IS NULL OR cm.valid_from <= CURRENT_DATE) "
                 "AND (cm.valid_until IS NULL OR cm.valid_until >= CURRENT_DATE))"
             )
             params.append(class_name)
@@ -1769,6 +1920,7 @@ class Database:
             clauses.append(
                 "EXISTS (SELECT 1 FROM memberships gm WHERE gm.identity_id = i.id "
                 "AND gm.group_id = ? AND gm.active IS TRUE "
+                "AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = gm.identity_id AND mo.group_id = gm.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) "
                 "AND (gm.valid_from IS NULL OR gm.valid_from <= CURRENT_DATE) "
                 "AND (gm.valid_until IS NULL OR gm.valid_until >= CURRENT_DATE))"
             )
@@ -1783,7 +1935,7 @@ class Database:
                 dict(row)
                 for row in self.execute(
                     connection,
-                    f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref "
+                    f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note "
                     f"FROM identities i WHERE {' AND '.join(clauses)} "
                     "ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
                     tuple(params),
@@ -1815,6 +1967,7 @@ class Database:
                                   g.base_class_name, g.subject_subgroup, g.exam_track, m.source, m.source_ref
                              FROM memberships m JOIN groups g ON g.id = m.group_id
                             WHERE m.identity_id IN ({placeholders}) AND m.active IS TRUE
+                              AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE)
                               AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
                               AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                             ORDER BY g.group_type, g.name""",
@@ -1826,24 +1979,36 @@ class Database:
                 item["membership_kind"] = (
                     "base_class" if item["group_type"] == "class"
                     else "exam_profile" if item["group_type"] == "exam_track"
-                    else "instructional" if item["group_type"] in {"subject_group", "instructional_group"}
+                    else "instructional" if item["group_type"] in {"subject_group", "instructional_group", "instructional"}
                     else "other"
                 )
                 item["is_manual"] = item.get("source") == "admin_override"
                 memberships_by_identity.setdefault(item["identity_id"], {})[item["id"]] = item
 
             teacher_assignments_by_identity: dict[Any, list[dict[str, Any]]] = {}
+            teacher_subjects_by_identity: dict[Any, set[str]] = {}
             if kind != "student":
                 assignment_rows = self.execute(
                     connection,
-                    f"""SELECT teacher_identity_id, group_id, subject FROM teacher_assignments
-                         WHERE teacher_identity_id IN ({placeholders}) AND active IS TRUE
-                           AND (valid_from IS NULL OR valid_from <= CURRENT_DATE)
-                           AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)""",
+                    f"""SELECT ta.id,ta.teacher_identity_id,ta.group_id,ta.grade_level,ta.subject,ta.active,ta.source,ta.source_ref,
+                               ta.valid_from,ta.valid_until,ta.subject_subgroup AS assignment_subject_subgroup,
+                               ta.exam_track AS assignment_exam_track,ta.classroom_course_id,
+                               cc.title AS course_name,g.name AS group_name,g.display_name AS group_display_name,
+                               g.group_type,g.base_class_name,g.subject_subgroup,g.exam_track
+                         FROM teacher_assignments ta LEFT JOIN groups g ON g.id=ta.group_id
+                         LEFT JOIN classroom_courses cc ON cc.id=ta.classroom_course_id
+                         WHERE ta.teacher_identity_id IN ({placeholders}) AND ta.active IS TRUE
+                           AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                           AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)""",
                     tuple(identity_ids),
                 ).fetchall()
                 for row in assignment_rows:
                     teacher_assignments_by_identity.setdefault(row["teacher_identity_id"], []).append(dict(row))
+                subject_rows = self.execute(connection, f"SELECT teacher_identity_id, subject FROM teacher_subjects WHERE teacher_identity_id IN ({placeholders}) AND active IS TRUE", tuple(identity_ids)).fetchall()
+                for row in subject_rows:
+                    teacher_subjects_by_identity.setdefault(row["teacher_identity_id"], set()).add(str(row["subject"]))
+                for identity_key, assignments in teacher_assignments_by_identity.items():
+                    teacher_subjects_by_identity.setdefault(identity_key, set()).update(str(row["subject"]) for row in assignments if row.get("subject"))
 
             accounts = self.execute(
                 connection,
@@ -1903,6 +2068,7 @@ class Database:
                     "selection_facts": [],
                     "relationship_issue": "multiple_active_base_classes" if len(base_classes) > 1 else None,
                     "teacher_assignments": teacher_assignments_by_identity.get(identity["id"], []),
+                    "subjects": sorted(teacher_subjects_by_identity.get(identity["id"], set())) if identity["kind"] == "teacher" else [],
                     "homerooms": [],
                     "unresolved": [],
                     "unresolved_count": unresolved_count,
@@ -2215,23 +2381,424 @@ class Database:
                 (user_id,),
             ).fetchall()
 
-    def create_identity(self, kind: str, display_name: str, class_name: str | None = None) -> Any:
+    @staticmethod
+    def _class_label_key(value: Any) -> str:
+        key = " ".join(str(value or "").replace("ё", "е").replace("Ё", "Е").casefold().split())
+        # Confirmed school alias: 9-А is the historical label for canonical 9-Ан.
+        return "9-а" if key == "9-ан" else key
+
+    def _resolve_canonical_class_group(self, connection: Any, class_name: str | None) -> dict[str, Any] | None:
+        key = self._class_label_key(class_name)
+        if not key:
+            return None
+        archive_filter = " AND archived_at IS NULL" if self._group_archive_column_available(connection) else ""
+        rows = self.execute(connection, f"SELECT id, name, display_name, base_class_name FROM groups WHERE group_type = 'class' AND canonical IS TRUE{archive_filter}", ()).fetchall()
+        matches = [dict(row) for row in rows if key in {self._class_label_key(row[field]) for field in ("name", "display_name", "base_class_name")}]
+        if len(matches) > 1:
+            raise ValueError("The selected class label matches more than one canonical class group")
+        return matches[0] if matches else None
+
+    def _apply_class_membership_transfer(self, connection: Any, identity_id: Any, target_group: dict[str, Any], actor_user_id: Any, reason: str) -> dict[str, Any]:
+        import json
+        source_groups = self.execute(connection, "SELECT g.id FROM memberships m JOIN groups g ON g.id = m.group_id WHERE m.identity_id = ? AND m.member_role = 'student' AND m.active IS TRUE AND g.group_type = 'class' AND g.canonical IS TRUE", (identity_id,)).fetchall()
+        changed = False
+        for source in source_groups:
+            source_id = source["id"]
+            if str(source_id) == str(target_group["id"]):
+                continue
+            current = self.execute(connection, "SELECT action FROM membership_overrides WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND active IS TRUE", (identity_id, source_id)).fetchone()
+            if current and current["action"] == "exclude":
+                continue
+            self.execute(connection, "UPDATE membership_overrides SET active = FALSE WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND active IS TRUE", (identity_id, source_id))
+            self.execute(connection, "INSERT INTO membership_overrides(identity_id, group_id, member_role, action, reason, created_by) VALUES (?, ?, 'student', 'exclude', ?, ?)", (identity_id, source_id, reason, actor_user_id))
+            self.execute(connection, "UPDATE memberships SET active = FALSE WHERE identity_id = ? AND group_id = ? AND source = 'admin_override'", (identity_id, source_id))
+            changed = True
+        excluded = self.execute(connection, "SELECT 1 FROM membership_overrides WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND action = 'exclude' AND active IS TRUE", (identity_id, target_group["id"])).fetchone()
+        active_membership = self.execute(connection, "SELECT 1 FROM memberships WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND active IS TRUE", (identity_id, target_group["id"])).fetchone()
+        if excluded:
+            self.execute(connection, "UPDATE membership_overrides SET active = FALSE WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND active IS TRUE", (identity_id, target_group["id"]))
+            override = self.execute(connection, "INSERT INTO membership_overrides(identity_id, group_id, member_role, action, reason, created_by) VALUES (?, ?, 'student', 'include', ?, ?) RETURNING id", (identity_id, target_group["id"], reason, actor_user_id)).fetchone()
+            self.execute(connection, "INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by) VALUES (?, ?, 'student', 'admin_override', ?, TRUE, ?) ON CONFLICT(group_id, identity_id, member_role, source, source_ref) DO UPDATE SET active = TRUE, created_by = excluded.created_by", (target_group["id"], identity_id, f"membership_override:{override['id']}", actor_user_id))
+            changed = True
+        elif not active_membership:
+            self.execute(connection, "INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by) VALUES (?, ?, 'student', 'admin_override', 'admin_editor', TRUE, ?) ON CONFLICT(group_id, identity_id, member_role, source, source_ref) DO UPDATE SET active = TRUE, created_by = excluded.created_by", (target_group["id"], identity_id, actor_user_id))
+            changed = True
+        return {"group_id": target_group["id"], "source_group_ids": [row["id"] for row in source_groups if str(row["id"]) != str(target_group["id"])], "changed": changed}
+
+    def create_identity(self, kind: str, display_name: str, class_name: str | None = None, actor_user_id: Any | None = None, subjects: list[str] | None = None, comment: str | None = None, status: str = "active") -> Any:
+        import json
         with self.connection() as connection:
+            duplicate = self.execute(connection, "SELECT id FROM identities WHERE kind = ? AND lower(trim(display_name)) = lower(trim(?)) LIMIT 1", (kind, display_name)).fetchone()
+            if duplicate:
+                raise ValueError("An active identity with this name already exists")
+            class_group = self._resolve_canonical_class_group(connection, class_name) if kind == "student" and class_name and actor_user_id is not None else None
+            if kind == "student" and class_name and actor_user_id is not None and not class_group:
+                raise ValueError("The selected administrative class does not exist as a canonical class group")
+            canonical_class_name = (class_group.get("base_class_name") or class_group["name"]) if class_group else class_name
             inserted = self.execute(
                 connection,
-                "INSERT INTO identities(kind, display_name, class_name) VALUES (?, ?, ?) RETURNING id",
-                (kind, display_name, class_name),
+                "INSERT INTO identities(kind, display_name, class_name, status, origin, source_ref, admin_note) VALUES (?, ?, ?, ?, 'admin_override', 'admin_editor', ?) RETURNING id",
+                (kind, display_name, canonical_class_name, status, (comment or "").strip() or None),
             ).fetchone()
-            return self.execute(connection, "SELECT * FROM identities WHERE id = ?", (inserted["id"],)).fetchone()
+            cleaned_subjects: dict[str, str] = {}
+            for item in subjects or []:
+                if isinstance(item, str):
+                    cleaned = " ".join(item.split())
+                    if cleaned:
+                        cleaned_subjects.setdefault(cleaned.casefold(), cleaned)
+            normalized_subjects = sorted(cleaned_subjects.values(), key=str.casefold)
+            if normalized_subjects and kind != "teacher":
+                raise ValueError("Only teacher identities can have subjects")
+            for subject in normalized_subjects:
+                self.execute(connection, "INSERT INTO teacher_subjects(teacher_identity_id, subject, source, created_by) VALUES (?, ?, 'admin_override', ?) ON CONFLICT(teacher_identity_id, subject, source) DO UPDATE SET active = TRUE, created_by = excluded.created_by", (inserted["id"], subject, actor_user_id))
+            if class_group:
+                self.execute(connection, "INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by) VALUES (?, ?, 'student', 'admin_override', 'admin_editor', TRUE, ?) ON CONFLICT(group_id, identity_id, member_role, source, source_ref) DO UPDATE SET active = TRUE, created_by = excluded.created_by", (class_group["id"], inserted["id"], actor_user_id))
+            identity = self.execute(connection, "SELECT * FROM identities WHERE id = ?", (inserted["id"],)).fetchone()
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'identity.created', 'person', ?, ?)", (actor_user_id, inserted["id"], json.dumps({"kind": kind, "subject_count": len(normalized_subjects), "class_group_id": class_group["id"] if class_group else None}, ensure_ascii=False, default=str)))
+            return identity
 
-    def create_group(self, name: str, group_type: str) -> Any:
+    def create_group(self, name: str, group_type: str, *, display_name: str | None = None, subject: str | None = None, base_class_name: str | None = None, subject_subgroup: str | None = None, exam_track: str | None = None, default_teacher_identity_id: Any | None = None, comment: str | None = None, actor_user_id: Any | None = None) -> Any:
+        import json
         with self.connection() as connection:
+            legacy_key_duplicate = self.execute(connection, "SELECT id FROM groups WHERE group_type = ? AND lower(trim(name)) = lower(trim(?)) LIMIT 1", (group_type, name)).fetchone()
+            keys = {self._class_label_key(name), self._class_label_key(display_name)} - {""}
+            same_dimension = self.execute(connection, "SELECT id, name, display_name FROM groups WHERE group_type = ? AND coalesce(subject, '') = coalesce(?, '')", (group_type, subject)).fetchall()
+            if legacy_key_duplicate or any(keys & {self._class_label_key(row[field]) for field in ("name", "display_name")} - {""} for row in same_dimension):
+                raise ValueError("A group with this name and type already exists")
             row = self.execute(
                 connection,
-                "INSERT INTO groups(name, group_type) VALUES (?, ?) ON CONFLICT(name, group_type) DO UPDATE SET name = excluded.name RETURNING id",
-                (name, group_type),
+                "INSERT INTO groups(name, group_type, display_name, subject, base_class_name, subject_subgroup, exam_track, provenance_source, provenance_ref, admin_note, canonical) VALUES (?, ?, ?, ?, ?, ?, ?, 'admin_override', 'admin_editor', ?, TRUE) RETURNING id",
+                (name, group_type, display_name, subject, base_class_name, subject_subgroup, exam_track, (comment or "").strip() or None),
             ).fetchone()
-            return self.execute(connection, "SELECT * FROM groups WHERE id = ?", (row["id"],)).fetchone()
+            group = self.execute(connection, "SELECT * FROM groups WHERE id = ?", (row["id"],)).fetchone()
+            if default_teacher_identity_id:
+                self._set_group_default_teacher(connection, row["id"], default_teacher_identity_id, subject, actor_user_id)
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'group.created', 'group', ?, ?)", (actor_user_id, row["id"], json.dumps({"group_type": group_type, "comment": (comment or "").strip() or None, "default_teacher_identity_id": default_teacher_identity_id}, ensure_ascii=False, default=str)))
+            return group
+
+    def update_admin_group(self, group_id: Any, fields: dict[str, Any], actor_user_id: Any) -> Any | None:
+        import json
+        if "canonical" in fields or "active" in fields:
+            raise ValueError("Group availability must be changed with the archive or restore endpoint")
+        allowed = {"name", "display_name", "group_type", "subject", "base_class_name", "subject_subgroup", "exam_track", "admin_note"}
+        default_teacher_identity_id = fields.get("default_teacher_identity_id")
+        comment = str(fields.get("comment") or "").strip()
+        values = {key: value for key, value in fields.items() if key in allowed}
+        if "comment" in fields:
+            values["admin_note"] = comment or None
+        if not values and "default_teacher_identity_id" not in fields and not comment:
+            raise ValueError("No editable group fields were supplied")
+        if any(key in values and not str(values[key] or "").strip() for key in ("name", "group_type")):
+            raise ValueError("Group name and type cannot be empty")
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not current:
+                return None
+            if ("archived_at" in current.keys() and current["archived_at"]) and fields.get("default_teacher_identity_id"):
+                raise ValueError("Archived groups cannot receive new teacher assignments")
+            if "name" in values or "group_type" in values or "display_name" in values or "subject" in values:
+                name, group_type = values.get("name", current["name"]), values.get("group_type", current["group_type"])
+                subject = values.get("subject", current["subject"])
+                candidate_keys = {self._class_label_key(name), self._class_label_key(values.get("display_name", current["display_name"]))} - {""}
+                other_groups = self.execute(connection, "SELECT id, name, display_name FROM groups WHERE group_type = ? AND coalesce(subject, '') = coalesce(?, '') AND id <> ?", (group_type, subject, group_id)).fetchall()
+                if any(candidate_keys & {self._class_label_key(row[field]) for field in ("name", "display_name")} - {""} for row in other_groups):
+                    raise ValueError("A group with this name and type already exists")
+            assignments = ", ".join(f"{key} = ?" for key in values)
+            if values:
+                self.execute(connection, f"UPDATE groups SET {assignments} WHERE id = ?", (*values.values(), group_id))
+            if "default_teacher_identity_id" in fields:
+                effective_subject = values.get("subject", current["subject"])
+                if "subject" in values and str(current["subject"] or "").strip() != str(effective_subject or "").strip():
+                    self.execute(connection, "UPDATE teacher_assignments SET active = FALSE WHERE group_id = ? AND subject = ? AND source = 'admin_override' AND active IS TRUE", (group_id, str(current["subject"] or "").strip()))
+                    self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'group', ?, ?)", (actor_user_id, group_id, json.dumps({"group_id": group_id, "subject": str(current["subject"] or "").strip(), "active": False, "reason": "group_subject_changed"}, ensure_ascii=False, default=str)))
+                self._set_group_default_teacher(connection, group_id, default_teacher_identity_id, effective_subject, actor_user_id)
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'group.updated', 'group', ?, ?)", (actor_user_id, group_id, json.dumps({"fields": sorted(values), "comment": comment or None, "default_teacher_identity_id": default_teacher_identity_id if "default_teacher_identity_id" in fields else "unchanged"}, ensure_ascii=False, default=str)))
+            return self.execute(connection, "SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+
+    def group_archive_preview(self, group_id: Any) -> dict[str, Any] | None:
+        """Return a conservative reference summary without changing school data."""
+        from datetime import date
+
+        with self.connection() as connection:
+            if self.database_url:
+                tables = {row["table_name"]: set() for row in self.execute(connection, "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").fetchall()}
+                for row in self.execute(connection, "SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'", ()).fetchall():
+                    if row["table_name"] in tables:
+                        tables[row["table_name"]].add(row["column_name"])
+            else:
+                tables = {}
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+                    tables[row["name"]] = {item["name"] for item in connection.execute(f'PRAGMA table_info("{row["name"]}")').fetchall()}
+
+            if "groups" not in tables:
+                return None
+            archived_select = "archived_at" if "archived_at" in tables["groups"] else "NULL AS archived_at"
+            group = self.execute(connection, f"SELECT id, canonical, {archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not group:
+                return None
+
+            def count(table: str, predicate: str, params: tuple[Any, ...] = ()) -> int:
+                if table not in tables:
+                    return 0
+                return int(self.execute(connection, f"SELECT COUNT(*) AS n FROM {table} WHERE {predicate}", params).fetchone()["n"])
+
+            gid = str(group_id)
+            today = date.today().isoformat()
+            active_memberships = 0
+            if "memberships" in tables:
+                member_query = """SELECT COUNT(DISTINCT identity_id) AS n FROM (
+                    SELECT m.identity_id FROM memberships m JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
+                    WHERE m.group_id=? AND m.active IS TRUE AND m.member_role='student' AND i.kind='student' AND i.status='active'
+                      AND g.canonical IS TRUE AND (m.valid_from IS NULL OR m.valid_from<=?) AND (m.valid_until IS NULL OR m.valid_until>=?)
+                      AND NOT EXISTS (SELECT 1 FROM membership_overrides o WHERE o.identity_id=m.identity_id AND o.group_id=m.group_id
+                        AND o.member_role='student' AND o.action='exclude' AND o.active IS TRUE
+                        AND (o.valid_from IS NULL OR o.valid_from<=?) AND (o.valid_until IS NULL OR o.valid_until>=?))
+                    UNION
+                    SELECT o.identity_id FROM membership_overrides o JOIN identities i ON i.id=o.identity_id JOIN groups g ON g.id=o.group_id
+                    WHERE o.group_id=? AND o.member_role='student' AND o.action='include' AND o.active IS TRUE
+                      AND i.kind='student' AND i.status='active' AND g.canonical IS TRUE
+                      AND (o.valid_from IS NULL OR o.valid_from<=?) AND (o.valid_until IS NULL OR o.valid_until>=?)
+                      AND NOT EXISTS (SELECT 1 FROM membership_overrides x WHERE x.identity_id=o.identity_id AND x.group_id=o.group_id
+                        AND x.member_role='student' AND x.action='exclude' AND x.active IS TRUE
+                        AND (x.valid_from IS NULL OR x.valid_from<=?) AND (x.valid_until IS NULL OR x.valid_until>=?))
+                ) effective"""
+                member_params = (group_id, today, today, today, today, group_id, today, today, today, today)
+                active_memberships = int(self.execute(connection, member_query, member_params).fetchone()["n"])
+            active_assignments = count("teacher_assignments", "group_id = ? AND active IS TRUE AND (valid_from IS NULL OR valid_from <= ?) AND (valid_until IS NULL OR valid_until >= ?)", (group_id, today, today))
+            historical_assignments = count("teacher_assignments", "group_id = ? AND (active IS NOT TRUE OR (valid_from IS NOT NULL AND valid_from > ?) OR (valid_until IS NOT NULL AND valid_until < ?))", (group_id, today, today))
+            counts = {
+                "active_memberships": active_memberships,
+                "historical_memberships": count("memberships", "group_id = ? AND active IS NOT TRUE", (group_id,)),
+                "assignments": active_assignments,
+                "historical_assignments": historical_assignments,
+                "canonical_template": 0,
+                "dated_weeks": 0,
+                "journals": count("journal_group_mappings", "group_id = ?", (group_id,)),
+                "classroom_refs": count("classroom_courses", "group_id = ?", (group_id,)),
+                "source_refs": count("school_source_mappings", "group_id = ?", (group_id,)),
+                "json_refs": 0,
+            }
+            if "canonical_schedule_assignments" in tables and "canonical_group_ids" in tables["canonical_schedule_assignments"]:
+                if self.database_url:
+                    counts["canonical_template"] = count("canonical_schedule_assignments", "canonical_group_ids @> ?::jsonb", (f'["{gid}"]',))
+                else:
+                    counts["canonical_template"] = count("canonical_schedule_assignments", "EXISTS (SELECT 1 FROM json_each(canonical_group_ids) WHERE CAST(value AS TEXT) = ?)", (gid,))
+            if "canonical_schedule_assignments" in tables and "metadata" in tables["canonical_schedule_assignments"]:
+                counts["canonical_template"] += count("canonical_schedule_assignments", 'CAST(metadata AS TEXT) LIKE ?', (f'%"{gid}"%',))
+            if "canonical_effective_blocks" in tables and "patch" in tables["canonical_effective_blocks"]:
+                # Weekly patches are JSON documents; count any explicit reference.
+                counts["dated_weeks"] = count("canonical_effective_blocks", "CAST(patch AS TEXT) LIKE ?", (f'%"{gid}"%',))
+                if {"canonical_effective_weeks", "canonical_schedule_assignments"}.issubset(tables) and "canonical_block_id" in tables["canonical_effective_blocks"]:
+                    if self.database_url:
+                        weekly_ref_sql = """SELECT COUNT(DISTINCT eb.effective_week_id) AS n FROM canonical_effective_blocks eb
+                            JOIN canonical_effective_weeks ew ON ew.effective_week_id=eb.effective_week_id
+                            JOIN canonical_schedule_assignments a ON a.block_id=eb.canonical_block_id
+                            WHERE a.canonical_group_ids @> ?::jsonb"""
+                        weekly_ref = int(self.execute(connection, weekly_ref_sql, (f'["{gid}"]',)).fetchone()["n"])
+                    else:
+                        weekly_ref_sql = """SELECT COUNT(DISTINCT eb.effective_week_id) AS n FROM canonical_effective_blocks eb
+                            JOIN canonical_effective_weeks ew ON ew.effective_week_id=eb.effective_week_id
+                            JOIN canonical_schedule_assignments a ON a.block_id=eb.canonical_block_id
+                            WHERE EXISTS (SELECT 1 FROM json_each(a.canonical_group_ids) WHERE CAST(value AS TEXT)=?)"""
+                        weekly_ref = int(self.execute(connection, weekly_ref_sql, (gid,)).fetchone()["n"])
+                    counts["dated_weeks"] += weekly_ref
+            # Imported dated lessons are historical references even when they
+            # have no effective-week overlay. schedule_entries stores a parallel
+            # legacy projection and is included conservatively as well.
+            for table, candidates in (
+                ("schedule_lessons", {"resolved_group_ids", "audience_rule"}),
+                ("schedule_entries", {"resolved_audience", "audience_rule"}),
+                ("schedule_lesson_audiences", {"resolved_group_ids", "provenance"}),
+                ("schedule_student_allocations", {"resolved_group_ids", "provenance"}),
+            ):
+                if table in tables:
+                    refs = sorted(candidates & tables[table])
+                    if refs:
+                        predicate = " OR ".join(f'CAST("{column}" AS TEXT) LIKE ?' for column in refs)
+                        counts["dated_weeks"] += count(table, f"({predicate})", tuple(f'%"{gid}"%' for _ in refs))
+            json_columns = {
+                "metadata", "payload", "context", "source_context", "structural_payload", "canonical_value",
+                "audience_rule", "resolved_audience", "resolved_group_ids", "raw_payload", "raw_source",
+                "raw_source_data", "modifiers", "evidence", "merge_data", "baseline_data", "diagnostics",
+                "provenance", "source_provenance", "patch",
+            }
+            json_matches = 0
+            for table, columns in tables.items():
+                for column in json_columns & columns:
+                    if table == "canonical_schedule_assignments" and column == "canonical_group_ids":
+                        continue
+                    if table == "canonical_effective_blocks" and column == "patch":
+                        continue
+                    if table == "canonical_schedule_assignments" and column == "metadata":
+                        continue
+                    if table == "schedule_lessons" and column in {"resolved_group_ids", "audience_rule"}:
+                        continue
+                    if table == "schedule_entries" and column in {"resolved_audience", "audience_rule"}:
+                        continue
+                    if table == "schedule_lesson_audiences" and column in {"resolved_group_ids", "provenance"}:
+                        continue
+                    if table == "schedule_student_allocations" and column in {"resolved_group_ids", "provenance"}:
+                        continue
+                    json_matches += count(table, f'CAST("{column}" AS TEXT) LIKE ?', (f'%"{gid}"%',))
+            counts["json_refs"] = json_matches
+            known_group_reference_tables = {"groups", "memberships", "teacher_assignments", "journal_group_mappings", "classroom_courses", "school_source_mappings", "canonical_schedule_assignments", "canonical_effective_blocks"}
+            unknown_references = []
+            for table, columns in tables.items():
+                if table in known_group_reference_tables or "group_id" not in columns:
+                    continue
+                n = count(table, "group_id = ?", (group_id,))
+                if n:
+                    unknown_references.append({"table": table, "count": n})
+            all_counts = sum(counts.values()) + sum(item["count"] for item in unknown_references)
+            return {"group_id": gid, "archived": bool(group["archived_at"]), "counts": counts,
+                    "unknown_references": unknown_references,
+                    "safe_to_archive": all_counts == 0 and not unknown_references}
+
+    def archive_admin_group(self, group_id: Any, actor_user_id: Any, *, confirm_used: bool = False) -> Any | None:
+        import json
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT id, archived_at FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not current:
+                return None
+            preview = self.group_archive_preview(group_id)
+            used = any(preview["counts"].values()) or bool(preview["unknown_references"])
+            if used and not confirm_used:
+                raise ValueError("This group has existing memberships or references; explicit confirmation is required")
+            if current["archived_at"]:
+                return current
+            updated = self.execute(connection, "UPDATE groups SET archived_at = CURRENT_TIMESTAMP WHERE id = ? RETURNING id, archived_at", (group_id,)).fetchone()
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'group.archived', 'group', ?, ?)", (actor_user_id, group_id, json.dumps({"confirm_used": bool(confirm_used), "reference_counts": preview["counts"]}, ensure_ascii=False, default=str)))
+            return updated
+
+    def restore_admin_group(self, group_id: Any, actor_user_id: Any) -> Any | None:
+        import json
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT id, archived_at FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not current:
+                return None
+            if not current["archived_at"]:
+                return current
+            updated = self.execute(connection, "UPDATE groups SET archived_at = NULL WHERE id = ? RETURNING id, archived_at", (group_id,)).fetchone()
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'group.restored', 'group', ?, ?)", (actor_user_id, group_id, json.dumps({}, ensure_ascii=False)))
+            return updated
+
+    def _set_group_default_teacher(self, connection: Any, group_id: Any, teacher_identity_id: Any | None, subject: str | None, actor_user_id: Any) -> None:
+        import json
+        if teacher_identity_id and (not subject or not str(subject).strip()):
+            raise ValueError("A subject is required for a default teacher assignment")
+        if teacher_identity_id:
+            teacher = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
+            if not teacher or teacher["kind"] != "teacher" or teacher["status"] != "active":
+                raise ValueError("Default teacher must be an active teacher")
+            self.execute(connection, "UPDATE teacher_assignments SET active = FALSE WHERE group_id = ? AND subject = ? AND source = 'admin_override' AND active IS TRUE", (group_id, str(subject).strip()))
+            row = self.execute(connection, """INSERT INTO teacher_assignments(teacher_identity_id, group_id, subject, source, active, created_by)
+                VALUES (?, ?, ?, 'admin_override', TRUE, ?)
+                ON CONFLICT(teacher_identity_id, group_id, subject, capability, source, source_ref)
+                DO UPDATE SET active = TRUE, created_by = excluded.created_by RETURNING id""", (teacher_identity_id, group_id, str(subject).strip(), actor_user_id)).fetchone()
+            details = {"teacher_identity_id": teacher_identity_id, "group_id": group_id, "subject": str(subject).strip(), "active": True}
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'teacher_assignment', ?, ?)", (actor_user_id, row["id"], json.dumps(details, ensure_ascii=False, default=str)))
+        else:
+            self.execute(connection, "UPDATE teacher_assignments SET active = FALSE WHERE group_id = ? AND subject = ? AND source = 'admin_override' AND active IS TRUE", (group_id, str(subject or "").strip()))
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'group', ?, ?)", (actor_user_id, group_id, json.dumps({"group_id": group_id, "subject": str(subject or "").strip(), "active": False}, ensure_ascii=False, default=str)))
+
+    def update_admin_identity(self, identity_id: Any, fields: dict[str, Any], actor_user_id: Any) -> Any | None:
+        import json
+        allowed = {"display_name", "class_name", "status", "admin_note"}
+        values = {key: value for key, value in fields.items() if key in allowed}
+        if "comment" in fields:
+            values["admin_note"] = str(fields.get("comment") or "").strip() or None
+        subjects_supplied = "subjects" in fields
+        raw_subjects = fields.get("subjects") or []
+        if subjects_supplied and not isinstance(raw_subjects, list):
+            raise ValueError("subjects must be a list of strings")
+        if not values and not subjects_supplied:
+            raise ValueError("No editable identity fields were supplied")
+        if "display_name" in values and not str(values["display_name"] or "").strip():
+            raise ValueError("Identity display name cannot be empty")
+        if "status" in values and values["status"] not in {"active", "inactive"}:
+            raise ValueError("Identity status must be active or inactive")
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT * FROM identities WHERE id = ?", (identity_id,)).fetchone()
+            if not current:
+                return None
+            if subjects_supplied and current["kind"] != "teacher":
+                raise ValueError("Only teacher identities can have subjects")
+            if "display_name" in values:
+                duplicate = self.execute(connection, "SELECT id FROM identities WHERE kind = ? AND status = 'active' AND lower(trim(display_name)) = lower(trim(?)) AND id <> ? LIMIT 1", (current["kind"], values["display_name"], identity_id)).fetchone()
+                if duplicate:
+                    raise ValueError("An active identity with this name already exists")
+            class_transfer = None
+            if current["kind"] == "student" and "class_name" in values:
+                target = self._resolve_canonical_class_group(connection, values["class_name"])
+                if not target:
+                    raise ValueError("The selected administrative class does not exist as a canonical class group")
+                class_transfer = self._apply_class_membership_transfer(connection, identity_id, target, actor_user_id, "Class changed in school directory editor")
+                values["class_name"] = target.get("base_class_name") or target["name"]
+            if values:
+                assignments = ", ".join(f"{key} = ?" for key in values)
+                self.execute(connection, f"UPDATE identities SET {assignments} WHERE id = ?", (*values.values(), identity_id))
+            cleaned_subjects: dict[str, str] = {}
+            for item in raw_subjects:
+                if isinstance(item, str):
+                    cleaned = " ".join(item.split())
+                    if cleaned:
+                        cleaned_subjects.setdefault(cleaned.casefold(), cleaned)
+            normalized_subjects = sorted(cleaned_subjects.values(), key=str.casefold)
+            if subjects_supplied:
+                self.execute(connection, "UPDATE teacher_subjects SET active = FALSE WHERE teacher_identity_id = ? AND source = 'admin_override' AND active IS TRUE", (identity_id,))
+                existing_subjects = self.execute(connection, "SELECT subject FROM teacher_subjects WHERE teacher_identity_id = ? AND active IS TRUE", (identity_id,)).fetchall()
+                existing_keys = {" ".join(str(row["subject"]).split()).casefold() for row in existing_subjects}
+                for subject in normalized_subjects:
+                    if subject.casefold() in existing_keys:
+                        continue
+                    self.execute(connection, "INSERT INTO teacher_subjects(teacher_identity_id, subject, source, active, created_by) VALUES (?, ?, 'admin_override', TRUE, ?) ON CONFLICT(teacher_identity_id, subject, source) DO UPDATE SET active = TRUE, created_by = excluded.created_by", (identity_id, subject, actor_user_id))
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'identity.updated', 'person', ?, ?)", (actor_user_id, identity_id, json.dumps({"fields": sorted(values) + (["subjects"] if subjects_supplied else []), "subject_count": len(normalized_subjects) if subjects_supplied else None, "class_group_id": class_transfer.get("group_id") if class_transfer else None, "source_class_group_ids": class_transfer.get("source_group_ids") if class_transfer else []}, ensure_ascii=False, default=str)))
+            return self.execute(connection, "SELECT * FROM identities WHERE id = ?", (identity_id,)).fetchone()
+
+    def update_student_memberships(self, identity_id: Any, from_group_id: Any | None, to_group_id: Any | None, actor_user_id: Any, reason: str = "") -> dict[str, Any]:
+        import json
+        if not to_group_id and not from_group_id:
+            raise ValueError("A source or destination group is required")
+        if from_group_id and to_group_id and str(from_group_id) == str(to_group_id):
+            raise ValueError("Source and destination groups must be different")
+        with self.connection() as connection:
+            identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (identity_id,)).fetchone()
+            if not identity or identity["kind"] != "student" or identity["status"] != "active":
+                raise ValueError("Membership requires an active student identity")
+            group_rows: dict[str, Any] = {}
+            for group_id in (from_group_id, to_group_id):
+                if group_id:
+                    archived_select = "archived_at" if self._group_archive_column_available(connection) else "NULL AS archived_at"
+                    group = self.execute(connection, f"SELECT id, name, group_type, base_class_name, canonical, {archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
+                    if not group or not group["canonical"]:
+                        raise ValueError("Membership requires a canonical group")
+                    if str(group_id) == str(to_group_id) and group["archived_at"]:
+                        raise ValueError("Archived groups cannot receive new memberships")
+                    group_rows[str(group_id)] = group
+            wanted_actions = [(gid, action) for gid, action in ((from_group_id, "exclude"), (to_group_id, "include")) if gid]
+            class_transfer = bool(from_group_id and to_group_id and group_rows[str(from_group_id)]["group_type"] == "class" and group_rows[str(to_group_id)]["group_type"] == "class")
+            if class_transfer:
+                target = group_rows[str(to_group_id)]
+                self.execute(connection, "UPDATE identities SET class_name = ? WHERE id = ?", (target["base_class_name"] or target["name"], identity_id))
+            already_applied = all((row := self.execute(connection, "SELECT action FROM membership_overrides WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND active IS TRUE ORDER BY id DESC LIMIT 1", (identity_id, gid)).fetchone()) and row["action"] == action for gid, action in wanted_actions)
+            if already_applied:
+                return {"identity_id": identity_id, "from_group_id": from_group_id, "to_group_id": to_group_id, "class_transfer": class_transfer, "idempotent": True}
+            if from_group_id:
+                effective_source = self.execute(connection, """SELECT 1 FROM memberships m WHERE m.identity_id = ? AND m.group_id = ? AND m.member_role = 'student' AND m.active IS TRUE
+                    AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE) AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
+                    AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) LIMIT 1""", (identity_id, from_group_id)).fetchone()
+                if not effective_source:
+                    raise ValueError("Student is not currently a member of the source group")
+            for group_id, action in ((from_group_id, "exclude"), (to_group_id, "include")):
+                if group_id:
+                    self.execute(connection, "UPDATE membership_overrides SET active = FALSE WHERE identity_id = ? AND group_id = ? AND member_role = 'student' AND active IS TRUE", (identity_id, group_id))
+                    override = self.execute(connection, "INSERT INTO membership_overrides(identity_id, group_id, member_role, action, reason, created_by) VALUES (?, ?, 'student', ?, ?, ?) RETURNING id", (identity_id, group_id, action, reason.strip(), actor_user_id)).fetchone()
+                    if action == "include":
+                        self.execute(connection, "INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by) VALUES (?, ?, 'student', 'admin_override', ?, TRUE, ?) ON CONFLICT(group_id, identity_id, member_role, source, source_ref) DO UPDATE SET active = TRUE, created_by = excluded.created_by", (group_id, identity_id, f"membership_override:{override['id']}", actor_user_id))
+                    else:
+                        self.execute(connection, "UPDATE memberships SET active = FALSE WHERE group_id = ? AND identity_id = ? AND source = 'admin_override'", (group_id, identity_id))
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, details) VALUES (?, 'membership.transferred', 'membership', ?)", (actor_user_id, json.dumps({"identity_id": identity_id, "from_group_id": from_group_id, "to_group_id": to_group_id, "reason": reason.strip(), "class_transfer": class_transfer}, ensure_ascii=False, default=str)))
+            return {"identity_id": identity_id, "from_group_id": from_group_id, "to_group_id": to_group_id, "class_transfer": class_transfer, "idempotent": False}
 
     def get_identity(self, identity_id: Any) -> Any | None:
         with self.connection() as connection:
@@ -2249,13 +2816,17 @@ class Database:
             return self.execute(connection, "SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
 
     def create_membership(self, group_id: Any, identity_id: Any, member_role: str, source: str, source_ref: str = "", created_by: Any | None = None) -> Any:
+        import json
         with self.connection() as connection:
             identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (identity_id,)).fetchone()
-            group = self.execute(connection, "SELECT canonical FROM groups WHERE id = ?", (group_id,)).fetchone()
+            archived_select = "archived_at" if self._group_archive_column_available(connection) else "NULL AS archived_at"
+            group = self.execute(connection, f"SELECT canonical,{archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
             if member_role != "student" or not identity or identity["kind"] != "student" or identity["status"] != "active":
                 raise ValueError("Membership requires an active student identity")
             if not group or not group["canonical"]:
                 raise ValueError("Membership requires a canonical group")
+            if group["archived_at"]:
+                raise ValueError("Archived groups cannot receive new memberships")
             row = self.execute(
                 connection,
                 """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref, active, created_by)
@@ -2264,6 +2835,8 @@ class Database:
                    RETURNING id""",
                 (group_id, identity_id, member_role, source, source_ref.strip(), created_by),
             ).fetchone()
+            if created_by is not None:
+                self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'membership.added', 'membership', ?, ?)", (created_by, row["id"], json.dumps({"identity_id": identity_id, "group_id": group_id, "source": source, "source_ref": source_ref.strip()}, ensure_ascii=False, default=str)))
             return self.execute(connection, "SELECT * FROM memberships WHERE id = ?", (row["id"],)).fetchone()
 
     def map_group_schedule_audience(
@@ -2287,32 +2860,37 @@ class Database:
             ).fetchone()
             return self.execute(connection, "SELECT * FROM group_schedule_audiences WHERE id = ?", (row["id"],)).fetchone()
 
-    def list_groups_admin(self) -> list[dict[str, Any]]:
+    def list_groups_admin(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.display_name, g.group_type, g.subject, g.base_class_name,
-                          g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref,
-                          g.canonical,
-                           COUNT(DISTINCT m.identity_id) AS member_count,
+                """SELECT g.id, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
+                          g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref, g.admin_note,
+                          (SELECT ta.teacher_identity_id FROM teacher_assignments ta WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE ORDER BY ta.id DESC LIMIT 1) AS default_teacher_identity_id,
+                          (SELECT ti.display_name FROM teacher_assignments ta JOIN identities ti ON ti.id = ta.teacher_identity_id WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE AND ti.status = 'active' ORDER BY ta.id DESC LIMIT 1) AS default_teacher_name,
+                          g.canonical, g.archived_at,
+                           COUNT(DISTINCT CASE WHEN NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) THEN m.identity_id END) AS member_count,
                            COUNT(DISTINCT ta.teacher_identity_id) AS teacher_count
                       FROM groups g
                       LEFT JOIN memberships m ON m.group_id = g.id AND m.active IS TRUE
                         AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE) AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                       LEFT JOIN teacher_assignments ta ON ta.group_id = g.id AND ta.active IS TRUE
                         AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
-                     WHERE g.canonical IS TRUE
+                     WHERE g.canonical IS TRUE AND (? OR g.archived_at IS NULL)
                     GROUP BY g.id, g.name, g.group_type
                     ORDER BY g.group_type, g.name""",
+                (include_archived,),
             ).fetchall()
             result: list[dict[str, Any]] = []
             for row in rows:
                 group = dict(row)
+                group["comment"] = group.get("admin_note")
                 members = self.execute(
                     connection,
                     """SELECT i.id, i.display_name, i.class_name, m.source, m.source_ref
                          FROM memberships m JOIN identities i ON i.id = m.identity_id
                         WHERE m.group_id = ? AND m.active IS TRUE AND i.status = 'active'
+                          AND NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE)
                           AND (m.valid_from IS NULL OR m.valid_from <= CURRENT_DATE)
                           AND (m.valid_until IS NULL OR m.valid_until >= CURRENT_DATE)
                         ORDER BY i.display_name""",
@@ -2349,21 +2927,23 @@ class Database:
                 group["relationship_kind"] = (
                     "base_class" if row["group_type"] == "class"
                     else "exam_profile" if row["group_type"] == "exam_track"
-                    else "instructional" if row["group_type"] in {"subject_group", "instructional_group"}
+                    else "instructional" if row["group_type"] in {"subject_group", "instructional_group", "instructional"}
                     else "other"
                 )
                 result.append(group)
             return result
 
-    def list_groups_admin_summary(self) -> list[dict[str, Any]]:
+    def list_groups_admin_summary(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
         """Return the Groups collection without loading every roster row."""
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.display_name, g.group_type, g.subject, g.base_class_name,
-                          g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref,
-                          g.canonical,
-                          COUNT(DISTINCT m.identity_id) AS member_count,
+                """SELECT g.id, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
+                          g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref, g.admin_note,
+                          (SELECT ta.teacher_identity_id FROM teacher_assignments ta WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE ORDER BY ta.id DESC LIMIT 1) AS default_teacher_identity_id,
+                          (SELECT ti.display_name FROM teacher_assignments ta JOIN identities ti ON ti.id = ta.teacher_identity_id WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE AND ti.status = 'active' ORDER BY ta.id DESC LIMIT 1) AS default_teacher_name,
+                          g.canonical, g.archived_at,
+                          COUNT(DISTINCT CASE WHEN NOT EXISTS (SELECT 1 FROM membership_overrides mo WHERE mo.identity_id = m.identity_id AND mo.group_id = m.group_id AND mo.member_role = 'student' AND mo.action = 'exclude' AND mo.active IS TRUE) THEN m.identity_id END) AS member_count,
                           COUNT(DISTINCT ta.teacher_identity_id) AS teacher_count
                      FROM groups g
                      LEFT JOIN memberships m ON m.group_id = g.id AND m.active IS TRUE
@@ -2372,19 +2952,21 @@ class Database:
                      LEFT JOIN teacher_assignments ta ON ta.group_id = g.id AND ta.active IS TRUE
                        AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
                        AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
-                    WHERE g.canonical IS TRUE
+                    WHERE g.canonical IS TRUE AND (? OR g.archived_at IS NULL)
                     GROUP BY g.id, g.name, g.group_type
                     ORDER BY g.group_type, g.name""",
+                (include_archived,),
             ).fetchall()
             result = []
             for row in rows:
                 item = dict(row)
+                item["comment"] = item.get("admin_note")
                 item["student_count"] = int(item.get("member_count") or 0)
                 item["teacher_count"] = int(item.get("teacher_count") or 0)
                 item["relationship_kind"] = (
                     "base_class" if item["group_type"] == "class"
                     else "exam_profile" if item["group_type"] == "exam_track"
-                    else "instructional" if item["group_type"] in {"subject_group", "instructional_group"}
+                    else "instructional" if item["group_type"] in {"subject_group", "instructional_group", "instructional"}
                     else "other"
                 )
                 result.append(item)
@@ -2420,35 +3002,190 @@ class Database:
                 )
             return self.execute(connection, "SELECT * FROM membership_overrides WHERE id = ?", (row["id"],)).fetchone()
 
+    def deactivate_teacher_assignment(self, assignment_id: Any, teacher_identity_id: Any, actor_user_id: Any) -> Any | None:
+        """Deactivate one exact assignment while retaining its provenance row."""
+        import json
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ? AND teacher_identity_id = ?", (assignment_id, teacher_identity_id)).fetchone()
+            if not row:
+                return None
+            if row["active"]:
+                self.execute(connection, "UPDATE teacher_assignments SET active = FALSE WHERE id = ?", (assignment_id,))
+                details = {"assignment_id": str(row["id"]), "teacher_identity_id": str(row["teacher_identity_id"]),
+                           "group_id": str(row["group_id"]), "subject": row["subject"], "active": False,
+                           "source": row["source"], "source_ref": row["source_ref"], "reason": "admin_editor"}
+                self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'teacher_assignment', ?, ?)",
+                             (actor_user_id, assignment_id, json.dumps(details, ensure_ascii=False, default=str)))
+            return self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ?", (assignment_id,)).fetchone()
+
+    def replace_teacher_assignment(self, assignment_id: Any, teacher_identity_id: Any, group_id: Any,
+                                   subject: str, actor_user_id: Any, *, base_class_name: Any = ...,
+                                   subject_subgroup: Any = ..., classroom_course_id: Any = ...,
+                                   exam_track: Any = ...) -> Any | None:
+        """Move one assignment by retaining its source row and creating an admin override."""
+        import json
+        cleaned_subject = " ".join(str(subject or "").split())
+        if not cleaned_subject:
+            raise ValueError("A subject is required for a teacher assignment")
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ? AND teacher_identity_id = ?", (assignment_id, teacher_identity_id)).fetchone()
+            if not current:
+                return None
+            if not current["active"]:
+                raise ValueError("Only an active teacher assignment can be changed")
+            teacher = self.execute(connection, "SELECT kind,status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
+            archived_select = "archived_at" if self._group_archive_column_available(connection) else "NULL AS archived_at"
+            target = self.execute(connection, f"SELECT id,canonical,{archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
+            if not teacher or teacher["kind"] != "teacher" or teacher["status"] != "active":
+                raise ValueError("Teacher assignment requires an active teacher identity")
+            if not target or not target["canonical"]:
+                raise ValueError("Teacher assignment requires a canonical audience")
+            if target["archived_at"]:
+                raise ValueError("Archived groups cannot receive new teacher assignments")
+            base_class_name = current["base_class_name"] if base_class_name is ... else base_class_name
+            subject_subgroup = current["subject_subgroup"] if subject_subgroup is ... else subject_subgroup
+            classroom_course_id = current["classroom_course_id"] if classroom_course_id is ... else classroom_course_id
+            exam_track = current["exam_track"] if exam_track is ... else exam_track
+            if classroom_course_id and not self.execute(connection, "SELECT 1 FROM classroom_courses WHERE id = ?", (classroom_course_id,)).fetchone():
+                raise ValueError("Teacher assignment Classroom course was not found")
+            target_ref = _teacher_assignment_context_ref(exam_track, classroom_course_id)
+            if (str(current["group_id"]) == str(group_id) and str(current["subject"]) == cleaned_subject
+                    and current["base_class_name"] == base_class_name and current["subject_subgroup"] == subject_subgroup
+                    and current["classroom_course_id"] == classroom_course_id and current["exam_track"] == exam_track):
+                return current
+            self.execute(connection, "UPDATE teacher_assignments SET active = FALSE WHERE id = ?", (assignment_id,))
+            inserted = self.execute(connection, """INSERT INTO teacher_assignments(teacher_identity_id,group_id,subject,base_class_name,subject_subgroup,classroom_course_id,exam_track,source_ref,source,active,created_by)
+                VALUES (?,?,?,?,?,?,?,?,'admin_override',TRUE,?)
+                ON CONFLICT(teacher_identity_id,group_id,subject,capability,source,source_ref)
+                DO UPDATE SET base_class_name=excluded.base_class_name,subject_subgroup=excluded.subject_subgroup,
+                  classroom_course_id=excluded.classroom_course_id,exam_track=excluded.exam_track,
+                  active=TRUE,created_by=excluded.created_by RETURNING id""",
+                (teacher_identity_id, group_id, cleaned_subject, base_class_name, subject_subgroup, classroom_course_id, exam_track, target_ref, actor_user_id)).fetchone()
+            old_details = {"assignment_id": str(current["id"]), "teacher_identity_id": str(current["teacher_identity_id"]),
+                           "group_id": str(current["group_id"]), "subject": current["subject"], "active": False,
+                           "source": current["source"], "source_ref": current["source_ref"],
+                           "reason": "replaced_in_admin_editor", "replacement_assignment_id": str(inserted["id"])}
+            new_details = {"assignment_id": str(inserted["id"]), "teacher_identity_id": str(teacher_identity_id),
+                           "group_id": str(group_id), "subject": cleaned_subject, "active": True,
+                           "source": "admin_override", "replaces_assignment_id": str(current["id"])}
+            for entity_id, details in ((current["id"], old_details), (inserted["id"], new_details)):
+                self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'teacher_assignment', ?, ?)",
+                             (actor_user_id, entity_id, json.dumps(details, ensure_ascii=False, default=str)))
+            return self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ?", (inserted["id"],)).fetchone()
+
     def set_teacher_assignment(self, teacher_identity_id: Any, group_id: Any, subject: str, active: bool, actor_user_id: Any, *, base_class_name: str | None = None, subject_subgroup: str | None = None, classroom_course_id: Any | None = None, exam_track: str | None = None) -> Any:
+        import json
         with self.connection() as connection:
             identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
-            group = self.execute(connection, "SELECT canonical FROM groups WHERE id = ?", (group_id,)).fetchone()
+            archived_select = "archived_at" if self._group_archive_column_available(connection) else "NULL AS archived_at"
+            group = self.execute(connection, f"SELECT canonical,{archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
             if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
                 raise ValueError("Teacher assignment requires an active teacher identity")
             if not group or not group["canonical"]:
                 raise ValueError("Teacher assignment requires a canonical group")
+            if active and group["archived_at"]:
+                raise ValueError("Archived groups cannot receive new teacher assignments")
+            source_ref = _teacher_assignment_context_ref(exam_track, classroom_course_id)
             row = self.execute(
                 connection,
-                """INSERT INTO teacher_assignments(teacher_identity_id, group_id, subject, base_class_name, subject_subgroup, classroom_course_id, exam_track, source, active, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 'admin_override', ?, ?)
+                """INSERT INTO teacher_assignments(teacher_identity_id, group_id, subject, base_class_name, subject_subgroup, classroom_course_id, exam_track, source_ref, source, active, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin_override', ?, ?)
                    ON CONFLICT(teacher_identity_id, group_id, subject, capability, source, source_ref)
                    DO UPDATE SET base_class_name = excluded.base_class_name, subject_subgroup = excluded.subject_subgroup,
                      classroom_course_id = excluded.classroom_course_id, exam_track = excluded.exam_track,
                      active = excluded.active, created_by = excluded.created_by
                    RETURNING id""",
-                (teacher_identity_id, group_id, subject.strip(), base_class_name, subject_subgroup, classroom_course_id, exam_track, active, actor_user_id),
+                (teacher_identity_id, group_id, subject.strip(), base_class_name, subject_subgroup, classroom_course_id, exam_track, source_ref, active, actor_user_id),
             ).fetchone()
-            return self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ?", (row["id"],)).fetchone()
+            assignment = self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ?", (row["id"],)).fetchone()
+            details = {"teacher_identity_id": teacher_identity_id, "group_id": group_id, "subject": subject.strip(), "active": bool(active), "base_class_name": base_class_name, "subject_subgroup": subject_subgroup, "classroom_course_id": classroom_course_id, "exam_track": exam_track}
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'teacher_assignment', ?, ?)", (actor_user_id, row["id"], json.dumps(details, ensure_ascii=False, default=str)))
+            return assignment
+
+    def set_teacher_grade_assignments(self, teacher_identity_id: Any, grade_level: str, subject: str, active: bool, actor_user_id: Any, *, exam_track: str | None = None, classroom_course_id: Any | None = None) -> list[dict[str, Any]]:
+        import json
+        import re
+        grade = str(grade_level).strip()
+        if not re.fullmatch(r"\d{1,2}", grade):
+            raise ValueError("Grade level must be a number")
+        with self.connection() as connection:
+            identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
+            if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
+                raise ValueError("Teacher assignment requires an active teacher identity")
+            normalized_subject = subject.strip()
+            cleaned_track = str(exam_track).strip() if exam_track else None
+            cleaned_course = classroom_course_id
+            if cleaned_course and not self.execute(connection, "SELECT 1 FROM classroom_courses WHERE id = ?", (cleaned_course,)).fetchone():
+                raise ValueError("Teacher assignment Classroom course was not found")
+            source_ref = _teacher_assignment_context_ref(cleaned_track, cleaned_course)
+            current = self.execute(connection, "SELECT id FROM teacher_assignments WHERE teacher_identity_id = ? AND group_id IS NULL AND grade_level = ? AND subject = ? AND capability = 'teach' AND source = 'admin_override' AND source_ref = ?", (teacher_identity_id, grade, normalized_subject, source_ref)).fetchone()
+            if current:
+                row = self.execute(connection, "UPDATE teacher_assignments SET active = ?, exam_track = ?, classroom_course_id = ?, created_by = ? WHERE id = ? RETURNING id", (active, cleaned_track, cleaned_course, actor_user_id, current["id"])).fetchone()
+            else:
+                row = self.execute(connection, """INSERT INTO teacher_assignments(teacher_identity_id, group_id, grade_level, subject, base_class_name, exam_track, classroom_course_id, source_ref, source, active, created_by)
+                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'admin_override', ?, ?) RETURNING id""", (teacher_identity_id, grade, normalized_subject, grade, cleaned_track, cleaned_course, source_ref, active, actor_user_id)).fetchone()
+            assignment = dict(self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ?", (row["id"],)).fetchone())
+            details = {"teacher_identity_id": teacher_identity_id, "grade_level": grade, "subject": normalized_subject, "exam_track": cleaned_track, "active": bool(active), "assignment_id": assignment["id"]}
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.grade_updated', 'teacher_assignment', ?, ?)", (actor_user_id, assignment["id"], json.dumps(details, ensure_ascii=False, default=str)))
+            return [assignment]
+
+    def replace_teacher_grade_assignment(self, assignment_id: Any, teacher_identity_id: Any, grade_level: str,
+                                         subject: str, actor_user_id: Any, *, exam_track: Any = ...,
+                                         classroom_course_id: Any = ...) -> Any | None:
+        import json
+        import re
+        grade = str(grade_level).strip()
+        cleaned_subject = " ".join(str(subject or "").split())
+        if not re.fullmatch(r"\d{1,2}", grade):
+            raise ValueError("Grade level must be a number")
+        if not cleaned_subject:
+            raise ValueError("A subject is required for a teacher assignment")
+        with self.connection() as connection:
+            current = self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ? AND teacher_identity_id = ?", (assignment_id, teacher_identity_id)).fetchone()
+            if not current:
+                return None
+            if not current["active"]:
+                raise ValueError("Only an active teacher assignment can be changed")
+            if current["group_id"] is not None:
+                raise ValueError("Assignment is not a grade-wide teacher assignment")
+            cleaned_track = current["exam_track"] if exam_track is ... else (str(exam_track).strip() if exam_track else None)
+            cleaned_course = current["classroom_course_id"] if classroom_course_id is ... else classroom_course_id
+            if cleaned_course and not self.execute(connection, "SELECT 1 FROM classroom_courses WHERE id = ?", (cleaned_course,)).fetchone():
+                raise ValueError("Teacher assignment Classroom course was not found")
+            target_ref = _teacher_assignment_context_ref(cleaned_track, cleaned_course)
+            identity = self.execute(connection, "SELECT kind,status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
+            if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
+                raise ValueError("Teacher assignment requires an active teacher identity")
+            if (str(current["grade_level"]) == grade and str(current["subject"]) == cleaned_subject
+                    and str(current["source"]) == "admin_override" and str(current["source_ref"] or "") == target_ref):
+                updated = self.execute(connection, "UPDATE teacher_assignments SET exam_track = ?, classroom_course_id = ?, base_class_name = ?, created_by = ? WHERE id = ? RETURNING id", (cleaned_track, cleaned_course, grade, actor_user_id, assignment_id)).fetchone()
+                result_id = updated["id"]
+            else:
+                self.execute(connection, "UPDATE teacher_assignments SET active = FALSE WHERE id = ?", (assignment_id,))
+                replacement = self.execute(connection, "SELECT id FROM teacher_assignments WHERE teacher_identity_id = ? AND group_id IS NULL AND grade_level = ? AND subject = ? AND capability = 'teach' AND source = 'admin_override' AND source_ref = ?", (teacher_identity_id, grade, cleaned_subject, target_ref)).fetchone()
+                if replacement:
+                    self.execute(connection, "UPDATE teacher_assignments SET active = TRUE, exam_track = ?, classroom_course_id = ?, base_class_name = ?, created_by = ? WHERE id = ?", (cleaned_track, cleaned_course, grade, actor_user_id, replacement["id"]))
+                    result_id = replacement["id"]
+                else:
+                    inserted = self.execute(connection, """INSERT INTO teacher_assignments(teacher_identity_id,group_id,grade_level,subject,base_class_name,exam_track,classroom_course_id,source_ref,source,active,created_by)
+                        VALUES (?,NULL,?,?,?,?,?,?, 'admin_override',TRUE,?) RETURNING id""", (teacher_identity_id, grade, cleaned_subject, grade, cleaned_track, cleaned_course, target_ref, actor_user_id)).fetchone()
+                    result_id = inserted["id"]
+            details = {"assignment_id": str(assignment_id), "teacher_identity_id": str(teacher_identity_id),
+                       "grade_level": grade, "subject": cleaned_subject, "exam_track": cleaned_track, "active": True}
+            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id, details) VALUES (?, 'teacher_assignment.updated', 'teacher_assignment', ?, ?)", (actor_user_id, result_id, json.dumps(details, ensure_ascii=False, default=str)))
+            return self.execute(connection, "SELECT * FROM teacher_assignments WHERE id = ?", (result_id,)).fetchone()
 
     def set_homeroom_assignment(self, teacher_identity_id: Any, group_id: Any, active: bool, actor_user_id: Any) -> Any:
         with self.connection() as connection:
             identity = self.execute(connection, "SELECT kind, status FROM identities WHERE id = ?", (teacher_identity_id,)).fetchone()
-            group = self.execute(connection, "SELECT group_type, canonical FROM groups WHERE id = ?", (group_id,)).fetchone()
+            archived_select = "archived_at" if self._group_archive_column_available(connection) else "NULL AS archived_at"
+            group = self.execute(connection, f"SELECT group_type, canonical, {archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
             if not identity or identity["kind"] != "teacher" or identity["status"] != "active":
                 raise ValueError("Homeroom assignment requires an active teacher identity")
             if not group or group["group_type"] != "class" or not group["canonical"]:
                 raise ValueError("Homeroom assignment requires a canonical class group")
+            if active and group["archived_at"]:
+                raise ValueError("Archived groups cannot receive new teacher assignments")
             row = self.execute(
                 connection,
                 """INSERT INTO homeroom_assignments(teacher_identity_id, class_group_id, source, active, created_by)
@@ -2468,10 +3205,13 @@ class Database:
                      WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
                        EXISTS (SELECT 1 FROM teacher_assignments ta WHERE ta.teacher_identity_id = u.identity_id AND ta.group_id = ? AND ta.active IS TRUE
                          AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE))
+                       OR EXISTS (SELECT 1 FROM teacher_assignments ta JOIN groups g ON g.id = ? WHERE ta.teacher_identity_id = u.identity_id AND ta.group_id IS NULL AND ta.grade_level IS NOT NULL AND g.group_type = 'class'
+                         AND (g.name = ta.grade_level OR g.base_class_name = ta.grade_level OR (substr(g.name, 1, length(ta.grade_level)) = ta.grade_level AND substr(g.name, length(ta.grade_level) + 1, 1) NOT BETWEEN '0' AND '9')) AND ta.active IS TRUE
+                         AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE))
                        OR EXISTS (SELECT 1 FROM homeroom_assignments h WHERE h.teacher_identity_id = u.identity_id AND h.class_group_id = ? AND h.active IS TRUE
                          AND (h.valid_from IS NULL OR h.valid_from <= CURRENT_DATE) AND (h.valid_until IS NULL OR h.valid_until >= CURRENT_DATE))
                      )""",
-                 (user_id, group_id, group_id),
+                 (user_id, group_id, group_id, group_id),
             ).fetchone()
             return bool(row)
 
@@ -2488,12 +3228,12 @@ class Database:
                            COUNT(DISTINCT sm.identity_id) AS student_count
                      FROM users u
                      JOIN groups g ON (
-                        EXISTS (SELECT 1 FROM teacher_assignments x WHERE x.teacher_identity_id = u.identity_id AND x.group_id = g.id AND x.active IS TRUE
+                        EXISTS (SELECT 1 FROM teacher_assignments x WHERE x.teacher_identity_id = u.identity_id AND (x.group_id = g.id OR (x.group_id IS NULL AND x.grade_level IS NOT NULL AND g.group_type = 'class' AND (g.name = x.grade_level OR g.base_class_name = x.grade_level OR (substr(g.name, 1, length(x.grade_level)) = x.grade_level AND substr(g.name, length(x.grade_level) + 1, 1) NOT BETWEEN '0' AND '9')))) AND x.active IS TRUE
                           AND (x.valid_from IS NULL OR x.valid_from <= CURRENT_DATE) AND (x.valid_until IS NULL OR x.valid_until >= CURRENT_DATE))
                         OR EXISTS (SELECT 1 FROM homeroom_assignments hx WHERE hx.teacher_identity_id = u.identity_id AND hx.class_group_id = g.id AND hx.active IS TRUE
                           AND (hx.valid_from IS NULL OR hx.valid_from <= CURRENT_DATE) AND (hx.valid_until IS NULL OR hx.valid_until >= CURRENT_DATE))
                      )
-                     LEFT JOIN teacher_assignments ta ON ta.teacher_identity_id = u.identity_id AND ta.group_id = g.id AND ta.active IS TRUE
+                     LEFT JOIN teacher_assignments ta ON ta.teacher_identity_id = u.identity_id AND (ta.group_id = g.id OR (ta.group_id IS NULL AND ta.grade_level IS NOT NULL AND g.group_type = 'class' AND (g.name = ta.grade_level OR g.base_class_name = ta.grade_level OR (substr(g.name, 1, length(ta.grade_level)) = ta.grade_level AND substr(g.name, length(ta.grade_level) + 1, 1) NOT BETWEEN '0' AND '9')))) AND ta.active IS TRUE
                        AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
                      LEFT JOIN homeroom_assignments h ON h.teacher_identity_id = u.identity_id AND h.class_group_id = g.id AND h.active IS TRUE
                        AND (h.valid_from IS NULL OR h.valid_from <= CURRENT_DATE) AND (h.valid_until IS NULL OR h.valid_until >= CURRENT_DATE)
@@ -2530,7 +3270,8 @@ class Database:
                           se.audience, se.subject_subgroup, se.exam_track, se.lesson_type, se.delivery_mode, se.source_coordinate
                      FROM users u
                      JOIN teacher_assignments ta ON ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
-                     JOIN group_schedule_audiences ga ON ga.group_id = ta.group_id
+                     JOIN groups g ON ta.group_id = g.id OR (ta.group_id IS NULL AND ta.grade_level IS NOT NULL AND g.group_type = 'class' AND (g.name = ta.grade_level OR g.base_class_name = ta.grade_level OR (substr(g.name, 1, length(ta.grade_level)) = ta.grade_level AND substr(g.name, length(ta.grade_level) + 1, 1) NOT BETWEEN '0' AND '9')))
+                     JOIN group_schedule_audiences ga ON ga.group_id = g.id
                      JOIN schedule_entries se ON se.audience = ga.audience AND se.archived IS FALSE
                       WHERE u.id = ? AND ga.archived IS FALSE AND {date_range} AND (ta.subject = '' OR ta.subject = se.subject)
                        AND (ta.valid_from IS NULL OR ta.valid_from <= se.lesson_date)
@@ -3014,8 +3755,18 @@ class Database:
         groups = self.list_groups_admin()
         group = next((item for item in groups if str(item.get("id")) == str(group_id)), None)
         if not group:
-            return None
+            with self.connection() as connection:
+                row = self.execute(connection, "SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+                if not row:
+                    return None
+                group = dict(row)
+                group.update({"comment": group.get("admin_note"), "students": [], "teacher_assignments": [], "student_count": 0, "teacher_count": 0, "relationship_kind": "base_class" if row["group_type"] == "class" else "instructional" if row["group_type"] in {"subject_group", "instructional_group", "instructional"} else "other"})
         group["history"] = []
+        with self.connection() as connection:
+            usage = self.execute(connection, """SELECT COUNT(DISTINCT a.id) AS value
+                FROM canonical_schedule_assignments a
+                WHERE CAST(a.canonical_group_ids AS TEXT) LIKE ?""", (f'%"{group_id}"%',)).fetchone()
+            group["schedule_usage_count"] = int(usage["value"] or 0)
         return group
 
     def system_health(self) -> dict[str, Any]:

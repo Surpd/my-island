@@ -9,6 +9,7 @@ dist/
 !.env.example
 data/
 .local-test/
+artifacts/schedule-export/
 # Local source captures and generated school-data audits; keep out of Git.
 backend/.current_full_v2_cell_meta.json
 backend/.current_full_v2_input.json
@@ -24,3 +25,13 @@ backend/__pycache__/
 backend/**/__pycache__/
 .venv/
 site-scaffold/
+
+# Release/build workspaces and private verification output.
+.release-worktree/
+.sites-*/
+artifacts/
+test-results/
+playwright-report/
+schedule-studio-*.png
+docs/SCHOOL_DIRECTORY_UNIFICATION_AUDIT_*.json
+docs/SCHOOL_DIRECTORY_UNIFICATION_DIAGNOSTICS_*.json

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 
 SHEETS_READ_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 GOOGLE_IDENTITY_SCOPES = (
     "openid",
     "email",

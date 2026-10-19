@@ -9,13 +9,15 @@ import {
   PanelRightClose, Plus, RefreshCw, Save, Search, Sigma, Sparkles, Star, Users, X,
 } from 'lucide-react';
 
+import { audienceLabel as groupLabel, audienceShortLabel, subjectLabel } from './school-audience';
+
 type Item = Record<string, any>;
 type AdminApi = <T>(path: string, init?: RequestInit) => Promise<T>;
 type ViewMode = 'week' | 'day' | 'class';
 type ScheduleLayer = 'week' | 'template';
 type AudienceMode = 'groups' | 'base_class' | 'grade' | 'remaining' | 'available_slot' | 'students';
 type Lesson = { id: string; day: number; date: string; period: number; start: string; end: string; grade: number; subject: string; note?: string; teacher: string; room: string; groups: string[]; groupIds?: string[]; teacherIds?: string[]; assignmentIndex?: number; audienceMode: AudienceMode; audienceLabel: string; students: string[]; studentIds?: string[]; audienceRule?: Item; teacherColor: string; warning?: string; changed?: boolean; cancelled?: boolean; block?: Item };
-type DirectoryOption = { id: string; name: string; meta?: string; subjects?: string[] };
+type DirectoryOption = { id: string; name: string; meta?: string; subjects?: string[]; subject?: string; group_type?: string; archived_at?: string | null };
 type ScheduleDropTarget = { day: number; grade: number; period: number | null };
 type LessonTransfer = { lessonId: string; action: 'copy' | 'move' };
 type SaveStatus = 'saved' | 'saving' | 'error' | 'conflict';
@@ -102,25 +104,12 @@ const SUBJECT_ICON: Record<string, ComponentType<{ size?: number; strokeWidth?: 
 };
 const isNoLesson = (subject: string) => /^(?:no[\s_-]*lessons?|нет\s+урока)$/i.test(String(subject || '').trim());
 const SUBJECT_OPTIONS = [
-  'Английский', 'Биология', 'География', 'Естествознание', 'История', 'История искусства',
+  'Английский язык', 'Биология', 'География', 'Естествознание', 'История', 'История искусства',
   'Информатика', 'Классный час', 'Курс по выбору', 'Лаборатория', 'Лаборатория текста',
   'Литература', 'Математика', 'Музыка', 'Настоящее', 'Нет урока', 'Обществознание', 'Пластика', 'Проект',
-  'Русский', 'SDEP', 'Творчество', 'Тренинг', 'Физика', 'Физкультура', 'Химия', 'Цифровой трек',
+  'Русский язык', 'SDEP', 'Творчество', 'Тренинг', 'Физика', 'Физкультура', 'Химия', 'Цифровой трек',
 ];
-const SUBJECT_ALIASES = new Map([
-  ['русский язык', 'Русский'], ['рус', 'Русский'], ['английский язык', 'Английский'], ['англ', 'Английский'],
-  ['лит', 'Литература'], ['общ', 'Обществознание'], ['кл. час', 'Классный час'], ['кл.час', 'Классный час'],
-  ['кл час', 'Классный час'], ['кл. час иван', 'Классный час'], ['история искусств', 'История искусства'],
-  ['ист-иск лида', 'История искусства'], ['музыка марина', 'Музыка'], ['пластика вадим', 'Пластика'],
-  ['лаб текста', 'Лаборатория текста'],
-].map(([alias, subject]) => [String(alias).toLocaleLowerCase('ru'), String(subject)]));
-const normalizeSubject = (subject: string) => {
-  const value = String(subject || '').trim().replace(/\s+/g, ' ');
-  if (isNoLesson(value)) return 'Нет урока';
-  const alias = SUBJECT_ALIASES.get(value.toLocaleLowerCase('ru'));
-  if (alias) return alias;
-  return SUBJECT_OPTIONS.find((option) => option.toLocaleLowerCase('ru') === value.toLocaleLowerCase('ru')) || value;
-};
+const normalizeSubject = (subject: string) => isNoLesson(subject) ? 'Нет урока' : subjectLabel(subject);
 const displaySubject = normalizeSubject;
 const lessonTitle = (lesson: Lesson) => isNoLesson(lesson.subject) && lesson.note ? `${lesson.note} · Нет урока` : displaySubject(lesson.subject);
 
@@ -206,7 +195,7 @@ function LessonInspector({ lesson, api, groups, teachers, students, lessons, sub
         {audienceMode === 'remaining' ? <div className="studio-rule-card is-legacy"><Users size={18} /><div><strong>Сохранено старое правило аудитории</strong><small>Оно не изменится, пока вы не выберете одну из четырёх категорий выше.</small></div></div> : null}
         {audienceMode === 'students' ? <><label>Найти ученика<input placeholder="Фамилия или имя" value={studentQuery} onChange={(event) => setStudentQuery(event.target.value)} /></label><div className="studio-choice-grid">{availableStudents.filter((name) => name.toLowerCase().includes(studentQuery.toLowerCase())).map((name) => <label key={name}><input type="checkbox" checked={selectedGroups.includes(name)} onChange={() => toggle(name, selectedGroups, setSelectedGroups)} /> <span>{name}</span></label>)}</div></> : null}
         <div className="studio-audience-preview"><div><span className="studio-preview-count">{previewError ? '—' : preview.length}</span><div><strong>{audienceLabel}</strong><small>{previewError || 'Предпросмотр по актуальному составу групп'}</small></div>{previewError ? <AlertTriangle size={18} /> : <Check size={18} />}</div><details open><summary>Показать учеников</summary><ul>{preview.map((name) => <li key={name}><span>{name}</span><button type="button" onClick={() => setExcluded([...excluded, name])}>Исключить</button></li>)}</ul></details>{excluded.length ? <div className="studio-exclusions"><strong>Исключения:</strong>{excluded.map((name) => <button type="button" key={name} onClick={() => setExcluded(excluded.filter((item) => item !== name))}>{name} <X size={12} /></button>)}</div> : null}</div>
-      </section></div> : tab === 'students' ? <div className="studio-inspector__content"><section className="studio-form-section"><div className="studio-section-heading"><div><h3>{preview.length} учеников</h3><p>{audienceLabel}</p></div><Users size={18} /></div><div className="studio-student-list">{preview.map((name, index) => <div key={name}><span>{name.split(' ').map((part) => part[0]).join('')}</span><div><strong>{name}</strong><small>{draft.grade}-{index % 2 ? 'Д' : 'А'} · {selectedGroups[0] || audienceLabel}</small></div></div>)}</div></section></div> : <div className="studio-inspector__content"><section className="studio-history-list"><article><span><History size={16} /></span><div><strong>Аудитория уточнена</strong><p>Все остальные в делении «Английский»</p><small>Сегодня, 18:42 · Администратор</small></div></article><article><span><CloudDownload size={16} /></span><div><strong>Импортировано из Google Sheets</strong><p>Занятие сопоставлено с шаблоном</p><small>Сегодня, 17:58</small></div></article><article><span><CalendarDays size={16} /></span><div><strong>Создано из шаблона v12</strong><small>20 сентября, 20:14</small></div></article></section></div>}
+      </section></div> : tab === 'students' ? <div className="studio-inspector__content"><section className="studio-form-section"><div className="studio-section-heading"><div><h3>{preview.length} учеников</h3><p>{audienceLabel}</p></div><Users size={18} /></div><div className="studio-student-list">{preview.map((name, index) => <div key={name}><span>{name.split(' ').map((part) => part[0]).join('')}</span><div><strong>{name}</strong><small>{students.find((student) => student.name === name)?.meta || 'Класс не указан'} · {selectedGroups[0] || audienceLabel}</small></div></div>)}</div></section></div> : <div className="studio-inspector__content"><section className="studio-history-list"><article><span><CalendarDays size={16} /></span><div><strong>Текущее занятие</strong><p>{lesson.date} · {lesson.start}–{lesson.end}</p><small>{lesson.changed ? 'Есть изменения в черновике' : 'Загружено из сохранённого расписания'}</small></div></article><article><span><CloudDownload size={16} /></span><div><strong>Источник</strong><p>{lesson.block?.source_provenance?.tab_title || lesson.block?.source_tab || 'Школьный шаблон расписания'}</p><small>Исторические изменения автоматически не переписываются.</small></div></article></section></div>}
     <footer><button type="button" className="studio-danger-button" onClick={() => onDelete(lesson)}>Удалить урок</button><span className={`studio-save-state is-${saveStatus}`}>{saveStatus === 'saving' ? 'Сохраняем…' : saveStatus === 'error' ? 'Не удалось сохранить' : saveStatus === 'conflict' ? 'Изменено в другой сессии' : 'Сохранено'}</span></footer></aside>;
 }
 
@@ -293,6 +282,13 @@ function applyDraftChanges(base: Lesson[], changes: Item[], groups: DirectoryOpt
   return result;
 }
 
+function presentLesson(lesson: Lesson, directory: DirectoryOption[]): Lesson {
+  const known = (lesson.groupIds || []).map((id) => directory.find((group) => group.id === id)).filter(Boolean) as DirectoryOption[];
+  const names = known.length ? known.map((group) => group.name) : lesson.groups;
+  const caption = ['grade', 'remaining', 'available_slot', 'students'].includes(lesson.audienceMode) ? lesson.audienceLabel : known.length ? known.map(audienceShortLabel).join(' + ') : lesson.audienceLabel;
+  return { ...lesson, subject: subjectLabel(lesson.subject), groups: names, audienceLabel: caption };
+}
+
 export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const [lessons, setLessons] = useState<Lesson[]>([]); const [weekBaseLessons, setWeekBaseLessons] = useState<Lesson[]>([]); const [templateBaseLessons, setTemplateBaseLessons] = useState<Lesson[]>([]); const [mode, setModeState] = useState<ViewMode>('week'); const [layer, setLayerState] = useState<ScheduleLayer>('week'); const [weekStart, setWeekStart] = useState(WEEK_START); const [loadedWeek, setLoadedWeek] = useState<string | null>(null); const [day, setDay] = useState(1); const [grade, setGrade] = useState(9); const [selectedId, setSelectedId] = useState(''); const [loading, setLoading] = useState(true); const [notice, setNotice] = useState(''); const [query, setQuery] = useState(''); const [showImport, setShowImport] = useState(false); const [showVersions, setShowVersions] = useState(false);
   const [groups, setGroups] = useState<DirectoryOption[]>([]); const [teachers, setTeachers] = useState<DirectoryOption[]>([]); const [students, setStudents] = useState<DirectoryOption[]>([]); const [baseVersion, setBaseVersion] = useState('current'); const [draftRevision, setDraftRevision] = useState(0); const [draftChanges, setDraftChanges] = useState<Item[]>([]); const [draftDirty, setDraftDirty] = useState(false); const [saveAttempt, setSaveAttempt] = useState(0); const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved'); const [saveError, setSaveError] = useState(''); const [draftUpdatedAt, setDraftUpdatedAt] = useState(''); const [showPublish, setShowPublish] = useState(false); const [publishing, setPublishing] = useState(false); const [confirmingTemplate, setConfirmingTemplate] = useState(false);
@@ -300,15 +296,15 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const revisionRef = useRef(0); const generationRef = useRef(0); const baseVersionRef = useRef(''); const dirtyRef = useRef(false);
   const transferRef = useRef<LessonTransfer | null>(null); const pasteTargetRef = useRef<ScheduleDropTarget | null>(null);
   const publishableChanges = draftChanges.filter((change) => !change.deferred);
-  const selected = lessons.find((lesson) => lesson.id === selectedId) || null;
+  const selectedRaw = lessons.find((lesson) => lesson.id === selectedId); const selected = selectedRaw ? presentLesson(selectedRaw, groups) : null;
   const selectedReview = selected ? draftChanges.find((change) => change.operation === 'upsert' && String(change.block_key) === String(selected.block?.block_key || selected.id) && Number(change.assignment_index ?? 0) === Number(selected.assignmentIndex ?? 0)) : null;
   const canApproveSelected = Boolean(selectedReview?.review_required && selectedReview.lesson?.audience?.kind !== 'unresolved');
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.split('?')[1] || ''); const savedMode = params.get('mode') as ViewMode | null; if (savedMode && ['week', 'day', 'class'].includes(savedMode)) setModeState(savedMode); const savedGrade = Number(params.get('grade')); if (GRADES.includes(savedGrade)) setGrade(savedGrade); const savedWeek = params.get('week_start'); if (savedWeek && isMondayDate(savedWeek)) setWeekStart(savedWeek);
-    let cancelled = false; Promise.allSettled([api<Item>('/api/admin/groups'), api<Item>('/api/admin/people?kind=teacher'), api<Item>('/api/admin/people?kind=student')]).then(([groupResult, teacherResult, studentResult]) => {
+    let cancelled = false; Promise.allSettled([api<Item>('/api/admin/groups?include_archived=true'), api<Item>('/api/admin/people?kind=teacher'), api<Item>('/api/admin/people?kind=student')]).then(([groupResult, teacherResult, studentResult]) => {
       if (cancelled) return;
-      if (groupResult.status === 'fulfilled') setGroups((groupResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: String(item.subject || item.semantic_dimension || item.group_type || '') })));
-      if (teacherResult.status === 'fulfilled') setTeachers((teacherResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: 'teacher', subjects: (item.teacher_assignments || []).map((assignment: Item) => String(assignment.subject || '')).filter(Boolean) })));
+      if (groupResult.status === 'fulfilled') setGroups((groupResult.value.items || []).map((item: Item) => ({ ...item, id: String(item.id), name: groupLabel(item), meta: subjectLabel(item.subject) || (item.group_type === 'class' ? 'Административный класс' : 'Учебная группа') })));
+      if (teacherResult.status === 'fulfilled') setTeachers((teacherResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: 'teacher', subjects: (item.teacher_assignments || []).map((assignment: Item) => subjectLabel(assignment.subject)).filter(Boolean) })));
       if (studentResult.status === 'fulfilled') setStudents((studentResult.value.items || []).map((item: Item) => ({ id: String(item.id), name: String(item.display_name || item.name), meta: String(item.class_name || '') })));
     }); return () => { cancelled = true; };
   }, [api]);
@@ -374,7 +370,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
   const setMode = (next: ViewMode) => { setModeState(next); const params = new URLSearchParams(window.location.hash.split('?')[1] || ''); params.set('mode', next); params.set('grade', String(grade)); window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}#/admin/schedule?${params}`); };
   const setSelectedGrade = (next: number) => { setGrade(next); const params = new URLSearchParams(window.location.hash.split('?')[1] || ''); params.set('mode', mode); params.set('grade', String(next)); window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}#/admin/schedule?${params}`); };
   const DAYS = useMemo(() => weekDays(weekStart), [weekStart]);
-  const visible = useMemo(() => lessons.filter((lesson) => { if (query && !`${displaySubject(lesson.subject)} ${lesson.teacher} ${lesson.room} ${lesson.audienceLabel}`.toLowerCase().includes(query.toLowerCase())) return false; if (mode === 'day' && lesson.day !== day) return false; if (mode === 'class' && lesson.grade !== grade) return false; return true; }), [day, grade, lessons, mode, query]);
+  const visible = useMemo(() => lessons.map((lesson) => presentLesson(lesson, groups)).filter((lesson) => { if (query && !`${displaySubject(lesson.subject)} ${lesson.teacher} ${lesson.room} ${lesson.audienceLabel}`.toLowerCase().includes(query.toLowerCase())) return false; if (mode === 'day' && lesson.day !== day) return false; if (mode === 'class' && lesson.grade !== grade) return false; return true; }), [day, grade, lessons, mode, query, groups]);
   const attentionCount = new Set(lessons.filter((lesson) => lesson.warning).map((lesson) => String(lesson.block?.block_key || lesson.id))).size;
   useEffect(() => {
     if (!selected || mode !== 'class') return;
@@ -520,7 +516,14 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
       if (!/^[0-4]$/.test(dayIndex) || !GRADES.includes(Number(gradeNumber))) return null;
       return { day: Number(dayIndex), grade: Number(gradeNumber), period: period === 'auto' ? null : Number(period) };
     };
-    const click = (event: Event) => { const cell = targetAt(event); const target = cell && parseTarget(cell); if (target) pasteTargetRef.current = target; };
+    const click = (event: Event) => {
+      const cell = targetAt(event); const target = cell && parseTarget(cell);
+      if (!target) return;
+      pasteTargetRef.current = target;
+      // Cells are mostly non-focusable divs. Move focus to the editor so its
+      // keyboard shortcuts keep working after the user clicks a grid cell.
+      root.focus({ preventScroll: true });
+    };
     const dragStart = (event: DragEvent) => {
       const card = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-lesson-card]') : null;
       const lessonId = String(card?.dataset.lessonCard || '');
@@ -534,7 +537,7 @@ export function ScheduleAdmin({ api }: { api: AdminApi }) {
     root.addEventListener('click', click); root.addEventListener('dragstart', dragStart); root.addEventListener('dragover', dragOver); root.addEventListener('dragleave', dragLeave); root.addEventListener('drop', drop); root.addEventListener('keydown', handleScheduleKeyDown);
     return () => { root.removeEventListener('click', click); root.removeEventListener('dragstart', dragStart); root.removeEventListener('dragover', dragOver); root.removeEventListener('dragleave', dragLeave); root.removeEventListener('drop', drop); root.removeEventListener('keydown', handleScheduleKeyDown); };
   }, [mode, day, grade, weekStart, handleDrop, handleScheduleKeyDown]);
-  return <div className={`schedule-studio ${selected ? 'has-inspector' : ''}`}><section className="studio-main"><header className="studio-topbar"><div><p>MY ISLAND · УПРАВЛЕНИЕ ШКОЛОЙ</p><div className="studio-title-row"><h1>Расписание</h1><span className="studio-title-note">Неделя без хаоса <Sparkles size={14} /></span></div></div><div className="studio-topbar__actions"><button type="button" className="studio-secondary-button" onClick={() => setShowVersions(true)}><History size={16} /> История</button>{layer === 'template' ? <button type="button" className="studio-secondary-button" disabled={confirmingTemplate || draftDirty || draftChanges.length > 0 || baseVersion === 'current'} onClick={() => void confirmTemplate()}>{confirmingTemplate ? <RefreshCw size={16} className="admin-spin" /> : <Check size={16} />} {confirmingTemplate ? 'Подтверждаем…' : 'Подтвердить источник'}</button> : null}<button type="button" className="studio-import-button" onClick={() => setShowImport(true)}><CloudDownload size={17} /> Импорт из Google Sheets</button></div></header>
+  return <div tabIndex={-1} className={`schedule-studio ${selected ? 'has-inspector' : ''}`}><section className="studio-main"><header className="studio-topbar"><div><p>MY ISLAND · УПРАВЛЕНИЕ ШКОЛОЙ</p><div className="studio-title-row"><h1>Расписание</h1><span className="studio-title-note">Неделя без хаоса <Sparkles size={14} /></span></div></div><div className="studio-topbar__actions"><button type="button" className="studio-secondary-button" onClick={() => setShowVersions(true)}><History size={16} /> История</button>{layer === 'template' ? <button type="button" className="studio-secondary-button" disabled={confirmingTemplate || draftDirty || draftChanges.length > 0 || baseVersion === 'current'} onClick={() => void confirmTemplate()}>{confirmingTemplate ? <RefreshCw size={16} className="admin-spin" /> : <Check size={16} />} {confirmingTemplate ? 'Подтверждаем…' : 'Подтвердить источник'}</button> : null}<button type="button" className="studio-import-button" onClick={() => setShowImport(true)}><CloudDownload size={17} /> Импорт из Google Sheets</button></div></header>
     <div className="studio-toolbar"><div className="studio-week-nav"><button type="button" aria-label="Предыдущая неделя" onClick={() => navigateWeek(-1)} disabled={loading || dirtyRef.current || saveStatus !== 'saved'}><ChevronLeft size={18} /></button><span><strong>{weekRangeLabel(weekStart)}</strong><small>{layer === 'template' ? 'Базовый шаблон' : draftChanges.length ? `Черновик недели · ${draftChanges.length} изменений` : 'Опубликованная версия'}</small></span><button type="button" aria-label="Следующая неделя" onClick={() => navigateWeek(1)} disabled={loading || dirtyRef.current || saveStatus !== 'saved'}><ChevronRight size={18} /></button></div><div className="studio-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Урок, учитель, кабинет…" /></div><button type="button" className="studio-filter-button"><ListFilter size={17} /> Фильтры</button><ModeSwitch value={mode} onChange={setMode} /></div>
     <div className="studio-context-bar"><div className="studio-layer-switch"><button type="button" className={layer === 'week' ? 'is-active' : ''} onClick={() => switchLayer('week')}>Неделя</button><button type="button" className={layer === 'template' ? 'is-active' : ''} onClick={() => switchLayer('template')}>Шаблон</button></div><span>{draftChanges.length ? `Черновик · ${draftChanges.length} изменений${draftUpdatedAt ? ` · ${new Date(draftUpdatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : ''}` : layer === 'template' ? `Шаблон ${baseVersion}` : `${weekRangeLabel(weekStart)} · опубликованная версия`}</span>{pendingTemplate !== null && pendingTemplate > 0 ? <button type="button" className="studio-attention" onClick={() => { switchLayer('template'); setShowImport(true); }}>Изменения в источнике: {pendingTemplate}</button> : null}<div className={`studio-autosave is-${saveStatus}`}>{saveStatus === 'saving' ? <><RefreshCw size={14} className="admin-spin" /> Сохраняем…</> : saveStatus === 'error' ? <><AlertTriangle size={14} /> Не удалось сохранить</> : saveStatus === 'conflict' ? <><AlertTriangle size={14} /> Расписание изменилось в другой сессии</> : draftChanges.length ? <><Check size={14} /> Черновик сохранён{draftUpdatedAt ? ` · ${new Date(draftUpdatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : ''}</> : <><Check size={14} /> Сохранено</>}</div>{draftChanges.length ? <button type="button" className="studio-discard-link" onClick={() => void discard()}>Отменить изменения</button> : null}<div className="studio-attention"><AlertTriangle size={15} /> Требуют внимания: {attentionCount}</div></div>
     {saveStatus === 'error' || saveStatus === 'conflict' ? <div className="studio-save-error" role="alert"><AlertTriangle size={17} /><div><strong>{saveStatus === 'conflict' ? 'Черновик изменился в другой сессии.' : 'Изменения остались в этой вкладке, но не сохранены.'}</strong><span>{saveError || 'Перед публикацией необходимо сохранить черновик.'}</span>{saveStatus === 'conflict' ? <small>Локальные изменения сохранены здесь. Объединение добавит их поверх актуальной серверной версии, сохранив прочие серверные изменения.</small> : null}</div>{saveStatus === 'conflict' ? <button type="button" onClick={() => void retryDraftSave(true)}>Объединить и сохранить</button> : <button type="button" onClick={() => void retryDraftSave()}>Повторить сохранение</button>}</div> : null}

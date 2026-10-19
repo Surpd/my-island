@@ -304,6 +304,13 @@ class MergeAwareParsingTests(unittest.TestCase):
         self.assertEqual(rows[(0, "09:00", "09:45", "5,6")][0]["raw_text"], "Русский")
         self.assertEqual(rows[(0, "09:00", "09:45", "7")][0]["raw_text"], "Физика")
 
+    def test_two_letter_administrative_class_header_is_not_dropped(self):
+        values = [["", "9-Ан", "9-Д"], ["", "Пн", "Пн"],
+                  ["09:00-09:45", "Математика A", "Английский 8"]]
+        rows = parse_structure(values, sheet_id="1", title="Шаблон", week_start="2026-09-21")
+        self.assertEqual(rows[(0, "09:00", "09:45", "9")][0]["audience"], "9-Ан")
+        self.assertEqual(len(rows[(0, "09:00", "09:45", "9")]), 2)
+
     def test_layout_drift_is_controlled(self):
         with self.assertRaisesRegex(WeeklyIngestionError, "class-header"):
             layout_profile([["", "предмет"], ["09:00-09:45", "Русский"]])
