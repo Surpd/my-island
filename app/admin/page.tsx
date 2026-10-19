@@ -115,14 +115,21 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response: Response;
+  const method = (init?.method || 'GET').toUpperCase();
+  for (let attempt = 0; ; attempt++) {
   try {
     response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
   } catch (cause) {
-    const method = (init?.method || 'GET').toUpperCase();
+    if (attempt === 0 && method === 'GET' && (typeof navigator === 'undefined' || navigator.onLine)) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      continue;
+    }
     const networkState = typeof navigator !== 'undefined' && !navigator.onLine ? 'Браузер сообщает, что сеть отключена.' : 'HTTP-ответ не получен: соединение с API прервалось или браузер заблокировал запрос.';
     const error = new Error(`${networkState} Запрос: ${method} ${API_BASE}${path}.`) as ApiError;
     error.cause = cause;
     throw error;
+  }
+  break;
   }
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
