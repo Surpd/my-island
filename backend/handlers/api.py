@@ -27,6 +27,7 @@ from backend.services.google_live import GoogleLiveClient, GoogleLiveError, Goog
 from backend.services.google_oauth import build_google_authorization_url, google_config
 from backend.services.google_contract import SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE
 from backend.services.schedule_sheet_publishing import export_saved_week
+from backend.services.school_template_selection import open_active_school_template
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
 from backend.services.canonical_schedule import canonical_version, effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
@@ -36,7 +37,7 @@ from backend.services.schedule_drafts import (
     merge_import_changes, preview_changes, publish_draft, save_draft,
 )
 from backend.services.schedule_experiments import (
-    ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment, open_school_canonical_template,
+    ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
     duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment,
 )
 from backend.services.school_experiment_workspace import (
@@ -1095,7 +1096,7 @@ def create_router(database: Database) -> APIRouter:
         try:
             if local_school_workspace_enabled():
                 return import_school_template(source, store)
-            return open_school_canonical_template(store, actor_user_id=principal["id"])
+            return open_active_school_template(store)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

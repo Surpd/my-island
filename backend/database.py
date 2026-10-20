@@ -309,6 +309,14 @@ CREATE TABLE IF NOT EXISTS schedule_experiment_drafts (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS schedule_experiment_drafts_updated_idx ON schedule_experiment_drafts(updated_at DESC);
+CREATE TABLE IF NOT EXISTS school_template_selection (
+  scope TEXT PRIMARY KEY CHECK (scope = 'school'),
+  draft_id TEXT NOT NULL REFERENCES schedule_experiment_drafts(id) ON DELETE RESTRICT,
+  source_draft_id TEXT NOT NULL,
+  source_revision INTEGER NOT NULL CHECK (source_revision > 0),
+  source_payload_sha256 TEXT NOT NULL,
+  activated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS schedule_activity_catalog (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
