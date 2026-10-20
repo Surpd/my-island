@@ -63,14 +63,14 @@ class ProductionSchoolWorkspaceRouteTests(unittest.TestCase):
         self.assertEqual(saved.status_code, 200)
         self.assertIs(save.call_args.args[0], self.database)
 
-    def test_school_import_uses_canonical_database_without_local_importer(self):
+    def test_school_import_opens_active_saved_template_without_local_importer(self):
         headers = {"X-Dev-Auth": "browser:valid"}
-        with patch("backend.handlers.api.open_school_canonical_template", return_value={"id": "draft-1"}) as open_template, \
+        with patch("backend.handlers.api.open_active_school_template", return_value={"id": "draft-1"}) as open_template, \
                 patch("backend.handlers.api.import_school_template") as local_import:
             response = self.client.post("/api/admin/schedule/experiments/school/import", headers=headers)
         self.assertEqual(response.status_code, 200)
         self.assertIs(open_template.call_args.args[0], self.database)
-        self.assertEqual(open_template.call_args.kwargs["actor_user_id"], "admin-uuid")
+        self.assertEqual(open_template.call_args.kwargs, {})
         local_import.assert_not_called()
 
     def test_school_directory_uses_production_database_without_local_source(self):
