@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from 'next';
 import Script from 'next/script';
 import './globals.css';
+import './workspace.css';
 
 export const metadata: Metadata = {
   title: 'Мой Остров',
+  icons: { icon: '/favicon.svg' },
   description:
     'Школьный кабинет для учеников, преподавателей и администраторов.',
 };

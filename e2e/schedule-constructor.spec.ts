@@ -4,6 +4,16 @@ import { test } from './helpers/experiment-test';
 const API = 'http://127.0.0.1:8011';
 const ADMIN = { 'X-Dev-Auth': 'admin:1' };
 
+async function addLessonForGroup(page: import('@playwright/test').Page, subject: string, groupName: RegExp) {
+  await page.getByRole('button', { name: 'Форма', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Название активности' }).fill(subject);
+  const form = page.locator('.constructor-create-form');
+  const picker = form.getByRole('region', { name: 'Участники занятия' });
+  await picker.getByRole('button', { name: /Учебные группы/ }).click();
+  await picker.getByRole('checkbox', { name: groupName }).check();
+  await form.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
+}
+
 test('constructor keeps edits local until manual save and persists a distinguishable English group', async ({ page }) => {
   test.setTimeout(45_000);
   await page.addInitScript(() => {
@@ -32,7 +42,7 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(String(klass!.id));
   await page.locator('[data-cell]').first().click();
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Предмет нового занятия' }).fill('Английский язык');
+  await page.getByRole('combobox', { name: 'Название активности' }).fill('Английский язык');
   const picker = page.getByRole('region', { name: 'Участники занятия' });
   await picker.getByRole('button', { name: /Учебные группы/ }).click();
   await picker.getByRole('checkbox', { name: /^Английский язык · группа 6\b/u }).check();
@@ -110,12 +120,11 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   const cells = page.locator('[data-cell]');
   await expect(cells.first()).toBeVisible();
   await cells.first().click();
-  await page
-    .getByPlaceholder('мат 9 A ДФ 17')
-    .fill('мат 9А A');
+  await page.getByRole('textbox', { name: 'Быстрый ввод урока в ячейке' }).fill('мат 9А');
   await expect(page.locator('.constructor-suggestions')).toContainText(
     '9А Математика A',
   );
+  await page.getByRole('combobox', { name: 'Распознанный предмет' }).selectOption('Математика');
   await page.getByRole('combobox', { name: 'Распознанная группа' }).selectOption(groupId);
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
   await expect(page.locator('.constructor-card')).toHaveCount(1);
@@ -138,11 +147,14 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await cells.first().click();
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'с', code: 'KeyC', ctrlKey: true, bubbles: true })));
   await page.locator('[data-cell="1:0"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.constructor-card.active')).toHaveCount(0);
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'м', code: 'KeyV', ctrlKey: true, bubbles: true })));
   await expect(page.locator('.constructor-card')).toHaveCount(2);
   await page.locator('[data-cell="1:0"]').click();
   await page.keyboard.press('Control+c');
   await cells.first().click();
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Control+v');
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-card.error')).toHaveCount(2);
@@ -153,22 +165,30 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await expect(page.locator('.constructor-card')).toHaveCount(3);
   await cells.first().click();
   await page.keyboard.press('Escape');
+  await expect(page.locator('.constructor-card.active')).toHaveCount(0);
   await page.keyboard.press('Control+x');
   await page.locator('[data-cell="2:0"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.constructor-card.active')).toHaveCount(0);
+  await expect(page.locator('[data-cell="2:0"]')).toBeFocused();
   await page.keyboard.press('Control+v');
   await expect(page.locator('.constructor-card')).toHaveCount(3);
+  await expect(page.locator('[data-cell="1:0"] .constructor-card')).toHaveCount(1);
+  await expect(page.locator('[data-cell="2:0"] .constructor-card')).toHaveCount(2);
   await page.locator('[data-cell="2:0"] .constructor-card').first().dragTo(page.locator('[data-cell="3:0"]'), { sourcePosition: { x: 4, y: 20 }, targetPosition: { x: 20, y: 20 } });
   await expect(page.locator('[data-cell="3:0"] .constructor-card')).toHaveCount(
     1,
   );
   await page.locator('[data-cell="1:0"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.constructor-card.active')).toHaveCount(0);
   await page.keyboard.press('Shift+ArrowDown');
   await page.keyboard.press('Control+c');
-  await expect(page.locator('.constructor-status')).toContainText(
-    '2 занятий, 1 × 2 ячеек',
-  );
+  await expect(page.locator('.constructor-status')).toContainText('2 занятий, 1 × 2 ячеек');
   await page.getByRole('button', { name: 'Вторник' }).click();
   await cells.first().click();
+  await page.keyboard.press('Escape');
+  await expect(cells.first()).toBeFocused();
   await page.keyboard.press('Control+v');
   await expect(page.locator('[data-cell="0:0"] .constructor-card')).toHaveCount(
     1,
@@ -221,11 +241,14 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+c');
   await page.locator(`[data-cell="${emptyTuesdayRow}:${gradeNineColumn}"]`).click({ position: { x: 8, y: 8 } });
+  await page.keyboard.press('Escape');
+  await expect(page.locator(`[data-cell="${emptyTuesdayRow}:${gradeNineColumn}"]`)).toBeFocused();
   await page.keyboard.press('Control+v');
   await expect(page.locator(`[data-cell="${emptyTuesdayRow}:${gradeNineColumn}"] .constructor-card`)).toHaveCount(3);
 
   // A repeated paste creates a real schedule conflict in the isolated fixture.
   await page.locator(`[data-cell="0:${gradeNineColumn}"]`).click({ position: { x: 8, y: 8 } });
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Control+v');
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-conflict-panel')).toContainText('Проблемы расписания');
@@ -236,8 +259,10 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await expect(page.getByRole('button', { name: 'День' })).toHaveClass(/active/);
   await expect(page.locator('.constructor-card.active')).toHaveCount(1);
 
-  await page.locator('.constructor-inspector').getByRole('button', { name: /Все свободные/ }).click();
-  await expect(page.locator('.constructor-inspector')).toContainText('Состав определяется по ученикам');
+  const availableSlotMode = page.locator('.constructor-inspector').getByRole('button', { name: /Все остальные/ });
+  await availableSlotMode.click();
+  await expect(availableSlotMode).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.constructor-inspector')).toContainText('Все остальные');
 
   await page.getByRole('button', { name: 'Шаблон' }).click();
   const firstStart = page.getByLabel('Начало 1 урока');
@@ -352,15 +377,9 @@ test('constructor: overlapping memberships identify a student conflict', async (
     .getByRole('combobox', { name: 'Фильтр по классу' })
     .selectOption(classId);
   await page.locator('[data-cell="0:0"]').click();
-  await page.getByPlaceholder('мат 9 A ДФ 17').fill('Математика');
-  await page.getByRole('button', { name: 'Добавить занятие' }).click();
-  await page.locator('.constructor-inspector').getByRole('button', { name: /Учебные группы/ }).click();
-  await page.locator('.constructor-inspector').getByRole('checkbox', { name: /8Б математика А/ }).check();
-  await page.getByRole('button', { name: 'Урок', exact: true }).click();
-  await page.getByPlaceholder('мат 9 A ДФ 17').fill('Английский');
-  await page.getByRole('button', { name: 'Добавить занятие' }).click();
-  await page.locator('.constructor-inspector').getByRole('button', { name: /Учебные группы/ }).click();
-  await page.locator('.constructor-inspector').getByRole('checkbox', { name: /8Б английский Б/ }).check();
+  await addLessonForGroup(page, 'Математика', /8Б математика А/);
+  await page.locator('[data-cell="0:0"] .constructor-cell-add').click();
+  await addLessonForGroup(page, 'Английский', /8Б английский Б/);
   await page.locator('.constructor-issue-count').click();
   await expect(
     page.locator('[data-cell="0:0"] .constructor-card.error'),
@@ -369,6 +388,8 @@ test('constructor: overlapping memberships identify a student conflict', async (
   await page.locator('[data-cell="0:0"] .constructor-card').first().click();
   await page.keyboard.press('Control+c');
   await page.locator('[data-cell="1:0"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-cell="1:0"]')).toBeFocused();
   await page.keyboard.press('Control+v');
   await expect(page.locator('[data-cell="1:0"] .constructor-card')).toHaveCount(
     1,
@@ -422,7 +443,7 @@ test('constructor: drag resize spans the week and persists; double click restore
   await page.mouse.move(zoomGrip!.x + zoomGrip!.width / 2 + 60, zoomGrip!.y + zoomGrip!.height / 2, { steps: 6 });
   await page.mouse.up();
   await expect.poll(async () => (await column.boundingBox())!.width).toBeGreaterThan(scaled + 45);
-  await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await page.getByRole('button', { name: 'Сохранить черновик', exact: true }).click();
   await page.reload();
   await page.getByRole('group', { name: 'Разделы черновиков' }).getByRole('button', { name: /Мои черновики/ }).click();
   await page.getByRole('button', { name: /Новый шаблон/ }).first().click();

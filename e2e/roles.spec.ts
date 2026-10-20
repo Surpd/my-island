@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const API = 'http://localhost:8011';
+const API = 'http://127.0.0.1:8011';
 
 test('Admin authenticates locally, reads API, and navigates key sections', async ({ page }) => {
   const responses: number[] = [];
@@ -27,6 +27,8 @@ test('Admin authenticates locally, reads API, and navigates key sections', async
 
 test('Teacher and student load their interfaces; student cannot access admin API', async ({ page }) => {
   const duplicateKeyWarnings: string[] = [];
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => {
     if (message.type() === 'error' && /same key|duplicate key/i.test(message.text())) {
       duplicateKeyWarnings.push(message.text());
@@ -40,11 +42,16 @@ test('Teacher and student load their interfaces; student cannot access admin API
 
   await page.goto('/');
   await expect(page.getByRole('button', { name: /Расписание/ }).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Расписание', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
+  await expect(page.getByText('Занятий нет', { exact: true })).toBeVisible();
+  await page.locator('.scene-focus-back').click();
   await page.locator('.profile-button').click();
   await expect(page.getByRole('heading', { name: 'Тестовый ученик' })).toBeVisible();
   await expect(page.getByText('Мои группы', { exact: true })).toBeVisible();
   await expect(page.locator('.group-card').first()).toBeVisible();
   await expect.poll(() => duplicateKeyWarnings).toEqual([]);
+  expect(pageErrors).toEqual([]);
   const adminResponse = await page.request.get(`${API}/api/admin/groups`, { headers: { 'X-Dev-Auth': 'student:1' } });
   expect(adminResponse.status()).toBe(403);
   await expect(page.getByRole('button', { name: /Администрирование|Admin/ })).toHaveCount(0);

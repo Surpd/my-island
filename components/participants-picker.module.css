@@ -15,7 +15,7 @@
 
 .heading strong { font-size: 15px; }
 .heading span, .mode small, .option small { color: #66778a; }
-.audienceCaption { margin: -7px 0 0; padding: 6px 9px; border-left: 3px solid #3976ae; border-radius: 4px; background: #f2f7fc; color: #36546e; font-size: 12px; font-weight: 600; }
+.audienceCaption { margin: -7px 0 0; padding: 6px 9px; border-left: 3px solid var(--ws-accent, #3976ae); border-radius: 4px; background: var(--ws-paper, #f2f7fc); color: #36546e; font-size: 12px; font-weight: 600; }
 .advancedAudience { border-top: 1px solid #e3e9ef; padding-top: 7px; }
 .advancedAudience summary { cursor: pointer; color: #52687c; font-size: 11px; font-weight: 600; }
 .advancedAudienceBody { display: grid; gap: 9px; padding-top: 8px; }
@@ -54,8 +54,8 @@
 }
 
 .mode:hover, .option:hover { background: #f4f8fb; }
-.mode.active { border-color: #3976ae; background: #eaf4ff; box-shadow: inset 0 0 0 1px #3976ae; }
-.mode:focus-visible, .chip button:focus-visible { outline: 2px solid #3976ae; outline-offset: 2px; }
+.mode.active { border-color: var(--ws-accent, #3976ae); background: var(--ws-soft, #eaf4ff); box-shadow: inset 0 0 0 1px var(--ws-accent, #3976ae); }
+.mode:focus-visible, .chip button:focus-visible { outline: 2px solid var(--ws-accent, #3976ae); outline-offset: 2px; }
 .mode b { font-size: 12px; }
 .mode small { font-size: 11px; }
 
@@ -74,7 +74,7 @@
 .source p { margin: 2px 0 0; color: #627185; line-height: 1.35; }
 
 .selected { display: flex; flex-wrap: wrap; gap: 5px; }
-.chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 8px; border-radius: 20px; background: #eaf4ff; color: #244d73; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 8px; border-radius: 20px; background: var(--ws-soft, #eaf4ff); color: #244d73; }
 .chip button { padding: 0 2px; border: 0; background: transparent; color: inherit; font-size: 17px; line-height: 1; cursor: pointer; }
 
 .options {
@@ -88,7 +88,7 @@
 }
 .root .option { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 6px 9px; cursor: pointer; }
 .option + .option { border-top: 1px solid #eef1f5; }
-.root .option input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3976ae; }
+.root .option input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--ws-accent, #3976ae); }
 .option span { display: grid; gap: 1px; min-width: 0; }
 .option b { font-weight: 600; }
 .empty { margin: 0; padding: 12px; color: #66778a; }

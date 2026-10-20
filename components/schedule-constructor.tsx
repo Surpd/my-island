@@ -1339,7 +1339,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       col >= bounds.left &&
       col <= bounds.right,
     );
-  const selectCell = (row: number, col: number, extend = false) => {
+  const selectCell = (row: number, col: number, extend = false, focusEditor = true) => {
     const cell = { row, col };
     if (!extend || !anchor) setAnchor(cell);
     setFocus(cell);
@@ -1352,7 +1352,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setTargetClassId(gridColumns[col].classIds[0]);
     else if (gridColumns[col]?.classIds.length > 1)
       setTargetClassId('');
-    setTimeout(() => quickInput.current?.focus(), 0);
+    setTimeout(() => {
+      if (focusEditor) quickInput.current?.focus();
+      else root.current?.querySelector<HTMLElement>(`[data-cell="${keyOf(cell)}"]`)?.focus();
+    }, 0);
   };
   const editCell = (initial?: string) => {
     if (!focus || !payload) return;
@@ -1731,7 +1734,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           ),
         ),
       };
-      selectCell(next.row, next.col, event.shiftKey);
+      selectCell(next.row, next.col, event.shiftKey, false);
     } else if (key === 'enter' && focus) {
       event.preventDefault();
       event.stopPropagation();
@@ -1899,7 +1902,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           </button>
         </output>
       ) : null}
-      {activityEditor ? <div className="constructor-conflict-backdrop"><section className="constructor-conflict-dialog constructor-catalog-dialog" role="dialog" aria-modal="true" aria-labelledby="constructor-catalog-title">
+      {activityEditor ? <div className="constructor-conflict-backdrop"><dialog ref={(node) => { if (node && !node.open) node.showModal(); }} onCancel={(event) => { event.preventDefault(); if (!catalogSaving) setActivityEditor(null); }} className="constructor-conflict-dialog constructor-catalog-dialog" aria-modal="true" aria-labelledby="constructor-catalog-title">
         <header><h2 id="constructor-catalog-title">Каталог кружков и курсов</h2><button aria-label="Закрыть каталог" disabled={catalogSaving} onClick={() => setActivityEditor(null)}><X size={18} /></button></header>
         <label>Запись каталога<select aria-label="Редактировать запись каталога" value={activityEditor.item?.id || ''} onChange={(event) => editActivity(activities.find((item) => item.id === event.target.value))}><option value="">Создать новую</option>{activities.map((item) => <option key={item.id} value={item.id}>{item.name}{item.status === 'archived' ? ' · в архиве' : ''}</option>)}</select></label>
         <label>Название<input autoFocus value={activityEditor.name} onChange={(event) => setActivityEditor((item) => item ? { ...item, name: event.target.value } : item)} /></label>
@@ -1909,7 +1912,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         <label>Кабинет<input value={activityEditor.room} onChange={(event) => setActivityEditor((item) => item ? { ...item, room: event.target.value } : item)} /></label>
         <p>Изменения каталога не переписывают занятия уже созданных недель. Кружки не назначаются ученикам.</p>
         <footer>{activityEditor.item ? <button disabled={catalogSaving} onClick={async () => { await archiveActivity(activityEditor.item!); setActivityEditor(null); }}>{activityEditor.item.status === 'active' ? 'В архив' : 'Восстановить'}</button> : null}<button disabled={catalogSaving} onClick={() => setActivityEditor(null)}>Отмена</button><button className="is-primary" disabled={catalogSaving || !activityEditor.name.trim()} onClick={() => void saveActivityEditor()}>{catalogSaving ? 'Сохраняем…' : 'Сохранить запись'}</button></footer>
-      </section></div> : null}
+      </dialog></div> : null}
       {versionConflict ? (
         <div className="constructor-conflict-backdrop">
           <section className="constructor-conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="constructor-conflict-title">
@@ -2007,6 +2010,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             {(payload.import_review.visual_exclusions || []).map((item: Raw) => <p key={item.source_cell}>Отдельная заметка {item.source_cell}: «{item.raw_text?.trim()}» · {item.reason}.</p>)}
           </details> : null}
           <div className="constructor-toolbar">
+            <div className="constructor-toolbar-group" role="group" aria-label="Черновик и публикация недели">
             <button
               onClick={() => {
                 void (async () => {
@@ -2031,6 +2035,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 setDirty(true);
               }}
             />
+            </div>
+            <div className="constructor-toolbar-group" role="group" aria-label="Вид расписания и инструменты">
             <div className="constructor-view-tabs" role="group" aria-label="Режим просмотра">
               <button className={viewMode === 'day' ? 'active' : ''} onClick={() => { setViewMode('day'); setAnchor(null); setFocus(null); setSelectedId(''); }}>День</button>
               <button className={viewMode === 'week' ? 'active' : ''} onClick={() => { setViewMode('week'); setAnchor(null); setFocus(null); setSelectedId(''); }}>Неделя</button>
@@ -2086,6 +2092,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <select className="constructor-zoom" aria-label="Масштаб" value={zoom} onChange={(event) => { setFitWidth(false); setZoom(Number(event.target.value)); }}>{[70, 80, 85, 90, 100, 110, 120, 130, 140, 150].map((value) => <option key={value} value={value}>{value}%</option>)}</select>
             <button onClick={() => { setFitWidth(false); setZoom((value) => Math.min(150, value + 10)); }} aria-label="Увеличить масштаб">+</button>
             <button onClick={() => setFullScreen((value) => !value)} aria-label={fullScreen ? 'Выйти из полного экрана' : 'Полный экран'}><Expand size={16} /></button>
+            </div>
           </div>
           <div className={`constructor-filters ${filtersOpen || query ? '' : 'is-collapsed'}`}>
             <label>Цвета <select aria-label="Режим цвета" value={colorMode} onChange={(event) => setColorMode(event.target.value as typeof colorMode)}><option value="teacher">По преподавателям</option><option value="subject">По предметам</option><option value="none">Без заливки</option></select></label>
@@ -2409,7 +2416,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                 onKeyDown={(event) => {
                                   event.stopPropagation();
                                   if (event.key === 'Enter') { event.preventDefault(); addLesson(); }
-                                  if (event.key === 'Escape') { setQuick(''); setQuickChoice({}); event.currentTarget.blur(); }
+                                  if (event.key === 'Escape') { setQuick(''); setQuickChoice({}); event.currentTarget.closest<HTMLElement>('[data-cell]')?.focus(); }
                                 }}
                                 placeholder="Введите урок…"
                               /> : null}
