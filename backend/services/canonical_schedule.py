@@ -344,7 +344,28 @@ def import_canonical_artifact(database: Database, artifact: Mapping[str, Any], *
                 "assignments": inserted_assignments, "idempotent": bool(existing)}
 
 
+def publication_head(database: Database, scope_key: str) -> dict[str, Any] | None:
+    """Optional manual pointer; old installations remain readable pre-migration.
+
+    Detect the table before querying it (a missing-table exception would abort a
+    PostgreSQL transaction). Explicit source artifacts stay immutable/available.
+    """
+    with database.connection() as connection:
+        exists = database.execute(connection,
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schedule_publication_heads'"
+            if database.database_url else
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_publication_heads'").fetchone()
+        if not exists:
+            return None
+        row = database.execute(connection, "SELECT * FROM schedule_publication_heads WHERE scope_key=?", (scope_key,)).fetchone()
+        return dict(row) if row else None
+
+
 def canonical_version(database: Database, version_id: str | None = None) -> dict[str, Any] | None:
+    if version_id is None:
+        head = publication_head(database, "template")
+        if head:
+            version_id = head["version_id"]
     with database.connection() as connection:
         row = database.execute(connection, "SELECT * FROM canonical_schedule_versions WHERE version_id = ?", (version_id,)).fetchone() if version_id else database.execute(connection, """SELECT * FROM canonical_schedule_versions
             WHERE status <> 'superseded' ORDER BY CASE status WHEN 'authoritative' THEN 0 WHEN 'approved_with_exceptions' THEN 1 WHEN 'approved_baseline' THEN 2 ELSE 3 END, COALESCE(approved_at,created_at) DESC, created_at DESC, version_id DESC LIMIT 1""").fetchone()
@@ -929,6 +950,16 @@ def _assignments(database: Database, block_id: Any, patch: Mapping[str, Any] | N
 
 
 def _effective_week(database: Database, version_id: str | None, week_start: str) -> dict[str, Any] | None:
+    # A manually published week is an independent immutable edition, pinned to
+    # its own canonical base even after another template/source is imported.
+    head = publication_head(database, f"week:{week_start}")
+    if head:
+        with database.connection() as connection:
+            row = database.execute(connection, """SELECT ew.*,cv.status AS canonical_status,cv.source_snapshot_id,cv.source_fingerprint
+                FROM canonical_effective_weeks ew JOIN canonical_schedule_versions cv ON cv.version_id=ew.version_id
+                WHERE ew.effective_week_id=? AND ew.week_start=?""", (head["published_id"], week_start)).fetchone()
+            if row:
+                return dict(row)
     with database.connection() as connection:
         query = """SELECT ew.*,cv.status AS canonical_status,cv.source_snapshot_id,cv.source_fingerprint
                    FROM canonical_effective_weeks ew JOIN canonical_schedule_versions cv ON cv.version_id=ew.version_id

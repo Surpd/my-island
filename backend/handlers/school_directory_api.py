@@ -28,11 +28,34 @@ class ArchiveGroupPayload(BaseModel):
     confirm_used: bool = False
 
 
-def create_school_directory_router() -> APIRouter:
+def create_school_directory_router(local_database: Database | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/admin/school")
+    from backend.services.consolidated_workspace import isolated_consolidation_enabled
+
+    def production_consolidation_enabled() -> bool:
+        settings = get_settings()
+        return (os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") == "1"
+                and settings.app_env == "production"
+                and bool(settings.database_url)
+                and not settings.local_test_mode
+                and os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1"
+                and os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") != "1"
+                and local_database is not None
+                and bool(local_database.database_url)
+                and local_database.database_url == settings.database_url)
+
+    def configured_source():
+        if production_consolidation_enabled() or (isolated_consolidation_enabled() and local_database is not None):
+            return local_database
+        return school_source()
+
+    def directory_source():
+        return configured_source()
 
     def school_database() -> Database:
         settings = get_settings()
+        if production_consolidation_enabled() or (isolated_consolidation_enabled() and local_database is not None):
+            return local_database
         if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1" or os.getenv("MY_ISLAND_TEST_PROFILE") == "e2e":
             raise HTTPException(status_code=404, detail="School workspace is disabled")
         try:
@@ -50,6 +73,8 @@ def create_school_directory_router() -> APIRouter:
         return database, str(session["user_id"])
 
     def editor_schema_ready(database: Database) -> bool:
+        if not database.database_url:
+            return False  # This fixture exercises schedule APIs, not directory editing.
         with database.connection() as connection:
             columns = database.execute(connection, """SELECT table_name, column_name FROM information_schema.columns
                 WHERE table_schema = 'public' AND ((table_name = 'groups' AND column_name = 'admin_note')
@@ -101,7 +126,12 @@ def create_school_directory_router() -> APIRouter:
     @router.get("/directory")
     def directory(x_school_admin_session: str | None = Header(default=None)):
         require_school_admin(x_school_admin_session)
-        source = school_source()
+        source = directory_source()
+        if not source.database_url:
+            from backend.services.school_experiment_workspace import school_directory
+            data = school_directory(source)
+            return {**data, "people": [], "read_only": True, "write_ready": False,
+                    "grade_assignment_ready": False, "archive_ready": False}
         read_only = os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1"
         return {**school_editor_directory(source), "read_only": read_only,
                 "write_ready": editor_schema_ready(source) and not read_only,
@@ -111,7 +141,7 @@ def create_school_directory_router() -> APIRouter:
     @router.get("/groups/{group_id}/archive-preview")
     def archive_preview(group_id: str, x_school_admin_session: str | None = Header(default=None)):
         require_school_admin(x_school_admin_session)
-        source = school_source()
+        source = configured_source()
         ready = archive_schema_ready(source)
         preview = source.group_archive_preview(group_id)
         if not preview:
@@ -150,7 +180,7 @@ def create_school_directory_router() -> APIRouter:
     def teacher_schedule(teacher_id: str, week_start: str | None = None,
                          x_school_admin_session: str | None = Header(default=None)):
         require_school_admin(x_school_admin_session)
-        source = school_source()
+        source = configured_source()
         return school_teacher_schedule(source, teacher_id, week_start)
 
     @router.post("/groups")

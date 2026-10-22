@@ -7,7 +7,7 @@ only when the V2 resolver produces a deterministic replacement.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from collections import Counter
 from copy import deepcopy
 import hashlib
@@ -761,12 +761,26 @@ def preview_current_week(database: Database, settings: Settings, week_start: str
 
 
 def refresh_current_week(database: Database, settings: Settings, week_start: str | None = None, *, target_date: date | None = None) -> dict[str, Any]:
+    from backend.services.canonical_schedule import publication_head
+    selected_date = date.fromisoformat(week_start) if week_start else (target_date or date.today())
+    selected_week = (selected_date - timedelta(days=selected_date.weekday())).isoformat()
+    manual_head = publication_head(database, f"week:{selected_week}") or publication_head(database, "template")
+    if manual_head:
+        return {"status": "manual_publication_protected", "week_start": selected_week,
+                "published_id": manual_head["published_id"], "source_update_pending_review": True,
+                "message": "Manual publication is active; source refresh requires explicit review"}
     prepared = _prepare_current_week(database, settings, week_start, target_date=target_date)
     if prepared.get("status") != "ready":
         return dict(prepared)
     selected = prepared["selected"]
     weekly_tab = prepared["weekly_tab"]
     week_start = str(prepared["week_start"])
+    # The head can be published while a slow source read is in progress. Hold
+    # automatic application too; runtime pointers also protect the final race.
+    manual_head = publication_head(database, f"week:{week_start}") or publication_head(database, "template")
+    if manual_head:
+        return {"status": "manual_publication_protected", "week_start": week_start,
+                "published_id": manual_head["published_id"], "source_update_pending_review": True}
     week_end = str(prepared["week_end"])
     fingerprint = str(prepared["fingerprint"])
     diff = prepared["diff"]

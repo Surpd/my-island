@@ -200,12 +200,12 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         for lesson in sorted(items, key=lambda l: (l["start"], str(l["id"]))):
             lid = str(lesson["id"])
             r1, r2 = row_for_start[lesson["start"]], row_for_end[lesson["end"]]
-            tids = list(dict.fromkeys(lesson.get("teacherIds") or ([lesson["teacherId"]] if lesson.get("teacherId") else [])))
+            tids = [str(t) for t in dict.fromkeys(lesson.get("teacherIds") or ([lesson["teacherId"]] if lesson.get("teacherId") else []))]
             gids = list(dict.fromkeys(lesson.get("groupIds") or ([lesson["groupId"]] if lesson.get("groupId") else [])))
             teacher_names = [str(teachers[t].get("display_name") or teachers[t].get("name") or t) if t in teachers else "Преподаватель не сопоставлен" for t in tids]
             group_names = [_label(groups[g]) if g in groups else "Группа не сопоставлена" for g in gids if g not in class_ids]
             special = lesson.get("specialMark") or lesson.get("kind")
-            bg = "#FABF8F" if special == "lunch" else "#F3F4F6" if special == "no_lesson" else "#D9EAD3" if special == "event" else TEACHER_COLORS.get(teacher_names[0].casefold(), "#E2E8F0") if teacher_names else "#E2E8F0"
+            bg = "#FABF8F" if special == "lunch" else "#F3F4F6" if special == "no_lesson" else "#D9EAD3" if special == "event" else _teacher_fill(tids, teachers, teacher_names)
             rgb = [int(bg[i:i + 2], 16) / 255 for i in (1, 3, 5)]
             fg = "#FFFFFF" if sum(v * k for v, k in zip(rgb, (.2126, .7152, .0722))) < .48 else "#202124"
             lines = [str(lesson["subject"])]
@@ -273,6 +273,18 @@ _COMPACT_TEACHERS = {
     "Дмитрий К": "ДК", "Анна Владимировна": "Анна В.", "Анна Елисеева": "Анна Е.",
 }
 
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _teacher_fill(teacher_ids: list[str], teachers: Mapping[str, Any], names: list[str]) -> str:
+    """Use the ID-keyed shared UI color when present, with the legacy name fallback."""
+    if teacher_ids:
+        teacher = teachers.get(str(teacher_ids[0]))
+        color = teacher.get("ui_color") if teacher else None
+        if isinstance(color, str) and _HEX_COLOR.fullmatch(color):
+            return color
+    return TEACHER_COLORS.get(names[0].casefold(), "#E2E8F0") if names else "#E2E8F0"
+
 
 def _compact_text(lesson: Mapping[str, Any], groups: Mapping[str, Any],
                   teachers: Mapping[str, Any], specific_classes: list[str]) -> tuple[str, str, str]:
@@ -312,7 +324,7 @@ def _compact_text(lesson: Mapping[str, Any], groups: Mapping[str, Any],
         short += " " + "/".join(tags)
     if specific_classes:
         short += " · " + "/".join(specific_classes)
-    tids = list(dict.fromkeys(lesson.get("teacherIds") or ([lesson["teacherId"]] if lesson.get("teacherId") else [])))
+    tids = [str(t) for t in dict.fromkeys(lesson.get("teacherIds") or ([lesson["teacherId"]] if lesson.get("teacherId") else []))]
     full_teachers = [str(teachers[t].get("display_name") or teachers[t].get("name") or t)
                      if t in teachers else "Преподаватель ?" for t in tids]
     teacher_line = ", ".join(_COMPACT_TEACHERS.get(t, t) for t in full_teachers)
@@ -325,8 +337,7 @@ def _compact_text(lesson: Mapping[str, Any], groups: Mapping[str, Any],
     full = "\n".join(filter(None, (subject, "; ".join(full_groups), ", ".join(full_teachers), room)))
     special = lesson.get("specialMark") or lesson.get("kind")
     bg = ("#FABF8F" if special == "lunch" else "#F3F4F6" if special == "no_lesson" else
-          "#D9EAD3" if special == "event" else TEACHER_COLORS.get(full_teachers[0].casefold(), "#E2E8F0")
-          if full_teachers else "#E2E8F0")
+          "#D9EAD3" if special == "event" else _teacher_fill(tids, teachers, full_teachers))
     return text, full, bg
 
 

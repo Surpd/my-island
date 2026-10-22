@@ -7,8 +7,10 @@ from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.google_live import GoogleLiveError
-from backend.services.schedule_experiments import ExperimentConflict, create_experiment, save_experiment
+from backend.services.schedule_experiments import ExperimentConflict, create_experiment, get_experiment, save_experiment
+from backend.services.schedule_sheet_export import freeze_week
 from backend.services.schedule_sheet_publishing import ExportAuthorizationRequired, export_client, export_saved_week, prepare_export
+from backend.services.teacher_ui_colors import initialize_sqlite_schema, set_manual_color
 
 
 class FakeSheets:
@@ -102,6 +104,28 @@ class SchedulePublishingTests(unittest.TestCase):
         export = prepare_export(self.db, draft['id'], expected_revision=1)
         self.assertNotIn('private-student', json.dumps(export['plan']))
         self.assertIn('confirmed_participants_fingerprint', json.dumps(export['snapshot']))
+
+    def test_consolidated_export_uses_shared_teacher_color_only_for_presentation(self):
+        initialize_sqlite_schema(self.db)
+        set_manual_color(self.db, "school", self.teacher, "#12ABEF", 0, "admin")
+        with patch.dict('os.environ', {'MY_ISLAND_CONSOLIDATED_SCHEDULE': '1'}):
+            export = prepare_export(self.db, self.draft['id'], expected_revision=1, directory_database=self.db)
+        draft = get_experiment(self.db, self.draft['id'])
+        with self.db.connection() as connection:
+            groups = [dict(row) for row in self.db.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject FROM groups ORDER BY id").fetchall()]
+            teachers = [dict(row) for row in self.db.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' ORDER BY id").fetchall()]
+        for row in groups + teachers:
+            row['id'] = str(row['id'])
+        source = {"source": {"draft_id": self.draft['id'], "name": draft['name'], "revision": 1,
+                             "school_source": draft['payload'].get('school_source')},
+                  "payload": draft['payload'], "groups": groups, "teachers": teachers}
+        baseline = freeze_week(source, draft['payload']['week_start'])
+        exported_teacher = next(row for row in export['snapshot']['teachers'] if row['id'] == self.teacher)
+        self.assertEqual(exported_teacher['ui_color'], "#12ABEF")
+        self.assertEqual(export['snapshot']['snapshot_id'], baseline['snapshot_id'])
+        self.assertEqual(export['snapshot']['payload'], baseline['payload'])
+        self.assertFalse(any('ui_color' in row for row in export['snapshot']['payload']['lessons']))
+        self.assertTrue(any(cell['bg'] == "#12ABEF" for cell in export['plan']['cells']))
 
 
 if __name__ == '__main__':

@@ -88,12 +88,23 @@ class Settings:
             raise ValueError("DATABASE_URL is required in production")
         if self.app_env == "production" and not self.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required in production")
+        if self.app_env == "production" and os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") == "1":
+            parsed = urlparse(self.database_url or "")
+            project = "kmrcbewmxeqqxfauiwyy"
+            direct = parsed.hostname == f"db.{project}.supabase.co"
+            pooler = (parsed.hostname == "aws-1-eu-west-1.pooler.supabase.com"
+                      and parsed.username == f"postgres.{project}")
+            if parsed.scheme not in {"postgres", "postgresql"} or not (direct or pooler):
+                raise ValueError("Consolidated production requires the approved My Island Supabase database")
+            if (os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1"
+                    or os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1"):
+                raise ValueError("Consolidated production cannot use local/read-only school mode")
         if self.local_test_mode:
             profile = os.getenv("MY_ISLAND_TEST_PROFILE", "manual")
-            if profile not in {"manual", "e2e", "schedule"}:
+            if profile not in {"manual", "e2e", "schedule", "consolidation"}:
                 raise ValueError("Unknown local test profile")
             expected_db = (Path(__file__).resolve().parent.parent / ".local-test" /
-                           (profile if profile in {"e2e", "schedule"} else "") / "my-island-test.sqlite3").resolve()
+                           (profile if profile in {"e2e", "schedule", "consolidation"} else "") / "my-island-test.sqlite3").resolve()
             configured_db = Path(self.database_path).resolve()
             if configured_db != expected_db or self.database_url:
                 raise ValueError("Local test mode requires the dedicated .local-test SQLite database")
