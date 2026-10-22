@@ -6,7 +6,7 @@
   font-size: 13px;
 }
 
-.heading, .preview > div:first-child {
+.heading, .preview > div:not(.legacyNotice):first-child {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -103,5 +103,17 @@
 .previewStudents { display: flex; flex-wrap: wrap; gap: 4px 10px; max-height: 110px; overflow: auto; margin-top: 7px; color: #57697b; }
 
 @media (max-width: 560px) {
-  .modes { grid-template-columns: minmax(0, 1fr); }
+  .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* 3B: same four audience rules and preview, a shorter working surface. */
+.root { margin:12px 0; padding:12px 0; border-block:1px solid #dce2ec; gap:9px; }
+.heading { align-items:center; }
+.heading strong { font-size:15px; }
+.mode { padding:8px; min-height:55px; gap:3px; }
+.mode small { line-height:1.35; }
+.options { max-height:150px; scrollbar-width:thin; }
+.root .option { margin:0; padding:7px 8px; }
+.preview .legacyNotice { display:block; margin-bottom:9px; line-height:1.5; }
+.preview .legacyNotice button { display:block; width:100%; margin-top:8px; padding:8px; border:1px solid #be9237; border-radius:6px; background:white; color:#704900; font-family:inherit; font-size:12px; font-weight:600; }
+.previewAttention { border-left:3px solid #bf8a12; }
