@@ -23,6 +23,8 @@ docs/STUDENT_MEMBERSHIP_*
 my-island-*.tar
 backend/__pycache__/
 backend/**/__pycache__/
+__pycache__/
+*.pyc
 .venv/
 site-scaffold/
 
@@ -32,6 +34,8 @@ site-scaffold/
 artifacts/
 test-results/
 playwright-report/
+.playwright-mcp/
+debug.log
 schedule-studio-*.png
 docs/SCHOOL_DIRECTORY_UNIFICATION_AUDIT_*.json
 docs/SCHOOL_DIRECTORY_UNIFICATION_DIAGNOSTICS_*.json

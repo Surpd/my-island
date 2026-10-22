@@ -1,0 +1,1 @@
+import {defineConfig} from '@playwright/test';export default defineConfig({testDir:'../../e2e',testMatch:'schedule.spec.ts',workers:1,timeout:30000,reporter:'line',outputDir:'../../.local-test/consolidation/playwright-results',use:{baseURL:'http://localhost:3041',headless:true}});
