@@ -981,11 +981,41 @@ def effective_status(database: Database, week_start: str | None = None) -> dict[
     return result
 
 
-def schedule_admin_observability(database: Database, week_start: str | None = None, *, include_student_projection: bool = True) -> dict[str, Any]:
+def _admin_week_history(database: Database) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read effective-week versions and actual constructor publications separately."""
+    with database.connection() as connection:
+        effective = [dict(row) for row in database.execute(connection, """SELECT effective_week_id,version_id,
+            week_start,status,created_at,revision_at,overlay_source_snapshot_id
+            FROM canonical_effective_weeks ORDER BY week_start DESC,created_at DESC,effective_week_id""").fetchall()]
+        table_query = ("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() "
+                       "AND table_name IN ('schedule_publication_heads','schedule_constructor_publications')"
+                       if database.database_url else
+                       "SELECT name AS table_name FROM sqlite_master WHERE type='table' "
+                       "AND name IN ('schedule_publication_heads','schedule_constructor_publications')")
+        tables = {str(row["table_name"]) for row in database.execute(connection, table_query).fetchall()}
+        heads = {}
+        if "schedule_publication_heads" in tables:
+            heads = {str(row["scope_key"]): dict(row) for row in database.execute(connection,
+                "SELECT scope_key,published_id,version_id,revision,updated_at FROM schedule_publication_heads "
+                "WHERE scope_key LIKE 'week:%'").fetchall()}
+        publications = []
+        if "schedule_constructor_publications" in tables:
+            publications = [dict(row) for row in database.execute(connection, """SELECT id,draft_id,draft_revision,
+                scope_key,base_version_id,previous_published_id,published_id,version_id,created_at
+                FROM schedule_constructor_publications WHERE scope_kind='week' ORDER BY created_at DESC,id""").fetchall()]
+    for item in effective:
+        head = heads.get(f"week:{item['week_start']}")
+        item["is_current_publication"] = bool(head and str(head["published_id"]) == str(item["effective_week_id"]))
+    return effective, publications
+
+
+def schedule_admin_observability(database: Database, week_start: str | None = None, *, include_student_projection: bool = True, effective_week_id: str | None = None) -> dict[str, Any]:
     """Return a read-only, human-oriented view of persisted canonical schedule state."""
+    effective_weeks, week_publications = _admin_week_history(database)
     version = canonical_version(database)
     if not version:
-        return {"status": "canonical_not_imported", "weeks": [], "blocks": []}
+        return {"status": "canonical_not_imported", "weeks": [], "effective_weeks": effective_weeks,
+                "week_publications": week_publications, "blocks": []}
     version_id = str(version["version_id"])
     available_weeks = _single_fetchall(
         database,
@@ -996,6 +1026,16 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
     available_values = [str(row["week_start"]) for row in available_weeks]
     selected_week = requested_week if requested_week in available_values else (available_values[0] if available_values else requested_week)
     effective = _effective_week(database, version_id, selected_week) or _effective_week(database, None, selected_week)
+    if effective_week_id:
+        effective = _single_fetchone(database, """SELECT ew.*,cv.status AS canonical_status,
+            cv.source_snapshot_id,cv.source_fingerprint FROM canonical_effective_weeks ew
+            JOIN canonical_schedule_versions cv ON cv.version_id=ew.version_id WHERE ew.effective_week_id=?""", (effective_week_id,))
+        if not effective:
+            raise ValueError("Effective week version not found")
+        effective = dict(effective)
+        selected_week = str(effective["week_start"])
+        version_id = str(effective["version_id"])
+        version = canonical_version(database, version_id)
     canonical = read_canonical_template(database, version_id) or {}
     canonical_blocks = canonical.get("blocks") if isinstance(canonical.get("blocks"), Mapping) else {}
     if effective:
@@ -1177,6 +1217,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
     return {
         "status": version.get("status") if effective.get("effective_week_id") else "canonical_not_materialized", "selected_week": selected_week,
         "weeks": [{"week_start": value, "current": value == selected_week, "historical": value != selected_week} for value in available_values],
+        "effective_weeks": effective_weeks, "week_publications": week_publications,
         "canonical": {"version_id": version_id, "status": version.get("status"), "authoritative": bool((version.get("metadata") or {}).get("authoritative", False)), "source_snapshot_id": version.get("source_snapshot_id"), "source_fingerprint": version.get("source_fingerprint"), "blocks": len(canonical_blocks), "assignments": sum(len(item.get("assignments") or []) for item in canonical_blocks.values())},
         "effective_week": {"effective_week_id": effective.get("effective_week_id"), "version_id": effective.get("version_id"), "week_start": selected_week, "source_snapshot": snapshot, "overlay_patch_count": sum(value for key, value in diff_counts.items() if key != "UNCHANGED"), "effective_blocks": len(rendered_blocks), "diff_counts": dict(diff_counts)},
         "student_projection": {"active_students": len(active_students), "states": dict(projection_states), "conflicts": sum(1 for item in projection_issues if item.get("code") in {"INCOMPATIBLE_MEMBERSHIP_OVERLAP", "MULTIPLE_ACTIVITY_CLAIMS"}), "unresolved": len(projection_issues), "unresolved_by_reason": dict(Counter(str(item.get("reason") or "") for item in projection_issues)), "issues": projection_issues, "samples": dict(projection_samples), "skipped": not include_student_projection},

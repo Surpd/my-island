@@ -63,7 +63,10 @@ class ConstructorWeekCopyTests(unittest.TestCase):
         lesson = week["payload"]["lessons"][0]
         self.assertEqual(lesson["audience_snapshot"]["fingerprint"], "invalid-old-fingerprint")
         result = experiment_audience_preview(self.db, week["payload"])["lessons"]["lesson"]
-        self.assertTrue(result["needs_recalculation"])
+        # Fingerprint drift remains visible without inventing a roster change.
+        self.assertTrue(result["fingerprint_changed"])
+        self.assertFalse(result["needs_recalculation"])
+        self.assertEqual(result["student_ids"], result["proposed_student_ids"])
 
     def test_target_week_membership_change_keeps_frozen_roster_and_requires_review(self):
         with self.db.connection() as connection:

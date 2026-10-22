@@ -38,7 +38,7 @@ from backend.services.schedule_drafts import (
 )
 from backend.services.schedule_experiments import (
     ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
-    duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment,
+    duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
 from backend.services.school_experiment_workspace import (
     cached_audience_snapshot, import_school_template, school_directory, school_drafts, school_source,
@@ -892,10 +892,13 @@ def create_router(database: Database) -> APIRouter:
         return effective_status(database, week_start) if canonical_admin_backend_enabled() else {"status": "canonical_backend_disabled", "authoritative": False, "weeks": [], "summary": {"lessons": 0, "issues": 0}}
 
     @router.get("/admin/schedule/observability")
-    def admin_schedule_observability(week_start: str | None = None, editor: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_schedule_observability(week_start: str | None = None, editor: bool = False, effective_week_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         """Read-only canonical/effective schedule diagnostics for the admin console."""
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return schedule_admin_observability(database, week_start, include_student_projection=not editor)
+        try:
+            return schedule_admin_observability(database, week_start, include_student_projection=not editor, effective_week_id=effective_week_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
     @router.get("/admin/schedule/draft")
     def admin_schedule_draft(scope_kind: str, scope_key: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1088,6 +1091,18 @@ def create_router(database: Database) -> APIRouter:
         require_real_school_admin(x_school_admin_session, principal)
         source = school_source_database()
         return school_directory(source)
+
+    @router.post("/admin/schedule/experiments/school/effective-week/{effective_week_id}")
+    def admin_school_edit_effective_week(effective_week_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        source, store = school_stores()
+        if source is not store:
+            raise HTTPException(status_code=422, detail="Historical editing requires the school workspace database")
+        try:
+            return create_effective_week_experiment(store, effective_week_id, actor_user_id=actor["id"])
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/admin/schedule/experiments/school")
     def admin_school_create_experiment(payload: ScheduleExperimentCreatePayload, init_data: str | None = None,

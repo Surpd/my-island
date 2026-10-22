@@ -26,6 +26,15 @@ class LessonIntervalTests(unittest.TestCase):
 
 
 class ScheduleExperimentTests(unittest.TestCase):
+    def test_list_uses_explicit_template_selection_instead_of_legacy_role_tags(self):
+        old = create_experiment(self.database, name="Old role-tagged copy", source="empty", payload={"school_source": {"role": "primary_school_template"}})
+        selected = create_experiment(self.database, name="Selected editor template", source="empty", payload={"draft_kind": "school"})
+        with self.database.connection() as connection:
+            connection.execute("INSERT INTO school_template_selection(scope,draft_id,source_draft_id,source_revision,source_payload_sha256) VALUES ('school',?,?,1,'fixture')", (selected["id"], selected["id"]))
+        listing = {item["id"]: item for item in list_experiments(self.database)}
+        self.assertTrue(listing[selected["id"]]["is_primary_template"])
+        self.assertFalse(listing[old["id"]]["is_primary_template"])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.database = Database(Path(self.temp.name) / "experiments.db")

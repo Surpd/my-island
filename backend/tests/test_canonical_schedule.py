@@ -162,6 +162,40 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(result["blocks"][0]["effective_assignments"][0]["activity"], "Математика")
         self.assertEqual(result["blocks"][0]["change_kind"], "unchanged")
 
+    def test_admin_history_preserves_versions_across_canonical_releases(self):
+        import_canonical_artifact(self.database, self.artifact())
+        original = materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        changed = materialize_effective_week(self.database, self.version_id, "2026-09-07",
+            patches=[{"block_key": self.block_key, "change_kind": "cancelled"}], overlay_fingerprint="changed")
+        newer = self.artifact()
+        newer["version_id"] = "newer-template"
+        newer["source_snapshot"] = {"id": "newer-snapshot", "fingerprint": "newer-fingerprint"}
+        import_canonical_artifact(self.database, newer)
+        materialize_effective_week(self.database, "newer-template", "2026-09-21")
+        result = schedule_admin_observability(self.database, include_student_projection=False)
+        self.assertEqual(len(result["effective_weeks"]), 3)
+        self.assertEqual({item["week_start"] for item in result["effective_weeks"]}, {"2026-09-07", "2026-09-21"})
+        self.assertEqual(result["week_publications"], [])
+        self.assertFalse(any(item["is_current_publication"] for item in result["effective_weeks"]))
+        historical = schedule_admin_observability(self.database, effective_week_id=original["effective_week_id"], include_student_projection=False)
+        self.assertEqual(historical["effective_week"]["effective_week_id"], original["effective_week_id"])
+        self.assertEqual(historical["canonical"]["version_id"], self.version_id)
+        self.assertNotEqual(original["effective_week_id"], changed["effective_week_id"])
+
+    def test_editing_historical_week_creates_detached_draft_of_exact_overlay(self):
+        from backend.services.schedule_experiments import create_effective_week_experiment
+        import_canonical_artifact(self.database, self.artifact())
+        old = materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        materialize_effective_week(self.database, self.version_id, "2026-09-07",
+            patches=[{"block_key": self.block_key, "change_kind": "cancelled"}], overlay_fingerprint="new-overlay")
+        created = create_effective_week_experiment(self.database, old["effective_week_id"])
+        self.assertEqual(created["payload"]["week_start"], "2026-09-07")
+        self.assertEqual(len(created["payload"]["lessons"]), 2)
+        self.assertEqual(created["payload"]["school_source"]["effective_week_id"], old["effective_week_id"])
+        self.assertEqual(create_effective_week_experiment(self.database, old["effective_week_id"])["id"], created["id"])
+        with self.database.connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM canonical_effective_weeks").fetchone()[0], 2)
+
     def test_optional_activity_without_teacher_is_not_teacher_issue(self):
         artifact = self.artifact()
         artifact["version_id"] = "runtime-optional-teacher"

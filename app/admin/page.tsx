@@ -50,7 +50,7 @@ const API_BASE = String(
     (isLocalBuild ? 'http://127.0.0.1:8000' : ''),
 ).replace(/\/$/, '');
 const schoolMode = runtimeEnv.VITE_SCHOOL_DIRECTORY_MODE === 'school';
-const dataSourceLabel = String(runtimeEnv.VITE_DATA_SOURCE_LABEL || 'Источник данных не подтверждён');
+const dataSourceLabel = String(runtimeEnv.VITE_DATA_SOURCE_LABEL || (runtimeEnv.VITE_SCHOOL_DIRECTORY_MODE === 'school' ? 'Школьная база My Island' : 'My Island'));
 
 const nav = [
   { href: '/admin', label: 'Сегодня', icon: Home },
