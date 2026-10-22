@@ -32,6 +32,7 @@ import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
+import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
 import { groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
@@ -39,7 +40,7 @@ import { audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } f
 import { assignmentIsActive } from './teacher-directory-logic';
 
 const readOnlySchoolWorkspace = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_READ_ONLY_SCHOOL_WORKSPACE || '') === 'true';
-const scheduleDataSourceLabel = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_DATA_SOURCE_LABEL || 'Источник данных не подтверждён');
+const scheduleDataSourceLabel = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_DATA_SOURCE_LABEL || '');
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Raw = Record<string, any>;
@@ -169,6 +170,9 @@ function conflictLessonLabel(lesson: Lesson, groups: Group[], teachers: Teacher[
 }
 type DraftSummary = Omit<Draft, 'payload'> & {
   created_at?: string;
+  week_start?: string | null;
+  is_primary_template?: boolean;
+  source_template?: { id?: string; revision?: number } | null;
   draft_kind: 'demo' | 'test' | 'user' | 'unclassified';
   lesson_count: number;
   event_count: number;
@@ -194,7 +198,7 @@ type Issue = {
   type: 'teacher' | 'room' | 'audience' | 'data';
   message: string;
   related?: string;
-  category: 'conflict' | 'incomplete' | 'import';
+  category: 'conflict' | 'review' | 'incomplete' | 'import';
 };
 
 const DAYS = [
@@ -321,6 +325,14 @@ function audiencePatch(audience: AudienceRule, groups: Group[], students: Studen
     classId: classIds[0] || '',
   };
 }
+function audienceNeedsReview(lesson: Lesson, preview?: AudiencePreview) {
+  if (!preview || !lesson.audience_snapshot) return false;
+  if (preview.status !== 'ok' || preview.proposed_student_ids == null)
+    return Boolean(preview.needs_recalculation);
+  const saved = [...new Set(lesson.audience_snapshot.student_ids || [])].sort();
+  const proposed = [...new Set(preview.proposed_student_ids)].sort();
+  return saved.length !== proposed.length || saved.some((id, index) => id !== proposed[index]);
+}
 function audienceFromGroup(groupId: string, classIds: string[], groups: Group[]): AudienceRule {
   return groupId && groups.find((group) => group.id === groupId)?.group_type !== 'class'
     ? { kind: 'groups', group_ids: [groupId] }
@@ -367,7 +379,7 @@ function issuesFor(
     const audience = previews[lesson.id];
     if (lesson.kind !== 'event' && subjectLabel(lesson.subject) === 'Английский язык' && !linkedInstructionalGroups(lesson, groups).length)
       result.push({ lessonId: lesson.id, severity: 'warning', type: 'audience', category: 'import', message: 'Не определена группа английского урока в canonical-назначении.' });
-    if (audience?.needs_recalculation) add(lesson.id, 'warning', 'Расчёт участников изменился. Сохранённый состав не заменён; подтвердите пересчёт в карточке занятия.', undefined, 'conflict');
+    if (audienceNeedsReview(lesson, audience)) add(lesson.id, 'warning', 'Состав учеников отличается от сохранённого или текущие данные требуют проверки. Сохранённый состав не заменён.', undefined, 'review');
     if (!payload.days.includes(lesson.day) || !payload.slots[lesson.period])
       add(lesson.id, 'error', 'День или время занятия не входят в шаблон.', undefined, lesson.canonical ? 'import' : 'incomplete');
     if (lesson.kind === 'event' && (!lesson.start || !lesson.end || minutes(lesson.end) <= minutes(lesson.start)))
@@ -429,6 +441,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [schoolDrafts, setSchoolDrafts] = useState<DraftSummary[]>([]);
+  const [schoolWeekIndex, setSchoolWeekIndex] = useState<SchoolWeekIndex>({});
+  const [schoolStartSection, setSchoolStartSection] = useState<'template' | 'weeks'>('template');
+  const [hiddenSchoolDrafts, setHiddenSchoolDrafts] = useState<string[]>([]);
   const [demoDrafts, setDemoDrafts] = useState<DraftSummary[]>([]);
   const [draftFilter, setDraftFilter] = useState<'demo' | 'user' | 'test' | 'unclassified'>('demo');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -443,6 +458,20 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [exporting, setExporting] = useState(false);
   const [lastExport, setLastExport] = useState<{ draftId: string; revision: number; name: string; week: string; status: string; url?: string; reconnect?: boolean } | null>(null);
   const [newWeekStart, setNewWeekStart] = useState('');
+  useEffect(() => {
+    try { const saved = JSON.parse(window.localStorage.getItem('my-island-hidden-school-drafts:v1') || '[]'); setHiddenSchoolDrafts(Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : []); }
+    catch { setHiddenSchoolDrafts([]); }
+  }, []);
+  const hideSchoolDraft = (id: string) => setHiddenSchoolDrafts((current) => {
+    const next = [...new Set([...current, id])];
+    try { window.localStorage.setItem('my-island-hidden-school-drafts:v1', JSON.stringify(next)); } catch { /* Hiding is a local convenience only. */ }
+    return next;
+  });
+  const restoreSchoolDraft = (id: string) => setHiddenSchoolDrafts((current) => {
+    const next = current.filter((item) => item !== id);
+    try { window.localStorage.setItem('my-island-hidden-school-drafts:v1', JSON.stringify(next)); } catch { /* Hiding is a local convenience only. */ }
+    return next;
+  });
   const activityPath = () => `/api/admin/schedule/activities?${workspace === 'school' ? 'workspace=school&' : ''}include_archived=true`;
   const directoryByWorkspace = useRef<{ demo: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] }; school: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] } }>({ demo: { groups: [], teachers: [], students: [], rooms: [] }, school: { groups: [], teachers: [], students: [], rooms: [] } });
   const [audienceSnapshot, setAudienceSnapshot] = useState<{ key: string; lessons: Record<string, AudiencePreview> } | null>(null);
@@ -576,13 +605,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         capabilities.demo_available ? api<{ items: Raw[] }>('/api/admin/groups?include_archived=true') : Promise.resolve({ items: [] }),
         capabilities.demo_available ? api<{ items: Raw[] }>('/api/admin/people?kind=teacher') : Promise.resolve({ items: [] }),
         capabilities.demo_available ? api<{ items: Raw[] }>('/api/admin/people?kind=student') : Promise.resolve({ items: [] }),
-        capabilities.demo_available ? api<{ blocks: Raw[] }>(
+        capabilities.school_available || capabilities.demo_available ? api<SchoolWeekIndex & { blocks: Raw[]; weeks?: { week_start: string }[] }>(
           '/api/admin/schedule/observability?editor=true',
-        ).catch(() => ({ blocks: [] })) : Promise.resolve({ blocks: [] }),
+        ).catch((error) => ({ blocks: [], weeks: [] as { week_start: string }[], load_error: String((error as Error).message || error) })) : Promise.resolve({ blocks: [], weeks: [] as { week_start: string }[] }),
       ]);
     setDrafts(list.items || []);
     setDemoDrafts(list.items || []);
     setSchoolDrafts(schoolList.items || []);
+    setSchoolWeekIndex(scheduleData as SchoolWeekIndex);
     const schoolReady = capabilities.school_available && Boolean(schoolDirectory.groups?.length);
     setDirectoryAccess(schoolReady ? 'school' : capabilities.demo_available ? 'demo' : 'school');
     if (schoolDirectoryError) setStatus(`Справочник школы временно недоступен: ${schoolDirectoryError}`);
@@ -1842,6 +1872,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return problems.map((message) => ({ index, message }));
   });
   const filteredIssues = issues.filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
+  const conflictIssues = issues.filter((item) => item.category === 'conflict');
+  const conflictLessons = new Set(conflictIssues.flatMap((item) => [item.lessonId, ...(item.related ? [item.related] : [])]));
+  const conflictPairs = new Set(conflictIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
   const versionConflicts = versionConflict?.conflicts || [];
   const conflictFieldLabels: Record<string, string> = {
     '$lesson': 'занятие целиком', subject: 'предмет', teacherId: 'преподаватель', teacherIds: 'преподаватели',
@@ -1881,12 +1914,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return change.lessonId ? `${subject}${where} · ${conflictFieldLabels[change.field] || change.field}` : conflictFieldLabels[change.field] || change.field;
   };
 
-  const workspaceTabs = (
+  const workspaceTabs = demoAvailable ? (
       <nav className="constructor-workspaces" aria-label="Пространство конструктора">
         {demoAvailable ? <button className={workspace === 'demo' ? 'active' : ''} disabled={directoryAccess === 'checking'} onClick={() => { workspaceRef.current = 'demo'; setWorkspace('demo'); setGroups(directoryByWorkspace.current.demo.groups); setTeachers(directoryByWorkspace.current.demo.teachers); setStudents(directoryByWorkspace.current.demo.students); setKnownRooms(directoryByWorkspace.current.demo.rooms); setDrafts(demoDrafts); setDraft(null); }}>Демо <small>Синтетические данные</small></button> : null}
         <button className={workspace === 'school' ? 'active' : ''} disabled={directoryAccess !== 'school'} onClick={() => { workspaceRef.current = 'school'; setWorkspace('school'); setGroups(directoryByWorkspace.current.school.groups); setTeachers(directoryByWorkspace.current.school.teachers); setStudents(directoryByWorkspace.current.school.students); setKnownRooms(directoryByWorkspace.current.school.rooms); setDrafts(schoolDrafts); setDraft(null); }}>Школа <small>Школьный справочник</small></button>
       </nav>
-  );
+  ) : null;
   return (
     <div
       className={`constructor constructor-ux ${draft ? 'has-draft' : ''} ${fullScreen ? 'is-fullscreen' : ''}`}
@@ -1908,7 +1941,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           <small>РАСПИСАНИЕ · {workspace === 'school' ? 'ШКОЛА' : 'ПЕСОЧНИЦА'}</small>
           <h1><span className="desktop-label">Конструктор расписания</span><span className="mobile-label">Расписание</span></h1>{draft ? <span className="constructor-current-draft" title={draft.name}>{draft.name}</span> : null}
           <p>{consolidatedSchedule && workspace === 'school' ? 'Изменения сохраняются в черновике. Публикация — после отдельной проверки и подтверждения.' : 'Черновик · опубликованное расписание не меняется'}</p>
-          <span className="admin-data-source">{scheduleDataSourceLabel}</span>{draft ? workspaceTabs : null}
+          {scheduleDataSourceLabel ? <span className="admin-data-source">{scheduleDataSourceLabel}</span> : <span className="admin-data-source">{directoryAccess === 'school' ? 'Школьный справочник подключён' : directoryAccess === 'checking' ? 'Подключение…' : 'Локальная песочница'}</span>}{draft ? workspaceTabs : null}
         </div>
         <div className="constructor-actions">
           {!draft ? <>
@@ -1917,6 +1950,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           </> : null}
           {draft ? (
             <>
+              {workspace === 'school' ? <button disabled={saving} onClick={() => void (async () => { if (await save()) { setSchoolStartSection(draft.payload.week_start ? 'weeks' : 'template'); setDraft(null); } })()}>{draft.payload.week_start ? 'К неделям' : 'К основному шаблону'}</button> : null}
               <span className={dirty ? 'constructor-unsaved' : ''}>
                 {saving ? 'Сохраняется' : dirty ? saveFailed ? 'Ошибка сохранения' : 'Есть несохранённые изменения' : 'Сохранено'}
               </span>
@@ -1981,13 +2015,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         </div>
       ) : null}
       {directoryAccess === 'checking' ? <section className="constructor-school-gate">Проверяем подключение к справочнику…</section> : workspace === 'school' && !draft ? (
-        <section className="constructor-start">
-          <section className="constructor-source-card"><h3>Основной школьный шаблон</h3><p>{readOnlySchoolWorkspace ? 'Сбор создаёт отдельный школьный черновик. Изменения источника попадут в черновик после проверки.' : 'Открывается активный основной школьный шаблон — сохранённый редакторский черновик. Исторические canonical-копии остаются в списке. Для изменений на конкретные даты создайте независимую неделю.'}</p></section>
-          {readOnlySchoolWorkspace ? <p>Школьная база доступна только для чтения. Черновики сохраняются локально и не изменяют действующее расписание.</p> : null}<div className="constructor-start-actions"><button onClick={async () => { try { const value = await api<Draft>('/api/admin/schedule/experiments/school/import', { method: 'POST' }); await refreshDrafts(); await open(value.id); setStatus(`Открыт основной школьный шаблон: ${value.payload.lessons.length} записей · ревизия ${value.revision}. Сохранённые уточнения и исходные ID сохранены.`); } catch (error) { setStatus(String((error as Error).message || error)); } }}><Copy /> Открыть школьный шаблон<small>Открыть сохранённый основной редакторский шаблон.</small></button></div>
-          <div className="constructor-start-actions"><button onClick={() => void create('empty')}><Plus /> Пустой школьный черновик<small>Отдельное расписание с сохранением в школьной базе.</small></button>{consolidatedSchedule ? <button onClick={() => void create('canonical')}><Copy /> Новый черновик опубликованного шаблона<small>Копия текущей canonical-версии. Используйте после восстановления или изменения базового шаблона.</small></button> : null}</div><div className="constructor-draft-filters"><strong>Школьные черновики · {schoolDrafts.length}</strong></div>
-          {schoolDrafts.map((item) => <article className="constructor-draft" key={item.id}><button className="constructor-draft-open" onClick={() => void open(item.id)}><strong>{item.name}</strong><span>{item.lesson_count} занятий · {item.event_count} событий · {item.group_count} групп</span><ChevronDown size={16} /></button><div className="constructor-draft-actions"><button onClick={() => void rename(item)}>Переименовать</button><button onClick={() => void duplicate(item)}>Дублировать</button><button onClick={() => void remove(item)}>Удалить</button></div></article>)}
-          {!schoolDrafts.length ? <p>Школьных черновиков пока нет.</p> : null}
-        </section>
+        <ConstructorSchoolStart api={api} drafts={schoolDrafts} index={schoolWeekIndex} hiddenIds={hiddenSchoolDrafts} readOnly={readOnlySchoolWorkspace} initialSection={schoolStartSection}
+          onOpen={open} onCopy={(item) => void duplicate(item as DraftSummary)} onHide={hideSchoolDraft} onRestore={restoreSchoolDraft}
+          onCreateEmpty={() => void create('empty')} onCreated={async (id) => { setSchoolStartSection('weeks'); await refreshDrafts(); await open(id); }}
+          onPublication={async (id) => { await open(id); setPublicationOpen(true); }} />
       ) : !draft ? (
         <section className="constructor-start">
           <h2>С чего начнём?</h2>
@@ -2073,7 +2104,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </select> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <button className="constructor-issue-count" onClick={() => setConflictsOpen((open) => !open)} aria-expanded={conflictsOpen}>
-              <AlertTriangle size={14} /><span className="desktop-label">Диагностика {issues.filter((item) => item.category === 'conflict').length ? `· ${issues.filter((item) => item.category === 'conflict').length} совпадений` : ''}</span><span className="mobile-label">Проверка · {issues.filter((item) => item.category === 'conflict').length}</span>
+              <AlertTriangle size={14} /><span className="desktop-label">Проверка · {conflictLessons.size} занятий · {conflictPairs.size} парных совпадений</span><span className="mobile-label">Проверка · {conflictLessons.size}</span>
             </button>
             <button onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>Фильтры</button>
               <button className="constructor-open-colors" onClick={() => setColorPanelOpen(true)} title="Поиск и цвета преподавателей"><Palette size={15}/><span>Преподаватели</span></button>
@@ -2139,12 +2170,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 })();
               }}
             >
-              Все черновики
+              {workspace === 'school' ? 'К шаблону и неделям' : 'Все черновики'}
             </button>
             <button onClick={() => void exportDraft()} disabled={dirty || saving || exporting || !draft.payload.week_start}>{exporting ? 'Экспортируем…' : 'Экспортировать в Google Sheets'}</button>
             {lastExport?.draftId === draft.id && lastExport.revision === draft.revision && !dirty ? <span className="constructor-export-result">{lastExport.reconnect ? <button onClick={async () => { try { const result = await api<{ authorization_url: string }>('/api/admin/google/reconnect?schedule_export=true', { method: 'POST' }); window.location.assign(result.authorization_url); } catch (error) { setStatus(String((error as Error).message || error)); } }}>Подключить Google для экспорта</button> : null}{lastExport.name} · {lastExport.week} · {lastExport.status === 'existing' ? 'уже экспортировано' : lastExport.status === 'authorization_required' ? 'нужна авторизация' : 'экспортировано'}{lastExport.url ? <> · <a href={lastExport.url} target="_blank" rel="noreferrer">Открыть таблицу</a></> : null}</span> : null}
-            <input type="date" aria-label="Понедельник новой недели" value={newWeekStart} onChange={(event) => setNewWeekStart(event.target.value)} />
-            <button onClick={() => void createWeek()} disabled={dirty || saving || !newWeekStart}>Создать неделю</button>
+            {workspace !== 'school' ? <><input type="date" aria-label="Понедельник новой недели" value={newWeekStart} onChange={(event) => setNewWeekStart(event.target.value)} /><button onClick={() => void createWeek()} disabled={dirty || saving || !newWeekStart}>Создать неделю</button></> : null}
 
             <input
               aria-label="Название черновика"
@@ -2249,11 +2279,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 <select aria-label="Важность проблемы" value={issueSeverity} onChange={(event) => setIssueSeverity(event.target.value)}><option value="all">Все уровни</option><option value="error">Ошибки</option><option value="warning">Предупреждения</option></select>
                 <select aria-label="Тип проблемы" value={issueType} onChange={(event) => setIssueType(event.target.value)}><option value="all">Все типы</option><option value="teacher">Преподаватель</option><option value="room">Кабинет</option><option value="student">Группа или ученик</option><option value="data">Данные занятия</option></select>
               </div>
-              {(['conflict', 'incomplete', 'import'] as const).map((category) => {
+              {(['conflict', 'review', 'incomplete', 'import'] as const).map((category) => {
                 const categoryIssues = filteredIssues.filter((item) => item.category === category);
                 if (!categoryIssues.length) return null;
-                const title = category === 'conflict' ? 'Конфликты расписания' : category === 'incomplete' ? 'Неполные данные' : 'Ошибки импорта и сопоставления';
-                return <section className="constructor-issue-category" key={category}><h3>{title} · {categoryIssues.length}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
+                const title = category === 'conflict' ? 'Конфликты расписания' : category === 'review' ? 'Проверка состава учеников' : category === 'incomplete' ? 'Неполные данные' : 'Ошибки импорта и сопоставления';
+                const affected = new Set(categoryIssues.map((item) => item.lessonId));
+                const pairs = new Set(categoryIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
+                const count = category === 'conflict' ? `${affected.size} занятий · ${pairs.size} парных совпадений` : `${affected.size} занятий`;
+                return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
                   const lesson = payload.lessons.find((entry) => entry.id === item.lessonId);
                   const targetGroup = groups.find((entry) => entry.id === lesson?.groupId);
                   const dayName = lesson ? DAYS[lesson.day] || 'День не определён' : 'Занятие не найдено';
@@ -2454,7 +2487,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     <small>
                                       {item.kind === 'event' ? lessonClasses(item).length === payload.classes.length ? 'Вся школа' : `${[...new Set(lessonClasses(item).map((id) => groups.find((g) => g.id === id)?.name.match(/^\d+/)?.[0]).filter(Boolean))].join('–')} классы` : item.activityType === 'club' ? 'Кружок' : <>{lessonClasses(item).length > 1 && !isAvailableSlot ? '↔ ' : ''}{isAvailableSlot ? 'Все остальные' : englishCaption ? classCaption || 'Группа не определена' : (linkedInstructionalGroups(item, groups).length ? linkedInstructionalGroups(item, groups).map((group) => audienceShortLabel(group)).join(', ') : lessonClasses(item).map((id) => groups.find((g) => g.id === id)?.name || 'Класс недоступен').join(', ') || 'Группа не определена')}</>}
                                     </small>
-                                    <small className="constructor-teacher-line">{item.teacherId && colorMode === 'teacher' ? <i className="constructor-teacher-code" title={teacherRegistry.code(item.teacherId)}>{teacherRegistry.code(item.teacherId).slice(0,5)}</i> : null}{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || '—')}{item.room ? ` · ${item.room}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={`${teachers.find(t=>t.id===id)?.name || id} · ${teacherRegistry.code(id)}`}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small>
+                                    <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || '—')}{item.room ? ` · ${item.room}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small>
                                   </span>
                                   {conflictsOpen && issues.some(
                                     (issue) => issue.lessonId === item.id || issue.related === item.id,
