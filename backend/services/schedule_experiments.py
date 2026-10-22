@@ -461,11 +461,16 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         assigned = (frozen_ids if snapshot is not None else candidate) if status == "ok" or snapshot is not None else set()
         can_propose = status == "ok"
         proposed = sorted(candidate) if can_propose else None
-        needs_recalculation = snapshot is not None and (state["fingerprint"] != str(snapshot.get("fingerprint") or "") or proposed != sorted(frozen_ids))
+        fingerprint_changed = snapshot is not None and state["fingerprint"] != str(snapshot.get("fingerprint") or "")
+        # A changed time/date fingerprint alone does not mean the frozen roster
+        # changed. Keep review mandatory when the current rule is ambiguous or
+        # invalid, and when its resolved participants differ from the snapshot.
+        needs_recalculation = snapshot is not None and (status != "ok" or proposed != sorted(frozen_ids))
         source_known = state["reason"] is None
         results[lesson_id] = {"status": status, "student_ids": sorted(assigned),
                               "audience_snapshot": snapshot,
                               "needs_recalculation": needs_recalculation,
+                              "fingerprint_changed": fingerprint_changed,
                               "proposed_student_ids": proposed,
                               "proposed_count": len(proposed) if proposed is not None else None,
                               "source_count": len(base) if source_known else None,
@@ -638,7 +643,11 @@ def list_experiments(database: Database) -> list[dict[str, Any]]:
                      for group_id in (lesson.get("groupIds") or [lesson.get("groupId")]) if group_id}
         item.update({"draft_kind": kind, "lesson_count": len(lessons),
                      "event_count": sum(lesson.get("kind") == "event" for lesson in lessons if isinstance(lesson, Mapping)),
-                     "group_count": len(group_ids), "day_count": len(payload.get("days") or [])})
+                     "group_count": len(group_ids), "day_count": len(payload.get("days") or []),
+                     "week_start": payload.get("week_start"),
+                     "is_primary_template": (isinstance(payload.get("school_source"), Mapping)
+                                              and payload["school_source"].get("role") == "primary_school_template"),
+                     "source_template": payload.get("source_template")})
         result.append(item)
     return result
 
@@ -855,6 +864,15 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         had_snapshot = isinstance(previous.get("audience_snapshot"), Mapping)
         explicit_reset = key in reset_keys
         if had_snapshot and not explicit_reset:
+            preview = resolved.get(str(lesson.get("id") or index), {})
+            old_snapshot = lesson.get("audience_snapshot")
+            proposed = preview.get("proposed_student_ids")
+            if (isinstance(old_snapshot, Mapping) and preview.get("status") == "ok"
+                    and proposed is not None and _ids(proposed) == _ids(old_snapshot.get("student_ids"))):
+                # Rebind only the context fingerprint after the exact roster was
+                # checked and found unchanged. Never replace confirmed student IDs.
+                lesson["audience_snapshot"] = {**dict(old_snapshot),
+                                                "fingerprint": _audience_fingerprint(lesson, clean)}
             continue
         preview = resolved.get(str(lesson.get("id") or index), {})
         if explicit_reset and (preview.get("status") != "ok" or preview.get("proposed_student_ids") is None):
