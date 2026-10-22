@@ -1170,9 +1170,10 @@ function StudentApp({
     (a.due_at || '9999').localeCompare(b.due_at || '9999'),
   )[0];
   const latestInfo = data.today.announcements[0];
+  const hasScheduleProjection = Array.isArray(data.scheduleProjection.days);
   const contextualPeek =
     selectedId === 'schedule' ? (
-      <ScheduleFocusPeek projection={data.scheduleProjection} />
+      hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : 'Ближайших занятий нет'} />
     ) : selectedId === 'homework' ? (
       <SheetSummary
         icon="homework"
@@ -1211,7 +1212,7 @@ function StudentApp({
       peek={contextualPeek}
     >
       {selectedId === 'schedule' ? (
-        <StudentSchedulePanel projection={data.scheduleProjection} />
+        hasScheduleProjection ? <StudentSchedulePanel projection={data.scheduleProjection} /> : <SchedulePanel schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} />
       ) : selectedId === 'homework' ? (
         <HomeworkPanel homework={data.homework} />
       ) : selectedId === 'information' ? (
@@ -2160,7 +2161,7 @@ function AdminApp({
               <div className="student-preview-row" key={displayValue(student.id, String(index))}>
                 <span className="avatar-mini">{personLabel(student).slice(0, 1)}</span>
                 <div><strong>{personLabel(student)}</strong><small>{personBaseClass(student) || 'Класс не указан'}</small></div>
-                <button className="preview-button" onClick={() => void onPreview(displayValue(student.user_id || `identity:${student.identity_id}`)).catch((error) => setMessage(error instanceof Error ? error.message : 'Экран ученика не открылся'))}>Открыть как ученик</button>
+                <button className="preview-button" onClick={() => void onPreview(displayValue(student.user_id || `identity:${String(student.identity_id)}`)).catch((error) => setMessage(error instanceof Error ? error.message : 'Экран ученика не открылся'))}>Открыть как ученик</button>
               </div>
             )) : <p className="calm-empty">Ученики не найдены. Проверьте имя или класс.</p>}
           </section>
@@ -3663,6 +3664,7 @@ declare global {
     Telegram?: {
       WebApp?: {
         initData?: string;
+        isVersionAtLeast?: (version: string) => boolean;
         ready?: () => void;
         expand?: () => void;
         viewportHeight?: number;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -21,7 +22,7 @@ from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.admin import (
     add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
-    override_membership, publish_information,
+    publish_information,
 )
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, exchange_code
 from backend.services.google_oauth import build_google_authorization_url, google_config
@@ -30,11 +31,10 @@ from backend.services.schedule_sheet_publishing import export_saved_week
 from backend.services.school_template_selection import open_active_school_template
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
 from backend.services.google_sync_service import refresh_classroom, refresh_journal
-from backend.services.canonical_schedule import canonical_version, effective_blocks, effective_status, project_student_range, project_teacher_range, schedule_admin_observability
-from backend.services.canonical_weekly_refresh import confirm_current_template, preview_current_template, preview_current_week, refresh_current_week
+from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, schedule_admin_observability
+from backend.services.canonical_weekly_refresh import preview_current_template, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import (
-    DraftConflict, DraftNotFound, audience_preview, discard_draft, get_draft,
-    merge_import_changes, preview_changes, publish_draft, save_draft,
+    audience_preview, get_draft, preview_changes,
 )
 from backend.services.schedule_experiments import (
     ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
@@ -241,6 +241,7 @@ class ScheduleConfirmTemplatePayload(BaseModel):
 
 def create_router(database: Database) -> APIRouter:
     router = APIRouter(prefix="/api")
+    from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
 
     def authenticate(init_data: str | None, dev_auth: str | None, telegram_header: str | None = None, browser_session: str | None = None):
         browser_token = browser_session or (dev_auth.removeprefix("browser:") if dev_auth and dev_auth.startswith("browser:") else None)
@@ -845,12 +846,7 @@ def create_router(database: Database) -> APIRouter:
     @router.post("/admin/schedule/template/confirm")
     def admin_schedule_confirm_template(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        if not canonical_admin_backend_enabled():
-            raise HTTPException(status_code=409, detail="Canonical schedule backend is disabled")
-        try:
-            return confirm_current_template(database, get_settings(), payload.expected_version_id)
-        except (GoogleLiveError, ValueError, RuntimeError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        raise HTTPException(status_code=410, detail="Legacy ScheduleAdmin writes are retired; use the constructor publication workflow")
 
     @router.post("/admin/schedule/template/preview")
     def admin_schedule_template_preview(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -880,6 +876,16 @@ def create_router(database: Database) -> APIRouter:
         return {"status": "blocked", "ok": False,
                 "message": "There is no legacy recalculation path. Reconciliation must be completed against the approved canonical template."}
 
+    @router.get("/admin/schedule/source-policy")
+    def admin_schedule_source_policy(week_start: date | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        selected = week_start or date.today()
+        monday = (selected - timedelta(days=selected.weekday())).isoformat()
+        head = publication_head(database, f"week:{monday}") or publication_head(database, "template")
+        return {"week_start": monday, "manual_publication_active": bool(head),
+                "review_required": bool(head), "source_checked": False,
+                "automatic_application_enabled": canonical_admin_backend_enabled() and not bool(head)}
+
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
@@ -905,10 +911,15 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_experiment_capabilities(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         local_workspace = os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e"
-        school_enabled = local_workspace or (bool(database.database_url) and not get_settings().local_test_mode)
-        return {"demo_available": get_settings().local_test_mode, "school_available": school_enabled}
+        school_enabled = isolated_consolidation_enabled() or local_workspace or (bool(database.database_url) and not get_settings().local_test_mode)
+        return {"demo_available": get_settings().local_test_mode and not isolated_consolidation_enabled(),
+                "school_available": school_enabled,
+                "consolidated_schedule": os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") == "1"
+                    and (isolated_consolidation_enabled() or bool(database.database_url) and not local_workspace)}
 
     def school_stores() -> tuple[Database, Database]:
+        if isolated_consolidation_enabled():
+            return database, database
         if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e":
             try:
                 source = school_source()
@@ -923,6 +934,8 @@ def create_router(database: Database) -> APIRouter:
         raise HTTPException(status_code=404, detail="School workspace is disabled")
 
     def school_source_database() -> Database:
+        if isolated_consolidation_enabled():
+            return database
         if local_school_workspace_enabled():
             try:
                 return school_source()
@@ -936,6 +949,9 @@ def create_router(database: Database) -> APIRouter:
         return os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e"
 
     def require_real_school_admin(token: str | None, authenticated_principal: dict | None = None) -> None:
+        if isolated_consolidation_enabled():
+            require_consolidated_admin(database, token)
+            return
         if not local_school_workspace_enabled():
             # Every production caller has already passed require_role(..., "admin") against
             # this same database, whether authenticated through Telegram or browser session.
@@ -1001,7 +1017,7 @@ def create_router(database: Database) -> APIRouter:
             return save_activity(activity_store(workspace, x_school_admin_session, actor), payload,
                                  activity_id=activity_id, expected_revision=revision, actor_user_id=actor["id"])
         except ActivityConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ActivityNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
@@ -1013,7 +1029,7 @@ def create_router(database: Database) -> APIRouter:
             return create_experiment_week(store, experiment_id, week_start=payload.week_start,
                                           expected_revision=payload.expected_revision, actor_user_id=actor["id"])
         except ExperimentConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
@@ -1036,7 +1052,7 @@ def create_router(database: Database) -> APIRouter:
         try:
             return export_saved_week(store, experiment_id, expected_revision=revision, settings=get_settings(), directory_database=source)
         except ExperimentConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
@@ -1173,7 +1189,7 @@ def create_router(database: Database) -> APIRouter:
                                    payload=payload.payload, name=payload.name, actor_user_id=actor["id"],
                                    audience_database=source)
         except ExperimentConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
@@ -1243,7 +1259,7 @@ def create_router(database: Database) -> APIRouter:
         try:
             return save_experiment(database, experiment_id, expected_revision=payload.expected_revision, payload=payload.payload, name=payload.name, actor_user_id=actor["id"])
         except ExperimentConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
@@ -1251,47 +1267,18 @@ def create_router(database: Database) -> APIRouter:
 
     @router.put("/admin/schedule/draft")
     def admin_schedule_save_draft(payload: ScheduleDraftPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            return save_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, payload=payload.payload, actor_user_id=actor["id"], base_version_id=payload.base_version_id, base_effective_week_id=payload.base_effective_week_id, source_context=payload.source_context)
-        except DraftConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        raise HTTPException(status_code=410, detail="Legacy ScheduleAdmin writes are retired; use the constructor publication workflow")
 
     @router.delete("/admin/schedule/draft")
     def admin_schedule_discard_draft(scope_kind: str, scope_key: str, expected_revision: int, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            discard_draft(database, scope_kind, scope_key, expected_revision=expected_revision)
-            return {"status": "discarded"}
-        except DraftConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except DraftNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        raise HTTPException(status_code=410, detail="Legacy ScheduleAdmin writes are retired; use the constructor publication workflow")
 
     @router.post("/admin/schedule/draft/publish")
     def admin_schedule_publish_draft(payload: SchedulePublishPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            draft = get_draft(database, payload.scope_kind, payload.scope_key)
-            result = publish_draft(database, payload.scope_kind, payload.scope_key, expected_revision=payload.expected_revision, actor_user_id=actor["id"], comment=payload.comment)
-            source = draft.get("source_context") or {}
-            if payload.scope_kind == "template" and source.get("source") == "google_sheet" and source.get("fingerprint"):
-                try:
-                    result["source_baseline"] = confirm_current_template(database, get_settings(), result["published_id"],
-                        expected_source_fingerprint=str(source["fingerprint"]))
-                except (GoogleLiveError, ValueError, RuntimeError) as error:
-                    # The immutable publication succeeded; a changed/unavailable source must
-                    # remain pending, never be silently accepted as the new baseline.
-                    result["source_baseline"] = {"status": "pending", "message": str(error)}
-            return result
-        except DraftConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except DraftNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        raise HTTPException(status_code=410, detail="Legacy ScheduleAdmin writes are retired; use the constructor publication workflow")
 
     @router.post("/admin/schedule/audience-preview")
     def admin_schedule_audience_preview(payload: ScheduleAudiencePreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1303,18 +1290,8 @@ def create_router(database: Database) -> APIRouter:
 
     @router.post("/admin/schedule/import-to-draft")
     def admin_schedule_import_to_draft(payload: ScheduleImportDraftPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        try:
-            if payload.scope_kind not in {"week", "template"}:
-                raise ValueError("Unsupported schedule import scope")
-            scope_key = payload.scope_key if payload.scope_kind == "template" else payload.week_start
-            if payload.scope_kind == "template" and str((canonical_version(database) or {}).get("version_id") or "") != str(scope_key or ""):
-                raise ValueError("Canonical template changed; reload before importing")
-            return merge_import_changes(database, str(scope_key or ""), expected_revision=payload.expected_revision, proposed_changes=payload.proposed_changes, source_context=payload.source_context, actor_user_id=actor["id"], scope_kind=payload.scope_kind)
-        except DraftConflict as error:
-            raise HTTPException(status_code=409, detail={"message": str(error), "current": error.current}) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        raise HTTPException(status_code=410, detail="Legacy ScheduleAdmin writes are retired; use the constructor publication workflow")
 
     @router.get("/admin/schedule/lessons")
     def admin_schedule_lessons(week_start: str | None = None, status: str | None = None, teacher_id: str | None = None, group_id: str | None = None, lesson_type: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

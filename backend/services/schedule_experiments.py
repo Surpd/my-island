@@ -557,6 +557,16 @@ def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
         class_id = ordered_class_ids[0] if len(ordered_class_ids) == 1 else ""
         teacher_ids = [str(item) for item in assignment.get("teacher_ids") or []]
         metadata = assignment.get("metadata") or {}
+        details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
+        descriptive = {key: details[key] for key in (
+            "description", "place", "format", "kind", "informational",
+            "activityCatalogId", "activityNameSnapshot", "eligibleGrades",
+            "confirmedParticipantIds", "electiveDirection") if key in details}
+        activity_type = metadata.get("activity_type")
+        if activity_type in {"club", "elective", "event"}:
+            descriptive["activityType"] = activity_type
+        if metadata.get("special_mark") in {"lunch", "no_lesson"}:
+            descriptive["specialMark"] = metadata["special_mark"]
         role = str(assignment.get("role") or assignment.get("assignment_kind") or "")
         audience_kind = str(assignment.get("audience_kind") or (metadata.get("audience") or {}).get("type") or "")
         audience_rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), Mapping) else {}
@@ -564,13 +574,19 @@ def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
         raw_room = str(metadata.get("room") or "").strip()
         room = "" if raw_room in {"—", "–", "-"} else raw_room
         no_lesson = role == "explicit_no_lesson" or activity.strip().casefold() in {"нет урока", "нет занятия"}
+        if no_lesson:
+            descriptive["specialMark"] = "no_lesson"
         residual = not no_lesson and (role in {"default", "residual", "final_state", "final_unassigned"} or audience_kind in {"complement", "remaining"} or audience_rule.get("kind") == "remaining")
         time_is_valid = bool(start and end and (start, end) in slot_indexes)
         unknown_group_ids = [group_id for group_id in group_ids if group_id not in known_group_ids]
-        requires_clarification = not ordered_class_ids and not group_ids and not residual or weekday is None or not time_is_valid or bool(unknown_group_ids)
+        explicit_participants = audience_rule.get("kind") == "students"
+        teacher_only = activity_type == "club" or descriptive.get("informational") is True
+        missing_scope = not ordered_class_ids and not group_ids and not residual and not explicit_participants and not teacher_only
+        requires_clarification = missing_scope or weekday is None or not time_is_valid or bool(unknown_group_ids)
         source_assignment = _canonical_provenance(assignment)
         source_block = _canonical_provenance(block)
         lessons.append({
+            **descriptive,
             "id": f"{block_key}:{assignment_index}",
             "day": int(weekday) if weekday is not None else -1,
             "period": slot_indexes.get((start, end), -1),
@@ -580,6 +596,7 @@ def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
             "teacherId": teacher_ids[0] if teacher_ids else "",
             "groupId": next((group_id for group_id in group_ids if group_id not in classes), group_ids[0] if group_ids else ""),
             "room": room,
+            "note": str(metadata.get("note") or ""),
             "groupIds": group_ids,
             "teacherIds": teacher_ids,
             "start": start,
@@ -591,7 +608,7 @@ def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
             "needsClarification": requires_clarification,
             "importError": bool(unknown_group_ids),
             "clarificationReason": (f"Canonical-группы отсутствуют в справочнике: {', '.join(unknown_group_ids)}." if unknown_group_ids else
-                                    "Не удалось сопоставить canonical-аудиторию с классами или группами." if not ordered_class_ids and not group_ids and not residual else
+                                    "Не удалось сопоставить canonical-аудиторию с классами или группами." if missing_scope else
                                     "В исходном блоке не указаны день или время." if weekday is None or not time_is_valid else ""),
             "canonical": {"block_key": block_key, "assignment_index": assignment_index, "assignment": source_assignment, "block": source_block},
         })
@@ -646,7 +663,8 @@ def _draft_actor_id(database: Database, actor_user_id: Any) -> Any:
     return None
 
 
-def create_experiment(database: Database, *, name: str, source: str, payload: Mapping[str, Any] | None = None, actor_user_id: Any = None) -> dict[str, Any]:
+def create_experiment(database: Database, *, name: str, source: str, payload: Mapping[str, Any] | None = None,
+                      actor_user_id: Any = None, _base_version_id: str | None = None) -> dict[str, Any]:
     normalized_name = str(name or "").strip()
     if not normalized_name:
         raise ValueError("name is required")
@@ -661,7 +679,9 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
         if payload:
             seed.update(dict(payload))
         payload = seed
-    base_version_id = None
+    # Internal trusted-copy provenance only. Public import payloads cannot pick
+    # a canonical base; HTTP adapters deliberately do not expose this argument.
+    base_version_id = str(_base_version_id) if _base_version_id else None
     if source == "canonical":
         version = canonical_version(database)
         if not version:
@@ -770,8 +790,16 @@ def create_experiment_week(database: Database, experiment_id: str, *, week_start
     payload["week_start"] = start.isoformat()
     payload["reference_date"] = start.isoformat()
     payload["source_template"] = {"id": source["id"], "revision": int(source["revision"])}
+    for original, copied in zip(source["payload"].get("lessons") or [], payload.get("lessons") or []):
+        snapshot = copied.get("audience_snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("fingerprint") == _audience_fingerprint(original, source["payload"]):
+            # A trusted date-only copy preserves confirmed participants. Rebind
+            # the rule fingerprint, never recompute/fill the roster here. A
+            # changed target-week membership still requires explicit review.
+            snapshot["fingerprint"] = _audience_fingerprint(copied, payload)
     return create_experiment(database, name=f"Неделя {start.isoformat()} · {source['name']}",
-                             source="import", payload=payload, actor_user_id=actor_user_id)
+                             source="import", payload=payload, actor_user_id=actor_user_id,
+                             _base_version_id=source.get("base_version_id"))
 
 
 def delete_experiment(database: Database, experiment_id: str) -> None:

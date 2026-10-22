@@ -60,14 +60,15 @@ export function useTelegramLayout() {
       events.forEach((event) => app.onEvent?.(event, update));
       update();
       // Unsupported methods can be exposed by older bridges. Keep expanded fallback.
-      for (const action of [app.ready, app.expand, app.disableVerticalSwipes]) {
+      const supports = (version: string) => Boolean(app.isVersionAtLeast?.(version));
+      for (const action of [app.ready, app.expand, ...(supports('7.7') ? [app.disableVerticalSwipes] : [])]) {
         try {
           action?.call(app);
         } catch {
           /* Older client. */
         }
       }
-      if (!app.isFullscreen) {
+      if (!app.isFullscreen && supports('8.0')) {
         try {
           app.requestFullscreen?.();
         } catch {

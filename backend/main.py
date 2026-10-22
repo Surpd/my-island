@@ -12,11 +12,19 @@ from backend.config import get_settings
 from backend.handlers.api import create_router
 from backend.handlers.school_directory_api import create_school_directory_router
 from backend.services.auth import is_loopback_dev_auth_request
+from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
+from backend.handlers.constructor_publication_api import create_constructor_publication_router
+from backend.handlers.teacher_ui_colors_api import create_school_teacher_ui_colors_router
 
 
 settings = get_settings()
 database = Database(settings.database_path, settings.database_url)
 database.initialize()
+if isolated_consolidation_enabled():
+    from backend.services.constructor_publication import initialize_publication_schema
+    from backend.services.teacher_ui_colors import initialize_sqlite_schema
+    initialize_publication_schema(database)
+    initialize_sqlite_schema(database)
 app = FastAPI(title="My Island API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"], allow_headers=["*"])
 
@@ -66,9 +74,14 @@ async def forward_admin_browser_session(request, call_next):
     return await call_next(request)
 
 app.include_router(create_router(database))
-app.include_router(create_school_directory_router())
+app.include_router(create_school_directory_router(database))
+app.include_router(create_constructor_publication_router(
+    lambda: (database, database), lambda token: require_consolidated_admin(database, token)))
+app.include_router(create_school_teacher_ui_colors_router(
+    lambda: database, lambda token: require_consolidated_admin(database, token)))
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "environment": settings.app_env}
+    return {"status": "ok", "environment": settings.app_env,
+            "release": os.getenv("MY_ISLAND_RELEASE_SHA", "unversioned")}

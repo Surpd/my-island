@@ -78,40 +78,16 @@ class LocalTestEnvironmentTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/student/grades", headers=student_headers).status_code, 200)
         self.assertEqual(self.client.get("/api/admin/schedule/draft?scope_kind=week&scope_key=2026-10-12", headers={"X-Dev-Auth": "teacher:1"}).status_code, 403)
 
-    def test_schedule_draft_persists_and_is_readable_after_request(self):
-        with database.connection() as connection:
-            group = connection.execute("SELECT id FROM groups WHERE name='7' AND group_type='base_class'").fetchone()
+    def test_retired_schedule_draft_write_is_rejected_without_creating_revision(self):
         response = self.client.put(
             "/api/admin/schedule/draft",
             headers={"X-Dev-Auth": "admin:1"},
-            json={
-                "scope_kind": "week",
-                "scope_key": "2026-10-12",
-                "expected_revision": 0,
-                "payload": {"changes": [{
-                    "operation": "upsert",
-                    "block_key": "local-e2e-math-7",
-                    "manual": True,
-                    "lesson": {
-                        "activity": "Математика",
-                        "grade": "7",
-                        "weekday": 0,
-                        "start_time": "09:00",
-                        "end_time": "09:45",
-                        "audience": {"kind": "base_class", "grade": "7", "group_ids": [str(group["id"])]},
-                    },
-                }]},
-                "source_context": {"editor": "local-e2e"},
-            },
+            json={"scope_kind": "week", "scope_key": "2026-10-12", "expected_revision": 0, "payload": {}},
         )
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["revision"], 1)
-        reread = self.client.get("/api/admin/schedule/draft?scope_kind=week&scope_key=2026-10-12", headers={"X-Dev-Auth": "admin:1"})
-        self.assertEqual(reread.status_code, 200, reread.text)
-        self.assertEqual(reread.json()["payload"]["changes"][0]["block_key"], "local-e2e-math-7")
+        self.assertEqual(response.status_code, 410, response.text)
         with database.connection() as connection:
             saved = connection.execute("SELECT revision FROM schedule_editor_drafts WHERE draft_key='week:2026-10-12'").fetchone()
-        self.assertEqual(saved["revision"], 1)
+        self.assertIsNone(saved)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 """The real school API must never accept the SQLite demo admin shortcut."""
 
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -13,7 +15,75 @@ from backend.database import Database
 from backend.handlers.api import create_router
 
 
+class ConfiguredProductionDatabase(Database):
+    def __init__(self):
+        super().__init__(database_url="postgresql://approved-production-db")
+
+    def get_admin_browser_session(self, token):
+        return {"user_id": "admin-uuid"} if token == "valid" else None
+
+    def user_has_role(self, user_id, role):
+        return user_id == "admin-uuid" and role == "admin"
+
+    def group_archive_preview(self, group_id):
+        return {"id": group_id, "references": []}
+
+    @contextmanager
+    def connection(self):
+        yield object()
+
+    def execute(self, connection, query, params=()):
+        class Result:
+            def fetchall(self):
+                return [object(), object()] if "information_schema.columns" in query else [object()]
+
+            def fetchone(self):
+                return object()
+
+        return Result()
+
+    def teacher_grade_assignment_schema_ready(self):
+        return True
+
+
 class SchoolDirectoryApiAuthTests(unittest.TestCase):
+    def test_production_consolidated_school_routes_use_the_injected_database(self):
+        database = ConfiguredProductionDatabase()
+        app = FastAPI()
+        app.include_router(create_school_directory_router(database))
+        client = TestClient(app)
+        settings = SimpleNamespace(app_env="production", database_url=database.database_url, local_test_mode=False)
+        env = {"MY_ISLAND_CONSOLIDATED_SCHEDULE": "1"}
+        with patch.dict("os.environ", env, clear=True), \
+                patch("backend.handlers.school_directory_api.get_settings", return_value=settings), \
+                patch("backend.services.consolidated_workspace.get_settings", return_value=settings), \
+                patch("backend.handlers.school_directory_api.school_source", side_effect=AssertionError("root source must not be opened")), \
+                patch("backend.handlers.school_directory_api.school_editor_directory", return_value={"groups": []}) as directory, \
+                patch("backend.handlers.school_directory_api.school_teacher_schedule", return_value={"weeks": []}) as schedule:
+            headers = {"X-School-Admin-Session": "valid"}
+            session_response = client.get("/api/admin/school/auth/session", headers=headers)
+            directory_response = client.get("/api/admin/school/directory", headers=headers)
+            archive_response = client.get("/api/admin/school/groups/group-1/archive-preview", headers=headers)
+            schedule_response = client.get("/api/admin/school/teachers/teacher-1/schedule", headers=headers)
+        self.assertEqual(session_response.status_code, 200, session_response.text)
+        self.assertEqual(directory_response.status_code, 200, directory_response.text)
+        self.assertEqual(archive_response.status_code, 200, archive_response.text)
+        self.assertEqual(schedule_response.status_code, 200, schedule_response.text)
+        self.assertIs(directory.call_args.args[0], database)
+        self.assertIs(schedule.call_args.args[0], database)
+
+    def test_production_consolidated_school_workspace_remains_disabled_without_flag(self):
+        database = ConfiguredProductionDatabase()
+        app = FastAPI()
+        app.include_router(create_school_directory_router(database))
+        settings = SimpleNamespace(app_env="production", database_url=database.database_url, local_test_mode=False)
+        with patch.dict("os.environ", {}, clear=True), \
+                patch("backend.handlers.school_directory_api.get_settings", return_value=settings), \
+                patch("backend.services.consolidated_workspace.get_settings", return_value=settings), \
+                patch("backend.handlers.school_directory_api.school_source", side_effect=AssertionError("workspace is disabled")):
+            response = TestClient(app).get("/api/admin/school/auth/session", headers={"X-School-Admin-Session": "valid"})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "School workspace is disabled")
     def test_directory_requires_real_school_session(self):
         app = FastAPI()
         app.include_router(create_school_directory_router())

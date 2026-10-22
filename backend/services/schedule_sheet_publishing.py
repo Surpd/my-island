@@ -63,6 +63,15 @@ def _decode(row: Any) -> dict[str, Any]:
     return result
 
 
+def _presentation_teacher_colors(database: Database) -> dict[str, str] | None:
+    """Read shared teacher UI colors only for the explicitly consolidated export."""
+    if os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") != "1":
+        return None
+    from backend.services.teacher_ui_colors import list_colors
+
+    return {str(item["teacher_id"]): str(item["color"]) for item in list_colors(database, "school")}
+
+
 def prepare_export(database: Database, experiment_id: str, *, expected_revision: int,
                    directory_database: Database | None = None) -> dict[str, Any]:
     draft = get_experiment(database, experiment_id)
@@ -73,13 +82,22 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
     if not week or date.fromisoformat(week).weekday() != 0:
         raise ValueError("Сначала создайте отдельную неделю с датой понедельника")
     target = _target()
+    directory_database = directory_database or database
+    presentation_colors = _presentation_teacher_colors(directory_database)
+    color_fingerprint = ""
+    if presentation_colors is not None:
+        color_fingerprint = hashlib.sha256(json.dumps(sorted(presentation_colors.items()), ensure_ascii=False,
+                                                       separators=(",", ":")).encode()).hexdigest()
+    digest_input = f"{experiment_id}:{expected_revision}:{target}:{EXPORT_POLICY}"
+    if presentation_colors is not None:
+        digest_input += f":teacher-ui:{color_fingerprint}"
+    digest = hashlib.sha256(digest_input.encode()).hexdigest()
     with database.connection() as connection:
         completed = database.execute(connection, """SELECT * FROM schedule_sheet_exports
-            WHERE draft_id=? AND revision=? AND target_id=? AND status='exported'
-            ORDER BY created_at DESC LIMIT 1""", (experiment_id, expected_revision, target)).fetchone()
+            WHERE export_key=? AND status='exported'
+            ORDER BY created_at DESC LIMIT 1""", (digest,)).fetchone()
     if completed:
         return _decode(completed)
-    directory_database = directory_database or database
     with directory_database.connection() as connection:
         groups = [dict(r) for r in directory_database.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject FROM groups ORDER BY id").fetchall()]
         teachers = [dict(r) for r in directory_database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' ORDER BY id").fetchall()]
@@ -91,7 +109,13 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
                           "school_source": payload.get("school_source")},
               "payload": payload, "groups": groups, "teachers": teachers}
     snapshot = freeze_week(source, week)
-    digest = hashlib.sha256(f"{experiment_id}:{expected_revision}:{target}:{EXPORT_POLICY}".encode()).hexdigest()
+    # Add presentation preferences after freeze_week so UI colors never alter
+    # the frozen lesson content snapshot or its source snapshot ID.
+    if presentation_colors is not None:
+        for teacher in snapshot["teachers"]:
+            color = presentation_colors.get(str(teacher["id"]))
+            if color:
+                teacher["ui_color"] = color
     with database.connection() as connection:
         old = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?", (digest,)).fetchone()
     if old:

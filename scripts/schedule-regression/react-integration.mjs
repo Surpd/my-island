@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {chromium} from 'playwright';
+import fs from 'node:fs/promises';
+const ROOT='.local-test/consolidation/results',API='http://127.0.0.1:8041',URL='http://localhost:3041/admin#/admin/schedule/constructor';
+const auth=JSON.parse(await fs.readFile('.local-test/consolidation/auth.json','utf8'));
+const fixture=JSON.parse(await fs.readFile('.local-test/consolidation/fixture.json','utf8'));
+const headers={'Content-Type':'application/json','X-School-Admin-Session':auth.admin_browser_session,'X-Admin-Browser-Session':auth.admin_browser_session};
+async function call(path,method='GET',body){const r=await fetch(API+path,body===undefined?{method,headers}:{method,headers,body:JSON.stringify(body)});const value=await r.json();assert(r.ok,`${method} ${path}: ${r.status} ${JSON.stringify(value)}`);return value;}
+for(let attempt=0;attempt<60;attempt++){try{const response=await fetch(URL);if(response.ok)break;}catch{}await new Promise(resolve=>setTimeout(resolve,500));}
+const browser=await chromium.launch();
+const context=await browser.newContext({viewport:{width:1366,height:768}});
+const requests=[],errors=[],blocked=[],shots=[],steps=[];const report={steps,shots,requests,errors,blocked,transport:'Real React + isolated HTTP SQLite backend; no response mocks'};
+await context.addInitScript(token=>{sessionStorage.setItem('my_island_admin_session',token);sessionStorage.setItem('my_island_school_admin_session',token);},auth.admin_browser_session);
+await context.route('**/*',route=>{const u=new globalThis.URL(route.request().url());if(['data:','blob:'].includes(u.protocol)||(['127.0.0.1','localhost'].includes(u.hostname)&&['8041','3041'].includes(u.port)))return route.continue();blocked.push(u.hostname);return route.abort();});
+context.on('response',r=>{if(r.url().startsWith(API+'/api/'))requests.push({method:r.request().method(),path:new globalThis.URL(r.url()).pathname,status:r.status()});});
+const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+async function shot(name){await page.waitForTimeout(200);await page.screenshot({path:`${ROOT}/screenshots/${name}.png`,fullPage:false});shots.push(name);}
+async function open(name){await page.goto(URL);await page.locator('.constructor-start,.constructor-grid-wrap').first().waitFor();if(await page.locator('.constructor-grid-wrap').count()){await page.locator('.constructor-draft-menu > summary').click();await page.getByRole('button',{name:'Все черновики',exact:true}).click();}await page.locator('.constructor-draft').filter({has:page.getByText(name,{exact:true})}).first().locator('.constructor-draft-open').click();await page.locator('.constructor-grid-wrap').waitFor();}
+async function publication(scope){await page.getByRole('button',{name:'Открыть публикацию расписания'}).click();await page.getByRole('button',{name:'Проверить изменения',exact:true}).click();await page.getByLabel('Проверка публикации',{exact:true}).waitFor();await shot(`publication-${scope}-preview-1366`);await page.locator('.constructor-publication-confirm input').check();await page.getByRole('button',{name:scope==='week'?'Опубликовать неделю':'Опубликовать шаблон',exact:true}).click();await page.getByText(/Опубликовано\. Чтение через canonical подтверждено/).waitFor();await shot(`publication-${scope}-success-1366`);await page.getByRole('button',{name:'К конструктору',exact:true}).click();}
+try{
+ await fs.mkdir(`${ROOT}/screenshots`,{recursive:true});
+ await open('Synthetic template publication');
+ const initial=await call('/api/admin/schedule/experiments/school/'+fixture.template_publication_draft_id);const lesson=initial.payload.lessons.find(x=>x.teacherId);
+ const card=page.locator(`[data-lesson-id="${lesson.id}"]`).first();await card.click();await page.getByLabel('Кабинет',{exact:true}).fill('LOCAL-315');
+ await Promise.all([page.waitForResponse(r=>r.url().endsWith(fixture.template_publication_draft_id)&&r.request().method()==='PUT'&&r.status()===200),page.getByRole('button',{name:'Сохранить черновик',exact:true}).first().click()]);
+ const saved=await call('/api/admin/schedule/experiments/school/'+initial.id);assert.equal(saved.payload.lessons.find(x=>x.id===lesson.id).room,'LOCAL-315');steps.push('UI edit → save → real backend readback');
+ const remotePayload=structuredClone(saved.payload);const other=remotePayload.lessons.find(x=>x.id!==lesson.id&&x.teacherId);other.room='REMOTE-316';await call('/api/admin/schedule/experiments/school/'+initial.id,'PUT',{expected_revision:saved.revision,payload:remotePayload});
+ await page.getByLabel('Кабинет',{exact:true}).fill('LOCAL-317');await Promise.all([page.waitForResponse(r=>r.url().endsWith(initial.id)&&r.request().method()==='PUT'&&r.status()===200),page.getByRole('button',{name:'Сохранить черновик',exact:true}).first().click()]);
+ const merged=await call('/api/admin/schedule/experiments/school/'+initial.id);assert.equal(merged.payload.lessons.find(x=>x.id===lesson.id).room,'LOCAL-317');assert.equal(merged.payload.lessons.find(x=>x.id===other.id).room,'REMOTE-316');assert(requests.some(x=>x.method==='PUT'&&x.status===409));steps.push('Real HTTP409 → existing React merge → both independent edits persist');
+ await open('Synthetic template publication');await page.locator(`[data-lesson-id="${lesson.id}"]`).first().click();assert.equal(await page.getByLabel('Кабинет',{exact:true}).inputValue(),'LOCAL-317');steps.push('Page reload → persisted edit confirmed');await shot('inspector-parallel-1366');
+ await page.locator('.constructor-draft-menu > summary').click();await page.getByLabel('Понедельник новой недели').fill('2026-11-02');const weekResponse=page.waitForResponse(r=>r.url().endsWith('/week')&&r.request().method()==='POST'&&r.status()===200);await page.getByRole('button',{name:'Создать неделю',exact:true}).click();const newWeek=await (await weekResponse).json();await page.waitForTimeout(400);steps.push('Created independent weekly copy in existing React menu');
+ await publication('week');await open('Synthetic template publication');await publication('template');
+ const after=await call('/api/admin/schedule/experiments/school/'+initial.id);assert(after.revision>merged.revision);assert.notEqual(after.base_version_id,initial.base_version_id);const readWeek=await call('/api/admin/schedule/observability?week_start=2026-11-02&editor=true');assert.equal(readWeek.effective_week.version_id,initial.base_version_id);steps.push('UI weekly and template publish → readback verified → previous week keeps independent base');
+ await open('Synthetic template publication');await page.getByRole('button',{name:'Открыть публикацию расписания'}).click();await page.getByRole('button',{name:'Проверить изменения',exact:true}).click();await page.getByLabel('Проверка публикации',{exact:true}).waitFor();assert(await page.getByText('Я проверил изменения',{exact:false}).isVisible());steps.push('Same draft remains publishable after atomic base/revision advance');await page.getByRole('button',{name:'Закрыть публикацию',exact:true}).click();
+ report.newWeekId=newWeek.id;report.templateRevision=after.revision;
+ assert.deepEqual(errors,[]);report.status='PASS';
+}catch(error){report.status='FAIL';report.failure=String(error.stack||error);await shot('failure');throw error;}finally{await fs.writeFile(`${ROOT}/react-integration-report.json`,JSON.stringify(report,null,2));await context.close();await browser.close();}

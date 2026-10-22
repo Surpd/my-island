@@ -79,7 +79,7 @@ test('three-way merge ignores object-key order and set ordering but detects a re
   assert.equal(result.conflicts[0].field, 'subject');
   const resolved = mergeScheduleDrafts(base, local, server, { [result.conflicts[0].key]: 'server' });
   assert.equal(resolved.draft.payload.lessons[0].subject, 'Геометрия');
-  assert.deepEqual([...resolved.draft.payload.lessons[0].audience_snapshot.student_ids].sort(), ['s1', 's2']);
+  assert.deepEqual([...resolved.draft.payload.lessons[0].audience_snapshot.student_ids].sort((a, b) => a.localeCompare(b)), ['s1', 's2']);
 });
 
 test('three-way merge preserves a genuine audience membership conflict for explicit choice', () => {
