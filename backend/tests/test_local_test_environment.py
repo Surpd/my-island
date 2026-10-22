@@ -4,6 +4,7 @@ import os
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -28,6 +29,15 @@ class LocalTestEnvironmentTests(unittest.TestCase):
         # This fixture is deliberately repeatable against the dedicated test DB.
         with database.connection() as connection:
             connection.execute("DELETE FROM schedule_editor_drafts WHERE draft_key='week:2026-10-12'")
+
+    def test_health_reports_render_commit_before_legacy_release_override(self):
+        with patch.dict(os.environ, {
+            "RENDER_GIT_COMMIT": "running-render-commit",
+            "MY_ISLAND_RELEASE_SHA": "stale-release-override",
+        }):
+            response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["release"], "running-render-commit")
 
     def test_dev_role_auth_is_loopback_only(self):
         self.assertTrue(is_loopback_dev_auth_request("localhost:8000", "127.0.0.1", local_test_mode=True))
