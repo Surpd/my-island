@@ -490,8 +490,8 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
     return {"lessons": results}
 
 
-def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
-    template = read_canonical_template(database, version_id)
+def _canonical_payload(database: Database, version_id: str, *, source_blocks: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    template = {"blocks": source_blocks} if source_blocks is not None else read_canonical_template(database, version_id)
     if not template:
         raise ValueError("Canonical schedule version was not found")
     with database.connection() as connection:
@@ -626,6 +626,21 @@ def _canonical_payload(database: Database, version_id: str) -> dict[str, Any]:
 def list_experiments(database: Database) -> list[dict[str, Any]]:
     with database.connection() as connection:
         rows = database.execute(connection, "SELECT id,name,base_version_id,revision,created_at,updated_at,payload FROM schedule_experiment_drafts ORDER BY updated_at DESC,id").fetchall()
+        selection_table = database.execute(connection,
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='school_template_selection'"
+            if database.database_url else
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='school_template_selection'").fetchone()
+        selected_template_id = None
+        if selection_table:
+            selected = database.execute(connection,
+                "SELECT draft_id FROM school_template_selection WHERE scope='school'").fetchone()
+            selected_template_id = str(selected["draft_id"]) if selected else None
+        publication_table = database.execute(connection,
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schedule_constructor_publications'"
+            if database.database_url else
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_constructor_publications'").fetchone()
+        published_draft_ids = {str(row["draft_id"]) for row in database.execute(connection,
+            "SELECT DISTINCT draft_id FROM schedule_constructor_publications").fetchall()} if publication_table else set()
     result = []
     for row in rows:
         item = dict(row)
@@ -645,8 +660,10 @@ def list_experiments(database: Database) -> list[dict[str, Any]]:
                      "event_count": sum(lesson.get("kind") == "event" for lesson in lessons if isinstance(lesson, Mapping)),
                      "group_count": len(group_ids), "day_count": len(payload.get("days") or []),
                      "week_start": payload.get("week_start"),
-                     "is_primary_template": (isinstance(payload.get("school_source"), Mapping)
-                                              and payload["school_source"].get("role") == "primary_school_template"),
+                     # The explicit selection pointer is authoritative. Older role
+                     # tags can remain on superseded copies and must not promote them.
+                     "is_primary_template": bool(selected_template_id and str(item["id"]) == selected_template_id),
+                     "has_publications": str(item["id"]) in published_draft_ids,
                      "source_template": payload.get("source_template")})
         result.append(item)
     return result
@@ -764,6 +781,39 @@ def open_school_canonical_template(database: Database, *, actor_user_id: Any = N
             }, "import_review": {"status": "canonical_copy", "message":
                 "Копия подтверждённого canonical-расписания из школьной базы. Исходный Google-шаблон при открытии не перечитывается и может отличаться."}},
             actor_user_id=actor_user_id)
+
+
+def create_effective_week_experiment(database: Database, effective_week_id: str, *, actor_user_id: Any = None) -> dict[str, Any]:
+    """Make an editable draft of an exact immutable week; leave runtime untouched."""
+    from backend.services.canonical_schedule import _block_rows, _assignments
+    with database.connection() as connection:
+        row = database.execute(connection, "SELECT * FROM canonical_effective_weeks WHERE effective_week_id=?", (effective_week_id,)).fetchone()
+    if not row:
+        raise ValueError("Effective week version not found")
+    for summary in list_experiments(database):
+        if summary.get("week_start") == str(row["week_start"]):
+            existing = get_experiment(database, summary["id"])
+            if (existing["payload"].get("school_source") or {}).get("effective_week_id") == effective_week_id:
+                return existing
+    blocks = {}
+    for block in _block_rows(database, effective_week_id):
+        if block.get("change_kind") == "cancelled":
+            continue
+        patch = block.get("patch") or {}
+        assignments = _assignments(database, block.get("canonical_block_id"), patch)
+        assignments = [{**item, "canonical_group_ids": item.get("canonical_group_ids") or
+                        (item.get("audience") or {}).get("canonical_group_ids") or []} for item in assignments]
+        slot = patch.get("slot") or {}
+        blocks[str(block["block_key"])] = {**block, **patch,
+            "start_time": slot.get("start") or patch.get("start_time") or block.get("start_time"),
+            "end_time": slot.get("end") or patch.get("end_time") or block.get("end_time"), "assignments": assignments}
+    version_id = str(row["version_id"])
+    payload = _canonical_payload(database, version_id, source_blocks=blocks)
+    payload.update({"draft_kind": "school", "week_start": str(row["week_start"]),
+                    "reference_date": str(row["week_start"]), "school_source": {
+                        "kind": "effective_week", "effective_week_id": effective_week_id, "canonical_version_id": version_id}})
+    return create_experiment(database, name=f"Неделя {row['week_start']} · черновик исторической версии", source="import",
+                             payload=payload, actor_user_id=actor_user_id, _base_version_id=version_id)
 
 
 def duplicate_experiment(database: Database, experiment_id: str, *, name: str | None = None, actor_user_id: Any = None) -> dict[str, Any]:
