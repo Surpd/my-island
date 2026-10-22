@@ -169,6 +169,9 @@ function conflictLessonLabel(lesson: Lesson, groups: Group[], teachers: Teacher[
 }
 type DraftSummary = Omit<Draft, 'payload'> & {
   created_at?: string;
+  week_start?: string | null;
+  is_primary_template?: boolean;
+  source_template?: { id?: string; revision?: number } | null;
   draft_kind: 'demo' | 'test' | 'user' | 'unclassified';
   lesson_count: number;
   event_count: number;
@@ -194,7 +197,7 @@ type Issue = {
   type: 'teacher' | 'room' | 'audience' | 'data';
   message: string;
   related?: string;
-  category: 'conflict' | 'incomplete' | 'import';
+  category: 'conflict' | 'review' | 'incomplete' | 'import';
 };
 
 const DAYS = [
@@ -321,6 +324,14 @@ function audiencePatch(audience: AudienceRule, groups: Group[], students: Studen
     classId: classIds[0] || '',
   };
 }
+function audienceNeedsReview(lesson: Lesson, preview?: AudiencePreview) {
+  if (!preview || !lesson.audience_snapshot) return false;
+  if (preview.status !== 'ok' || preview.proposed_student_ids == null)
+    return Boolean(preview.needs_recalculation);
+  const saved = [...new Set(lesson.audience_snapshot.student_ids || [])].sort();
+  const proposed = [...new Set(preview.proposed_student_ids)].sort();
+  return saved.length !== proposed.length || saved.some((id, index) => id !== proposed[index]);
+}
 function audienceFromGroup(groupId: string, classIds: string[], groups: Group[]): AudienceRule {
   return groupId && groups.find((group) => group.id === groupId)?.group_type !== 'class'
     ? { kind: 'groups', group_ids: [groupId] }
@@ -367,7 +378,7 @@ function issuesFor(
     const audience = previews[lesson.id];
     if (lesson.kind !== 'event' && subjectLabel(lesson.subject) === 'Английский язык' && !linkedInstructionalGroups(lesson, groups).length)
       result.push({ lessonId: lesson.id, severity: 'warning', type: 'audience', category: 'import', message: 'Не определена группа английского урока в canonical-назначении.' });
-    if (audience?.needs_recalculation) add(lesson.id, 'warning', 'Расчёт участников изменился. Сохранённый состав не заменён; подтвердите пересчёт в карточке занятия.', undefined, 'conflict');
+    if (audienceNeedsReview(lesson, audience)) add(lesson.id, 'warning', 'Состав учеников отличается от сохранённого или текущие данные требуют проверки. Сохранённый состав не заменён.', undefined, 'review');
     if (!payload.days.includes(lesson.day) || !payload.slots[lesson.period])
       add(lesson.id, 'error', 'День или время занятия не входят в шаблон.', undefined, lesson.canonical ? 'import' : 'incomplete');
     if (lesson.kind === 'event' && (!lesson.start || !lesson.end || minutes(lesson.end) <= minutes(lesson.start)))
@@ -429,6 +440,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [schoolDrafts, setSchoolDrafts] = useState<DraftSummary[]>([]);
+  const [publishedWeeks, setPublishedWeeks] = useState<string[]>([]);
+  const [hiddenSchoolDrafts, setHiddenSchoolDrafts] = useState<string[]>([]);
+  const [startSection, setStartSection] = useState<'template' | 'create' | 'weeks' | 'drafts'>('template');
   const [demoDrafts, setDemoDrafts] = useState<DraftSummary[]>([]);
   const [draftFilter, setDraftFilter] = useState<'demo' | 'user' | 'test' | 'unclassified'>('demo');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -443,6 +457,20 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [exporting, setExporting] = useState(false);
   const [lastExport, setLastExport] = useState<{ draftId: string; revision: number; name: string; week: string; status: string; url?: string; reconnect?: boolean } | null>(null);
   const [newWeekStart, setNewWeekStart] = useState('');
+  useEffect(() => {
+    try { setHiddenSchoolDrafts(JSON.parse(window.localStorage.getItem('my-island-hidden-school-drafts:v1') || '[]')); }
+    catch { setHiddenSchoolDrafts([]); }
+  }, []);
+  const hideSchoolDraft = (id: string) => setHiddenSchoolDrafts((current) => {
+    const next = [...new Set([...current, id])];
+    try { window.localStorage.setItem('my-island-hidden-school-drafts:v1', JSON.stringify(next)); } catch { /* Hiding is a local convenience only. */ }
+    return next;
+  });
+  const restoreSchoolDraft = (id: string) => setHiddenSchoolDrafts((current) => {
+    const next = current.filter((item) => item !== id);
+    try { window.localStorage.setItem('my-island-hidden-school-drafts:v1', JSON.stringify(next)); } catch { /* Hiding is a local convenience only. */ }
+    return next;
+  });
   const activityPath = () => `/api/admin/schedule/activities?${workspace === 'school' ? 'workspace=school&' : ''}include_archived=true`;
   const directoryByWorkspace = useRef<{ demo: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] }; school: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] } }>({ demo: { groups: [], teachers: [], students: [], rooms: [] }, school: { groups: [], teachers: [], students: [], rooms: [] } });
   const [audienceSnapshot, setAudienceSnapshot] = useState<{ key: string; lessons: Record<string, AudiencePreview> } | null>(null);
@@ -555,6 +583,20 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setStatus(`Создана отдельная неделя с ${newWeekStart}.`);
     } catch (error) { setStatus(`Не удалось создать неделю: ${String((error as Error).message || error)}`); }
   };
+  const createWeekFromTemplate = async () => {
+    if (!newWeekStart) return;
+    const parts = newWeekStart.split('-').map(Number);
+    const date = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    if (date.getUTCDay() !== 1) { setStatus('Выберите понедельник для начала недели.'); return; }
+    try {
+      let source = schoolDrafts.find((item) => item.is_primary_template);
+      if (!source) source = await api<DraftSummary>('/api/admin/schedule/experiments/school/import', { method: 'POST' });
+      const result = await api<Draft>(`/api/admin/schedule/experiments/school/${encodeURIComponent(source.id)}/week`, { method: 'POST', body: JSON.stringify({ expected_revision: source.revision, week_start: newWeekStart }) });
+      await refreshDrafts();
+      await open(result.id);
+      setStatus(`Создана отдельная неделя с ${newWeekStart}.`);
+    } catch (error) { setStatus(`Не удалось создать неделю: ${String((error as Error).message || error)}`); }
+  };
   const draftRef = useRef<Draft | null>(null);
   const changeVersion = useRef(0);
   const savingRef = useRef(false);
@@ -576,13 +618,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         capabilities.demo_available ? api<{ items: Raw[] }>('/api/admin/groups?include_archived=true') : Promise.resolve({ items: [] }),
         capabilities.demo_available ? api<{ items: Raw[] }>('/api/admin/people?kind=teacher') : Promise.resolve({ items: [] }),
         capabilities.demo_available ? api<{ items: Raw[] }>('/api/admin/people?kind=student') : Promise.resolve({ items: [] }),
-        capabilities.demo_available ? api<{ blocks: Raw[] }>(
+        capabilities.school_available || capabilities.demo_available ? api<{ blocks: Raw[]; weeks?: { week_start: string }[] }>(
           '/api/admin/schedule/observability?editor=true',
-        ).catch(() => ({ blocks: [] })) : Promise.resolve({ blocks: [] }),
+        ).catch(() => ({ blocks: [], weeks: [] as { week_start: string }[] })) : Promise.resolve({ blocks: [], weeks: [] as { week_start: string }[] }),
       ]);
     setDrafts(list.items || []);
     setDemoDrafts(list.items || []);
     setSchoolDrafts(schoolList.items || []);
+    setPublishedWeeks((scheduleData.weeks || []).map((item) => String(item.week_start)).filter(Boolean));
     const schoolReady = capabilities.school_available && Boolean(schoolDirectory.groups?.length);
     setDirectoryAccess(schoolReady ? 'school' : capabilities.demo_available ? 'demo' : 'school');
     if (schoolDirectoryError) setStatus(`Справочник школы временно недоступен: ${schoolDirectoryError}`);
@@ -1842,7 +1885,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return problems.map((message) => ({ index, message }));
   });
   const filteredIssues = issues.filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
+  const conflictIssues = issues.filter((item) => item.category === 'conflict');
+  const conflictLessons = new Set(conflictIssues.flatMap((item) => [item.lessonId, ...(item.related ? [item.related] : [])]));
+  const conflictPairs = new Set(conflictIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
   const versionConflicts = versionConflict?.conflicts || [];
+  const primarySchoolDraft = schoolDrafts.find((item) => item.is_primary_template);
+  const visibleSchoolDrafts = schoolDrafts.filter((item) => !hiddenSchoolDrafts.includes(item.id));
+  const weekDrafts = visibleSchoolDrafts.filter((item) => Boolean(item.week_start));
+  const otherSchoolDrafts = visibleSchoolDrafts.filter((item) => !item.is_primary_template && !item.week_start);
+  const allSchoolWeeks = [...new Set([...publishedWeeks, ...weekDrafts.map((item) => String(item.week_start))])].sort((a, b) => b.localeCompare(a));
   const conflictFieldLabels: Record<string, string> = {
     '$lesson': 'занятие целиком', subject: 'предмет', teacherId: 'преподаватель', teacherIds: 'преподаватели',
     room: 'кабинет', groupId: 'учебная группа', groupIds: 'учебные группы', classId: 'класс', classIds: 'классы',
@@ -1982,11 +2033,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       ) : null}
       {directoryAccess === 'checking' ? <section className="constructor-school-gate">Проверяем подключение к справочнику…</section> : workspace === 'school' && !draft ? (
         <section className="constructor-start">
-          <section className="constructor-source-card"><h3>Основной школьный шаблон</h3><p>{readOnlySchoolWorkspace ? 'Сбор создаёт отдельный школьный черновик. Изменения источника попадут в черновик после проверки.' : 'Открывается активный основной школьный шаблон — сохранённый редакторский черновик. Исторические canonical-копии остаются в списке. Для изменений на конкретные даты создайте независимую неделю.'}</p></section>
-          {readOnlySchoolWorkspace ? <p>Школьная база доступна только для чтения. Черновики сохраняются локально и не изменяют действующее расписание.</p> : null}<div className="constructor-start-actions"><button onClick={async () => { try { const value = await api<Draft>('/api/admin/schedule/experiments/school/import', { method: 'POST' }); await refreshDrafts(); await open(value.id); setStatus(`Открыт основной школьный шаблон: ${value.payload.lessons.length} записей · ревизия ${value.revision}. Сохранённые уточнения и исходные ID сохранены.`); } catch (error) { setStatus(String((error as Error).message || error)); } }}><Copy /> Открыть школьный шаблон<small>Открыть сохранённый основной редакторский шаблон.</small></button></div>
-          <div className="constructor-start-actions"><button onClick={() => void create('empty')}><Plus /> Пустой школьный черновик<small>Отдельное расписание с сохранением в школьной базе.</small></button>{consolidatedSchedule ? <button onClick={() => void create('canonical')}><Copy /> Новый черновик опубликованного шаблона<small>Копия текущей canonical-версии. Используйте после восстановления или изменения базового шаблона.</small></button> : null}</div><div className="constructor-draft-filters"><strong>Школьные черновики · {schoolDrafts.length}</strong></div>
-          {schoolDrafts.map((item) => <article className="constructor-draft" key={item.id}><button className="constructor-draft-open" onClick={() => void open(item.id)}><strong>{item.name}</strong><span>{item.lesson_count} занятий · {item.event_count} событий · {item.group_count} групп</span><ChevronDown size={16} /></button><div className="constructor-draft-actions"><button onClick={() => void rename(item)}>Переименовать</button><button onClick={() => void duplicate(item)}>Дублировать</button><button onClick={() => void remove(item)}>Удалить</button></div></article>)}
-          {!schoolDrafts.length ? <p>Школьных черновиков пока нет.</p> : null}
+          {readOnlySchoolWorkspace ? <p>Школьный справочник доступен только для чтения. Создание недели отключено.</p> : null}
+          <nav className="constructor-draft-filters" aria-label="Разделы расписания"><button className={startSection === 'template' ? 'active' : ''} onClick={() => setStartSection('template')}>Основной шаблон</button><button className={startSection === 'create' ? 'active' : ''} onClick={() => setStartSection('create')}>Создать неделю</button><button className={startSection === 'weeks' ? 'active' : ''} onClick={() => setStartSection('weeks')}>Все недели · {allSchoolWeeks.length}</button><button className={startSection === 'drafts' ? 'active' : ''} onClick={() => setStartSection('drafts')}>Черновики · {otherSchoolDrafts.length}</button></nav>
+          {startSection === 'template' ? <>
+            <section className="constructor-source-card"><h3>Основной шаблон</h3><p>Редакторская основа расписания школы. Изменения сохраняются как черновик и не меняют опубликованную версию, пока вы отдельно её не опубликуете.</p><p>{primarySchoolDraft ? `Связан с опубликованной версией ${primarySchoolDraft.base_version_id || 'школьного расписания'} · ревизия черновика ${primarySchoolDraft.revision}.` : consolidatedSchedule ? 'Опубликованная версия есть. Основной редакторский шаблон будет подготовлен при открытии.' : 'Опубликованная версия пока не найдена.'}</p><button className="admin-button admin-button--primary" disabled={readOnlySchoolWorkspace} onClick={async () => { try { const value = await api<Draft>('/api/admin/schedule/experiments/school/import', { method: 'POST' }); await refreshDrafts(); await open(value.id); } catch (error) { setStatus(String((error as Error).message || error)); } }}><Copy size={16} /> Открыть и редактировать шаблон</button></section>
+          </> : null}
+          {startSection === 'create' ? <section className="constructor-source-card"><h3>Создать неделю</h3><p>Новая независимая неделя будет скопирована из основного шаблона. Опубликованный шаблон останется без изменений.</p><label>Понедельник недели<input type="date" value={newWeekStart} onChange={(event) => setNewWeekStart(event.target.value)} /></label><button className="admin-button admin-button--primary" disabled={readOnlySchoolWorkspace || !newWeekStart} onClick={() => void createWeekFromTemplate()}>Создать неделю из шаблона</button></section> : null}
+          {startSection === 'weeks' ? <section className="constructor-week-list"><h3>Все недели</h3>{allSchoolWeeks.length ? allSchoolWeeks.map((week) => { const item = weekDrafts.find((entry) => entry.week_start === week); return <article className="constructor-draft" key={week}><div className="constructor-draft-open"><strong>Неделя с {new Date(`${week}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}</strong><span>{publishedWeeks.includes(week) ? 'Опубликована' : ''}{publishedWeeks.includes(week) && item ? ' · ' : ''}{item ? 'Есть черновик недели' : 'Без отдельного черновика'}</span></div>{item ? <div className="constructor-draft-actions"><button onClick={() => void open(item.id)}>Открыть черновик</button><button onClick={() => hideSchoolDraft(item.id)}>Скрыть черновик</button></div> : null}</article>; }) : <p>Опубликованных и созданных недель пока нет.</p>}</section> : null}
+          {startSection === 'drafts' ? <section><h3>Незавершённые работы</h3><p>Скрытие убирает запись только из этого списка в текущем браузере. Сам черновик и история публикаций сохраняются.</p>{otherSchoolDrafts.length ? otherSchoolDrafts.map((item) => <article className="constructor-draft" key={item.id}><button className="constructor-draft-open" onClick={() => void open(item.id)}><strong>{item.name}</strong><span>{item.lesson_count} занятий · {item.event_count} событий · изменён: {item.updated_at ? new Date(item.updated_at).toLocaleString('ru-RU') : '—'}</span><ChevronDown size={16} /></button><div className="constructor-draft-actions"><button onClick={() => void rename(item)}>Переименовать</button><button onClick={() => void duplicate(item)}>Создать копию</button><button onClick={() => hideSchoolDraft(item.id)}>Скрыть</button></div></article>) : <p>Незавершённых черновиков нет.</p>}{hiddenSchoolDrafts.length ? <details><summary>Скрытые черновики · {hiddenSchoolDrafts.length}</summary>{schoolDrafts.filter((item) => hiddenSchoolDrafts.includes(item.id)).map((item) => <article className="constructor-draft" key={item.id}><strong>{item.name}</strong><button onClick={() => restoreSchoolDraft(item.id)}>Вернуть в список</button></article>)}</details> : null}</section> : null}
+          <details className="constructor-secondary-actions"><summary>Другие действия</summary><p>Пустое расписание не связано с шаблоном школы.</p><button disabled={readOnlySchoolWorkspace} onClick={() => void create('empty')}><Plus size={16} /> Создать пустое расписание</button>{consolidatedSchedule ? <p>Исторические копии опубликованных версий доступны среди черновиков и недель.</p> : null}</details>
         </section>
       ) : !draft ? (
         <section className="constructor-start">
@@ -2073,7 +2128,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </select> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <button className="constructor-issue-count" onClick={() => setConflictsOpen((open) => !open)} aria-expanded={conflictsOpen}>
-              <AlertTriangle size={14} /><span className="desktop-label">Диагностика {issues.filter((item) => item.category === 'conflict').length ? `· ${issues.filter((item) => item.category === 'conflict').length} совпадений` : ''}</span><span className="mobile-label">Проверка · {issues.filter((item) => item.category === 'conflict').length}</span>
+              <AlertTriangle size={14} /><span className="desktop-label">Проверка · {conflictLessons.size} занятий · {conflictPairs.size} парных совпадений</span><span className="mobile-label">Проверка · {conflictLessons.size}</span>
             </button>
             <button onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>Фильтры</button>
               <button className="constructor-open-colors" onClick={() => setColorPanelOpen(true)} title="Поиск и цвета преподавателей"><Palette size={15}/><span>Преподаватели</span></button>
@@ -2249,11 +2304,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 <select aria-label="Важность проблемы" value={issueSeverity} onChange={(event) => setIssueSeverity(event.target.value)}><option value="all">Все уровни</option><option value="error">Ошибки</option><option value="warning">Предупреждения</option></select>
                 <select aria-label="Тип проблемы" value={issueType} onChange={(event) => setIssueType(event.target.value)}><option value="all">Все типы</option><option value="teacher">Преподаватель</option><option value="room">Кабинет</option><option value="student">Группа или ученик</option><option value="data">Данные занятия</option></select>
               </div>
-              {(['conflict', 'incomplete', 'import'] as const).map((category) => {
+              {(['conflict', 'review', 'incomplete', 'import'] as const).map((category) => {
                 const categoryIssues = filteredIssues.filter((item) => item.category === category);
                 if (!categoryIssues.length) return null;
-                const title = category === 'conflict' ? 'Конфликты расписания' : category === 'incomplete' ? 'Неполные данные' : 'Ошибки импорта и сопоставления';
-                return <section className="constructor-issue-category" key={category}><h3>{title} · {categoryIssues.length}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
+                const title = category === 'conflict' ? 'Конфликты расписания' : category === 'review' ? 'Проверка состава учеников' : category === 'incomplete' ? 'Неполные данные' : 'Ошибки импорта и сопоставления';
+                const affected = new Set(categoryIssues.map((item) => item.lessonId));
+                const pairs = new Set(categoryIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
+                const count = category === 'conflict' ? `${affected.size} занятий · ${pairs.size} парных совпадений` : `${affected.size} занятий`;
+                return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
                   const lesson = payload.lessons.find((entry) => entry.id === item.lessonId);
                   const targetGroup = groups.find((entry) => entry.id === lesson?.groupId);
                   const dayName = lesson ? DAYS[lesson.day] || 'День не определён' : 'Занятие не найдено';

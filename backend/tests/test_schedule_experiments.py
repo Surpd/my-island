@@ -432,7 +432,26 @@ class ScheduleExperimentTests(unittest.TestCase):
         time_preview = experiment_audience_preview(self.database, time_saved["payload"])["lessons"]["english"]
         self.assertEqual(time_preview["student_ids"], [str(first["id"]), str(second["id"])])
         self.assertEqual(time_preview["proposed_student_ids"], [str(first["id"]), str(second["id"])])
-        self.assertTrue(time_preview["needs_recalculation"])
+        self.assertFalse(time_preview["needs_recalculation"])
+        self.assertFalse(time_preview["fingerprint_changed"])
+
+    def test_undated_template_does_not_require_confirmation_when_roster_is_unchanged(self):
+        class_id = str(self.class_group["id"])
+        student = self.database.create_identity("student", "Undated pupil")
+        self.database.create_membership(class_id, student["id"], "student", "test")
+        draft = create_experiment(self.database, name="Undated primary template", source="empty")
+        saved = save_experiment(self.database, draft["id"], expected_revision=1,
+            payload={**draft["payload"], "lessons": [{"id": "lesson", "day": 0, "period": 0,
+                "audience": {"kind": "classes", "class_ids": [class_id]}}]})
+        preview = experiment_audience_preview(self.database, saved["payload"])["lessons"]["lesson"]
+        self.assertEqual(preview["student_ids"], [str(student["id"])])
+        self.assertFalse(preview["needs_recalculation"])
+
+        next_student = self.database.create_identity("student", "Added pupil")
+        self.database.create_membership(class_id, next_student["id"], "student", "test")
+        changed = experiment_audience_preview(self.database, saved["payload"])["lessons"]["lesson"]
+        self.assertTrue(changed["needs_recalculation"])
+        self.assertEqual(set(changed["proposed_student_ids"]), {str(student["id"]), str(next_student["id"])})
 
     def test_school_snapshot_resolves_from_source_database_but_saves_to_local_store(self):
         source_dir = tempfile.TemporaryDirectory()

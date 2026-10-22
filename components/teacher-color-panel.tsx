@@ -19,17 +19,18 @@ export function TeacherColorPanel({teachers, registry, onFilter, onClose}: {teac
   const [migration,setMigration] = useState<TeacherColorMigrationPreview | null>(null);
   const [panelError,setPanelError] = useState('');
   const [migrationBusy,setMigrationBusy] = useState(false);
-  const filtered = teachers.filter(t=>`${t.name} ${registry.code(t.id)}`.toLocaleLowerCase('ru').includes(query.toLocaleLowerCase('ru')));
+  const filtered = teachers.filter(t=>t.name.toLocaleLowerCase('ru').includes(query.toLocaleLowerCase('ru')));
   const duplicate = teachers.some((t,i)=>teachers.slice(i+1).some(other=>registry.color(t.id)===registry.color(other.id)));
   return <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-color-panel" aria-labelledby="teacher-colors-title" ref={node=>{if(node&&!node.open)node.showModal();}} onCancel={event=>{event.preventDefault();onClose();}}>
     <header><div><small>{registry.mode === 'school' ? 'Общие цвета школы · уроки и расписание не меняются' : 'Локальные настройки · расписание не меняется'}</small><h2 id="teacher-colors-title">Преподаватели и цвета</h2></div><button aria-label="Закрыть цвета преподавателей" onClick={onClose}><X size={20}/></button></header>
-    <label className="constructor-color-search"><Search size={17}/><input autoFocus type="search" aria-label="Найти преподавателя по имени или коду" placeholder="Имя или код преподавателя" value={query} onChange={e=>setQuery(e.target.value)}/></label>
+    <label className="constructor-color-search"><Search size={17}/><input autoFocus type="search" aria-label="Найти преподавателя по имени" placeholder="Найти преподавателя" value={query} onChange={e=>setQuery(e.target.value)}/></label>
+    <p>Нажмите имя, чтобы отфильтровать расписание по этому преподавателю.</p>
     <p>{registry.mode === 'school' ? 'Изменения видны всем администраторам школы после сохранения. Цвет можно сбросить к исходному назначению.' : 'Цвета сохраняются только в этом браузере. Чтобы перенести их в настройки школы, сначала просмотрите список и подтвердите импорт.'} Один цвет во всех днях и видах.</p>
-    {registry.mode === 'school' ? <div className="constructor-color-actions">
-      <button disabled={!registry.ready || registry.initializing || registry.unassignedCount === 0} onClick={()=>void registry.initialize?.()}>{registry.initializing ? 'Закрепляем…' : `Закрепить новые цвета (${registry.unassignedCount})`}</button>
-      <button disabled={!registry.ready || registry.seeding} onClick={()=>void registry.seedApproved?.()}>{registry.seeding ? 'Применяем…' : 'Добавить утверждённые исходные цвета'}</button>
-      <button disabled={!registry.ready || migrationBusy} onClick={async()=>{setPanelError('');setMigrationBusy(true);try{if(registry.previewLocalMigration)setMigration(await registry.previewLocalMigration());}catch(error){setPanelError((error as Error).message || 'Не удалось прочитать локальные настройки.');}finally{setMigrationBusy(false);}}}>{migrationBusy ? 'Проверяем…' : 'Перенести локальные настройки'}</button>
-    </div> : null}
+    {registry.mode === 'school' ? <details className="constructor-color-service"><summary>Служебные операции</summary><p>Цвета хранятся по постоянному ID преподавателя. Первичное назначение закрепляет текущие цвета; перенос локальных цветов сначала показывает список соответствий.</p><div className="constructor-color-actions">
+      <button disabled={!registry.ready || registry.initializing || registry.unassignedCount === 0} onClick={()=>void registry.initialize?.()}>{registry.initializing ? 'Закрепляем…' : `Закрепить цвета для новых преподавателей (${registry.unassignedCount})`}</button>
+      <button disabled={!registry.ready || registry.seeding} onClick={()=>{if(window.confirm(`Обновить базовые цвета для ${teachers.length} преподавателей по их постоянным ID? Ручные цвета сохранятся.`))void registry.seedApproved?.();}}>{registry.seeding ? 'Применяем…' : 'Обновить цвета из школьного справочника…'}</button>
+      <button disabled={!registry.ready || migrationBusy} onClick={async()=>{setPanelError('');setMigrationBusy(true);try{if(registry.previewLocalMigration)setMigration(await registry.previewLocalMigration());}catch(error){setPanelError((error as Error).message || 'Не удалось прочитать локальные настройки.');}finally{setMigrationBusy(false);}}}>{migrationBusy ? 'Проверяем…' : 'Перенести локальные цвета…'}</button>
+    </div></details> : null}
     {!registry.ready ? <output aria-live="polite">Загружаем цвета…</output> : null}
     {registry.error ? <p role="alert">{registry.error}</p> : null}
     {registry.notice ? <output aria-live="polite">{registry.notice}</output> : null}
@@ -53,7 +54,7 @@ export function TeacherColorPanel({teachers, registry, onFilter, onClose}: {teac
     {duplicate ? <p className="constructor-color-note">Некоторые оттенки совпадают. Ориентируйтесь также на имя и постоянный код.</p> : null}
     <div className="constructor-color-list">{filtered.map(t=><div key={t.id} className="constructor-color-row">
       <label title={`Изменить цвет: ${t.name}`}><input type="color" aria-label={`Цвет: ${t.name}`} value={registry.color(t.id)} disabled={!registry.ready || registry.pending?.has(t.id)} onChange={e=>registry.setColor(t.id,e.target.value)}/></label>
-      <button className="constructor-color-person" onClick={()=>{onFilter(t.id);onClose();}}><strong>{t.name}</strong><small><i style={{background:registry.accent(t.id)}}/>{registry.code(t.id)}{registry.overrides[t.id] ? ' · ручной цвет' : ''}</small></button>
+      <button className="constructor-color-person" onClick={()=>{onFilter(t.id);onClose();}}><strong>{t.name}</strong><small><i style={{background:registry.accent(t.id)}}/>{registry.overrides[t.id] ? 'Цвет настроен вручную' : 'Цвет по умолчанию'}</small></button>
       <button aria-label={`Сбросить цвет: ${t.name}`} disabled={!registry.overrides[t.id] || registry.pending?.has(t.id)} onClick={()=>registry.resetColor(t.id)}>Сбросить</button>
     </div>)}{!filtered.length ? <p>Преподаватели не найдены</p> : null}</div>
     <footer><span>{filtered.length} из {teachers.length} преподавателей</span><button onClick={()=>{onFilter('');onClose();}}>Показать всех</button><button onClick={onClose}>Готово</button></footer>
