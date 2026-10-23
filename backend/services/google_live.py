@@ -250,27 +250,6 @@ class GoogleLiveClient:
             {"fields": "spreadsheetId,properties.title,sheets(properties,merges)"},
         )
 
-
-def load_google_client(
-    config: GoogleIntegrationConfig,
-    store: GoogleTokenStore,
-    allowed_email: str | None = None,
-) -> tuple[GoogleLiveClient, str]:
-    """Load the shared server credential, verify its identity, and bootstrap DB storage."""
-    token = store.load()
-    if not token or not token.get("refresh_token"):
-        raise GoogleLiveError("Stored Google refresh token is required")
-    client = GoogleLiveClient(config, token, store)
-    account = str(client.userinfo().get("email") or "").strip().casefold()
-    expected = str(allowed_email or "").strip().casefold()
-    if not account:
-        raise GoogleLiveError("Google userinfo did not return an email")
-    if expected and account != expected:
-        raise GoogleLiveError(f"Подключите аккаунт {expected}")
-    if store.database and not store.database.get_google_oauth_credential():
-        store.save(client.token, account_email=account)
-    return client, account
-
     def sheet_grid_range(self, spreadsheet_id: str, title: str, a1_range: str = "A1:V200") -> dict[str, Any]:
         escaped = title.replace("'", "''")
         return self.get(
@@ -331,7 +310,6 @@ def load_google_client(
             page_token = payload.get("nextPageToken")
             if not page_token:
                 return items
-
     def student_submissions(self, course_id: str, coursework_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         page_token: str | None = None
@@ -357,3 +335,24 @@ def load_google_client(
             page_token = payload.get("nextPageToken")
             if not page_token:
                 return items
+
+
+def load_google_client(
+    config: GoogleIntegrationConfig,
+    store: GoogleTokenStore,
+    allowed_email: str | None = None,
+) -> tuple[GoogleLiveClient, str]:
+    """Load the shared server credential, verify its identity, and bootstrap DB storage."""
+    token = store.load()
+    if not token or not token.get("refresh_token"):
+        raise GoogleLiveError("Stored Google refresh token is required")
+    client = GoogleLiveClient(config, token, store)
+    account = str(client.userinfo().get("email") or "").strip().casefold()
+    expected = str(allowed_email or "").strip().casefold()
+    if not account:
+        raise GoogleLiveError("Google userinfo did not return an email")
+    if expected and account != expected:
+        raise GoogleLiveError(f"Подключите аккаунт {expected}")
+    if store.database and not store.database.get_google_oauth_credential():
+        store.save(client.token, account_email=account)
+    return client, account

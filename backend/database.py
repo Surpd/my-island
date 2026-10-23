@@ -4289,6 +4289,21 @@ class Database:
     def start_journal_sync(self, spreadsheet_id: str, grade: int, subject: str | None = None, trigger_kind: str = "manual") -> Any | None:
         try:
             with self.connection() as connection:
+                # A killed worker leaves its row behind. Reclaim only runs that
+                # have exceeded a generous wall-clock lease; the partial unique
+                # index below remains the cross-process concurrency guard.
+                if self.database_url:
+                    self.execute(connection, """UPDATE journal_sync_runs
+                        SET status = 'error', finished_at = CURRENT_TIMESTAMP,
+                            error = 'Recovered stale journal sync after worker interruption (30-minute lease expired)'
+                        WHERE spreadsheet_id = ? AND status = 'running'
+                          AND started_at < CURRENT_TIMESTAMP - INTERVAL '30 minutes'""", (spreadsheet_id,))
+                else:
+                    self.execute(connection, """UPDATE journal_sync_runs
+                        SET status = 'error', finished_at = CURRENT_TIMESTAMP,
+                            error = 'Recovered stale journal sync after worker interruption (30-minute lease expired)'
+                        WHERE spreadsheet_id = ? AND status = 'running'
+                          AND datetime(started_at) < datetime('now', '-30 minutes')""", (spreadsheet_id,))
                 row = self.execute(connection, "INSERT INTO journal_sync_runs(spreadsheet_id, grade, subject, trigger_kind, status) VALUES (?, ?, ?, ?, 'running') RETURNING id", (spreadsheet_id, grade, subject, trigger_kind)).fetchone()
                 return row["id"] if row else None
         except Exception as error:

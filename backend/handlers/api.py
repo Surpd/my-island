@@ -13,6 +13,7 @@ import secrets
 import time
 import os
 import sqlite3
+import logging
 from html import escape
 from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
@@ -51,6 +52,8 @@ from backend.services.student_membership_apply import StudentMembershipApplyBloc
 from backend.services.student_membership_manual_resolutions import load_manual_resolutions
 from backend.services.student_membership_reconciliation import fetch_authoritative_sources, load_production_snapshot
 from backend.services.telegram_admin_bot import handle_admin_code_update
+
+logger = logging.getLogger(__name__)
 
 
 class SessionPayload(BaseModel):
@@ -914,6 +917,13 @@ def create_router(database: Database) -> APIRouter:
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             database.finish_journal_sync(run_id, status="error", error=str(error))
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            logger.exception("Unexpected failure while connecting journal spreadsheet_id=%s grade=%s", spreadsheet_id, payload.grade)
+            try:
+                database.finish_journal_sync(run_id, status="error", error=f"Unexpected journal connection failure: {type(error).__name__}")
+            except Exception:
+                logger.exception("Failed to finalize journal sync run_id=%s after refresh failure", run_id)
+            raise HTTPException(status_code=500, detail="Не удалось обновить журнал. Попробуйте ещё раз позже.") from error
 
     @router.post("/admin/journals/refresh-grade")
     def admin_journal_refresh_grade(grade: int = 9, spreadsheet_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -933,6 +943,13 @@ def create_router(database: Database) -> APIRouter:
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             database.finish_journal_sync(run_id, status="error", error=str(error))
             raise HTTPException(status_code=502, detail=str(error)) from error
+        except Exception as error:
+            logger.exception("Unexpected failure while refreshing journal spreadsheet_id=%s grade=%s", target_id, grade)
+            try:
+                database.finish_journal_sync(run_id, status="error", error=f"Unexpected journal refresh failure: {type(error).__name__}")
+            except Exception:
+                logger.exception("Failed to finalize journal sync run_id=%s after refresh failure", run_id)
+            raise HTTPException(status_code=500, detail="Не удалось обновить журнал. Попробуйте ещё раз позже.") from error
 
     @router.post("/admin/journals/auto-sync")
     def admin_journal_auto_sync(payload: JournalAutoSyncPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

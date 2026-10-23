@@ -129,8 +129,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       await new Promise((resolve) => setTimeout(resolve, 350));
       continue;
     }
-    const networkState = typeof navigator !== 'undefined' && !navigator.onLine ? 'Браузер сообщает, что сеть отключена.' : 'HTTP-ответ не получен: соединение с API прервалось или браузер заблокировал запрос.';
-    const error = new Error(`${networkState} Запрос: ${method} ${API_BASE}${path}.`) as ApiError;
+    const networkState = typeof navigator !== 'undefined' && !navigator.onLine
+      ? 'Нет подключения к сети. Проверьте соединение и повторите попытку.'
+      : 'Сервер временно не ответил. Попробуйте ещё раз позже.';
+    const error = new Error(networkState) as ApiError;
     error.cause = cause;
     throw error;
   }
