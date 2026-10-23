@@ -47,6 +47,7 @@ class Settings:
     telegram_webhook_secret: str = ""
     google_oauth_token_encryption_key: str = ""
     google_oauth_allowed_email: str = "antischool.island@gmail.com"
+    journal_cron_secret: str = ""
     # Scheduling is fail-closed until canonical is explicitly enabled for a pilot.
     schedule_backend: str = "disabled"
     local_test_mode: bool = False
@@ -76,6 +77,7 @@ class Settings:
             google_oauth_refresh_token=os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN") or None,
             google_oauth_token_encryption_key=os.getenv("GOOGLE_OAUTH_TOKEN_ENCRYPTION_KEY", ""),
             google_oauth_allowed_email=os.getenv("GOOGLE_OAUTH_ALLOWED_EMAIL", "antischool.island@gmail.com").strip().casefold(),
+            journal_cron_secret=os.getenv("JOURNAL_CRON_SECRET", "").strip(),
             telegram_bootstrap_user_ids=_parse_telegram_user_ids(os.getenv("TELEGRAM_BOOTSTRAP_USER_IDS", "")),
             schedule_backend=os.getenv("SCHEDULE_BACKEND", "disabled").strip().casefold() or "disabled",
             local_test_mode=os.getenv("MY_ISLAND_LOCAL_TEST_MODE", "false").strip().lower() == "true",

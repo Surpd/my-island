@@ -26,7 +26,7 @@ from backend.services.canonical_schedule import (
     read_canonical_template,
     schedule_admin_observability,
 )
-from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
+from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.schedule_drafts import _apply_assignment_changes, get_draft
 from backend.services.schedule_canonical_bootstrap import build_bootstrap_canonical
@@ -46,12 +46,7 @@ def _title(titles: list[str], wanted: str) -> str | None:
 def _client(settings: Settings, database: Database | None = None) -> tuple[GoogleLiveClient, str]:
     config = google_config(settings)
     store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
-    token = store.load()
-    if not token or not token.get("refresh_token"):
-        raise GoogleLiveError("Stored Google refresh token is required")
-    client = GoogleLiveClient(config, token, store)
-    account = client.userinfo()
-    return client, str(account.get("email") or "")
+    return load_google_client(config, store, settings.google_oauth_allowed_email)
 
 
 def _grid_tab(client: GoogleLiveClient, spreadsheet_id: str, title: str, sheet_id: str) -> dict[str, Any]:

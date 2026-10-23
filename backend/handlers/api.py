@@ -24,13 +24,13 @@ from backend.services.admin import (
     add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
     publish_information,
 )
-from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, exchange_code
+from backend.services.google_live import GoogleApiError, GoogleLiveClient, GoogleLiveError, GoogleTokenStore, exchange_code
 from backend.services.google_oauth import build_google_authorization_url, google_config
-from backend.services.google_contract import SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE
+from backend.services.google_contract import CLASSROOM_READ_SCOPES, SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE
 from backend.services.schedule_sheet_publishing import export_saved_week
 from backend.services.school_template_selection import open_active_school_template
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
-from backend.services.google_sync_service import refresh_classroom, refresh_journal
+from backend.services.google_sync_service import CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, schedule_admin_observability
 from backend.services.canonical_weekly_refresh import preview_current_template, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import (
@@ -172,6 +172,21 @@ class JournalMappingPayload(BaseModel):
     exam_track: str | None = None
 
 
+class JournalConnectPayload(BaseModel):
+    spreadsheet_url: str
+    grade: int = Field(default=9, ge=5, le=11)
+    auto_sync_enabled: bool = True
+
+
+class JournalAutoSyncPayload(BaseModel):
+    spreadsheet_id: str
+    enabled: bool
+
+
+class JournalStudentMatchPayload(BaseModel):
+    identity_id: str
+
+
 class BrowserCodePayload(BaseModel):
     code: str
 
@@ -279,17 +294,116 @@ def create_router(database: Database) -> APIRouter:
         redirect = urlparse(settings.google_oauth_redirect_uri)
         if redirect.path != "/api/integrations/google/callback":
             return False
+        frontend = urlparse(settings.frontend_public_url or "")
+        if not frontend.netloc or frontend.scheme not in {"http", "https"}:
+            return False
+        frontend_origin = f"{frontend.scheme}://{frontend.netloc}"
+        allowed_origins = set()
+        for configured_origin in settings.cors_origins:
+            parsed_origin = urlparse(configured_origin)
+            if parsed_origin.scheme and parsed_origin.netloc:
+                allowed_origins.add(f"{parsed_origin.scheme}://{parsed_origin.netloc}")
+        if frontend_origin not in allowed_origins:
+            return False
         if settings.app_env == "production":
             backend = urlparse(settings.backend_public_url or "")
-            return redirect.scheme == "https" and bool(backend.netloc) and redirect.netloc == backend.netloc
-        return redirect.scheme == "http" and redirect.hostname in {"localhost", "127.0.0.1"}
+            return redirect.scheme == "https" and bool(backend.netloc) and redirect.netloc == backend.netloc and frontend.scheme == "https"
+        return redirect.scheme == "http" and redirect.hostname in {"localhost", "127.0.0.1"} and frontend.scheme == "http" and frontend.hostname in {"localhost", "127.0.0.1"}
 
-    def google_callback_page(title: str, message: str, status_code: int = 200) -> HTMLResponse:
+    def google_callback_page(title: str, message: str, status_code: int = 200, *, oauth_result: str | None = None) -> HTMLResponse:
         settings = get_settings()
         return_url = (settings.frontend_public_url or "").rstrip("/") + "/admin/settings"
         return_link = f'<p><a href="{escape(return_url, quote=True)}">Вернуться в My Island</a></p>' if return_url else "<p>Можно закрыть эту вкладку и вернуться в админку.</p>"
-        body = f'<!doctype html><meta charset="utf-8"><title>{escape(title)}</title><main style="font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px;color:#164b50"><h1>{escape(title)}</h1><p>{escape(message)}</p>{return_link}</main>'
-        return HTMLResponse(body, status_code=status_code, headers={"Cache-Control": "no-store"})
+        frontend_origin = ""
+        try:
+            candidate = urlparse(settings.frontend_public_url or "")
+            if candidate.scheme in {"http", "https"} and candidate.netloc:
+                frontend_origin = candidate.scheme + "://" + candidate.netloc
+        except ValueError:
+            pass
+        notification = ""
+        if oauth_result and frontend_origin:
+            notification = (
+                "<script>if(window.opener){window.opener.postMessage("
+                + json.dumps({"type": "my-island-google-oauth", "status": oauth_result}).replace("<", "\\u003c")
+                + ","
+                + json.dumps(frontend_origin).replace("<", "\\u003c")
+                + ");setTimeout(()=>window.close(),150);}</script>"
+            )
+        body = f'<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>{escape(title)}</title><main style="font:16px system-ui;max-width:620px;margin:12vh auto;padding:24px;color:#164b50"><h1>{escape(title)}</h1><p>{escape(message)}</p>{return_link}</main>{notification}'
+        return HTMLResponse(body, status_code=status_code, headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        })
+
+    def verify_google_status(settings: Any) -> dict[str, Any]:
+        config = google_config(settings)
+        reconnect_available = google_reconnect_ready(settings)
+        if not config.oauth_ready or not settings.google_oauth_token_encryption_key:
+            return {"status": "configuration_missing", "account_email": None, "reconnect_available": False, "message": "На сервере не настроены Google OAuth или шифрование токена."}
+        store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
+        try:
+            token = store.load()
+        except GoogleLiveError:
+            return {"status": "reauthorization_required", "account_email": None, "reconnect_available": reconnect_available, "message": "Сохранённые данные Google не читаются. Переподключите аккаунт."}
+        if not token or not token.get("refresh_token"):
+            return {"status": "reauthorization_required", "account_email": None, "reconnect_available": reconnect_available, "message": "Серверный Google аккаунт не подключён."}
+        client = GoogleLiveClient(config, token, store)
+        try:
+            profile = client.refresh_access_token(settings.google_oauth_allowed_email)
+            account = str(profile.get("email") or "").strip().casefold()
+        except GoogleApiError as error:
+            if error.error_code == "invalid_grant":
+                return {"status": "reauthorization_required", "account_email": None, "reconnect_available": reconnect_available, "message": "Google отклонил долгосрочный доступ. Переподключите аккаунт."}
+            if error.status == 403 and error.reason == "insufficientPermissions":
+                return {"status": "insufficient_permissions", "account_email": None, "reconnect_available": reconnect_available, "message": "Google не выдал необходимые разрешения."}
+            return {"status": "temporary_error", "account_email": None, "reconnect_available": reconnect_available, "message": "Google временно не ответил. Повторите проверку позже."}
+        except GoogleLiveError as error:
+            message = str(error)
+            is_wrong_account = "Подключите аккаунт" in message
+            return {"status": "reauthorization_required" if is_wrong_account else "temporary_error", "account_email": None, "reconnect_available": reconnect_available, "message": message if is_wrong_account else "Не удалось проверить Google. Повторите попытку позже."}
+
+        granted = set(str(client.token.get("scope") or "").split())
+        if not granted.intersection({SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE}):
+            return {"status": "insufficient_permissions", "account_email": account, "reconnect_available": reconnect_available, "message": "Аккаунту не разрешено читать Google Таблицы."}
+        journal_check = {"status": "checked", "title": None}
+        try:
+            metadata = client.spreadsheet(CURRENT_JOURNAL_SPREADSHEETS[9])
+            journal_check["title"] = str((metadata.get("properties") or {}).get("title") or "") or None
+        except GoogleApiError as error:
+            if error.status == 403 and error.reason == "insufficientPermissions":
+                return {"status": "insufficient_permissions", "account_email": account, "reconnect_available": reconnect_available, "message": "У Google аккаунта нет разрешения читать журнал девятого класса.", "journal": {"status": "insufficient_permissions"}}
+            if error.status in {403, 404}:
+                return {"status": "spreadsheet_access_denied", "account_email": account, "reconnect_available": reconnect_available, "message": "Токен действителен, но у выбранного Google аккаунта нет доступа к журналу девятого класса.", "journal": {"status": "access_denied"}}
+            return {"status": "temporary_error", "account_email": account, "reconnect_available": reconnect_available, "message": "Google Таблицы временно не ответили."}
+        except GoogleLiveError:
+            return {"status": "temporary_error", "account_email": account, "reconnect_available": reconnect_available, "message": "Не удалось проверить журнал. Повторите попытку позже."}
+
+        schedule_check = None
+        schedule_id = settings.google_sheets_spreadsheet_id
+        if schedule_id and schedule_id != CURRENT_JOURNAL_SPREADSHEETS[9]:
+            try:
+                schedule_metadata = client.spreadsheet(schedule_id)
+                schedule_check = {"status": "checked", "title": str((schedule_metadata.get("properties") or {}).get("title") or "") or None}
+            except GoogleApiError as error:
+                schedule_check = {"status": "access_denied" if error.status in {403, 404} else "temporary_error"}
+            except GoogleLiveError:
+                schedule_check = {"status": "temporary_error"}
+        return {
+            "status": "connected",
+            "account_email": account,
+            "reconnect_available": reconnect_available,
+            "message": f"Google проверен: доступ к журналу подтверждён для {account}.",
+            "journal": journal_check,
+            "schedule_source": schedule_check,
+            "capabilities": {
+                "sheets_read": bool(granted.intersection({SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE})),
+                "sheets_write": SHEETS_WRITE_SCOPE in granted,
+                "classroom_read": all(scope in granted for scope in CLASSROOM_READ_SCOPES),
+            },
+        }
 
     @router.post("/admin/auth/challenge")
     def create_admin_browser_challenge(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -308,7 +422,7 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=503, detail="Самостоятельное переподключение Google ещё не настроено на сервере")
         state = secrets.token_urlsafe(32)
         database.create_google_oauth_state(hashlib.sha256(state.encode("utf-8")).hexdigest(), actor["id"], int(time.time()) + 600)
-        authorization_url = build_google_authorization_url(settings, state, prompt="consent", schedule_export=schedule_export)
+        authorization_url = build_google_authorization_url(settings, state, prompt="consent select_account", schedule_export=schedule_export)
         database.record_audit_event("google_oauth.reconnect_started", "google_oauth", {"expires_in_seconds": 600}, actor["id"])
         return {"authorization_url": authorization_url, "expires_in_seconds": 600}
 
@@ -316,34 +430,43 @@ def create_router(database: Database) -> APIRouter:
     def google_reconnect_callback(state: str = "", code: str | None = None, error: str | None = None):
         actor_id = database.consume_google_oauth_state(hashlib.sha256(state.encode("utf-8")).hexdigest()) if state else None
         if actor_id is None:
-            return google_callback_page("Не удалось переподключить Google", "Ссылка устарела или уже использована. Вернитесь в админку и начните подключение заново.", 400)
+            return google_callback_page("Не удалось переподключить Google", "Ссылка устарела или уже использована. Вернитесь в админку и начните подключение заново.", 400, oauth_result="error")
         if error:
             database.record_audit_event("google_oauth.reconnect_cancelled", "google_oauth", {"provider_error": error[:80]}, actor_id)
-            return google_callback_page("Подключение не завершено", "Доступ Google не был подтверждён. Текущее подключение не изменено.", 400)
+            return google_callback_page("Подключение не завершено", "Доступ Google не был подтверждён. Текущее подключение не изменено.", 400, oauth_result="cancelled")
         if not code:
-            return google_callback_page("Не удалось переподключить Google", "Google не вернул код авторизации. Текущее подключение не изменено.", 400)
+            return google_callback_page("Не удалось переподключить Google", "Google не вернул код авторизации. Текущее подключение не изменено.", 400, oauth_result="error")
         settings = get_settings()
         if not google_reconnect_ready(settings):
-            return google_callback_page("Подключение не настроено", "Администратору сервера нужно завершить одноразовую настройку OAuth.", 503)
+            return google_callback_page("Подключение не настроено", "Администратору сервера нужно завершить одноразовую настройку OAuth.", 503, oauth_result="error")
         try:
             token = exchange_code(google_config(settings), code)
             if not token.get("refresh_token"):
                 raise GoogleLiveError("Google did not issue a refresh token")
             scopes = set(str(token.get("scope") or "").split())
             if not scopes.intersection({SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE}):
-                raise GoogleLiveError("Google did not grant read access to the schedule spreadsheet")
+                raise GoogleLiveError("Google не предоставил доступ на чтение Google Таблиц")
             store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
             client = GoogleLiveClient(google_config(settings), token, store)
             account = str(client.userinfo().get("email") or "").strip().casefold()
             if not account or account != settings.google_oauth_allowed_email:
                 raise GoogleLiveError(f"Подключите аккаунт {settings.google_oauth_allowed_email}")
-            client.spreadsheet(settings.google_sheets_spreadsheet_id or "")
+            client.spreadsheet(CURRENT_JOURNAL_SPREADSHEETS[9])
             store.save(token, updated_by=actor_id, account_email=account)
+        except GoogleApiError as exc:
+            if exc.status == 403 and exc.reason == "insufficientPermissions":
+                message = "Google не выдал право чтения таблиц. Запустите переподключение и подтвердите доступ к Google Таблицам."
+            elif exc.status in {403, 404}:
+                message = f"У аккаунта {settings.google_oauth_allowed_email} нет доступа к журналу девятого класса. Откройте таблицу и предоставьте этому аккаунту доступ."
+            else:
+                message = "Google временно не ответил при проверке журнала. Попробуйте позже."
+            database.record_audit_event("google_oauth.reconnect_failed", "google_oauth", {"reason": str(exc)[:180]}, actor_id)
+            return google_callback_page("Подключение не завершено", message, 400, oauth_result="error")
         except GoogleLiveError as exc:
             database.record_audit_event("google_oauth.reconnect_failed", "google_oauth", {"reason": str(exc)[:180]}, actor_id)
-            return google_callback_page("Подключение не завершено", str(exc), 400)
+            return google_callback_page("Подключение не завершено", str(exc), 400, oauth_result="error")
         database.record_audit_event("google_oauth.reconnected", "google_oauth", {"account_email": account, "granted_scopes": sorted(scopes)}, actor_id)
-        return google_callback_page("Google подключён", f"Доступ к таблице подтверждён для {account}. Токен сохранён защищённо.")
+        return google_callback_page("Google подключён", f"Доступ к журналу подтверждён для {account}. Токен сохранён защищённо.", oauth_result="success")
 
     @router.post("/telegram/webhook")
     async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token")):
@@ -589,23 +712,15 @@ def create_router(database: Database) -> APIRouter:
         require_role(telegram_user, "admin")
         settings = get_settings()
         google_configured = all((settings.google_oauth_client_id, settings.google_oauth_client_secret, settings.google_oauth_redirect_uri))
-        google_store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
-        try:
-            google_token = google_store.load()
-        except GoogleLiveError:
-            google_token = None
-        google_token_present = bool(google_token and google_token.get("refresh_token"))
-        google_status = "connected" if google_configured and google_token_present else "reauthorization_required" if google_configured else "configuration_missing"
-        google_credential = database.get_google_oauth_credential()
         reconnect_available = google_reconnect_ready(settings)
-        google_message = (
-            f"Google подключён: {google_credential['account_email']}" if google_credential and google_token_present else
-            "Google-соединение готово для синхронизации" if google_status == "connected" else
-            "Необходимо повторно авторизовать Google-соединение" if google_status == "reauthorization_required" else
-            "Google OAuth ещё не настроен"
-        )
-        reconnect_message = "" if reconnect_available else "Для переподключения из админки нужна одноразовая настройка callback-адреса и ключа шифрования на сервере."
-        return {"health": database.system_health(), "settings": {"environment": settings.app_env, "database_configured": bool(settings.database_url), "dev_auth_enabled": settings.dev_auth_enabled, "google": {"status": google_status, "configuration_present": google_configured, "refresh_token_present": google_token_present, "account_email": (google_credential or {}).get("account_email") or (google_token or {}).get("google_account_email"), "reconnect_available": reconnect_available, "reconnect_message": reconnect_message, "message": google_message}}}
+        reconnect_message = "" if reconnect_available else "Для переподключения из админки нужна настройка OAuth callback и ключа шифрования на сервере."
+        return {"health": database.system_health(), "settings": {"environment": settings.app_env, "database_configured": bool(settings.database_url), "dev_auth_enabled": settings.dev_auth_enabled, "google": {"configuration_present": google_configured, "reconnect_available": reconnect_available, "reconnect_message": reconnect_message}}}
+
+    @router.get("/admin/google/status")
+    def admin_google_status(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        return verify_google_status(get_settings())
 
     @router.get("/admin/sources")
     def admin_sources(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -772,7 +887,113 @@ def create_router(database: Database) -> APIRouter:
     def admin_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        return {"items": database.journal_status()}
+        return {"items": database.journal_status(), "scheduler_configured": database.journal_scheduler_configured()}
+
+    @router.post("/admin/journals/connect")
+    def admin_journal_connect(payload: JournalConnectPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        raw = payload.spreadsheet_url.strip()
+        match = re.search(r"docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)", raw)
+        spreadsheet_id = match.group(1) if match else raw
+        if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", spreadsheet_id):
+            raise HTTPException(status_code=400, detail="Укажите ссылку на Google Таблицу или её идентификатор")
+        run_id = database.start_journal_sync(spreadsheet_id, payload.grade, None, "manual")
+        if run_id is None:
+            raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
+        try:
+            result = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id)
+            success = result.get("status") == "success"
+            scheduler_configured = database.journal_scheduler_configured()
+            automation_enabled = success and payload.auto_sync_enabled and scheduler_configured
+            if automation_enabled:
+                database.set_journal_auto_sync(spreadsheet_id, True)
+            database.finish_journal_sync(run_id, status="success" if success else "partial", counts={"tabs": len(result.get("tabs", []))})
+            database.record_audit_event("journal_source.connected", "journal_source", {"spreadsheet_id": spreadsheet_id, "grade": payload.grade, "auto_sync_enabled": automation_enabled}, actor["id"])
+            return {**result, "auto_sync_enabled": automation_enabled, "scheduler_configured": scheduler_configured}
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            database.finish_journal_sync(run_id, status="error", error=str(error))
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @router.post("/admin/journals/refresh-grade")
+    def admin_journal_refresh_grade(grade: int = 9, spreadsheet_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS.get(grade)
+        if not target_id:
+            raise HTTPException(status_code=400, detail="Для этого класса ещё не подключена таблица")
+        run_id = database.start_journal_sync(target_id, grade, None, "manual")
+        if run_id is None:
+            raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
+        try:
+            result = refresh_grade_journal(database, get_settings(), grade, spreadsheet_id=target_id)
+            database.finish_journal_sync(run_id, status="success" if result.get("status") == "success" else "partial", counts={"tabs": len(result.get("tabs", []))})
+            database.record_audit_event("journal_sync.completed", "journal_sync", {"spreadsheet_id": target_id, "grade": grade, "status": result.get("status")}, actor["id"])
+            return result
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            database.finish_journal_sync(run_id, status="error", error=str(error))
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @router.post("/admin/journals/auto-sync")
+    def admin_journal_auto_sync(payload: JournalAutoSyncPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        if payload.enabled and not database.journal_scheduler_configured():
+            raise HTTPException(status_code=409, detail="Почасовое расписание ещё не настроено")
+        changed = database.set_journal_auto_sync(payload.spreadsheet_id, payload.enabled)
+        if not changed:
+            raise HTTPException(status_code=404, detail="Источник журнала не найден")
+        database.record_audit_event("journal_sync.automation_changed", "journal_source", {"spreadsheet_id": payload.spreadsheet_id, "enabled": payload.enabled}, actor["id"])
+        return {"spreadsheet_id": payload.spreadsheet_id, "auto_sync_enabled": payload.enabled}
+
+    @router.get("/admin/journals/{source_id}/detail")
+    def admin_journal_detail(source_id: str, group_marker: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        detail = database.journal_detail(source_id, group_marker)
+        if not detail:
+            raise HTTPException(status_code=404, detail="Журнал не найден")
+        return detail
+
+    @router.get("/admin/journals/{source_id}/sync-history")
+    def admin_journal_sync_history(source_id: str, limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        source = next((item for item in database.journal_status() if str(item["id"]) == source_id), None)
+        if not source:
+            raise HTTPException(status_code=404, detail="Журнал не найден")
+        return {"items": database.journal_sync_history(source["spreadsheet_id"], limit)}
+
+    @router.post("/admin/journals/{source_id}/students/{student_id}/match")
+    def admin_journal_student_match(source_id: str, student_id: str, payload: JournalStudentMatchPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        actor = require_role(telegram_user, "admin")
+        if not database.match_journal_student(source_id, student_id, payload.identity_id, actor["id"]):
+            raise HTTPException(status_code=404, detail="Ученик журнала или запись справочника не найдены")
+        database.record_audit_event("journal_student.matched", "journal_student", {"journal_source_id": source_id, "journal_student_id": student_id, "identity_id": payload.identity_id}, actor["id"])
+        return {"matched": True}
+
+    @router.post("/admin/journals/cron")
+    def admin_journal_cron(x_journal_cron_secret: str | None = Header(default=None, alias="X-Journal-Cron-Secret")):
+        settings = get_settings()
+        expected = settings.journal_cron_secret
+        if not expected or not x_journal_cron_secret or not hmac.compare_digest(expected, x_journal_cron_secret):
+            raise HTTPException(status_code=401, detail="Scheduled journal authorization failed")
+        outcomes = []
+        for source in database.journal_auto_sync_sources():
+            run_id = database.start_journal_sync(source["spreadsheet_id"], int(source["grade"]), None, "scheduled")
+            if run_id is None:
+                outcomes.append({"spreadsheet_id": source["spreadsheet_id"], "status": "already_running"})
+                continue
+            try:
+                result = refresh_grade_journal(database, settings, int(source["grade"]), spreadsheet_id=source["spreadsheet_id"], trigger_kind="scheduled")
+                run_status = "success" if result.get("status") == "success" else "partial"
+                database.finish_journal_sync(run_id, status=run_status, counts={"tabs": len(result.get("tabs", []))})
+                outcomes.append({"spreadsheet_id": source["spreadsheet_id"], "status": result.get("status")})
+            except (GoogleLiveError, ValueError, RuntimeError) as error:
+                database.finish_journal_sync(run_id, status="error", error=str(error))
+                outcomes.append({"spreadsheet_id": source["spreadsheet_id"], "status": "error", "error": str(error)[:1000]})
+        return {"items": outcomes}
 
     @router.post("/admin/journals/refresh")
     def admin_journal_refresh(grade: int = 9, subject: str = "Математика", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

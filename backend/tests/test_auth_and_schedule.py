@@ -6,12 +6,13 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from backend.database import Database
 from backend.config import Settings
 from backend.services.auth import AuthError, resolve_auth, verify_telegram_init_data
-from backend.services.google_live import GoogleTokenStore
+from backend.services.google_live import GoogleLiveClient, GoogleTokenStore, load_google_client, refresh_token
 from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.google_sheets import parse_school_schedule_values, sheet_values_to_rows
@@ -44,8 +45,56 @@ class AuthTests(unittest.TestCase):
 
     def test_google_consent_prompt_is_explicit_only(self):
         settings = Settings("development", True, "", None, "data/test.db", ("http://localhost:3000",), None, None, "sheet", None, "client", "secret", "http://localhost:8000/api/integrations/google/callback", None)
-        self.assertNotIn("prompt=consent", build_google_authorization_url(settings, "state"))
+        ordinary = build_google_authorization_url(settings, "state")
+        self.assertIn("access_type=offline", ordinary)
+        self.assertIn("include_granted_scopes=true", ordinary)
+        self.assertIn("login_hint=antischool.island%40gmail.com", ordinary)
+        self.assertNotIn("prompt=consent", ordinary)
         self.assertIn("prompt=consent", build_google_authorization_url(settings, "state", prompt="consent"))
+
+    def test_google_refresh_preserves_rotated_credentials_in_database(self):
+        from cryptography.fernet import Fernet
+        from backend.services.google_contract import GoogleIntegrationConfig
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "google.db"))
+            database.initialize()
+            store = GoogleTokenStore(database=database, encryption_key=Fernet.generate_key().decode("ascii"))
+            store.save({"access_token": "old-access", "refresh_token": "old-refresh", "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly", "expires_at": 0, "google_account_email": "antischool.island@gmail.com"}, account_email="antischool.island@gmail.com")
+            client = GoogleLiveClient(GoogleIntegrationConfig(None, None, "client", "secret", "https://api.test/callback"), store.load(), store)
+            rotated = {"access_token": "new-access", "refresh_token": "new-refresh", "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly", "expires_in": 3600, "expires_at": 0, "google_account_email": "antischool.island@gmail.com"}
+            with patch("backend.services.google_live.refresh_token", return_value=rotated):
+                self.assertEqual(client._access_token(), "new-access")
+            self.assertEqual(store.load()["refresh_token"], "new-refresh")
+
+    def test_google_refresh_keeps_old_refresh_token_when_google_omits_rotation(self):
+        from backend.services.google_contract import GoogleIntegrationConfig
+
+        config = GoogleIntegrationConfig(None, None, "client", "secret", "https://api.test/callback")
+        with patch("backend.services.google_live._request_json", return_value={"access_token": "new-access", "expires_in": 3600}):
+            token = refresh_token(config, {"refresh_token": "still-valid", "scope": "openid email"})
+        self.assertEqual(token["refresh_token"], "still-valid")
+
+    def test_google_environment_bootstrap_is_verified_then_persisted_in_database(self):
+        from cryptography.fernet import Fernet
+        from backend.services.google_contract import GoogleIntegrationConfig
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "google.db"))
+            database.initialize()
+            store = GoogleTokenStore(database=database, encryption_key=Fernet.generate_key().decode("ascii"))
+            config = GoogleIntegrationConfig(None, None, "client", "secret", "https://api.test/callback")
+            with patch.dict(os.environ, {
+                "GOOGLE_OAUTH_REFRESH_TOKEN": "bootstrap-refresh",
+                "GOOGLE_OAUTH_GRANTED_SCOPES": "openid email https://www.googleapis.com/auth/spreadsheets.readonly",
+            }), patch("backend.services.google_live._request_json", side_effect=[
+                {"access_token": "bootstrap-access", "expires_in": 3600, "refresh_token": "bootstrap-refresh", "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly"},
+                {"email": "antischool.island@gmail.com"},
+            ]):
+                client, email = load_google_client(config, store, "antischool.island@gmail.com")
+            self.assertEqual(email, "antischool.island@gmail.com")
+            self.assertEqual(client.token["refresh_token"], "bootstrap-refresh")
+            self.assertEqual(store.load()["refresh_token"], "bootstrap-refresh")
 
     def test_google_token_store_round_trips_refresh_token(self):
         with tempfile.TemporaryDirectory() as directory:

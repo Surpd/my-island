@@ -27,6 +27,15 @@
       "currentWeekTab": "21-25 сентября",
       "currentWeekSheetId": 1553117668
     },
+    "googleSheetsJournalSource": {
+      "expectedOAuthAccountEmail": "antischool.island@gmail.com",
+      "spreadsheetId": "1RaT1O-qNnbc3WnQs2Fhikcu03mPLl6JpatqhqBU5a8I",
+      "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1RaT1O-qNnbc3WnQs2Fhikcu03mPLl6JpatqhqBU5a8I/edit",
+      "spreadsheetTitle": "Журнал 9 класс",
+      "academicYear": "2026/27",
+      "grade": 9,
+      "authorization": "user-provided in task"
+    },
     "googleCloudOAuth": {
       "ownerAccountEmail": "antischool.island@gmail.com",
       "projectName": "My Island",

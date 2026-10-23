@@ -15,7 +15,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from backend.config import Settings
 from backend.database import Database
-from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
+from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.student_membership_manual_resolutions import (
     alias_for_source,
@@ -684,10 +684,7 @@ def render_plan_markdown(payload: Mapping[str, Any]) -> str:
 
 def fetch_authoritative_sources(settings: Settings, database: Database | None = None) -> tuple[dict[str, Sequence[Sequence[Any]]], dict[str, Any]]:
     token_store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
-    token = token_store.load()
-    if not token:
-        raise GoogleLiveError("Stored Google token is required for read-only student dry-run")
-    client = GoogleLiveClient(google_config(settings), token, token_store)
+    client, _account = load_google_client(google_config(settings), token_store, settings.google_oauth_allowed_email)
     spreadsheet_id = settings.google_sheets_spreadsheet_id or ""
     metadata = client.spreadsheet(spreadsheet_id)
     title = str((metadata.get("properties") or {}).get("title", ""))
