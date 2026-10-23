@@ -65,6 +65,7 @@ class GoogleLiveClientMethodTests(unittest.TestCase):
 
     def test_restored_sheet_and_classroom_methods_execute_their_real_pagination_logic(self):
         with patch.object(self.client, "get", side_effect=[
+            {"spreadsheetId": "spreadsheet", "sheets": [{"properties": {"title": "Математика"}}]},
             {"sheets": [{"properties": {"title": "Математика"}}]},
             {"valueRanges": [{"values": [["Вкладка", "Оценка"]]}]},
             {"courses": [{"id": "course-1"}], "nextPageToken": "page-2"},
@@ -73,6 +74,7 @@ class GoogleLiveClientMethodTests(unittest.TestCase):
             {"studentSubmissions": [{"id": "submission-1"}]},
             {"courseWorkMaterial": [{"id": "material-1"}]},
         ]) as request:
+            spreadsheet = self.client.spreadsheet("spreadsheet")
             sheet = self.client.sheet_grid_range("spreadsheet", "Математика")
             values = self.client.sheet_values_many("spreadsheet", ["Математика!A1:B1"])
             courses = self.client.classroom_courses_for_teacher()
@@ -80,13 +82,14 @@ class GoogleLiveClientMethodTests(unittest.TestCase):
             submissions = self.client.student_submissions("course-1", "work-1")
             materials = self.client.coursework_materials("course-1")
 
+        self.assertEqual(spreadsheet["sheets"][0]["properties"]["title"], "Математика")
         self.assertEqual(sheet["sheets"][0]["properties"]["title"], "Математика")
         self.assertEqual(values, [[["Вкладка", "Оценка"]]])
         self.assertEqual([item["id"] for item in courses], ["course-1", "course-2"])
         self.assertEqual(coursework, [{"id": "work-1"}])
         self.assertEqual(submissions, [{"id": "submission-1"}])
         self.assertEqual(materials, [{"id": "material-1"}])
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 8)
 
 
 class JournalSyncResilienceTests(unittest.TestCase):
