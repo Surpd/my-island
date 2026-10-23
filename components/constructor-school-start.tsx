@@ -7,6 +7,8 @@ export type SchoolDraftSummary = { id: string; name: string; revision: number; l
 export type EffectiveWeekSummary = { effective_week_id: string; version_id: string; week_start: string; status: string; created_at: string; revision_at?: string; is_current_publication?: boolean };
 export type WeekPublication = { id: string; draft_id: string; draft_revision: number; scope_key: string; published_id: string; created_at: string };
 export type SchoolWeekIndex = { effective_weeks?: EffectiveWeekSummary[]; week_publications?: WeekPublication[]; canonical?: { version_id: string; status: string }; load_error?: string };
+type WeekHistoryAssignment = { activity?: string; groups?: string[]; teachers?: string[]; room?: string | null };
+type WeekHistoryBlock = { block_key: string; weekday: number; start_time: string; end_time: string; change_kind?: string; grade_scope?: string | null; effective_assignments?: WeekHistoryAssignment[] };
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 
 export function nearestMonday(today = new Date()) {
@@ -37,9 +39,17 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
   const [restoredTests, setRestoredTests] = useState<string[]>([]);
-  useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('my-island-visible-test-drafts:v1') || '[]'); setRestoredTests(Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : []); } catch { /* Optional browser preference. */ } }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const saved: unknown = JSON.parse(localStorage.getItem('my-island-visible-test-drafts:v1') || '[]');
+        setRestoredTests(Array.isArray(saved) ? saved.filter((item: unknown): item is string => typeof item === 'string') : []);
+      } catch { /* Optional browser preference. */ }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const [history, setHistory] = useState<{ title: string; publications?: WeekPublication[]; weeks?: EffectiveWeekSummary[]; drafts?: SchoolDraftSummary[] } | null>(null);
-  const [view, setView] = useState<{ title: string; loading?: boolean; blocks?: Record<string, any>[]; error?: string } | null>(null);
+  const [view, setView] = useState<{ title: string; loading?: boolean; blocks?: WeekHistoryBlock[]; error?: string } | null>(null);
   const primary = drafts.find(item => item.is_primary_template);
   const publications = index.week_publications || [];
   const effective = index.effective_weeks || [];
@@ -56,7 +66,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const showWeek = async (item: EffectiveWeekSummary) => {
     setView({ title: weekPeriod(item.week_start), loading: true });
     try {
-      const result = await api<{ blocks: Record<string, any>[] }>(`/api/admin/schedule/observability?editor=true&effective_week_id=${encodeURIComponent(item.effective_week_id)}`);
+      const result = await api<{ blocks: WeekHistoryBlock[] }>(`/api/admin/schedule/observability?editor=true&effective_week_id=${encodeURIComponent(item.effective_week_id)}`);
       setView({ title: weekPeriod(item.week_start), blocks: result.blocks.filter(block => block.change_kind !== 'template_only') });
     } catch (error) { setView({ title: weekPeriod(item.week_start), error: (error as Error).message }); }
   };
@@ -115,6 +125,6 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     <details className="constructor-secondary-actions"><summary>Другие черновики и архив · {(section === 'weeks' ? others.length : 0) + archived.length}</summary><p className="constructor-muted">Тестовые и скрытые записи сохранены. Скрытие действует только в этом браузере.</p>{section === 'weeks' ? others.map(item => draftCard(item)) : null}{archived.length ? <details><summary>Тестовые и скрытые записи · {archived.length}</summary>{archived.map(item => draftCard(item, true))}</details> : null}</details>
     <details className="constructor-secondary-actions"><summary>Дополнительно</summary><button disabled={readOnly} onClick={onCreateEmpty}>Создать пустое расписание</button></details>
     {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.map(item => draftCard(item)) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span><code>{item.version_id}</code></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
-    {view ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-view-title" onCancel={() => setView(null)}><header><div><small>Только просмотр сохранённой версии</small><h2 id="week-view-title">{view.title}</h2></div><button aria-label="Закрыть просмотр недели" onClick={() => setView(null)}><X size={20} /></button></header>{view.loading ? <p>Загружаем занятия…</p> : view.error ? <p role="alert">{view.error}</p> : view.blocks?.map((block, position) => <article className="constructor-history-lesson" key={`${block.block_key}:${position}`}><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][block.weekday]} · {block.start_time}–{block.end_time}</strong>{block.change_kind === 'cancelled' ? <p>Занятие отменено в этой версии</p> : (block.effective_assignments || []).map((item: Record<string, any>, i: number) => <p key={i}>{item.activity} · {item.groups?.join(', ') || `${block.grade_scope || ''} параллель`} · {item.teachers?.join(', ') || 'Преподаватель не указан'}{item.room ? ` · ${item.room}` : ''}</p>)}</article>)}</dialog></div> : null}
+    {view ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-view-title" onCancel={() => setView(null)}><header><div><small>Только просмотр сохранённой версии</small><h2 id="week-view-title">{view.title}</h2></div><button aria-label="Закрыть просмотр недели" onClick={() => setView(null)}><X size={20} /></button></header>{view.loading ? <p>Загружаем занятия…</p> : view.error ? <p role="alert">{view.error}</p> : view.blocks?.map((block, position) => <article className="constructor-history-lesson" key={`${block.block_key}:${position}`}><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][block.weekday]} · {block.start_time}–{block.end_time}</strong>{block.change_kind === 'cancelled' ? <p>Занятие отменено в этой версии</p> : (block.effective_assignments || []).map((item, i) => <p key={i}>{item.activity} · {item.groups?.join(', ') || `${block.grade_scope || ''} параллель`} · {item.teachers?.join(', ') || 'Преподаватель не указан'}{item.room ? ` · ${item.room}` : ''}</p>)}</article>)}</dialog></div> : null}
   </section>;
 }

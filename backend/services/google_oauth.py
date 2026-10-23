@@ -25,7 +25,16 @@ def build_google_authorization_url(settings: Settings, state: str, prompt: str |
     if not config.client_id or not config.redirect_uri:
         raise ValueError("Google OAuth client id and redirect URI are required")
     scopes = (*GOOGLE_IDENTITY_SCOPES, SHEETS_WRITE_SCOPE if schedule_export else SHEETS_READ_SCOPE, *CLASSROOM_READ_SCOPES)
-    params = {'client_id': config.client_id, 'redirect_uri': config.redirect_uri, 'response_type': 'code', 'access_type': 'offline', 'scope': ' '.join(scopes), 'state': state}
+    params = {
+        'client_id': config.client_id,
+        'redirect_uri': config.redirect_uri,
+        'response_type': 'code',
+        'access_type': 'offline',
+        'include_granted_scopes': 'true',
+        'scope': ' '.join(scopes),
+        'state': state,
+        'login_hint': settings.google_oauth_allowed_email,
+    }
     if prompt:
         params['prompt'] = prompt
     return f"{GOOGLE_AUTHORIZE_URL}?{urlencode(params)}"

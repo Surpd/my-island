@@ -7,15 +7,17 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const workspace = path.join(projectRoot, '.local-test', 'e2e-workspace');
 const ignored = new Set([
   '.git', '.local-test', 'node_modules', '.next', '.vinext', '.wrangler', 'dist', 'data', 'test-results',
+  'archive', 'artifacts', 'docs', 'site-scaffold', '.playwright-mcp',
   '.aws', '.venv', 'venv', '.secrets', 'secrets', 'certs',
-  '.release-worktree', '.sites-checkout', '.sites-clean-rollout', '.sites-package-stage', '.sites-package-timeslots',
-  '.sites-timeslots-deploy', '.sites-timeslots-deploy-2', '.openai',
+  '.release-worktree', '.openai',
   'schedule-studio-draft-inspector.png', 'schedule-studio-main.png',
 ]);
 function shouldCopy(source) {
   const name = path.basename(source);
   const lower = name.toLowerCase();
   return !ignored.has(name)
+    && !lower.startsWith('.sites-') && !lower.startsWith('.site-')
+    && !lower.endsWith('.tar')
     && name !== '.env' && !name.startsWith('.env.')
     && !name.startsWith('.dev.vars')
     && !lower.startsWith('credentials') && !lower.includes('-credentials.')

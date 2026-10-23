@@ -84,4 +84,4 @@ app.include_router(create_school_teacher_ui_colors_router(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.app_env,
-            "release": os.getenv("MY_ISLAND_RELEASE_SHA", "unversioned")}
+            "release": os.getenv("RENDER_GIT_COMMIT") or os.getenv("MY_ISLAND_RELEASE_SHA", "unversioned")}

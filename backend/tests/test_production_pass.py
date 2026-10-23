@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 
 from backend.database import Database
@@ -45,7 +46,7 @@ class JournalTests(unittest.TestCase):
         parsed = parse_journal_values(self.VALUES, grade=9, subject="Математика", sheet_title="Математика")
         self.assertEqual([(item["title"], item["weight"], item["max_score"]) for item in parsed["assessments"]], [("Входное тестирование", 2.0, 10.0), ("ДЗ", 1.0, 5.0)])
         self.assertEqual(len(parsed["results"]), 6)
-        absence = next(item for item in parsed["results"] if item["student_name"] == "Иванов Иван" and item["assessment_key"].endswith(":C"))
+        absence = next(item for item in parsed["results"] if item["student_name"] == "Иванов Иван" and item["source_coordinate"].startswith("C"))
         self.assertEqual((absence["numeric_score"], absence["status"]), (None, "н"))
 
     def test_roster_keeps_student_with_no_scores_yet(self):
@@ -85,6 +86,11 @@ class JournalTests(unittest.TestCase):
             self.assertEqual((subgroup_mapping["group_id"], subgroup_mapping["subject_subgroup"]), (None, "B"))
             self.assertTrue(database.teacher_can_access_journal_marker(teacher_user, source_id, "B"))
             self.assertFalse(database.teacher_can_access_journal_marker(teacher_user, source_id, "C"))
+            detail = database.journal_detail(source_id, "A")
+            self.assertEqual(len(detail["assessments"]), 2)
+            ivan = next(student for student in detail["students"] if student["display_name"] == "Иванов Иван")
+            self.assertEqual(ivan["results"][str(detail["assessments"][0]["id"])]["numeric_score"], 8.5)
+            self.assertTrue(any(summary["label"] == "Итого" and summary["numeric_value"] == 8.5 for summary in ivan["summaries"]))
             self.assertEqual(view["students"][0]["name"], "Иванов Иван")
             self.assertIn("Петрова Анна", {student["name"] for student in view["students"]})
             self.assertEqual(view["analytics"]["average"], 7.83)
@@ -97,6 +103,125 @@ class JournalTests(unittest.TestCase):
             sheet_title="Математика",
         )
         self.assertEqual(parsed["students"][0]["group_marker"], "A")
+
+    def test_repeated_gradebook_blocks_and_stable_tab_id_are_discovered(self):
+        values = [
+            ["9A"], ["Дата", "01.09"], ["Задание", "Работа A"], ["Вес", 1], ["Оценка", 5],
+            ["Иванов Иван", 4], ["9B"], ["Дата", "01.09"], ["Задание", "Работа B"], ["Вес", 1], ["Оценка", 5],
+            ["Петров Пётр", 5],
+        ]
+        parsed = parse_journal_values(values, grade=9, subject="Математика", sheet_title="Математика", sheet_id=123)
+        self.assertEqual({student["group_marker"] for student in parsed["students"]}, {"A", "B"})
+        self.assertEqual(len(parsed["assessments"]), 2)
+        self.assertTrue(all(item["external_key"].startswith("123:") for item in parsed["assessments"]))
+
+    def test_reimport_preserves_assignment_and_student_ids_across_order_and_column_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика", sheet_id=4)
+            with database.connection() as connection:
+                initial = {row["title"]: row["id"] for row in connection.execute("SELECT id,title FROM journal_assessments WHERE active=1")}
+                students = {row["student_name"]: row["journal_student_id"] for row in connection.execute("SELECT student_name,journal_student_id FROM journal_results WHERE is_current=1")}
+            changed = [list(row) for row in self.VALUES]
+            changed[1][1] = "Домашняя работа"  # The title changes but the roster/value vector stays unique.
+            changed[5], changed[6] = changed[6], changed[5]  # Students move.
+            for row in changed:
+                row.insert(2, "")  # A new assessment is inserted before the existing second work.
+            changed[0][2] = "03.09"
+            changed[1][2] = "Новая работа"
+            changed[2][2] = 1
+            changed[3][2] = 10
+            changed[5][2] = 5
+            changed[6][2] = 3
+            changed[8][2] = 2
+            changed[5][3] = 4  # Existing score correction on the second work.
+            sync_journal_values(database, changed, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика", sheet_id=4)
+            with database.connection() as connection:
+                current = connection.execute("SELECT id,title FROM journal_assessments WHERE active=1").fetchall()
+                student_rows = connection.execute("SELECT display_name AS student_name,id AS journal_student_id FROM journal_students WHERE active=1").fetchall()
+                result_count = connection.execute("SELECT COUNT(*) FROM journal_results WHERE is_current=1").fetchone()[0]
+            titles = {row["title"] for row in current}
+            self.assertIn("Новая работа", titles)
+            self.assertIn("Домашняя работа", titles)
+            current_student_ids = {row["student_name"]: row["journal_student_id"] for row in student_rows}
+            ids_after = {row["title"]: row["id"] for row in current}
+            self.assertEqual(ids_after["Домашняя работа"], initial["Входное тестирование"])
+            self.assertEqual(ids_after["ДЗ"], initial["ДЗ"])
+            for name, identity in students.items():
+                self.assertEqual(current_student_ids[name], identity)
+            self.assertEqual(result_count, 9)
+            self.assertEqual(len({row["id"] for row in current}), len(current))
+
+    def test_empty_source_cell_is_tombstoned_and_unknown_student_does_not_take_another_students_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
+            changed = [list(row) for row in self.VALUES]
+            changed[5][1] = ""
+            changed.append(["Новый Ученик", "", "", ""])
+            sync_journal_values(database, changed, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
+            with database.connection() as connection:
+                absent = connection.execute("SELECT is_current FROM journal_results WHERE student_name='Иванов Иван' AND numeric_score=8.5").fetchone()
+                unknown = connection.execute("SELECT identity_id,match_status FROM journal_students WHERE display_name='Новый Ученик'").fetchone()
+                history = connection.execute("SELECT COUNT(*) FROM journal_result_history").fetchone()[0]
+            self.assertEqual(absent["is_current"], 0)
+            self.assertEqual((unknown["identity_id"], unknown["match_status"]), (None, "unlinked"))
+            self.assertGreaterEqual(history, 1)
+
+    def test_manual_student_match_is_persisted_as_a_source_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            database.create_identity("student", "Ученик Петрова", "9AN")
+            identity = database.create_identity("student", "Петрова Анна", "9AN")
+            sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
+            source_id = database.journal_status()[0]["id"]
+            with database.connection() as connection:
+                student_id = connection.execute("SELECT id FROM journal_students WHERE display_name='Петрова Анна'").fetchone()[0]
+            self.assertTrue(database.match_journal_student(source_id, student_id, identity["id"]))
+            sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
+            with database.connection() as connection:
+                student = connection.execute("SELECT identity_id,match_method FROM journal_students WHERE id=?", (student_id,)).fetchone()
+                mapping = connection.execute("SELECT identity_id,manually_confirmed FROM school_source_mappings WHERE external_key='alias:петрова анна'").fetchone()
+            self.assertEqual((student["identity_id"], student["match_method"]), (identity["id"], "admin_selected"))
+            self.assertEqual((mapping["identity_id"], mapping["manually_confirmed"]), (identity["id"], 1))
+
+    def test_ambiguous_or_partial_block_keeps_previous_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
+            with self.assertRaises(ValueError):
+                sync_journal_values(database, [["Дата", "01.09"], ["Задание", "Сломанная работа"], ["Иванов Иван", 3]], spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика")
+            with database.connection() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_results WHERE is_current=1").fetchone()[0], 6)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_assessments WHERE active=1").fetchone()[0], 2)
+
+    def test_repeated_and_overlapping_syncs_do_not_duplicate_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "test.db"))
+            database.initialize()
+            outcomes: list[object] = []
+            barrier = threading.Barrier(2)
+
+            def sync():
+                try:
+                    barrier.wait()
+                    outcomes.append(sync_journal_values(database, self.VALUES, spreadsheet_id="current-grade-9", spreadsheet_title="Журнал 9 класс", grade=9, subject="Математика", sheet_title="Математика"))
+                except Exception as error:  # Captured for a useful test assertion.
+                    outcomes.append(error)
+
+            threads = [threading.Thread(target=sync) for _ in range(2)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join()
+            self.assertEqual(len(outcomes), 2)
+            self.assertFalse([item for item in outcomes if isinstance(item, Exception)], outcomes)
+            with database.connection() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_sources").fetchone()[0], 1)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_assessments WHERE active=1").fetchone()[0], 2)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_results WHERE is_current=1").fetchone()[0], 6)
 
     def test_journal_failure_marks_health_without_deleting_last_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:

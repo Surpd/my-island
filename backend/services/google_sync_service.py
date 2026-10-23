@@ -6,7 +6,7 @@ from typing import Any
 from backend.config import Settings
 from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
-from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
+from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.journal_import import sync_journal_values
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
@@ -44,15 +44,7 @@ def _client(settings: Settings, database: Database | None = None) -> tuple[Googl
     if missing_config:
         raise GoogleLiveError(f"Google OAuth configuration is missing: {', '.join(missing_config)}")
     store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
-    token = store.load()
-    if not token or not token.get("refresh_token"):
-        raise GoogleLiveError("Stored Google refresh token is required")
-    client = GoogleLiveClient(config, token, store)
-    account = client.userinfo()
-    email = str(account.get("email", "")).strip()
-    if not email:
-        raise GoogleLiveError("Google userinfo did not return an email")
-    return client, email
+    return load_google_client(config, store, settings.google_oauth_allowed_email)
 
 
 class TeacherDirectoryApplyBlocked(RuntimeError):
@@ -197,7 +189,7 @@ def refresh_classroom(database: Database, settings: Settings) -> dict[str, Any]:
     return {"course_id": course_id, "course_name": course.get("name"), "counts": sync_classroom_course(database, client, course, teacher_account=teacher_account)}
 
 
-def refresh_journal(database: Database, settings: Settings, grade: int = 9, subject: str = "Математика") -> dict[str, Any]:
+def refresh_journal(database: Database, settings: Settings, grade: int = 9, subject: str = "Математика", sheet_id: int | str | None = None) -> dict[str, Any]:
     if grade not in CURRENT_JOURNAL_SPREADSHEETS:
         raise ValueError("Journal grade must be between 5 and 11")
     spreadsheet_id = CURRENT_JOURNAL_SPREADSHEETS[grade]
@@ -205,9 +197,11 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
         client, _ = _client(settings, database)
         metadata = client.spreadsheet(spreadsheet_id)
         title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
-        tabs = [str((sheet.get("properties") or {}).get("title", "")) for sheet in metadata.get("sheets") or []]
-        sheet_title = _resolve_sheet_title(tabs, subject)
-        if not sheet_title:
+        sheets = [sheet.get("properties") or {} for sheet in metadata.get("sheets") or []]
+        selected = next((sheet for sheet in sheets if sheet_id is not None and str(sheet.get("sheetId")) == str(sheet_id)), None)
+        selected = selected or next((sheet for sheet in sheets if str(sheet.get("title", "")).strip().casefold() == subject.strip().casefold()), None)
+        sheet_title = str(selected.get("title", "")) if selected else None
+        if not selected or not sheet_title:
             raise GoogleLiveError(f"Journal tab {subject} was not found in {title}")
         escaped_title = sheet_title.replace("'", "''")
         values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ")
@@ -219,13 +213,50 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
             grade=grade,
             subject=subject,
             sheet_title=sheet_title,
+            sheet_id=selected.get("sheetId"),
         )
     except (GoogleLiveError, ValueError, RuntimeError) as error:
         database.record_journal_failure(spreadsheet_id, subject, str(error))
         database.record_audit_event("journal_sync.failed", "journal_sync", {"grade": grade, "subject": subject, "error": str(error)})
         raise
     database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "subject": subject, **counts})
-    return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": subject, "counts": counts}
+    return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": sheet_title, "sheet_id": selected.get("sheetId"), "counts": counts}
+
+
+def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual") -> dict[str, Any]:
+    """Import every gradebook tab in one connected workbook using stable Google tab IDs."""
+    if grade not in CURRENT_JOURNAL_SPREADSHEETS and not spreadsheet_id:
+        raise ValueError("Для этого класса не задан источник журнала")
+    target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS[grade]
+    client, _ = _client(settings, database)
+    metadata = client.spreadsheet(target_id)
+    title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
+    tabs = [sheet.get("properties") or {} for sheet in metadata.get("sheets") or []]
+    if not tabs:
+        raise GoogleLiveError(f"В источнике {title} нет вкладок")
+    outcomes = []
+    for tab in tabs:
+        sheet_title = str(tab.get("title", "")).strip()
+        sheet_id = tab.get("sheetId")
+        if not sheet_title or sheet_id is None:
+            continue
+        escaped_title = sheet_title.replace("'", "''")
+        try:
+            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ")
+            counts = sync_journal_values(
+                database, values, spreadsheet_id=target_id, spreadsheet_title=title,
+                grade=grade, subject=sheet_title, sheet_title=sheet_title, sheet_id=sheet_id,
+            )
+            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "success", "counts": counts})
+        except (GoogleLiveError, ValueError, RuntimeError) as error:
+            database.record_journal_failure(target_id, sheet_title, str(error))
+            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "error", "error": str(error)[:1000]})
+    success_count = sum(item["status"] == "success" for item in outcomes)
+    if not success_count:
+        raise GoogleLiveError("Не удалось импортировать ни одной вкладки; предыдущие данные сохранены")
+    if trigger_kind == "manual":
+        database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": target_id, "successful_tabs": success_count, "failed_tabs": len(outcomes) - success_count})
+    return {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade, "status": "success" if success_count == len(outcomes) else "partial", "tabs": outcomes}
 
 
 def refresh_teacher_directory(database: Database, settings: Settings) -> dict[str, Any]:

@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from backend.database import Database
 from backend.handlers.api import create_router
 from backend.config import Settings
-from backend.services.google_live import GoogleTokenStore
+from backend.services.google_live import GoogleApiError, GoogleTokenStore
 
 
 class AdminConsoleDatabaseTests(unittest.TestCase):
@@ -100,15 +100,21 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         self.assertEqual(groups[source["id"]]["student_count"], 0)
         self.assertEqual(groups[target["id"]]["student_count"], 1)
 
-    def test_grade_teacher_assignment_only_uses_existing_class_groups(self):
-        self.database.create_group("9-А", "class", base_class_name="9-А", actor_user_id=self.user_id)
-        self.database.create_group("9-Б", "class", base_class_name="9-Б", actor_user_id=self.user_id)
+    def test_grade_teacher_assignment_uses_grade_wide_scope_without_creating_groups(self):
+        classes = [
+            self.database.create_group(name, "class", base_class_name=name, actor_user_id=self.user_id)
+            for name in ("9-А", "9-Б")
+        ]
         teacher = self.database.create_identity("teacher", "Тестовый преподаватель", actor_user_id=self.user_id)
+        teacher_user = self.database.get_or_create_user(992, "teacher")
+        with self.database.connection() as connection:
+            connection.execute("UPDATE users SET identity_id = ? WHERE id = ?", (teacher["id"], teacher_user["id"]))
         assignments = self.database.set_teacher_grade_assignments(teacher["id"], "9", "Математика", True, self.user_id)
-        self.assertEqual(len(assignments), 2)
-        self.assertEqual({item["base_class_name"] for item in assignments}, {"9"})
-        with self.assertRaises(ValueError):
-            self.database.set_teacher_grade_assignments(teacher["id"], "8", "Математика", True, self.user_id)
+        self.assertEqual(len(assignments), 1)
+        self.assertIsNone(assignments[0]["group_id"])
+        self.assertEqual(assignments[0]["grade_level"], "9")
+        self.assertTrue(all(self.database.teacher_can_access_group(teacher_user["id"], group["id"]) for group in classes))
+        self.assertEqual({group["name"] for group in self.database.list_groups_admin()}, {"9-А", "9-Б"})
 
     def test_class_change_updates_canonical_membership_and_keeps_identity_id(self):
         source = self.database.create_group("9-Г", "class", base_class_name="9-Г", actor_user_id=self.user_id)
@@ -234,7 +240,7 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         with patch("backend.handlers.api.get_settings", return_value=settings), \
              patch("backend.handlers.api.exchange_code", return_value=token), \
              patch("backend.handlers.api.GoogleLiveClient.userinfo", return_value={"email": "antischool.island@gmail.com"}), \
-             patch("backend.handlers.api.GoogleLiveClient.spreadsheet", return_value={"properties": {"title": "Расписание"}}):
+             patch("backend.handlers.api.GoogleLiveClient.spreadsheet", return_value={"properties": {"title": "Журнал 9 класс"}}) as spreadsheet_check:
             started = client.post("/api/admin/google/reconnect", headers=headers)
             self.assertEqual(started.status_code, 200)
             authorization = urlparse(started.json()["authorization_url"])
@@ -243,11 +249,90 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
             callback = client.get("/api/integrations/google/callback", params={"state": state, "code": "one-time-code"})
             self.assertEqual(callback.status_code, 200)
             self.assertIn("Google подключён", callback.text)
+            spreadsheet_check.assert_called_once_with("1RaT1O-qNnbc3WnQs2Fhikcu03mPLl6JpatqhqBU5a8I")
+            self.assertIn("my-island-google-oauth", callback.text)
+            self.assertIn('"status": "success"', callback.text)
             stored = self.database.get_google_oauth_credential()
             self.assertNotIn("refresh-secret", stored["token_ciphertext"])
             self.assertEqual(GoogleTokenStore(database=self.database, encryption_key=key).load()["refresh_token"], "refresh-secret")
             replay = client.get("/api/integrations/google/callback", params={"state": state, "code": "replay"})
             self.assertEqual(replay.status_code, 400)
+
+    def test_google_status_requires_a_live_refresh_and_journal_access(self):
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        code, _ = self.database.create_admin_login_challenge(self.user_id)
+        session_token, _ = self.database.consume_admin_login_challenge(code)
+        headers = {"X-Dev-Auth": f"browser:{session_token}"}
+        key = Fernet.generate_key().decode("ascii")
+        settings = Settings(
+            app_env="development", dev_auth_enabled=True, telegram_bot_token="", database_url=None,
+            database_path="data/test.db", cors_origins=("http://localhost:3000",),
+            backend_public_url="http://localhost:8000", frontend_public_url="http://localhost:3000",
+            google_sheets_spreadsheet_id="schedule-sheet", google_classroom_course_id=None,
+            google_oauth_client_id="client", google_oauth_client_secret="secret",
+            google_oauth_redirect_uri="http://localhost:8000/api/integrations/google/callback",
+            google_oauth_refresh_token=None, google_oauth_token_encryption_key=key,
+        )
+        store = GoogleTokenStore(database=self.database, encryption_key=key)
+        with patch("backend.handlers.api.get_settings", return_value=settings):
+            self.assertEqual(client.get("/api/admin/google/status").status_code, 401)
+            missing = client.get("/api/admin/google/status", headers=headers)
+            self.assertEqual(missing.json()["status"], "reauthorization_required")
+            store.save({"refresh_token": "refresh-secret", "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly", "google_account_email": "antischool.island@gmail.com"}, account_email="antischool.island@gmail.com")
+            with patch("backend.handlers.api.GoogleLiveClient.refresh_access_token", side_effect=GoogleApiError(400, {"error": "invalid_grant"})):
+                expired = client.get("/api/admin/google/status", headers=headers)
+            self.assertEqual(expired.json()["status"], "reauthorization_required")
+            with patch("backend.handlers.api.GoogleLiveClient.refresh_access_token", return_value={"email": "antischool.island@gmail.com"}), \
+                 patch("backend.handlers.api.GoogleLiveClient.spreadsheet", side_effect=[{"properties": {"title": "Журнал 9 класс"}}, GoogleApiError(404, {"error": {"errors": [{"reason": "notFound"}]}})]):
+                connected = client.get("/api/admin/google/status", headers=headers)
+            self.assertEqual(connected.json()["status"], "connected")
+            self.assertEqual(connected.json()["journal"]["title"], "Журнал 9 класс")
+            self.assertEqual(connected.json()["schedule_source"]["status"], "access_denied")
+
+    def test_google_reconnect_wrong_account_and_cancel_keep_existing_credential(self):
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        code, _ = self.database.create_admin_login_challenge(self.user_id)
+        session_token, _ = self.database.consume_admin_login_challenge(code)
+        headers = {"X-Dev-Auth": f"browser:{session_token}"}
+        key = Fernet.generate_key().decode("ascii")
+        settings = Settings(
+            app_env="development", dev_auth_enabled=True, telegram_bot_token="", database_url=None,
+            database_path="data/test.db", cors_origins=("http://localhost:3000",),
+            backend_public_url="http://localhost:8000", frontend_public_url="http://localhost:3000",
+            google_sheets_spreadsheet_id="schedule-sheet", google_classroom_course_id=None,
+            google_oauth_client_id="client", google_oauth_client_secret="secret",
+            google_oauth_redirect_uri="http://localhost:8000/api/integrations/google/callback",
+            google_oauth_refresh_token=None, google_oauth_token_encryption_key=key,
+        )
+        store = GoogleTokenStore(database=self.database, encryption_key=key)
+        store.save({"refresh_token": "old-refresh", "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly"}, account_email="antischool.island@gmail.com")
+        existing_ciphertext = self.database.get_google_oauth_credential()["token_ciphertext"]
+        replacement = {"access_token": "new-access", "refresh_token": "new-refresh", "scope": "openid email https://www.googleapis.com/auth/spreadsheets.readonly", "expires_at": int(time.time()) + 3600}
+        with patch("backend.handlers.api.get_settings", return_value=settings), \
+             patch("backend.handlers.api.exchange_code", return_value=replacement), \
+             patch("backend.handlers.api.GoogleLiveClient.userinfo", return_value={"email": "someone-else@gmail.com"}):
+            started = client.post("/api/admin/google/reconnect", headers=headers)
+            state = parse_qs(urlparse(started.json()["authorization_url"]).query)["state"][0]
+            rejected = client.get("/api/integrations/google/callback", params={"state": state, "code": "wrong-account-code"})
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(self.database.get_google_oauth_credential()["token_ciphertext"], existing_ciphertext)
+        self.assertNotIn("new-refresh", rejected.text)
+
+        with patch("backend.handlers.api.get_settings", return_value=settings):
+            started = client.post("/api/admin/google/reconnect", headers=headers)
+            state = parse_qs(urlparse(started.json()["authorization_url"]).query)["state"][0]
+            cancelled = client.get("/api/integrations/google/callback", params={"state": state, "error": "access_denied"})
+        self.assertEqual(cancelled.status_code, 400)
+        self.assertIn('"status": "cancelled"', cancelled.text)
+        self.assertEqual(self.database.get_google_oauth_credential()["token_ciphertext"], existing_ciphertext)
 
 
 if __name__ == "__main__":

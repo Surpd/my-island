@@ -1,6 +1,6 @@
 # ScheduleConstructor — release and operations
 
-Updated 2026-10-22; branch `codex/schedule-consolidation`. Production cutover awaits explicit confirmation. This is the current operational document; old one-off reports are privately archived.
+Updated 2026-10-22 after production cutover; branch `codex/schedule-consolidation`. This is the current operational document; old one-off reports are privately archived.
 
 ## Exact targets and current rollback versions
 
@@ -26,16 +26,20 @@ No new permanent database or data import is needed. The local school SQLite cont
 
 Production injects the same configured Database into directory/session, drafts, publication and preferences. It does not choose another source from a repository .env. Opening the selected draft does not import, normalize or rewrite it. Local read-only school mode remains separate.
 
-## Cutover sequence — explicit confirmation required at step 2
+## Production release record
 
-1. Refresh private read-only backup and recheck the selected revision/fingerprint.
-2. Apply **041_teacher_ui_colors.sql** and **042_constructor_publications.sql** to the approved existing Supabase. They add empty settings/head/audit tables, indexes, RLS and grants; no existing lesson, membership, mapping, draft or published version is changed. Verify unchanged aggregates afterwards.
-3. Push reviewed commits to canonical GitHub; preserve Render auto-deploy OFF.
-4. Merge requested Render settings only: `APP_ENV=production`, `DEV_AUTH_ENABLED=false`, `MY_ISLAND_CONSOLIDATED_SCHEDULE=1`, `SCHEDULE_BACKEND=canonical`, `MY_ISLAND_RELEASE_SHA=<reviewed commit>`. Local/test/read-only flags must be disabled. Preserve existing Google/Telegram credentials and DATABASE_URL, which must point to the approved Supabase. Deploy the exact backend commit and verify /health release.
-5. Preserve Sites API base `https://my-island-api.onrender.com`; set `VITE_SCHOOL_DIRECTORY_MODE=school` and `VITE_DATA_SOURCE_LABEL=Школьная база My Island`. Push exact source to its existing managed mirror, save a version, deploy that version; preserve the audience and unrelated env values.
-6. Verify administrator login, actual directory, selected template, colors, Dashboard links, retired routes and weekly source status. Save testing uses a disposable check draft, never the selected template. Publication preview is allowed; confirming a real template/week requires a separate reviewed diff.
+Production release completed 2026-10-22:
 
-Render MCP confirms the exact service and supports merged env updates, but exposes no environment getter in this session. The Dashboard currently requires sign-in for inspection. Do not claim its effective DATABASE_URL was read through MCP. The user requested that settings be entered by the agent through Render; never request secret values in chat.
+- Refreshed and checksum-verified the private PostgreSQL backup before DDL.
+- Applied migrations **041_teacher_ui_colors** and **042_constructor_publications** to the approved Supabase. Post-migration read-only verification confirmed the selected template remained rev45, 386 lessons, SHA256 `12f22d13cf5b67b3c80a134ffce1e09be4d18537b231c05589ac79bdcbdd9fbe`; 8 constructor drafts, 3 editor drafts, 17 canonical versions, and 6 effective weeks remain. New UI-settings and publication tables are empty (no constructor publication head exists yet). RLS is enabled and `service_role` access is present.
+- Pushed reviewed source to the canonical GitHub `main`. Render remains manual-deploy only; backend deployment `dep-dbd487i9lscs73e61kgg` is live at commit `dc6a0326f91280bcb3c30c90e80d49ef704d0218`.
+- Merged required production Render flags while preserving existing secrets and database connection. `/health` returned `status=ok`, `environment=production`, and the expected release SHA.
+- Sites runtime environment revision 2 preserves the approved API base and selects school mode. Frontend version **88**, source `1ce648d5bf60599db58e3b06e63bb1df3ae2eddc`, is deployed to the existing public Site.
+- Render error-log query and Sites Worker error-log query returned no errors after release. Browser checks confirmed the admin sign-in page and school-source label; admin data verification requires its one-time Telegram code and was not performed without an authenticated session.
+- Weekly refresh holds a manual constructor publication with `manual_publication_protected` and exposes pending review; this behavior passed isolated PostgreSQL integration checks. Production has no constructor publication head yet, so the hold will become active when the first manual publication is made. No school template/week was published during cutover.
+- Shared color writes are ready but the production color table starts empty. Teachers still receive the stable ID-based fallback palette. Applying the 14 evidence-backed source colors and migrating any browser-local overrides remains an authenticated admin action; neither was run during cutover.
+
+Render MCP confirms the exact service and supports merged env updates, but exposes no environment getter in this session. Existing `DATABASE_URL` and Google/Telegram secrets were preserved by merge; they were not read back through Render. Do not request secret values in chat.
 
 ## Private backup and rollback
 

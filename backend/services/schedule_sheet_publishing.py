@@ -12,7 +12,7 @@ import os
 from typing import Any
 
 from backend.database import Database
-from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore
+from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.schedule_experiments import ExperimentConflict, get_experiment
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_week, sheets_requests
@@ -37,15 +37,15 @@ def export_client(database: Database, settings: Any) -> GoogleLiveClient:
         raise ExportAuthorizationRequired("Подключите Google для экспорта. Токены локальных CLI не используются приложением.")
     store = GoogleTokenStore(database=database, encryption_key=settings.google_oauth_token_encryption_key)
     try:
-        token = store.load()
+        client, account = load_google_client(google_config(settings), store, settings.google_oauth_allowed_email)
     except GoogleLiveError as error:
         raise ExportAuthorizationRequired("Переподключите Google в настройках сервера.") from error
+    token = client.token
     if not token or SHEETS_WRITE_SCOPE not in str(token.get("scope") or "").split():
         raise ExportAuthorizationRequired("Подключение Google имеет только чтение или отсутствует. Администратору нужно разрешить экспорт Google Sheets при переподключении Google.")
-    account = str(token.get("google_account_email") or "").casefold()
     if account != settings.google_oauth_allowed_email.casefold():
         raise ExportAuthorizationRequired("Аккаунт серверного подключения Google не подтверждён для My Island.")
-    return GoogleLiveClient(google_config(settings), token, store)
+    return client
 
 
 def _target() -> str:

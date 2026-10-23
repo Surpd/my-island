@@ -27,9 +27,16 @@ class GoogleApiError(GoogleLiveError):
     def __init__(self, status: int, body: Any) -> None:
         self.status = status
         self.body = body
-        error_code = body.get("error") if isinstance(body, dict) else None
-        if error_code == "invalid_grant":
+        error = body.get("error") if isinstance(body, dict) else None
+        self.error_code = error if isinstance(error, str) else None
+        self.reason = None
+        if isinstance(error, dict):
+            errors = error.get("errors") or []
+            self.reason = next((item.get("reason") for item in errors if isinstance(item, dict) and item.get("reason")), None)
+        if self.error_code == "invalid_grant":
             message = "Google authorization expired or was revoked; reconnect Google integration"
+        elif self.reason == "insufficientPermissions":
+            message = "Google access is missing required permissions"
         else:
             message = f"Google API request failed ({status})"
         super().__init__(message)
@@ -94,6 +101,12 @@ class GoogleTokenStore:
                 payload.setdefault("scope", stored.get("granted_scopes") or "")
                 payload["google_account_email"] = stored.get("account_email") or ""
                 return payload
+            # A configured refresh token is an explicit one-time bootstrap path.
+            # Do not consult Render's ephemeral filesystem when Postgres is the store.
+            refresh_token_value = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN")
+            if refresh_token_value:
+                return {"refresh_token": refresh_token_value, "scope": os.getenv("GOOGLE_OAUTH_GRANTED_SCOPES", "")}
+            return None
         if not self.path.exists():
             refresh_token_value = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN")
             if refresh_token_value:
@@ -188,11 +201,25 @@ class GoogleLiveClient:
     def _access_token(self) -> str:
         if int(self.token.get("expires_at", 0)) <= int(time.time()) + 60:
             self.token = refresh_token(self.config, self.token)
-            self.store.save(self.token)
+            # A one-time environment bootstrap may not have an account identity
+            # until userinfo is fetched. Save after that check instead.
+            if self.token.get("google_account_email"):
+                self.store.save(self.token)
         access_token = self.token.get("access_token")
         if not access_token:
             raise GoogleLiveError("Google access token is missing")
         return str(access_token)
+
+    def refresh_access_token(self, allowed_email: str | None = None) -> dict[str, Any]:
+        """Force a real refresh-token grant and persist the resulting credentials."""
+        self.token = refresh_token(self.config, self.token)
+        profile = self.userinfo()
+        account = str(profile.get("email") or "").strip().casefold()
+        expected = str(allowed_email or "").strip().casefold()
+        if expected and account != expected:
+            raise GoogleLiveError(f"Подключите аккаунт {expected}")
+        self.store.save(self.token, account_email=account)
+        return profile
 
     def get(self, base_url: str, path: str = "", params: dict[str, str | list[str]] | None = None) -> dict[str, Any]:
         url = urljoin(base_url, path)
@@ -201,7 +228,11 @@ class GoogleLiveClient:
         return _request_json(Request(url, headers={"Authorization": f"Bearer {self._access_token()}"}))
 
     def userinfo(self) -> dict[str, Any]:
-        return self.get("https://openidconnect.googleapis.com/", "v1/userinfo")
+        profile = self.get("https://openidconnect.googleapis.com/", "v1/userinfo")
+        email = str(profile.get("email") or "").strip().casefold()
+        if email:
+            self.token["google_account_email"] = email
+        return profile
 
     def batch_update_spreadsheet(self, spreadsheet_id: str, requests: list[dict[str, Any]]) -> dict[str, Any]:
         # Export target validation belongs to the publishing service. Credentials
@@ -218,6 +249,27 @@ class GoogleLiveClient:
             f"v4/spreadsheets/{quote(spreadsheet_id, safe='')}",
             {"fields": "spreadsheetId,properties.title,sheets(properties,merges)"},
         )
+
+
+def load_google_client(
+    config: GoogleIntegrationConfig,
+    store: GoogleTokenStore,
+    allowed_email: str | None = None,
+) -> tuple[GoogleLiveClient, str]:
+    """Load the shared server credential, verify its identity, and bootstrap DB storage."""
+    token = store.load()
+    if not token or not token.get("refresh_token"):
+        raise GoogleLiveError("Stored Google refresh token is required")
+    client = GoogleLiveClient(config, token, store)
+    account = str(client.userinfo().get("email") or "").strip().casefold()
+    expected = str(allowed_email or "").strip().casefold()
+    if not account:
+        raise GoogleLiveError("Google userinfo did not return an email")
+    if expected and account != expected:
+        raise GoogleLiveError(f"Подключите аккаунт {expected}")
+    if store.database and not store.database.get_google_oauth_credential():
+        store.save(client.token, account_email=account)
+    return client, account
 
     def sheet_grid_range(self, spreadsheet_id: str, title: str, a1_range: str = "A1:V200") -> dict[str, Any]:
         escaped = title.replace("'", "''")
