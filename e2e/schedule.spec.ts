@@ -42,9 +42,24 @@ for (const route of ['/admin?role=admin#/admin/schedule', '/admin/schedule?role=
     await expect(page.getByText('Импорт из Google Sheets', { exact: true })).toHaveCount(0);
     await expect(page.getByText('История версий', { exact: true })).toHaveCount(0);
     expect(page.url()).toContain('/admin/schedule/constructor');
+    expect(page.url()).toContain('role=admin');
     expect(writes).toEqual([]);
   });
 }
+
+test('opens an editable copy of the main template in the constructor', async ({ page }) => {
+  await page.goto('/admin/schedule?role=admin');
+  await expect(page.locator('.constructor-start')).toBeVisible();
+  const createResponse = page.waitForResponse(response =>
+    response.url().endsWith('/api/admin/schedule/experiments')
+      && response.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: /На основе действующего расписания/ }).click();
+  expect((await createResponse).status()).toBe(200);
+  await expect(page).toHaveURL(/\/admin\/schedule\/constructor\?role=admin$/);
+  await expect(page.locator('.constructor-grid-wrap')).toBeVisible();
+  await expect.poll(() => page.locator('.constructor-card').count()).toBeGreaterThan(0);
+});
 
 test('all five retired schedule mutations reject direct HTTP', async ({ request }) => {
   const cases = [

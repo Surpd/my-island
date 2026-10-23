@@ -86,7 +86,7 @@ function routeFromLocation() {
     return route;
   }
   const pathRoute = window.location.pathname.replace(/\/$/, '') || '/admin';
-  if (pathRoute === '/admin/schedule') { window.history.replaceState(null, '', '/admin/schedule/constructor'); return '/admin/schedule/constructor'; }
+  if (pathRoute === '/admin/schedule') { window.history.replaceState(null, '', `${pathRoute}/constructor${window.location.search}`); return '/admin/schedule/constructor'; }
   if (pathRoute === '/admin' || pathRoute.startsWith('/admin/')) return pathRoute;
   return '/admin';
 }
