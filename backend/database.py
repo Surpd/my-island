@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -3931,11 +3931,23 @@ class Database:
     def _save_journal_snapshot_locked(self, source: dict[str, Any], assessments: list[dict[str, Any]], results: list[dict[str, Any]], students: list[dict[str, Any]] | None = None, summaries: list[dict[str, Any]] | None = None) -> dict[str, int]:
         import json
         with self.connection() as connection:
+            boolean_true = "TRUE" if self.database_url else "1"
+            boolean_false = "FALSE" if self.database_url else "0"
+            json_value = "?::jsonb" if self.database_url else "?"
+            def encoded_json(value: Any) -> str | None:
+                return value if isinstance(value, str) or value is None else json.dumps(value, ensure_ascii=False)
+            def numeric_key(value: Any) -> Any:
+                from decimal import Decimal
+                return Decimal(str(value)) if value is not None else None
             if self.database_url:
                 lock_key = f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}"
                 self.execute(connection, "SELECT pg_advisory_xact_lock(hashtext(?))", (lock_key,))
             if source.get("sheet_id") is not None:
                 source_row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
+                if not source_row:
+                    # Upgrade pre-stable-ID sources in place, retaining their
+                    # student mappings, assessment IDs and grade history.
+                    source_row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
             else:
                 source_row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
             if source_row:
@@ -3946,25 +3958,35 @@ class Database:
             else:
                 source_id = self.execute(connection, """INSERT INTO journal_sources(spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, source_hash, status, last_synced_at, last_error)
                     VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', CURRENT_TIMESTAMP, NULL) RETURNING id""", (source["spreadsheet_id"], source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["source_hash"])).fetchone()["id"]
-            school_source_id = self.execute(connection, """INSERT INTO school_sources(source_type, external_key, display_name, location_ref, authority_status, configuration)
-                VALUES ('journal', ?, ?, ?, 'reference', ?)
+            school_source_id = self.execute(connection, f"""INSERT INTO school_sources(source_type, external_key, display_name, location_ref, authority_status, configuration)
+                VALUES ('journal', ?, ?, ?, 'reference', {json_value})
                 ON CONFLICT(source_type, external_key) DO UPDATE SET display_name = excluded.display_name, location_ref = excluded.location_ref
                 RETURNING id""", (source["spreadsheet_id"], source["spreadsheet_title"], f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}", json.dumps({"grade": source["grade"], "subject": source["subject"], "sheet_id": source.get("sheet_id")}, ensure_ascii=False))).fetchone()["id"]
 
             existing_assessments = [dict(row) for row in self.execute(connection, "SELECT * FROM journal_assessments WHERE source_id = ?", (source_id,)).fetchall()]
+            def canonical_date(value: Any) -> str | None:
+                if value is None:
+                    return None
+                return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+            def assessment_metadata(item: dict[str, Any]) -> tuple[Any, ...]:
+                return (item.get('group_marker') or 'all', canonical_date(item.get('assessed_on')),
+                        ' '.join(str(item.get('title') or '').casefold().replace('ё', 'е').split()),
+                        numeric_key(item.get('weight')), numeric_key(item.get('max_score')))
+
             for row in existing_assessments:
-                row["metadata_signature"] = "|".join(str(row.get(key) or "") for key in ("group_marker", "assessed_on", "title", "weight", "max_score"))
+                row["metadata_signature"] = assessment_metadata(row)
             claimed: set[Any] = set()
             assessment_ids: dict[str, Any] = {}
-            raw_value = "?::jsonb" if self.database_url else "?"
+            raw_value = json_value
             for item in assessments:
                 group_marker = str(item.get("group_marker") or "all")
-                signature = "|".join(str(value or "") for value in (group_marker, item.get("assessed_on"), item["title"], item.get("weight"), item.get("max_score")))
+                signature = assessment_metadata(item)
                 candidates = [row for row in existing_assessments if row["id"] not in claimed]
                 exact = [row for row in candidates if row.get("external_key") == item["external_key"]]
                 metadata = [row for row in candidates if row.get("metadata_signature") == signature]
-                value_matches = [row for row in candidates if item.get("value_signature") and row.get("value_signature") == item["value_signature"] and row.get("group_marker", "all") == group_marker and row.get("assessed_on") == item.get("assessed_on")]
-                same_title_group = [row for row in candidates if row.get("group_marker", "all") == group_marker and row.get("assessed_on") == item.get("assessed_on") and " ".join(str(row.get("title") or "").casefold().replace("ё", "е").split()) == " ".join(str(item["title"]).casefold().replace("ё", "е").split())]
+                value_matches = [row for row in candidates if item.get("value_signature") and row.get("value_signature") == item["value_signature"] and row.get("group_marker", "all") == group_marker and canonical_date(row.get("assessed_on")) == canonical_date(item.get("assessed_on"))]
+                same_title_group = [row for row in candidates if row.get("group_marker", "all") == group_marker and canonical_date(row.get("assessed_on")) == canonical_date(item.get("assessed_on")) and " ".join(str(row.get("title") or "").casefold().replace("ё", "е").split()) == " ".join(str(item["title"]).casefold().replace("ё", "е").split())]
                 choices = exact or metadata or value_matches or same_title_group
                 if len(choices) > 1:
                     raise ValueError(f"{source['sheet_title']}: невозможно однозначно сопоставить работу «{item['title']}» после изменения структуры; прежние данные сохранены")
@@ -3973,17 +3995,17 @@ class Database:
                 if match:
                     assessment_id = match["id"]
                     claimed.add(assessment_id)
-                    self.execute(connection, f"""UPDATE journal_assessments SET external_key = ?, title = ?, assessed_on = ?, weight = ?, max_score = ?, source_column = ?, raw_source = {raw_value}, value_signature = ?, group_marker = ?, active = 1, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?""", (item["external_key"], item["title"], item.get("assessed_on"), item.get("weight"), item.get("max_score"), item["source_column"], raw_source, item.get("value_signature"), group_marker, assessment_id))
+                    self.execute(connection, f"""UPDATE journal_assessments SET external_key = ?, title = ?, assessed_on = ?, weight = ?, max_score = ?, source_column = ?, raw_source = {raw_value}, value_signature = ?, group_marker = ?, active = {boolean_true}, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?""", (item["external_key"], item["title"], item.get("assessed_on"), item.get("weight"), item.get("max_score"), item["source_column"], raw_source, item.get("value_signature"), group_marker, assessment_id))
                 else:
                     assessment_id = self.execute(connection, f"""INSERT INTO journal_assessments(source_id, external_key, title, assessed_on, weight, max_score, source_column, raw_source, value_signature, group_marker, active, last_seen_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, {raw_value}, ?, ?, 1, CURRENT_TIMESTAMP) RETURNING id""", (source_id, item["external_key"], item["title"], item.get("assessed_on"), item.get("weight"), item.get("max_score"), item["source_column"], raw_source, item.get("value_signature"), group_marker)).fetchone()["id"]
+                        VALUES (?, ?, ?, ?, ?, ?, ?, {raw_value}, ?, ?, {boolean_true}, CURRENT_TIMESTAMP) RETURNING id""", (source_id, item["external_key"], item["title"], item.get("assessed_on"), item.get("weight"), item.get("max_score"), item["source_column"], raw_source, item.get("value_signature"), group_marker)).fetchone()["id"]
                     claimed.add(assessment_id)
                 assessment_ids[item["external_key"]] = assessment_id
             if claimed:
                 placeholders = ",".join("?" for _ in claimed)
-                self.execute(connection, f"UPDATE journal_assessments SET active = 0 WHERE source_id = ? AND id NOT IN ({placeholders})", (source_id, *claimed))
+                self.execute(connection, f"UPDATE journal_assessments SET active = {boolean_false} WHERE source_id = ? AND id NOT IN ({placeholders})", (source_id, *claimed))
             else:
-                self.execute(connection, "UPDATE journal_assessments SET active = 0 WHERE source_id = ?", (source_id,))
+                self.execute(connection, f"UPDATE journal_assessments SET active = {boolean_false} WHERE source_id = ?", (source_id,))
 
             identities = self.execute(connection, "SELECT id, display_name FROM identities WHERE kind = 'student' AND status = 'active'").fetchall()
             by_name: dict[str, list[Any]] = {}
@@ -3998,8 +4020,9 @@ class Database:
                 student_key = item.get("student_key") or " ".join(str(item["student_name"]).casefold().replace("ё", "е").split())
                 roster.setdefault((item["group_marker"], student_key), item)
             student_ids: dict[tuple[str, str], Any] = {}
+            student_identities: dict[Any, Any] = {}
             linked_students = 0
-            self.execute(connection, "UPDATE journal_students SET active = 0 WHERE source_id = ?", (source_id,))
+            self.execute(connection, f"UPDATE journal_students SET active = {boolean_false} WHERE source_id = ?", (source_id,))
             for (group_marker, student_key), item in roster.items():
                 normalized_name = " ".join(str(item["student_name"]).casefold().replace("ё", "е").split())
                 existing = self.execute(connection, "SELECT id, identity_id, match_status, match_method FROM journal_students WHERE source_id = ? AND group_marker = ? AND student_key = ?", (source_id, group_marker, student_key)).fetchone()
@@ -4027,7 +4050,7 @@ class Database:
                               AND lower(COALESCE(g.subject, '')) = lower(?) LIMIT 1""", (candidate, group_marker, source["subject"])).fetchone()]
                         matches = eligible or matches
                     elif group_marker == "all":
-                        eligible = [candidate for candidate in matches if self.execute(connection, "SELECT 1 FROM identities i WHERE i.id = ? AND (COALESCE(i.class_name,'') LIKE '9%' OR EXISTS (SELECT 1 FROM memberships m JOIN groups g ON g.id=m.group_id WHERE m.identity_id=i.id AND m.active IS TRUE AND m.member_role='student' AND COALESCE(g.base_class_name,g.name) LIKE '9%'))", (candidate,)).fetchone()]
+                        eligible = [candidate for candidate in matches if self.execute(connection, "SELECT 1 FROM identities i WHERE i.id = ? AND (COALESCE(i.class_name,'') LIKE ? OR EXISTS (SELECT 1 FROM memberships m JOIN groups g ON g.id=m.group_id WHERE m.identity_id=i.id AND m.active IS TRUE AND m.member_role='student' AND COALESCE(g.base_class_name,g.name) LIKE ?))", (candidate, '9%', '9%')).fetchone()]
                         matches = eligible or matches
                 identity_id = existing["identity_id"] if existing and existing["identity_id"] is not None else (matches[0] if len(matches) == 1 else None)
                 match_status = "linked" if identity_id is not None else "ambiguous" if len(matches) > 1 else "unlinked"
@@ -4036,7 +4059,7 @@ class Database:
                 row = self.execute(
                     connection,
                     f"""INSERT INTO journal_students(source_id, student_key, display_name, group_marker, identity_id, match_status, match_method, source_row, raw_source, active)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, {raw_value}, 1)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, {raw_value}, {boolean_true})
                        ON CONFLICT(source_id, group_marker, student_key) DO UPDATE SET
                          display_name = excluded.display_name,
                          identity_id = COALESCE(journal_students.identity_id, excluded.identity_id),
@@ -4044,36 +4067,40 @@ class Database:
                          match_method = CASE WHEN COALESCE(journal_students.identity_id, excluded.identity_id) IS NULL THEN excluded.match_method ELSE COALESCE(journal_students.match_method, excluded.match_method) END,
                          source_row = excluded.source_row,
                          raw_source = excluded.raw_source,
-                         active = 1,
+                         active = {boolean_true},
                          updated_at = CURRENT_TIMESTAMP
                        RETURNING id, identity_id""",
                     (source_id, student_key, item["student_name"], group_marker, identity_id, match_status, match_method, item.get("source_row") or item.get("raw_source", {}).get("student_row"), raw_student),
                 ).fetchone()
                 student_ids[(group_marker, student_key)] = row["id"]
+                student_identities[row['id']] = row['identity_id']
                 linked_students += int(row["identity_id"] is not None)
             mapped = 0
-            self.execute(connection, "UPDATE journal_results SET source_coordinate = 'sync_pending:' || CAST(id AS TEXT) || ':' || source_coordinate, is_current = 0 WHERE is_current = 1 AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", (source_id,))
-            for item in results:
-                student_key = item.get("student_key") or " ".join(str(item["student_name"]).casefold().replace("ё", "е").split())
-                student_id = student_ids[(item["group_marker"], student_key)]
-                student = self.execute(connection, "SELECT identity_id FROM journal_students WHERE id = ?", (student_id,)).fetchone()
-                identity_id = student["identity_id"] if student else None
-                mapped += int(identity_id is not None)
-                assessment_id = assessment_ids[item["assessment_key"]]
-                current = self.execute(connection, "SELECT * FROM journal_results WHERE assessment_id = ? AND journal_student_id = ?", (assessment_id, student_id)).fetchone()
-                raw_result = json.dumps(item.get("raw_source"), ensure_ascii=False)
-                values = (item.get("numeric_score"), item.get("status"), item["source_coordinate"], raw_result, item["student_name"], item["group_marker"], identity_id)
-                if current:
-                    previous_coordinate = str(current["source_coordinate"] or "")
-                    if previous_coordinate.startswith("sync_pending:"):
-                        previous_coordinate = previous_coordinate.split(":", 2)[2]
-                    if (current["numeric_score"], current["status"], current["student_name"], current["group_marker"], current["raw_source"]) != (values[0], values[1], values[4], values[5], values[3]):
-                        self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (current["id"], current["numeric_score"], current["status"], previous_coordinate, current["raw_source"], current["is_current"]))
-                    self.execute(connection, f"""UPDATE journal_results SET numeric_score = ?, status = ?, source_coordinate = ?, raw_source = {raw_value}, student_name = ?, group_marker = ?, identity_id = ?, is_current = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?""", (*values, current["id"]))
-                else:
-                    self.execute(connection, f"""INSERT INTO journal_results(assessment_id, journal_student_id, identity_id, student_name, group_marker, numeric_score, status, source_coordinate, raw_source, is_current)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, {raw_value}, 1)""", (assessment_id, student_id, identity_id, item["student_name"], item["group_marker"], item.get("numeric_score"), item.get("status"), item["source_coordinate"], raw_result))
-            self.execute(connection, "UPDATE journal_student_summaries SET is_current = 0 WHERE journal_student_id IN (SELECT id FROM journal_students WHERE source_id = ?)", (source_id,))
+            existing_results = {(row['assessment_id'], row['journal_student_id']): dict(row) for row in self.execute(connection,
+                "SELECT result.* FROM journal_results result JOIN journal_assessments assessment ON assessment.id=result.assessment_id WHERE assessment.source_id = ?", (source_id,)).fetchall()}
+            self.execute(connection, f"UPDATE journal_results SET source_coordinate = 'sync_pending:' || CAST(id AS TEXT) || ':' || source_coordinate, is_current = {boolean_false} WHERE is_current = {boolean_true} AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", (source_id,))
+            with connection.pipeline() if self.database_url else nullcontext():
+                for item in results:
+                    student_key = item.get("student_key") or " ".join(str(item["student_name"]).casefold().replace("ё", "е").split())
+                    student_id = student_ids[(item["group_marker"], student_key)]
+                    identity_id = student_identities[student_id]
+                    mapped += int(identity_id is not None)
+                    assessment_id = assessment_ids[item["assessment_key"]]
+                    current = existing_results.get((assessment_id, student_id))
+                    raw_result = json.dumps(item.get("raw_source"), ensure_ascii=False)
+                    values = (item.get("numeric_score"), item.get("status"), item["source_coordinate"], raw_result, item["student_name"], item["group_marker"], identity_id)
+                    if current:
+                        previous_coordinate = str(current["source_coordinate"] or "")
+                        if previous_coordinate.startswith("sync_pending:"):
+                            previous_coordinate = previous_coordinate.split(":", 2)[2]
+                        if (numeric_key(current["numeric_score"]), current["status"], current["student_name"], current["group_marker"]) != (numeric_key(values[0]), values[1], values[4], values[5]):
+                            self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (current["id"], current["numeric_score"], current["status"], previous_coordinate, encoded_json(current["raw_source"]), str(current["source_coordinate"]).startswith("sync_pending:") or bool(current["is_current"])))
+                        self.execute(connection, f"""UPDATE journal_results SET numeric_score = ?, status = ?, source_coordinate = ?, raw_source = {raw_value}, student_name = ?, group_marker = ?, identity_id = ?, is_current = {boolean_true}, updated_at = CURRENT_TIMESTAMP WHERE id = ?""", (*values, current["id"]))
+                    else:
+                        self.execute(connection, f"""INSERT INTO journal_results(assessment_id, journal_student_id, identity_id, student_name, group_marker, numeric_score, status, source_coordinate, raw_source, is_current)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, {raw_value}, {boolean_true})""", (assessment_id, student_id, identity_id, item["student_name"], item["group_marker"], item.get("numeric_score"), item.get("status"), item["source_coordinate"], raw_result))
+            current_summary_ids = {row['id'] for row in self.execute(connection, f"SELECT id FROM journal_student_summaries WHERE is_current = {boolean_true} AND journal_student_id IN (SELECT id FROM journal_students WHERE source_id = ?)", (source_id,)).fetchall()}
+            self.execute(connection, f"UPDATE journal_student_summaries SET is_current = {boolean_false} WHERE journal_student_id IN (SELECT id FROM journal_students WHERE source_id = ?)", (source_id,))
             for item in summaries or []:
                 student_key = item.get("student_key") or " ".join(str(item["student_name"]).casefold().replace("ё", "е").split())
                 student_id = student_ids.get((item["group_marker"], student_key))
@@ -4083,16 +4110,17 @@ class Database:
                 raw_summary = json.dumps(item.get("raw_source"), ensure_ascii=False)
                 current_values = (item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary)
                 if summary:
-                    if (summary["numeric_value"], summary["text_value"], summary["raw_source"]) != (current_values[0], current_values[1], current_values[3]):
-                        self.execute(connection, f"INSERT INTO journal_summary_history(summary_id, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (summary["id"], summary["numeric_value"], summary["text_value"], summary["source_coordinate"], summary["raw_source"], summary["is_current"]))
-                    self.execute(connection, f"UPDATE journal_student_summaries SET numeric_value = ?, text_value = ?, source_coordinate = ?, raw_source = {raw_value}, is_current = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (*current_values, summary["id"]))
+                    if (numeric_key(summary["numeric_value"]), summary["text_value"]) != (numeric_key(current_values[0]), current_values[1]):
+                        self.execute(connection, f"INSERT INTO journal_summary_history(summary_id, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (summary["id"], summary["numeric_value"], summary["text_value"], summary["source_coordinate"], encoded_json(summary["raw_source"]), summary['id'] in current_summary_ids))
+                    self.execute(connection, f"UPDATE journal_student_summaries SET numeric_value = ?, text_value = ?, source_coordinate = ?, raw_source = {raw_value}, is_current = {boolean_true}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (*current_values, summary["id"]))
                 else:
-                    self.execute(connection, f"INSERT INTO journal_student_summaries(journal_student_id, label, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, ?, {raw_value}, 1)", (student_id, item["label"], item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary))
-            removed = self.execute(connection, "SELECT id, numeric_score, status, source_coordinate, raw_source, is_current FROM journal_results WHERE is_current = 0 AND source_coordinate LIKE 'sync_pending:%' AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", (source_id,)).fetchall()
+                    self.execute(connection, f"INSERT INTO journal_student_summaries(journal_student_id, label, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, ?, {raw_value}, {boolean_true})", (student_id, item["label"], item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary))
+            removed = self.execute(connection, f"SELECT id, numeric_score, status, source_coordinate, raw_source, is_current FROM journal_results WHERE is_current = {boolean_false} AND source_coordinate LIKE ? AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", ('sync_pending:%', source_id)).fetchall()
             for row in removed:
                 coordinate = str(row["source_coordinate"] or "").split(":", 2)[2]
-                self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (row["id"], row["numeric_score"], row["status"], coordinate, row["raw_source"], row["is_current"]))
+                self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (row["id"], row["numeric_score"], row["status"], coordinate, encoded_json(row["raw_source"]), True))
                 self.execute(connection, "UPDATE journal_results SET source_coordinate = ? WHERE id = ?", (f"removed:{row['id']}:{coordinate}", row["id"]))
+            self.execute(connection, "UPDATE journal_sources SET status = ? WHERE id = ?", ('ready' if results else 'empty', source_id))
             return {"assessments": len(assessments), "results": len(results), "roster_students": len(roster), "linked_students": linked_students, "mapped_results": mapped, "summary_values": len(summaries or [])}
 
     def map_journal_group(self, source_id: Any, group_marker: str, group_id: Any | None, actor_user_id: Any, *, base_class_name: str | None = None, subject_subgroup: str | None = None, classroom_course_id: Any | None = None, exam_track: str | None = None, source: str = "admin_override") -> Any:
@@ -4199,6 +4227,7 @@ class Database:
                 connection,
                 """SELECT js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                           js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled,
+                          (SELECT run.id FROM journal_sync_runs run WHERE run.spreadsheet_id = js.spreadsheet_id AND run.status = 'running' ORDER BY run.started_at DESC LIMIT 1) AS active_run_id,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE THEN ja.id END) AS assessment_count,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE AND jr.is_current IS TRUE THEN jr.id END) AS result_count,
                           COUNT(DISTINCT CASE WHEN js2.active IS TRUE THEN js2.id END) AS roster_student_count,
@@ -4293,6 +4322,9 @@ class Database:
                 # have exceeded a generous wall-clock lease; the partial unique
                 # index below remains the cross-process concurrency guard.
                 if self.database_url:
+                    lock = self.execute(connection, "SELECT pg_try_advisory_xact_lock(hashtext(?)) AS acquired", (f"journal-book:{spreadsheet_id}",)).fetchone()
+                    if not lock or not lock["acquired"]:
+                        return None
                     self.execute(connection, """UPDATE journal_sync_runs
                         SET status = 'error', finished_at = CURRENT_TIMESTAMP,
                             error = 'Recovered stale journal sync after worker interruption (30-minute lease expired)'
@@ -4312,12 +4344,13 @@ class Database:
             raise
 
     def finish_journal_sync(self, run_id: Any, *, status: str, counts: dict[str, Any] | None = None, error: str | None = None) -> None:
-        payload = json.dumps(counts or {}, ensure_ascii=False)
         raw_value = "?::jsonb" if self.database_url else "?"
-        query = f"UPDATE journal_sync_runs SET status = ?, finished_at = CURRENT_TIMESTAMP, counts = {raw_value}, error = ? WHERE id = ?"
-        params = (status, payload, (error or "")[:1000] or None, run_id)
         with self.connection() as connection:
-            self.execute(connection, query, params)
+            if counts is None:
+                self.execute(connection, "UPDATE journal_sync_runs SET status = ?, finished_at = CURRENT_TIMESTAMP, error = ? WHERE id = ?", (status, (error or "")[:1000] or None, run_id))
+            else:
+                payload = json.dumps(counts, ensure_ascii=False)
+                self.execute(connection, f"UPDATE journal_sync_runs SET status = ?, finished_at = CURRENT_TIMESTAMP, counts = {raw_value}, error = ? WHERE id = ?", (status, payload, (error or "")[:1000] or None, run_id))
 
     def journal_auto_sync_sources(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
@@ -4367,12 +4400,57 @@ class Database:
             self.execute(connection, "UPDATE journal_results SET identity_id = ? WHERE journal_student_id = ?", (identity_id, journal_student_id))
             return True
 
-    def record_journal_failure(self, spreadsheet_id: str, subject: str, error: str) -> None:
+    def record_journal_failure(self, spreadsheet_id: str, subject: str, error: str, *, grade: int | None = None,
+                               spreadsheet_title: str = "", sheet_title: str = "", sheet_id: Any = None) -> None:
         with self.connection() as connection:
-            self.execute(
+            changed = self.execute(
                 connection,
                 """UPDATE journal_sources
                       SET status = 'error', last_error = ?
-                    WHERE spreadsheet_id = ? AND subject = ?""",
-                (error[:1000], spreadsheet_id, subject),
+                    WHERE spreadsheet_id = ? AND (subject = ? OR sheet_id = ?)""",
+                (error[:1000], spreadsheet_id, subject, str(sheet_id) if sheet_id is not None else None),
             )
+            if not changed.rowcount and grade is not None:
+                self.execute(connection, """INSERT INTO journal_sources
+                    (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, last_error)
+                    VALUES (?, ?, ?, ?, ?, ?, 'error', ?)
+                    ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status = 'error', last_error = excluded.last_error""",
+                    (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title or subject,
+                     str(sheet_id) if sheet_id is not None else None, error[:1000]))
+
+    def get_journal_sync_run(self, run_id: Any) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT id, spreadsheet_id, grade, subject, trigger_kind, status, started_at, finished_at, error, counts FROM journal_sync_runs WHERE id = ?", (run_id,)).fetchone()
+            if not row:
+                return None
+            item = dict(row)
+            item["counts"] = self._decode_json_value(item.get("counts")) if item.get("counts") else {}
+            return item
+
+    def journal_workbook_lock(self, spreadsheet_id: str):
+        if not self.database_url:
+            return nullcontext(True)
+
+        @contextmanager
+        def hold_session_lock():
+            lock_key = f"journal-book:{spreadsheet_id}"
+            with self.connection() as connection:
+                row = self.execute(connection, "SELECT pg_try_advisory_lock(hashtext(?)) AS acquired", (lock_key,)).fetchone()
+                acquired = bool(row and row["acquired"])
+                # Session locks survive commit. Do not keep an idle transaction
+                # open while Google and per-tab transactions do their work.
+                connection.commit()
+                try:
+                    yield acquired
+                finally:
+                    if acquired:
+                        self.execute(connection, "SELECT pg_advisory_unlock(hashtext(?))", (lock_key,))
+
+        return hold_session_lock()
+
+    def update_journal_sync_progress(self, run_id: Any, counts: dict[str, Any]) -> bool:
+        payload = json.dumps(counts or {}, ensure_ascii=False)
+        raw_value = "?::jsonb" if self.database_url else "?"
+        with self.connection() as connection:
+            cursor = self.execute(connection, f"UPDATE journal_sync_runs SET counts = {raw_value} WHERE id = ? AND status = 'running'", (payload, run_id))
+            return bool(cursor.rowcount)

@@ -131,6 +131,20 @@ def parse_journal_values(
                 text = str(_cell(prior, 0) or "").strip()
                 if MATH_GROUP_RE.fullmatch(text):
                     marker = _canonical_group_marker(text, grade=grade, subject=subject)
+        elif len(blocks) > 1:
+            # Repeated blocks can represent separate local rosters (for example,
+            # parallel English groups). Keep their sheet labels verbatim; do not
+            # infer canonical class membership from a label we do not understand.
+            label_start = previous_end
+            labels = []
+            for label_row in range(block["date"] - 1, label_start - 1, -1):
+                row = values[label_row]
+                label = str(_cell(row, 0) or "").strip()
+                other_values = any(str(_cell(row, column) or "").strip() for column in range(1, len(row)))
+                if label and not other_values and not _header_kind(label):
+                    labels.append(label)
+                    break
+            marker = labels[0] if labels else f"block {block_index + 1}"
 
         title_row = values[block["title"]]
         summary_columns = [(column, str(_cell(title_row, column) or "").strip()) for column in range(1, width) if _normalized(_cell(title_row, column)) in SUMMARY_HEADERS]
@@ -152,9 +166,6 @@ def parse_journal_values(
             if not has_assignment_value and len(normalized_name.split()) < 2:
                 continue
             student_rows.append((row_index, name, current_marker))
-
-        if not student_rows:
-            raise ValueError(f"{sheet_title}: блок {block_index + 1} не содержит распознанного списка учеников")
 
         for row_index, name, student_marker in student_rows:
             student_key = f"{_normalized(name)}|{student_marker}"
@@ -222,11 +233,21 @@ def parse_journal_values(
                 result["assessment_key"] = external_key
                 results.append(result)
 
-    if not students_by_key:
-        raise ValueError(f"{sheet_title}: не найдено ни одного ученика")
-    signatures = [item["external_key"] for item in assessments]
-    if len(signatures) != len(set(signatures)):
-        raise ValueError(f"{sheet_title}: несколько заданий имеют неразличимые признаки; импорт остановлен")
+    # Empty placeholder columns often repeat metadata but carry no grades. They
+    # have no stable identity to preserve, so keep one. If the same signature
+    # contains actual results, leave it as a diagnostic instead of guessing.
+    result_keys = {item["assessment_key"] for item in results}
+    unique_assessments: list[dict[str, Any]] = []
+    seen_signatures: set[str] = set()
+    for assessment in assessments:
+        signature = assessment["external_key"]
+        if signature in seen_signatures:
+            if signature in result_keys:
+                raise ValueError(f"{sheet_title}: несколько заданий имеют неразличимые признаки; импорт остановлен")
+            continue
+        seen_signatures.add(signature)
+        unique_assessments.append(assessment)
+    assessments = unique_assessments
     payload = {"grade": grade, "subject": subject, "assessments": assessments,
                "students": list(students_by_key.values()), "results": results, "summaries": summaries}
     payload["source_hash"] = _signature(payload)

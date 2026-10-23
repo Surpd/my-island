@@ -3,9 +3,10 @@ import json
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.error import HTTPError
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -15,6 +16,41 @@ from backend.database import Database
 from backend.handlers.api import create_router
 from backend.services.google_contract import GoogleIntegrationConfig
 from backend.services.google_live import GoogleApiError, GoogleLiveClient, GoogleTokenStore
+from backend.services.google_sync_service import refresh_grade_journal
+
+
+class _FakePostgresConnection:
+    def __init__(self, lock_acquired):
+        self.lock_acquired = lock_acquired
+        self.queries = []
+        self.commits = 0
+
+    def commit(self):
+        self.commits += 1
+
+    def execute(self, query, params=()):
+        self.queries.append((query, params))
+        return _FakePostgresResult(self.lock_acquired)
+
+
+class _FakePostgresResult:
+    rowcount = 1
+
+    def __init__(self, lock_acquired):
+        self.lock_acquired = lock_acquired
+
+    def fetchone(self):
+        return {"acquired": self.lock_acquired}
+
+
+class _FakePostgresDatabase(Database):
+    def __init__(self, lock_acquired):
+        super().__init__(database_url="postgresql://synthetic")
+        self.fake_connection = _FakePostgresConnection(lock_acquired)
+
+    @contextmanager
+    def connection(self):
+        yield self.fake_connection
 
 
 class GoogleLiveClientMethodTests(unittest.TestCase):
@@ -122,6 +158,71 @@ class JournalSyncResilienceTests(unittest.TestCase):
         self.assertIsNotNone(recovered["finished_at"])
         self.assertEqual(next(run for run in history if run["id"] == run_id)["error"], "GoogleLiveClient.sheet_values unavailable")
 
+    def test_postgres_workbook_lock_blocks_reaping_and_releases_session_lock(self):
+        busy_database = _FakePostgresDatabase(False)
+        self.assertIsNone(busy_database.start_journal_sync("book-locked", 9))
+        self.assertEqual(len(busy_database.fake_connection.queries), 1)
+        self.assertIn("pg_try_advisory_xact_lock", busy_database.fake_connection.queries[0][0])
+
+        active_database = _FakePostgresDatabase(True)
+        with active_database.journal_workbook_lock("book-locked") as acquired:
+            self.assertTrue(acquired)
+        queries = [query for query, _ in active_database.fake_connection.queries]
+        self.assertTrue(any("pg_try_advisory_lock" in query for query in queries))
+        self.assertTrue(any("pg_advisory_unlock" in query for query in queries))
+        self.assertEqual(active_database.fake_connection.commits, 1)
+
+    def test_refresh_reports_progress_after_each_exact_named_tab(self):
+        run_id = self.database.start_journal_sync("book-progress", 9)
+        client = Mock()
+        client.spreadsheet.return_value = {
+            "properties": {"title": "Synthetic"},
+            "sheets": [{"properties": {"title": "Math ", "sheetId": 1}}, {"properties": {"title": "History", "sheetId": 2}}],
+        }
+        client.sheet_values.side_effect = [[[]], [[]]]
+        with patch("backend.services.google_sync_service._client", return_value=(client, None)), patch(
+            "backend.services.google_sync_service.sync_journal_values",
+            side_effect=[{"assessments": 1}, ValueError("synthetic tab failure")],
+        ):
+            result = refresh_grade_journal(self.database, object(), 9, spreadsheet_id="book-progress", run_id=run_id)
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(client.sheet_values.call_args_list[0].args[1], "'Math '!A:ZZ")
+        self.assertEqual(client.sheet_values.call_args_list[1].args[1], "'History'!A:ZZ")
+        run = self.database.get_journal_sync_run(run_id)
+        self.assertEqual(run["status"], "running")
+        self.assertEqual(run["counts"], {"completed_tabs": 2, "total_tabs": 2, "succeeded": 1, "failed": 1})
+        with self.database.connection() as connection:
+            source = self.database.execute(connection, "SELECT last_error FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", ("book-progress", "2")).fetchone()
+        self.assertEqual(source["last_error"], "Не удалось обновить вкладку. Предыдущие данные сохранены.")
+
+    def test_progress_updates_only_running_runs(self):
+        run_id = self.database.start_journal_sync("book-progress", 9)
+        self.assertTrue(self.database.update_journal_sync_progress(run_id, {"completed_tabs": 1, "total_tabs": 3, "succeeded": 1, "failed": 0}))
+        self.database.finish_journal_sync(run_id, status="error", error="refresh failed after first tab")
+        self.assertFalse(self.database.update_journal_sync_progress(run_id, {"completed_tabs": 4, "total_tabs": 3, "succeeded": 3, "failed": 1}))
+        self.assertEqual(self.database.get_journal_sync_run(run_id)["counts"], {"completed_tabs": 1, "total_tabs": 3, "succeeded": 1, "failed": 0})
+
+    def test_cron_enqueues_scheduled_run(self):
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        settings = Mock(journal_cron_secret="cron-secret")
+        with patch("backend.handlers.api.get_settings", return_value=settings), patch.object(
+            self.database, "journal_auto_sync_sources",
+            return_value=[{"spreadsheet_id": "book-cron", "grade": 9}],
+        ), patch("backend.handlers.api.refresh_grade_journal", return_value={"status": "success", "tabs": [{"status": "success"}]}) as refresh:
+            response = client.post("/api/admin/journals/cron", headers={"X-Journal-Cron-Secret": "cron-secret"})
+
+        self.assertEqual(response.status_code, 202, response.text)
+        item = response.json()["items"][0]
+        self.assertEqual(item["status"], "running")
+        self.assertEqual(refresh.call_args.kwargs["trigger_kind"], "scheduled")
+        run = self.database.get_journal_sync_run(item["run_id"])
+        self.assertEqual(run["trigger_kind"], "scheduled")
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["counts"], {"completed_tabs": 1, "total_tabs": 1, "succeeded": 1, "failed": 0})
+
     def test_unexpected_refresh_failure_finishes_run_and_next_refresh_succeeds(self):
         user_id = self._create_admin()
         token, _ = self.database.create_admin_login_challenge(user_id)
@@ -143,15 +244,21 @@ class JournalSyncResilienceTests(unittest.TestCase):
             side_effect=[TypeError("unexpected internal failure"), {"status": "success", "tabs": []}],
         ):
             failed = client.post("/api/admin/journals/refresh-grade?grade=9&spreadsheet_id=book-retry", headers=headers)
-            self.assertEqual(failed.status_code, 500)
-            self.assertEqual(failed.json()["detail"], "Не удалось обновить журнал. Попробуйте ещё раз позже.")
+            self.assertEqual(failed.status_code, 202, failed.text)
+            failed_run_id = failed.json()["run_id"]
+            self.assertEqual(failed.json()["status"], "running")
             failed_run = self.database.journal_sync_history("book-retry")[0]
             self.assertEqual(failed_run["status"], "error")
             self.assertIn("TypeError", failed_run["error"])
+            polled_failure = client.get(f"/api/admin/journals/sync-runs/{failed_run_id}", headers=headers)
+            self.assertEqual(polled_failure.status_code, 200, polled_failure.text)
+            self.assertEqual(polled_failure.json()["status"], "error")
 
             succeeded = client.post("/api/admin/journals/refresh-grade?grade=9&spreadsheet_id=book-retry", headers=headers)
-        self.assertEqual(succeeded.status_code, 200, succeeded.text)
-        self.assertIn("success", [run["status"] for run in self.database.journal_sync_history("book-retry")])
+        self.assertEqual(succeeded.status_code, 202, succeeded.text)
+        self.assertEqual(succeeded.json()["status"], "running")
+        completed_run = self.database.get_journal_sync_run(succeeded.json()["run_id"])
+        self.assertEqual(completed_run["status"], "success")
 
     def _create_admin(self):
         with self.database.connection() as connection:
