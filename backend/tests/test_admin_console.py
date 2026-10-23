@@ -100,15 +100,21 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         self.assertEqual(groups[source["id"]]["student_count"], 0)
         self.assertEqual(groups[target["id"]]["student_count"], 1)
 
-    def test_grade_teacher_assignment_only_uses_existing_class_groups(self):
-        self.database.create_group("9-А", "class", base_class_name="9-А", actor_user_id=self.user_id)
-        self.database.create_group("9-Б", "class", base_class_name="9-Б", actor_user_id=self.user_id)
+    def test_grade_teacher_assignment_uses_grade_wide_scope_without_creating_groups(self):
+        classes = [
+            self.database.create_group(name, "class", base_class_name=name, actor_user_id=self.user_id)
+            for name in ("9-А", "9-Б")
+        ]
         teacher = self.database.create_identity("teacher", "Тестовый преподаватель", actor_user_id=self.user_id)
+        teacher_user = self.database.get_or_create_user(992, "teacher")
+        with self.database.connection() as connection:
+            connection.execute("UPDATE users SET identity_id = ? WHERE id = ?", (teacher["id"], teacher_user["id"]))
         assignments = self.database.set_teacher_grade_assignments(teacher["id"], "9", "Математика", True, self.user_id)
-        self.assertEqual(len(assignments), 2)
-        self.assertEqual({item["base_class_name"] for item in assignments}, {"9"})
-        with self.assertRaises(ValueError):
-            self.database.set_teacher_grade_assignments(teacher["id"], "8", "Математика", True, self.user_id)
+        self.assertEqual(len(assignments), 1)
+        self.assertIsNone(assignments[0]["group_id"])
+        self.assertEqual(assignments[0]["grade_level"], "9")
+        self.assertTrue(all(self.database.teacher_can_access_group(teacher_user["id"], group["id"]) for group in classes))
+        self.assertEqual({group["name"] for group in self.database.list_groups_admin()}, {"9-А", "9-Б"})
 
     def test_class_change_updates_canonical_membership_and_keeps_identity_id(self):
         source = self.database.create_group("9-Г", "class", base_class_name="9-Г", actor_user_id=self.user_id)
