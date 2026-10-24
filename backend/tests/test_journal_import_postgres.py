@@ -14,6 +14,12 @@ from urllib.parse import unquote, urlparse
 
 from backend.database import Database
 from backend.services.journal_import import sync_journal_values
+from backend.services.journal_matching import (
+    confirm_match,
+    matching_overview,
+    preview_match,
+    set_team_members,
+)
 
 
 OPT_IN = os.getenv("MY_ISLAND_PG_JOURNAL_TESTS") == "1"
@@ -62,6 +68,7 @@ class JournalImportPostgresTests(unittest.TestCase):
         "journal_group_mappings",
         "school_sources",
         "school_source_mappings",
+        "audit_log",
     )
     VALUES = [
         ["Дата", "01.09", "02.09", ""],
@@ -115,6 +122,22 @@ class JournalImportPostgresTests(unittest.TestCase):
                         f'ALTER TABLE "{cls.schema}"."{table}" ALTER COLUMN "{column}" '
                         f"SET DEFAULT nextval('{sequence_ref}'::regclass)"
                     )
+            # Matching-specific schema is created only inside this disposable test
+            # schema, so tests remain compatible with production until its migration.
+            cls.admin_connection.execute(
+                f'ALTER TABLE "{cls.schema}".journal_students '
+                "ADD COLUMN entry_kind text NOT NULL DEFAULT 'individual', "
+                "ADD COLUMN classification_method text"
+            )
+            cls.admin_connection.execute(
+                f'''CREATE TABLE "{cls.schema}".journal_team_members (
+                    journal_student_id uuid NOT NULL REFERENCES "{cls.schema}".journal_students(id) ON DELETE CASCADE,
+                    identity_id uuid NOT NULL REFERENCES "{cls.schema}".identities(id),
+                    created_by uuid REFERENCES "{cls.schema}".users(id),
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    PRIMARY KEY (journal_student_id, identity_id)
+                )'''
+            )
             # LIKE INCLUDING ALL copies indexes and CHECK constraints, but PostgreSQL
             # deliberately omits foreign keys. Recreate the import path's key links
             # against the cloned tables so FK behavior is exercised locally.
@@ -122,6 +145,7 @@ class JournalImportPostgresTests(unittest.TestCase):
                 "memberships": ("FOREIGN KEY (group_id) REFERENCES {s}.groups(id)", "FOREIGN KEY (identity_id) REFERENCES {s}.identities(id)"),
                 "journal_assessments": ("FOREIGN KEY (source_id) REFERENCES {s}.journal_sources(id) ON DELETE CASCADE",),
                 "journal_students": ("FOREIGN KEY (source_id) REFERENCES {s}.journal_sources(id) ON DELETE CASCADE", "FOREIGN KEY (identity_id) REFERENCES {s}.identities(id)"),
+                "journal_team_members": ("FOREIGN KEY (journal_student_id) REFERENCES {s}.journal_students(id) ON DELETE CASCADE", "FOREIGN KEY (identity_id) REFERENCES {s}.identities(id)"),
                 "journal_results": ("FOREIGN KEY (assessment_id) REFERENCES {s}.journal_assessments(id) ON DELETE CASCADE", "FOREIGN KEY (journal_student_id) REFERENCES {s}.journal_students(id) ON DELETE SET NULL", "FOREIGN KEY (identity_id) REFERENCES {s}.identities(id)"),
                 "journal_student_summaries": ("FOREIGN KEY (journal_student_id) REFERENCES {s}.journal_students(id) ON DELETE CASCADE",),
                 "journal_group_mappings": ("FOREIGN KEY (source_id) REFERENCES {s}.journal_sources(id) ON DELETE CASCADE", "FOREIGN KEY (group_id) REFERENCES {s}.groups(id)", "FOREIGN KEY (classroom_course_id) REFERENCES {s}.classroom_courses(id)", "FOREIGN KEY (created_by) REFERENCES {s}.users(id)"),
@@ -152,7 +176,7 @@ class JournalImportPostgresTests(unittest.TestCase):
     def setUp(self):
         self.database = IsolatedPostgresDatabase(DATABASE_URL, self.schema)
         with self.database.connection() as connection:
-            connection.execute("TRUNCATE school_source_mappings, school_sources, journal_group_mappings, journal_sync_runs, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities RESTART IDENTITY CASCADE")
+            connection.execute("TRUNCATE audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
             connection.execute(
                 "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', %s, '9-А', 'active')",
                 ("Иванов Иван",),
@@ -165,6 +189,127 @@ class JournalImportPostgresTests(unittest.TestCase):
     def _rows(self, query, params=()):
         with self.database.connection() as connection:
             return connection.execute(query, params).fetchall()
+
+    def _matching_fixture(self, spreadsheet_id="synthetic-matching"):
+        values = [
+            ["Дата", "01.09"], ["Задание", "Проверочная"], ["Вес", "1"],
+            ["Оценка", "10"], ["A", ""], ["Synthetic Student", "8"],
+            ["Иванов Иван", "9"],
+        ]
+        for subject, sheet_id in (("Математика", 904), ("Физика", 905)):
+            sync_journal_values(
+                self.database, values, spreadsheet_id=spreadsheet_id,
+                spreadsheet_title="Synthetic matching journal", grade=9,
+                subject=subject, sheet_title=subject, sheet_id=sheet_id,
+            )
+        source = self._rows("SELECT id FROM journal_students WHERE display_name='Synthetic Student' ORDER BY id LIMIT 1")[0]
+        identity = self._rows("SELECT id FROM identities WHERE display_name='Иванов Иван'")[0]
+        with self.database.connection() as connection:
+            actor = connection.execute(
+                "INSERT INTO users(telegram_user_id, role) VALUES (%s, 'admin') RETURNING id",
+                (900000 + int(uuid.uuid4().hex[:8], 16),),
+            ).fetchone()["id"]
+        return str(source["id"]), str(identity["id"]), str(actor)
+
+    def test_matching_preview_is_read_only_and_confirmation_updates_only_journal_links(self):
+        student_id, identity_id, actor_id = self._matching_fixture()
+        before = self._rows("SELECT identity_id, match_status FROM journal_students WHERE id=%s", (student_id,))[0]
+        overview = matching_overview(self.database, "synthetic-matching")
+        self.assertEqual(len(overview["individuals"]), 1)
+        preview = preview_match(self.database, "synthetic-matching", "synthetic student", identity_id)
+        self.assertEqual(preview["record_count"], 2)
+        self.assertEqual(preview["subject_count"], 2)
+        self.assertEqual(preview["result_count"], 2)
+        self.assertEqual(self._rows("SELECT identity_id, match_status FROM journal_students WHERE id=%s", (student_id,))[0], before)
+
+        confirmed = confirm_match(
+            self.database, "synthetic-matching", "Synthetic Student", identity_id,
+            preview["preview_token"], actor_id,
+        )
+        self.assertEqual(confirmed, {"matched_records": 2, "updated_results": 2})
+        student = self._rows("SELECT identity_id, match_status, match_method FROM journal_students WHERE id=%s", (student_id,))[0]
+        self.assertEqual(str(student["identity_id"]), identity_id)
+        self.assertEqual((student["match_status"], student["match_method"]), ("linked", "admin_source_alias"))
+        self.assertEqual(len(self._rows("SELECT id FROM school_source_mappings WHERE external_key='alias:synthetic student' AND manually_confirmed IS TRUE")), 1)
+        self.assertEqual(len(self._rows("SELECT id FROM audit_log WHERE action='journal_matching.confirmed'")), 1)
+        unrelated = self._rows("SELECT id, identity_id FROM journal_students WHERE display_name='Иванов Иван' ORDER BY id")
+        self.assertEqual(len(unrelated), 2)
+        self.assertTrue(all(str(row["identity_id"]) == identity_id for row in unrelated))
+        result_ids = self._rows("SELECT id FROM journal_results WHERE journal_student_id IN (SELECT id FROM journal_students WHERE display_name='Synthetic Student') ORDER BY id")
+        with self.database.connection() as connection:
+            connection.execute("UPDATE journal_students SET identity_id=NULL, match_status='unlinked', match_method=NULL WHERE display_name='Synthetic Student'")
+            connection.execute("UPDATE journal_results SET identity_id=NULL WHERE journal_student_id IN (SELECT id FROM journal_students WHERE display_name='Synthetic Student')")
+        self._matching_fixture("synthetic-matching")
+        after_repeat = self._rows("SELECT id, match_method, identity_id FROM journal_students WHERE display_name='Synthetic Student' ORDER BY id")
+        self.assertEqual(len(after_repeat), 2)
+        self.assertTrue(all(str(row["identity_id"]) == identity_id and row["match_method"] == "saved_alias" for row in after_repeat))
+        self.assertEqual(self._rows("SELECT id FROM journal_results WHERE journal_student_id IN (SELECT id FROM journal_students WHERE display_name='Synthetic Student') ORDER BY id"), result_ids)
+        self.assertEqual(len(self._rows("SELECT id FROM school_source_mappings WHERE external_key='alias:synthetic student' AND manually_confirmed IS TRUE")), 1)
+        with self.assertRaises(ValueError):
+            confirm_match(self.database, "synthetic-matching", "Synthetic Student", identity_id, preview["preview_token"], actor_id)
+
+    def test_matching_rejects_stale_previews_and_wrong_grade_candidates(self):
+        student_id, identity_id, actor_id = self._matching_fixture("synthetic-stale")
+        preview = preview_match(self.database, "synthetic-stale", "Synthetic Student", identity_id)
+        with self.database.connection() as connection:
+            group_id = connection.execute("INSERT INTO groups(name, group_type, base_class_name) VALUES ('Synthetic Group', 'class', '9-А') RETURNING id").fetchone()["id"]
+            connection.execute("INSERT INTO memberships(group_id, identity_id, member_role, source, active) VALUES (%s, %s, 'student', 'official_import', TRUE)", (group_id, identity_id))
+        with self.assertRaises(ValueError):
+            confirm_match(self.database, "synthetic-stale", "Synthetic Student", identity_id, preview["preview_token"], actor_id)
+        with self.database.connection() as connection:
+            other_grade = connection.execute(
+                "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', 'Synthetic Other Grade', '8-Б', 'active') RETURNING id"
+            ).fetchone()["id"]
+        with self.assertRaises(ValueError):
+            preview_match(self.database, "synthetic-stale", "Synthetic Student", other_grade)
+        with self.database.connection() as connection:
+            merged = connection.execute(
+                "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', 'Synthetic Merged', '9-А', 'merged') RETURNING id"
+            ).fetchone()["id"]
+        with self.assertRaises(ValueError):
+            preview_match(self.database, "synthetic-stale", "Synthetic Student", merged)
+
+    def test_conflicting_confirmed_alias_rejects_without_partial_changes(self):
+        student_id, identity_id, actor_id = self._matching_fixture("synthetic-alias-conflict")
+        other_identity_id = self._rows("SELECT id FROM identities WHERE display_name='Петрова Анна'")[0]["id"]
+        preview = preview_match(self.database, "synthetic-alias-conflict", "Synthetic Student", identity_id)
+        with self.database.connection() as connection:
+            source_id = connection.execute("SELECT id FROM school_sources WHERE external_key='synthetic-alias-conflict'").fetchone()["id"]
+            connection.execute(
+                "INSERT INTO school_source_mappings(source_id, external_key, mapping_type, identity_id, status, manually_confirmed, evidence, created_by) "
+                "VALUES (%s, 'alias:synthetic student', 'identity', %s, 'confirmed', TRUE, '{\"source\":\"test\"}'::jsonb, %s)",
+                (source_id, other_identity_id, actor_id),
+            )
+        with self.assertRaises(ValueError):
+            confirm_match(self.database, "synthetic-alias-conflict", "Synthetic Student", identity_id, preview["preview_token"], actor_id)
+        self.assertTrue(all(row["identity_id"] is None for row in self._rows("SELECT identity_id FROM journal_students WHERE display_name='Synthetic Student'")))
+        self.assertEqual(len(self._rows("SELECT id FROM audit_log WHERE action='journal_matching.confirmed'")), 0)
+        self.assertEqual(str(self._rows("SELECT identity_id FROM school_source_mappings WHERE external_key='alias:synthetic student'")[0]["identity_id"]), str(other_identity_id))
+
+    def test_team_membership_keeps_results_synthetic_and_survives_repeat_sync(self):
+        student_id, identity_id, actor_id = self._matching_fixture("synthetic-team")
+        with self.assertRaises(ValueError):
+            set_team_members(self.database, student_id, [identity_id], actor_id)
+        with self.database.connection() as connection:
+            connection.execute("UPDATE journal_students SET entry_kind='team', display_name='Synthetic Team' WHERE id=%s", (student_id,))
+            second = connection.execute("SELECT id FROM identities WHERE display_name='Петрова Анна'").fetchone()["id"]
+        members = set_team_members(self.database, student_id, [identity_id, second, identity_id], actor_id)
+        self.assertEqual(set(members["identity_ids"]), {identity_id, str(second)})
+        with self.assertRaises(ValueError):
+            preview_match(self.database, "synthetic-team", "Synthetic Team", identity_id)
+        journal_counts = {str(row["id"]): row for row in self.database.journal_status() if row["spreadsheet_id"] == "synthetic-team"}
+        team_source = self._rows("SELECT source_id FROM journal_students WHERE id=%s", (student_id,))[0]["source_id"]
+        self.assertEqual(journal_counts[str(team_source)]["team_count"], 1)
+        self.assertEqual(journal_counts[str(team_source)]["unmapped_count"], 0)
+        before = self._rows("SELECT id, numeric_score, identity_id FROM journal_results WHERE journal_student_id=%s", (student_id,))[0]
+        self.assertIsNone(before["identity_id"])
+
+        self._matching_fixture("synthetic-team")
+        student = self._rows("SELECT entry_kind FROM journal_students WHERE id=%s", (student_id,))[0]
+        self.assertEqual(student["entry_kind"], "team")
+        self.assertEqual(len(self._rows("SELECT identity_id FROM journal_team_members WHERE journal_student_id=%s", (student_id,))), 2)
+        after = self._rows("SELECT id, numeric_score, identity_id FROM journal_results WHERE journal_student_id=%s", (student_id,))[0]
+        self.assertEqual(after, before)
 
     def test_full_sync_repeat_reordered_changed_scores_jsonb_and_constraints(self):
         first = sync_journal_values(

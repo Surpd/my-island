@@ -188,6 +188,21 @@ class JournalAutoSyncPayload(BaseModel):
 
 class JournalStudentMatchPayload(BaseModel):
     identity_id: str
+    preview_token: str | None = None
+
+
+class JournalMatchPreviewPayload(BaseModel):
+    spreadsheet_id: str = Field(min_length=1, max_length=200)
+    source_name: str = Field(min_length=1, max_length=300)
+    identity_id: str = Field(min_length=1, max_length=100)
+
+
+class JournalMatchConfirmPayload(JournalMatchPreviewPayload):
+    preview_token: str = Field(min_length=64, max_length=64)
+
+
+class JournalTeamMembersPayload(BaseModel):
+    identity_ids: list[str] = Field(max_length=30)
 
 
 class BrowserCodePayload(BaseModel):
@@ -983,6 +998,35 @@ def create_router(database: Database) -> APIRouter:
         database.record_audit_event("journal_sync.automation_changed", "journal_source", {"spreadsheet_id": payload.spreadsheet_id, "enabled": payload.enabled}, actor["id"])
         return {"spreadsheet_id": payload.spreadsheet_id, "auto_sync_enabled": payload.enabled}
 
+    @router.get("/admin/journals/matching")
+    def admin_journal_matching(spreadsheet_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return database.journal_matching_overview(spreadsheet_id)
+
+    @router.post("/admin/journals/matching/preview")
+    def admin_journal_matching_preview(payload: JournalMatchPreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return database.preview_journal_match(payload.spreadsheet_id,payload.source_name,payload.identity_id)
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
+    @router.post("/admin/journals/matching/confirm")
+    def admin_journal_matching_confirm(payload: JournalMatchConfirmPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return database.confirm_journal_match(payload.spreadsheet_id,payload.source_name,payload.identity_id,payload.preview_token,actor['id'])
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
+    @router.put("/admin/journals/teams/{team_id}/members")
+    def admin_journal_team_members(team_id: str, payload: JournalTeamMembersPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            return database.set_journal_team_members(team_id,payload.identity_ids,actor['id'])
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
     @router.get("/admin/journals/{source_id}/detail")
     def admin_journal_detail(source_id: str, group_marker: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -1005,10 +1049,16 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_student_match(source_id: str, student_id: str, payload: JournalStudentMatchPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        if not database.match_journal_student(source_id, student_id, payload.identity_id, actor["id"]):
-            raise HTTPException(status_code=404, detail="Ученик журнала или запись справочника не найдены")
-        database.record_audit_event("journal_student.matched", "journal_student", {"journal_source_id": source_id, "journal_student_id": student_id, "identity_id": payload.identity_id}, actor["id"])
-        return {"matched": True}
+        if not payload.preview_token:
+            raise HTTPException(status_code=409,detail="Подтвердите связь через предпросмотр в панели «Сопоставление».")
+        detail = database.journal_detail(source_id)
+        student = next((item for item in (detail or {}).get('students',[]) if str(item['id']) == student_id),None)
+        if not student:
+            raise HTTPException(status_code=404,detail="Запись журнала не найдена")
+        try:
+            return database.confirm_journal_match(detail['source']['spreadsheet_id'],student['display_name'],payload.identity_id,payload.preview_token,actor['id'])
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
 
     @router.post("/admin/journals/cron", status_code=202)
     def admin_journal_cron(background_tasks: BackgroundTasks, x_journal_cron_secret: str | None = Header(default=None, alias="X-Journal-Cron-Secret")):

@@ -2478,6 +2478,23 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .journal-match > div > button:not(.admin-link):hover { background: #eaf6f2; }
 .journal-match > div > button strong { font-size: 10px; }
 .journal-match > div > button small { color: #71868d; font-size: 9px; }
+.journal-map-action { display: flex; justify-content: flex-end; margin-top: 14px; }
+.journal-matching-panel { display: grid; gap: 12px; margin-top: 14px; padding: 16px; border: 1px solid #dfeaec; border-radius: 10px; background: #f9fcfb; }
+.journal-matching-panel h3, .journal-team-heading { margin: 8px 0 0; color: #1a3c47; font-size: 14px; }
+.journal-matching-panel > .admin-help-text { margin: 0; }
+.journal-mapping-row { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(250px, 1.2fr); gap: 14px; align-items: center; padding: 12px; border: 1px solid #e2ebeb; border-radius: 8px; background: #fff; }
+.journal-mapping-row > div:first-child { display: grid; gap: 4px; }
+.journal-mapping-row > div:first-child strong { color: #284b53; font-size: 13px; }
+.journal-mapping-row small { color: #71868d; font-size: 11px; }
+.journal-map-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.journal-map-controls input, .journal-map-controls select:not([multiple]), .journal-team-search input { min-width: 150px; flex: 1; padding: 8px 10px; border: 1px solid #d4e1e2; border-radius: 7px; background: #fff; color: #284b53; }
+.journal-map-controls label { display: grid; min-width: 180px; flex: 1; gap: 5px; color: #536e75; font-size: 11px; }
+.journal-map-controls select[multiple] { min-height: 90px; padding: 6px; border: 1px solid #d4e1e2; border-radius: 7px; background: #fff; }
+.journal-team-search { display: grid; max-width: 360px; gap: 5px; color: #536e75; font-size: 12px; }
+.journal-match-review { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 14px; border: 1px solid #d9e8d8; border-radius: 8px; background: #f2faf3; }
+.journal-match-review p { margin: 5px 0; color: #31545c; }
+.journal-match-review small { color: #617b72; }
+.journal-team-heading { margin-top: 18px; }
 @media (max-width: 760px) {
   .journal-connect-panel { grid-template-columns: 1fr; }
   .journal-book-heading, .journal-detail-head { align-items: flex-start; flex-direction: column; }
