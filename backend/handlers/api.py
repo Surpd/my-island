@@ -186,6 +186,18 @@ class JournalAutoSyncPayload(BaseModel):
     enabled: bool
 
 
+class JournalPeriodPayload(BaseModel):
+    term_number: int = Field(ge=1, le=3)
+    make_current: bool = False
+
+
+class JournalCurrentTermPayload(BaseModel):
+    spreadsheet_id: str = Field(min_length=1, max_length=200)
+    grade: int = Field(ge=5, le=11)
+    academic_year: str = Field(min_length=4, max_length=9)
+    term_number: int = Field(ge=1, le=3)
+
+
 class JournalStudentMatchPayload(BaseModel):
     identity_id: str
     preview_token: str | None = None
@@ -997,6 +1009,22 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=404, detail="Источник журнала не найден")
         database.record_audit_event("journal_sync.automation_changed", "journal_source", {"spreadsheet_id": payload.spreadsheet_id, "enabled": payload.enabled}, actor["id"])
         return {"spreadsheet_id": payload.spreadsheet_id, "auto_sync_enabled": payload.enabled}
+
+    @router.put("/admin/journals/current-term")
+    def admin_journal_current_term(payload: JournalCurrentTermPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not database.set_journal_current_term(payload.spreadsheet_id, payload.grade, payload.academic_year, payload.term_number):
+            raise HTTPException(status_code=404, detail="Источник журнала не найден")
+        database.record_audit_event("journal_period.current_changed", "journal_source", {"spreadsheet_id": payload.spreadsheet_id, "grade": payload.grade, "academic_year": payload.academic_year, "term_number": payload.term_number}, actor["id"])
+        return {"spreadsheet_id": payload.spreadsheet_id, "academic_year": payload.academic_year, "current_term": payload.term_number}
+
+    @router.put("/admin/journals/{source_id}/period")
+    def admin_journal_source_period(source_id: str, payload: JournalPeriodPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not database.set_journal_source_term(source_id, payload.term_number, payload.make_current):
+            raise HTTPException(status_code=409, detail="Период журнала не удалось сохранить: проверьте предмет и уже привязанные вкладки")
+        database.record_audit_event("journal_period.assigned", "journal_source", {"source_id": source_id, "term_number": payload.term_number, "make_current": payload.make_current}, actor["id"])
+        return {"source_id": source_id, "term_number": payload.term_number, "period_status": "current" if payload.make_current else "saved"}
 
     @router.get("/admin/journals/matching")
     def admin_journal_matching(spreadsheet_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

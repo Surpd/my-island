@@ -4,12 +4,20 @@ import hashlib
 import json
 import re
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from backend.database import Database
 
 
-SUMMARY_HEADERS = {"итого", "допуск", "допуск к аттестации", "итоговая", "итоговая оценка", "средний балл", "средняя оценка", "пропущенные весы"}
+SUMMARY_TYPES = {
+    "итого": "total_points", "сумма баллов за триместр": "total_points", "сумма баллов за триместр всего": "total_points",
+    "допуск": "admission", "допуск к аттестации": "admission", "допуск к аттестации за триместр": "admission",
+    "средняя отметка": "average_grade", "средняя оценка": "average_grade", "средний балл": "average_grade", "средний балл за триместр": "average_grade",
+    "итоговая": "term_grade", "итоговая оценка": "term_grade", "оценка за триместр": "term_grade",
+    "пропущенные весы": "missing_weights", "пропущенные работы": "missing_weights", "не выставлены оценки": "missing_weights",
+}
+SUMMARY_HEADERS = set(SUMMARY_TYPES) | {"допуск к аттестации", "итоговая оценка"}
 HEADER_ALIASES = {
     "date": {"дата", "дата работы", "дата выполнения"},
     "title": {"задание", "работа", "название работы", "тема задания"},
@@ -54,6 +62,37 @@ def _number(value: object) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def _summary_number(value: object) -> str | None:
+    """Keep exact source precision for calculated summary values."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    if not text:
+        return None
+    try:
+        return str(Decimal(text))
+    except InvalidOperation:
+        return None
+
+
+def _summary_type(value: object) -> str | None:
+    return SUMMARY_TYPES.get(_normalized(value).rstrip(":"))
+
+
+_TERM_RE = re.compile(r"\s*(?:[-–—:]\s*)?(?:\(\s*)?(?:триместр\s*)?(?:([1-3])|([ivx]+))(?:\s*триместр)?\s*\)?\s*$", re.IGNORECASE)
+
+
+def subject_period_from_title(title: str) -> tuple[str, int | None]:
+    """Return a canonical subject and an explicit trimester, if present."""
+    match = _TERM_RE.search(title.strip())
+    if not match:
+        return title.strip(), None
+    token = (match.group(1) or match.group(2) or "").casefold()
+    term = int(token) if token.isdigit() else {"i": 1, "ii": 2, "iii": 3}.get(token)
+    subject = title[:match.start()].strip(" -–—:()")
+    return (subject or title.strip()), term
 
 
 def _date(value: object, school_year_start: int) -> str | None:
@@ -147,7 +186,7 @@ def parse_journal_values(
             marker = labels[0] if labels else f"block {block_index + 1}"
 
         title_row = values[block["title"]]
-        summary_columns = [(column, str(_cell(title_row, column) or "").strip()) for column in range(1, width) if _normalized(_cell(title_row, column)) in SUMMARY_HEADERS]
+        summary_columns = [(column, str(_cell(title_row, column) or "").strip(), _summary_type(_cell(title_row, column))) for column in range(1, width) if _summary_type(_cell(title_row, column))]
         metadata_rows = {key: values[row_index] for key, row_index in block.items()}
         end = blocks[block_index + 1]["date"] if block_index + 1 < len(blocks) else len(values)
         student_rows: list[tuple[int, str, str]] = []
@@ -169,14 +208,21 @@ def parse_journal_values(
 
         for row_index, name, student_marker in student_rows:
             student_key = f"{_normalized(name)}|{student_marker}"
-            for column, label in summary_columns:
+            students_by_key.setdefault((student_marker, student_key), {
+                "student_name": name, "student_key": student_key, "group_marker": student_marker,
+                "source_row": row_index + 1, "raw_source": {"student_row": row_index + 1},
+            })
+
+        for row_index, name, student_marker in student_rows:
+            student_key = f"{_normalized(name)}|{student_marker}"
+            for column, label, summary_type in summary_columns:
                 raw_summary = _cell(values[row_index], column)
                 if raw_summary is None or str(raw_summary).strip() == "":
                     continue
-                numeric_summary = _number(raw_summary)
+                numeric_summary = _summary_number(raw_summary)
                 summaries.append({
                     "student_key": student_key, "student_name": name, "group_marker": student_marker,
-                    "label": label, "numeric_value": numeric_summary,
+                    "label": label, "summary_type": summary_type, "numeric_value": numeric_summary,
                     "text_value": None if numeric_summary is not None else str(raw_summary).strip(),
                     "source_coordinate": f"{column_name(column)}{row_index + 1}",
                     "raw_source": {"value": raw_summary, "student_row": row_index + 1},
@@ -185,7 +231,7 @@ def parse_journal_values(
         block_assessments: list[tuple[int, dict[str, Any]]] = []
         for column in range(1, width):
             title = str(_cell(title_row, column) if _cell(title_row, column) is not None else "").strip()
-            if not title or _normalized(title) in SUMMARY_HEADERS:
+            if not title or _summary_type(title):
                 continue
             meta = {
                 "title": title,
@@ -195,9 +241,6 @@ def parse_journal_values(
                 "group_marker": marker,
             }
             block_assessments.append((column, meta))
-        if not block_assessments:
-            raise ValueError(f"{sheet_title}: в блоке {block_index + 1} нет заданий")
-
         for column, metadata in block_assessments:
             score_vector = []
             pending: list[dict[str, Any]] = []
@@ -259,8 +302,12 @@ def sync_journal_values(
     spreadsheet_title: str, grade: int, subject: str, sheet_title: str,
     sheet_id: int | str | None = None,
 ) -> dict[str, int]:
-    parsed = parse_journal_values(values, grade=grade, subject=subject, sheet_title=sheet_title, sheet_id=sheet_id)
+    canonical_subject, explicit_term = subject_period_from_title(sheet_title)
+    parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title, sheet_id=sheet_id)
+    school_year_start = 2026
+    school_year = f"{school_year_start}/{str(school_year_start + 1)[-2:]}"
     source = {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "grade": grade,
-              "subject": subject, "sheet_title": sheet_title, "sheet_id": sheet_id,
+              "subject": canonical_subject, "sheet_title": sheet_title, "sheet_id": sheet_id,
+              "academic_year": school_year, "term_number": explicit_term,
               "source_hash": parsed["source_hash"]}
     return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"], parsed["students"], parsed["summaries"])

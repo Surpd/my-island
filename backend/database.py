@@ -629,6 +629,9 @@ CREATE TABLE IF NOT EXISTS journal_sources (
   subject TEXT NOT NULL,
   sheet_title TEXT NOT NULL,
   sheet_id TEXT,
+  academic_year TEXT NOT NULL DEFAULT '2026/27',
+  term_number INTEGER CHECK (term_number BETWEEN 1 AND 3),
+  period_status TEXT NOT NULL DEFAULT 'current' CHECK (period_status IN ('current','archived','unassigned')),
   auto_sync_enabled INTEGER NOT NULL DEFAULT 0,
   source_hash TEXT,
   status TEXT NOT NULL DEFAULT 'ready',
@@ -705,6 +708,7 @@ CREATE TABLE IF NOT EXISTS journal_student_summaries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   journal_student_id INTEGER NOT NULL REFERENCES journal_students(id) ON DELETE CASCADE,
   label TEXT NOT NULL,
+  summary_type TEXT NOT NULL DEFAULT 'technical',
   numeric_value REAL,
   text_value TEXT,
   source_coordinate TEXT NOT NULL,
@@ -716,6 +720,7 @@ CREATE TABLE IF NOT EXISTS journal_student_summaries (
 CREATE TABLE IF NOT EXISTS journal_summary_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   summary_id INTEGER NOT NULL,
+  summary_type TEXT NOT NULL DEFAULT 'technical',
   numeric_value REAL,
   text_value TEXT,
   source_coordinate TEXT NOT NULL,
@@ -958,6 +963,16 @@ class Database:
         with self.connection() as connection:
             connection.executescript(SCHEMA)
             self._ensure_sqlite_schema_parity(connection)
+            for table, columns in {
+                "journal_sources": {"academic_year": "TEXT NOT NULL DEFAULT '2026/27'", "term_number": "INTEGER", "period_status": "TEXT NOT NULL DEFAULT 'current'"},
+                "journal_student_summaries": {"summary_type": "TEXT NOT NULL DEFAULT 'technical'"},
+                "journal_summary_history": {"summary_type": "TEXT NOT NULL DEFAULT 'technical'"},
+            }.items():
+                present = {row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+                for name, definition in columns.items():
+                    if name not in present:
+                        connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            connection.execute("CREATE TABLE IF NOT EXISTS journal_term_settings (spreadsheet_id TEXT NOT NULL, grade INTEGER NOT NULL, academic_year TEXT NOT NULL, current_term INTEGER NOT NULL DEFAULT 1 CHECK (current_term BETWEEN 1 AND 3), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(spreadsheet_id,grade,academic_year))")
             self._upgrade_sqlite_teacher_assignment_targets(connection)
             connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS teacher_assignments_grade_target_uq ON teacher_assignments(teacher_identity_id, grade_level, subject, capability, source, source_ref) WHERE group_id IS NULL")
             announcement_columns = {row["name"] for row in connection.execute("PRAGMA table_info(announcements)").fetchall()}
@@ -3952,21 +3967,41 @@ class Database:
                 lock_key = f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}"
                 self.execute(connection, "SELECT pg_advisory_xact_lock(hashtext(?))", (lock_key,))
             if source.get("sheet_id") is not None:
-                source_row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
+                source_row = self.execute(connection, "SELECT id, academic_year, term_number, period_status FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
                 if not source_row:
                     # Upgrade pre-stable-ID sources in place, retaining their
                     # student mappings, assessment IDs and grade history.
-                    source_row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
+                    source_row = self.execute(connection, "SELECT id, academic_year, term_number, period_status FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
             else:
-                source_row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
+                source_row = self.execute(connection, "SELECT id, academic_year, term_number, period_status FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
+            settings = self.execute(connection, "SELECT current_term FROM journal_term_settings WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ?", (source["spreadsheet_id"], source["grade"], source.get("academic_year", "2026/27"))).fetchone()
+            current_term = int(settings["current_term"]) if settings else 1
+            source["academic_year"] = source.get("academic_year") or "2026/27"
+            if not settings:
+                self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id, grade, academic_year, current_term) VALUES (?, ?, ?, ?)", (source["spreadsheet_id"], source["grade"], source["academic_year"], current_term))
+            if source_row and source_row["term_number"]:
+                term_number = int(source_row["term_number"])
+            elif source.get("term_number"):
+                term_number = int(source["term_number"])
+            else:
+                term_number = current_term
+            if term_number is not None:
+                occupied_by_other = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ? AND subject = ? AND term_number = ? AND id <> ? LIMIT 1", (source["spreadsheet_id"], source["grade"], source["academic_year"], source["subject"], term_number, source_row["id"] if source_row else -1)).fetchone()
+            else:
+                occupied_by_other = None
+            if occupied_by_other and (not source_row or not source_row["term_number"] or source_row["period_status"] == "unassigned"):
+                term_number = None
+            period_status = "unassigned" if term_number is None or occupied_by_other else ("current" if term_number == current_term else "archived")
+            source["term_number"] = term_number
+            source["period_status"] = period_status
             if source_row:
                 source_id = source_row["id"]
                 self.execute(connection, """UPDATE journal_sources SET spreadsheet_title = ?, grade = ?, subject = ?, sheet_title = ?,
-                    sheet_id = COALESCE(?, sheet_id), source_hash = ?, status = 'ready', last_synced_at = CURRENT_TIMESTAMP, last_error = NULL
-                    WHERE id = ?""", (source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["source_hash"], source_id))
+                    sheet_id = COALESCE(?, sheet_id), academic_year = ?, term_number = COALESCE(term_number, ?), period_status = ?, source_hash = ?, status = 'ready', last_synced_at = CURRENT_TIMESTAMP, last_error = NULL
+                    WHERE id = ?""", (source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["academic_year"], term_number, period_status, source["source_hash"], source_id))
             else:
-                source_id = self.execute(connection, """INSERT INTO journal_sources(spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, source_hash, status, last_synced_at, last_error)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', CURRENT_TIMESTAMP, NULL) RETURNING id""", (source["spreadsheet_id"], source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["source_hash"])).fetchone()["id"]
+                source_id = self.execute(connection, """INSERT INTO journal_sources(spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, source_hash, status, last_synced_at, last_error)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', CURRENT_TIMESTAMP, NULL) RETURNING id""", (source["spreadsheet_id"], source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["academic_year"], term_number, period_status, source["source_hash"])).fetchone()["id"]
             school_source_id = self.execute(connection, f"""INSERT INTO school_sources(source_type, external_key, display_name, location_ref, authority_status, configuration)
                 VALUES ('journal', ?, ?, ?, 'reference', {json_value})
                 ON CONFLICT(source_type, external_key) DO UPDATE SET display_name = excluded.display_name, location_ref = excluded.location_ref
@@ -4119,13 +4154,14 @@ class Database:
                     continue
                 summary = self.execute(connection, "SELECT * FROM journal_student_summaries WHERE journal_student_id = ? AND label = ?", (student_id, item["label"])).fetchone()
                 raw_summary = json.dumps(item.get("raw_source"), ensure_ascii=False)
-                current_values = (item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary)
+                summary_type = item.get("summary_type", "technical")
+                current_values = (item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary, summary_type)
                 if summary:
-                    if (numeric_key(summary["numeric_value"]), summary["text_value"]) != (numeric_key(current_values[0]), current_values[1]):
-                        self.execute(connection, f"INSERT INTO journal_summary_history(summary_id, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (summary["id"], summary["numeric_value"], summary["text_value"], summary["source_coordinate"], encoded_json(summary["raw_source"]), summary['id'] in current_summary_ids))
-                    self.execute(connection, f"UPDATE journal_student_summaries SET numeric_value = ?, text_value = ?, source_coordinate = ?, raw_source = {raw_value}, is_current = {boolean_true}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (*current_values, summary["id"]))
+                    if (numeric_key(summary["numeric_value"]), summary["text_value"], summary["summary_type"]) != (numeric_key(current_values[0]), current_values[1], summary_type):
+                        self.execute(connection, f"INSERT INTO journal_summary_history(summary_id, summary_type, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, ?, {raw_value}, ?)", (summary["id"], summary["summary_type"], summary["numeric_value"], summary["text_value"], summary["source_coordinate"], encoded_json(summary["raw_source"]), summary['id'] in current_summary_ids))
+                    self.execute(connection, f"UPDATE journal_student_summaries SET numeric_value = ?, text_value = ?, source_coordinate = ?, raw_source = {raw_value}, summary_type = ?, is_current = {boolean_true}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (*current_values, summary["id"]))
                 else:
-                    self.execute(connection, f"INSERT INTO journal_student_summaries(journal_student_id, label, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, ?, {raw_value}, {boolean_true})", (student_id, item["label"], item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary))
+                    self.execute(connection, f"INSERT INTO journal_student_summaries(journal_student_id, label, summary_type, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, ?, ?, {raw_value}, {boolean_true})", (student_id, item["label"], summary_type, item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary))
             removed = self.execute(connection, f"SELECT id, numeric_score, status, source_coordinate, raw_source, is_current FROM journal_results WHERE is_current = {boolean_false} AND source_coordinate LIKE ? AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", ('sync_pending:%', source_id)).fetchall()
             for row in removed:
                 coordinate = str(row["source_coordinate"] or "").split(":", 2)[2]
@@ -4237,6 +4273,7 @@ class Database:
             rows = self.execute(
                 connection,
                 """SELECT js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
+                          js.academic_year, js.term_number, js.period_status,
                           js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled,
                           (SELECT run.id FROM journal_sync_runs run WHERE run.spreadsheet_id = js.spreadsheet_id AND run.status = 'running' ORDER BY run.started_at DESC LIMIT 1) AS active_run_id,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE THEN ja.id END) AS assessment_count,
@@ -4250,6 +4287,7 @@ class Database:
                      LEFT JOIN journal_students js2 ON js2.source_id = js.id
                      LEFT JOIN journal_students result_student ON result_student.id=jr.journal_student_id
                     GROUP BY js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
+                      js.academic_year, js.term_number, js.period_status,
                       js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled
                     ORDER BY js.grade, js.subject""",
             ).fetchall()
@@ -4285,6 +4323,36 @@ class Database:
     def journal_scheduler_configured(self) -> bool:
         if not self.database_url:
             return False
+
+    def set_journal_current_term(self, spreadsheet_id: str, grade: int, academic_year: str, term_number: int) -> bool:
+        if term_number not in (1, 2, 3):
+            return False
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT 1 FROM journal_sources WHERE spreadsheet_id=? AND grade=? LIMIT 1", (spreadsheet_id, grade)).fetchone()
+            if not row:
+                return False
+            self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id,grade,academic_year,current_term) VALUES (?,?,?,?) ON CONFLICT(spreadsheet_id,grade,academic_year) DO UPDATE SET current_term=excluded.current_term,updated_at=CURRENT_TIMESTAMP", (spreadsheet_id, grade, academic_year, term_number))
+            self.execute(connection, "UPDATE journal_sources SET period_status=CASE WHEN term_number IS NULL THEN 'unassigned' WHEN term_number=? THEN 'current' ELSE 'archived' END WHERE spreadsheet_id=? AND grade=? AND academic_year=?", (term_number, spreadsheet_id, grade, academic_year))
+            return True
+
+    def set_journal_source_term(self, source_id: Any, term_number: int, make_current: bool = False) -> bool:
+        if term_number not in (1, 2, 3):
+            return False
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT * FROM journal_sources WHERE id=?", (source_id,)).fetchone()
+            if not source:
+                return False
+            conflict = self.execute(connection, "SELECT 1 FROM journal_sources WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND subject=? AND term_number=? AND id<>? LIMIT 1", (source["spreadsheet_id"], source["grade"], source["academic_year"], source["subject"], term_number, source_id)).fetchone()
+            if conflict:
+                return False
+            setting = self.execute(connection, "SELECT current_term FROM journal_term_settings WHERE spreadsheet_id=? AND grade=? AND academic_year=?", (source["spreadsheet_id"], source["grade"], source["academic_year"])).fetchone()
+            current_term = term_number if make_current else (int(setting["current_term"]) if setting else 1)
+            if make_current:
+                self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id,grade,academic_year,current_term) VALUES (?,?,?,?) ON CONFLICT(spreadsheet_id,grade,academic_year) DO UPDATE SET current_term=excluded.current_term,updated_at=CURRENT_TIMESTAMP", (source["spreadsheet_id"], source["grade"], source["academic_year"], term_number))
+            self.execute(connection, "UPDATE journal_sources SET term_number=?,period_status=CASE WHEN ? THEN 'current' WHEN ?=? THEN 'current' ELSE 'archived' END WHERE id=?", (term_number, make_current, term_number, current_term, source_id))
+            if make_current:
+                self.execute(connection, "UPDATE journal_sources SET period_status=CASE WHEN term_number IS NULL THEN 'unassigned' WHEN term_number=? THEN 'current' ELSE 'archived' END WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND id<>?", (term_number, source["spreadsheet_id"], source["grade"], source["academic_year"], source_id))
+            return True
         try:
             with self.connection() as connection:
                 row = self.execute(
@@ -4299,7 +4367,7 @@ class Database:
 
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
-            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, last_synced_at, last_error, auto_sync_enabled FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
+            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, auto_sync_enabled FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
             if not source:
                 return None
             params: tuple[Any, ...] = (source_id,)
@@ -4318,8 +4386,8 @@ class Database:
                      WHERE is_current IS TRUE AND journal_student_id IN ({id_params}) AND assessment_id IN
                        (SELECT id FROM journal_assessments WHERE source_id = ? AND active IS TRUE)""", (*ids, source_id)).fetchall():
                     values[(row["journal_student_id"], row["assessment_id"])] = {"numeric_score": row["numeric_score"], "status": row["status"]}
-                for row in self.execute(connection, f"SELECT journal_student_id, label, numeric_value, text_value FROM journal_student_summaries WHERE is_current IS TRUE AND journal_student_id IN ({id_params})", ids).fetchall():
-                    summaries.setdefault(row["journal_student_id"], []).append({"label": row["label"], "numeric_value": row["numeric_value"], "text_value": row["text_value"]})
+                for row in self.execute(connection, f"SELECT journal_student_id, label, summary_type, numeric_value, text_value FROM journal_student_summaries WHERE is_current IS TRUE AND journal_student_id IN ({id_params})", ids).fetchall():
+                    summaries.setdefault(row["journal_student_id"], []).append({"label": row["label"], "summary_type": row["summary_type"], "numeric_value": row["numeric_value"], "text_value": row["text_value"]})
             marker_rows = self.execute(connection, "SELECT DISTINCT group_marker FROM journal_students WHERE source_id = ? AND active IS TRUE ORDER BY group_marker", (source_id,)).fetchall()
             members: dict[Any, list[dict[str, Any]]] = {}
             if ids:

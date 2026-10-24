@@ -55,6 +55,52 @@ class JournalTests(unittest.TestCase):
         self.assertIn("Новая Ученица", {student["student_name"] for student in parsed["students"]})
         self.assertNotIn("Новая Ученица", {result["student_name"] for result in parsed["results"]})
 
+    def test_real_summary_headers_are_typed_and_not_imported_as_assignments(self):
+        values = [
+            ["Дата", "01.09", "02.09", "", "", "", "", ""],
+            ["Задание", "Пробник ОГЭ — оценка", "ИТОГОВОЕ СОБЕСЕДОВАНИЕ", "Сумма баллов за триместр", "Допуск к аттестации ", "Средняя отметка ", "Оценка за триместр", "Пропущенные весы"],
+            ["Вес", 1, 1, "", "", "", "", ""],
+            ["Оценка", 5, 5, "", "", "", "", ""],
+            ["Иванов Иван", 4, 5, 17, True, "4,366666667", "", 2],
+        ]
+        parsed = parse_journal_values(values, grade=9, subject="Русский язык", sheet_title="Русский язык")
+        self.assertEqual([item["title"] for item in parsed["assessments"]], ["Пробник ОГЭ — оценка", "ИТОГОВОЕ СОБЕСЕДОВАНИЕ"])
+        self.assertEqual({item["summary_type"] for item in parsed["summaries"]}, {"total_points", "admission", "average_grade", "missing_weights"})
+        average = next(item for item in parsed["summaries"] if item["summary_type"] == "average_grade")
+        admission = next(item for item in parsed["summaries"] if item["summary_type"] == "admission")
+        self.assertEqual(average["numeric_value"], "4.366666667")
+        self.assertIsNone(next((item for item in parsed["summaries"] if item["summary_type"] == "term_grade"), None))
+        self.assertEqual(admission["text_value"], "True")
+
+    def test_sheet_rename_keeps_period_identity_and_new_empty_term_is_isolated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "period.db"))
+            database.initialize()
+            sync_journal_values(database, self.VALUES, spreadsheet_id="book", spreadsheet_title="Журнал", grade=9, subject="Математика", sheet_title="Математика", sheet_id=123)
+            original = database.journal_status()[0]
+            changed_title = "Математика — I триместр"
+            sync_journal_values(database, self.VALUES, spreadsheet_id="book", spreadsheet_title="Журнал", grade=9, subject="Математика", sheet_title=changed_title, sheet_id=123)
+            renamed = database.journal_status()[0]
+            self.assertEqual((renamed["id"], renamed["term_number"], renamed["subject"]), (original["id"], 1, "Математика"))
+            self.assertEqual(len(renamed["markers"]), len(original["markers"]))
+            blank = [["Дата", "", "", ""], ["Задание", "", "Средняя отметка", "Оценка за триместр"], ["Вес", "", "", ""], ["Оценка", "", "", ""], ["Петрова Анна", "", "", ""]]
+            sync_journal_values(database, blank, spreadsheet_id="book", spreadsheet_title="Журнал", grade=9, subject="Математика", sheet_title="Математика", sheet_id=456)
+            new = next(source for source in database.journal_status() if source["sheet_id"] == "456")
+            detail = database.journal_detail(new["id"])
+            self.assertEqual((new["term_number"], new["period_status"], new["assessment_count"], new["result_count"]), (None, "unassigned", 0, 0))
+            self.assertEqual([student["display_name"] for student in detail["students"]], ["Петрова Анна"])
+            self.assertTrue(database.set_journal_current_term("book", 9, "2026/27", 2))
+            self.assertEqual(next(source for source in database.journal_status() if source["id"] == original["id"])["period_status"], "archived")
+            self.assertTrue(database.set_journal_source_term(new["id"], 2))
+            sync_journal_values(database, blank, spreadsheet_id="book", spreadsheet_title="Журнал", grade=9, subject="Математика", sheet_title="Математика", sheet_id=456)
+            new = next(source for source in database.journal_status() if source["sheet_id"] == "456")
+            self.assertEqual((new["term_number"], new["period_status"]), (2, "current"))
+            sync_journal_values(database, blank, spreadsheet_id="book", spreadsheet_title="Журнал", grade=9, subject="Математика", sheet_title="Математика", sheet_id=456)
+            with database.connection() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_sources WHERE spreadsheet_id='book'").fetchone()[0], 2)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_students WHERE source_id=?", (new["id"],)).fetchone()[0], 1)
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM journal_results WHERE assessment_id IN (SELECT id FROM journal_assessments WHERE source_id=?)", (new["id"],)).fetchone()[0], 0)
+
     def test_normalized_journal_supports_teacher_analytics(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(os.path.join(directory, "test.db"))
