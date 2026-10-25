@@ -4544,6 +4544,15 @@ class Database:
     def journal_scheduler_configured(self) -> bool:
         if not self.database_url:
             return False
+        try:
+            with self.connection() as connection:
+                row = self.execute(connection,
+                    "SELECT EXISTS (SELECT 1 FROM cron.job WHERE jobname = ? AND active IS TRUE) AS configured",
+                    ("my-island-journal-hourly",)).fetchone()
+                return bool(row and row["configured"])
+        except Exception:
+            # An absent extension/schema means disabled.
+            return False
 
     def set_journal_current_term(self, spreadsheet_id: str, grade: int, academic_year: str, term_number: int) -> bool:
         if term_number not in (1, 2, 3):
@@ -4574,18 +4583,6 @@ class Database:
             if make_current:
                 self.execute(connection, "UPDATE journal_sources SET period_status=CASE WHEN term_number IS NULL THEN 'unassigned' WHEN term_number=? THEN 'current' ELSE 'archived' END WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND id<>?", (term_number, source["spreadsheet_id"], source["grade"], source["academic_year"], source_id))
             return True
-        try:
-            with self.connection() as connection:
-                row = self.execute(
-                    connection,
-                    "SELECT EXISTS (SELECT 1 FROM cron.job WHERE jobname = ? AND active IS TRUE) AS configured",
-                    ("my-island-journal-hourly",),
-                ).fetchone()
-                return bool(row and row["configured"])
-        except Exception:
-            # Cron is optional during rollout; an absent extension/schema means disabled.
-            return False
-
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
             source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, auto_sync_enabled FROM journal_sources WHERE id = ?", (source_id,)).fetchone()

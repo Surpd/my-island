@@ -17,6 +17,7 @@ from backend.config import get_settings
 from backend.database import Database
 from backend.services.google_sync_service import CURRENT_JOURNAL_SPREADSHEETS, _client
 from backend.services.journal_import import column_name, parse_journal_values, sync_journal_values
+from backend.services.journal_import import subject_period_from_title
 
 BACKUP_TABLES = ('journal_sources','journal_assessments','journal_students','journal_results',
     'journal_result_history','journal_student_summaries','journal_summary_history','journal_sync_runs',
@@ -45,7 +46,9 @@ def production_database() -> Database:
     if not url or not (parsed.hostname == 'db.kmrcbewmxeqqxfauiwyy.supabase.co' or
         parsed.hostname and parsed.hostname.endswith('.pooler.supabase.com') and (parsed.username or '').endswith('.kmrcbewmxeqqxfauiwyy')):
         raise RuntimeError('Refusing journal rollout outside the approved production Supabase project')
-    return Database(database_url=url)
+    from psycopg.conninfo import make_conninfo
+    return Database(database_url=make_conninfo(url,connect_timeout=15,keepalives=1,
+        keepalives_idle=15,keepalives_interval=5,keepalives_count=3))
 
 
 def backup(path: Path) -> None:
@@ -116,9 +119,18 @@ def import_capture(path: Path, backup_path: Path, *, repeat: bool = False) -> No
                         raise RuntimeError('Workbook lock unavailable')
                     for tab in tabs:
                         try:
-                            counts = sync_journal_values(database,tab['values'],spreadsheet_id=key,
-                                spreadsheet_title=book['spreadsheet_title'],grade=book['grade'],subject=tab['title'].strip(),
+                            canonical_subject, _ = subject_period_from_title(tab['title'])
+                            parsed = parse_journal_values(tab['values'],grade=book['grade'],subject=canonical_subject,
                                 sheet_title=tab['title'],sheet_id=tab['sheetId'])
+                            with database.connection() as connection:
+                                saved = database.execute(connection,"SELECT source_hash,status FROM journal_sources WHERE spreadsheet_id=? AND sheet_id=?",
+                                    (key,str(tab['sheetId']))).fetchone()
+                            if not repeat and saved and saved['status'] != 'error' and saved['source_hash'] == parsed['source_hash']:
+                                counts = {'unchanged_snapshot':1}
+                            else:
+                                counts = sync_journal_values(database,tab['values'],spreadsheet_id=key,
+                                    spreadsheet_title=book['spreadsheet_title'],grade=book['grade'],subject=tab['title'].strip(),
+                                    sheet_title=tab['title'],sheet_id=tab['sheetId'])
                             outcomes.append({'status':'success','counts':counts})
                         except ValueError as error:
                             database.record_journal_failure(key,tab['title'].strip(),str(error),grade=book['grade'],

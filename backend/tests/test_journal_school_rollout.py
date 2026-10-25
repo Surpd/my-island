@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import Mock
+from contextlib import contextmanager
 
 from backend.database import Database
 from backend.scripts.journal_school_rollout import import_capture
@@ -14,6 +16,17 @@ from backend.services.journal_import import sync_journal_values
 
 
 class JournalSchoolRolloutTests(unittest.TestCase):
+    def test_scheduler_detection_executes_query_at_its_own_entry_point(self):
+        database = Database(database_url='postgresql://synthetic')
+        connection = Mock()
+        connection.execute.return_value.fetchone.return_value = {'configured':True}
+        @contextmanager
+        def opened():
+            yield connection
+        with patch.object(database,'connection',opened):
+            self.assertIs(database.journal_scheduler_configured(),True)
+        self.assertIn('cron.job',connection.execute.call_args.args[0])
+
     def test_identical_columns_repeat_and_ambiguous_edit_preserve_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / 'repeat.db')
