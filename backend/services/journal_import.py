@@ -42,7 +42,13 @@ def _normalized(value: object) -> str:
 
 def _header_kind(value: object) -> str | None:
     normalized = _normalized(value).rstrip(":")
-    return next((kind for kind, aliases in HEADER_ALIASES.items() if normalized in aliases), None)
+    exact = next((kind for kind, aliases in HEADER_ALIASES.items() if normalized in aliases), None)
+    if exact:
+        return exact
+    # Some creative journals place a teacher/subject label above the header
+    # in the same merged cell. Match an entire line, never a work title substring.
+    lines = [_normalized(line).rstrip(":") for line in str(value or "").splitlines()]
+    return next((kind for kind, aliases in HEADER_ALIASES.items() if any(line in aliases for line in lines)), None)
 
 
 def _canonical_group_marker(marker: str, *, grade: int, subject: str) -> str:
@@ -72,9 +78,18 @@ def _summary_number(value: object) -> str | None:
     if not text:
         return None
     try:
-        return str(Decimal(text))
+        number = Decimal(text)
+        return str(number) if number.is_finite() else None
     except InvalidOperation:
         return None
+
+
+def _maximum(value: object) -> float | None:
+    numeric = _number(value)
+    if numeric is not None:
+        return numeric
+    match = re.search(r"оценка.*из\s*(\d+(?:[.,]\d+)?)", _normalized(value))
+    return _number(match.group(1)) if match else None
 
 
 def _summary_type(value: object) -> str | None:
@@ -102,7 +117,7 @@ def _date(value: object, school_year_start: int) -> str | None:
         # Google Sheets date serials use 1899-12-30 as day zero.
         from datetime import timedelta
         return (datetime(1899, 12, 30) + timedelta(days=float(value))).date().isoformat()
-    text = str(value).strip()
+    text = re.sub(r"\.{2,}", ".", str(value).strip())
     for pattern in ("%d.%m.%Y", "%d.%m", "%Y-%m-%d", "%d/%m/%Y"):
         try:
             parsed = datetime.strptime(text, pattern)
@@ -125,14 +140,22 @@ def _signature(value: Any) -> str:
 def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list[dict[str, int]]:
     blocks: list[dict[str, int]] = []
     for index, row in enumerate(values):
-        if _header_kind(_cell(row, 0)) != "date":
+        implicit_date = (not str(_cell(row, 0) or "").strip() and index + 1 < len(values)
+                         and _header_kind(_cell(values[index + 1], 0)) == "title"
+                         and any(_date(cell, 2026) for cell in row[1:]))
+        if _header_kind(_cell(row, 0)) != "date" and not implicit_date:
             continue
         found: dict[str, int] = {"date": index}
         for next_index in range(index + 1, min(index + 8, len(values))):
             kind = _header_kind(_cell(values[next_index], 0))
             if kind and kind not in found:
                 found[kind] = next_index
+            if _normalized(_cell(values[next_index], 0)) == "участники" and any(re.search(r"оценка.*из\s*\d+", _normalized(v)) for v in values[next_index][1:]):
+                found.setdefault("max_score", next_index)
         missing = set(HEADER_ALIASES) - found.keys()
+        # Project checklists deliberately have no numerical weights/maxima.
+        if _normalized(sheet_title).startswith("проекты") and found.get("title") == index + 1:
+            missing -= {"weight", "max_score"}
         if missing:
             raise ValueError(f"{sheet_title}: неполный блок журнала около строки {index + 1}; не найдены: {', '.join(sorted(missing))}")
         blocks.append(found)
@@ -140,6 +163,12 @@ def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list
         expected = ", ".join(sorted(next(iter(HEADER_ALIASES.values()))))
         raise ValueError(f"{sheet_title}: не найден блок с датой, работой, весом и максимальным баллом")
     return blocks
+
+
+def _section_label(value: object) -> bool:
+    text = _normalized(value)
+    return bool(re.match(r"^(?:group|английский|математика|обществознание|группа|графика|программирование|медиамастерская|машинная графика|ш\.у\.м\.|базовая группа|профильная группа)\b", text)
+                or re.fullmatch(r"(?:[5-9]|1[01])\s*[-–]?\s*[а-яa-z]+|[abc]|[А-ЯЁ]{3,}", str(value or "").strip()))
 
 
 def parse_journal_values(
@@ -180,7 +209,7 @@ def parse_journal_values(
                 row = values[label_row]
                 label = str(_cell(row, 0) or "").strip()
                 other_values = any(str(_cell(row, column) or "").strip() for column in range(1, len(row)))
-                if label and not other_values and not _header_kind(label):
+                if label and not other_values and not _header_kind(label) and _section_label(label):
                     labels.append(label)
                     break
             marker = labels[0] if labels else f"block {block_index + 1}"
@@ -200,6 +229,8 @@ def parse_journal_values(
             if grade == 9 and _normalized(subject) in {"математика", "math"} and MATH_GROUP_RE.fullmatch(name):
                 current_marker = _canonical_group_marker(name, grade=grade, subject=subject)
                 continue
+            if _section_label(name):
+                continue
             # Keep students with an empty grade row while ignoring ordinary section labels.
             has_assignment_value = any(_cell(row, col) is not None and str(_cell(row, col)).strip() for col in range(1, width))
             if not has_assignment_value and len(normalized_name.split()) < 2:
@@ -210,6 +241,7 @@ def parse_journal_values(
             student_key = f"{_normalized(name)}|{student_marker}"
             students_by_key.setdefault((student_marker, student_key), {
                 "student_name": name, "student_key": student_key, "group_marker": student_marker,
+                "entry_kind": "team" if re.match(r"^(?:команда|team)\b", _normalized(name)) else "individual",
                 "source_row": row_index + 1, "raw_source": {"student_row": row_index + 1},
             })
 
@@ -236,8 +268,8 @@ def parse_journal_values(
             meta = {
                 "title": title,
                 "assessed_on": _date(_cell(metadata_rows["date"], column), school_year_start),
-                "weight": _number(_cell(metadata_rows["weight"], column)),
-                "max_score": _number(_cell(metadata_rows["max_score"], column)),
+                "weight": _number(_cell(metadata_rows.get("weight", []), column)),
+                "max_score": _maximum(_cell(metadata_rows.get("max_score", []), column)),
                 "group_marker": marker,
             }
             block_assessments.append((column, meta))
@@ -268,7 +300,7 @@ def parse_journal_values(
                 "external_key": external_key, **metadata, "source_column": column_name(column),
                 "value_signature": _signature(sorted(score_vector)),
                 "raw_source": {"date": _cell(metadata_rows["date"], column), "title": metadata["title"],
-                               "weight": _cell(metadata_rows["weight"], column), "max_score": _cell(metadata_rows["max_score"], column),
+                               "weight": _cell(metadata_rows.get("weight", []), column), "max_score": _cell(metadata_rows.get("max_score", []), column),
                                "header_rows": {key: index + 1 for key, index in block.items()}, "group_marker": marker},
             }
             assessments.append(assessment)
@@ -276,17 +308,26 @@ def parse_journal_values(
                 result["assessment_key"] = external_key
                 results.append(result)
 
-    # Empty placeholder columns often repeat metadata but carry no grades. They
-    # have no stable identity to preserve, so keep one. If the same signature
-    # contains actual results, leave it as a diagnostic instead of guessing.
+    # Preserve distinct, initially identical populated source columns. Their
+    # occurrence only disambiguates an unchanged snapshot. Later non-identical
+    # edits still hit the database's ambiguous-match guard and retain history.
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for assessment in assessments:
+        grouped.setdefault(assessment["external_key"], []).append(assessment)
     result_keys = {item["assessment_key"] for item in results}
+    for key, duplicates in grouped.items():
+        if len(duplicates) > 1 and key in result_keys:
+            for ordinal, item in enumerate(duplicates, 1):
+                item["external_key"] = f"{key}:occurrence:{ordinal}"
+                item["raw_source"]["identical_source_columns"] = len(duplicates)
+                for result in results:
+                    if result["assessment_key"] == key and re.match(r"[A-Z]+", result["source_coordinate"])[0] == item["source_column"]:
+                        result["assessment_key"] = item["external_key"]
     unique_assessments: list[dict[str, Any]] = []
     seen_signatures: set[str] = set()
     for assessment in assessments:
         signature = assessment["external_key"]
         if signature in seen_signatures:
-            if signature in result_keys:
-                raise ValueError(f"{sheet_title}: несколько заданий имеют неразличимые признаки; импорт остановлен")
             continue
         seen_signatures.add(signature)
         unique_assessments.append(assessment)

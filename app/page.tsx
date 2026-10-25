@@ -37,6 +37,11 @@ import {
 import { IslandIcon, IslandMark, type IslandIconName } from './island-icons';
 import { useTelegramLayout } from './telegram-layout';
 import { useSceneMotion } from './scene-motion';
+import {
+  StudentRoleJournals,
+  TeacherRoleJournals,
+  type RoleJournalsApi,
+} from '../components/role-journals';
 
 type LoadState =
   | 'loading'
@@ -763,9 +768,11 @@ function ProfilePanel({
 function GradesPanel({
   items,
   loading,
+  api,
 }: {
   items: Array<Record<string, unknown>> | null;
   loading: boolean;
+  api: RoleJournalsApi;
 }) {
   return (
     <div className="section-panel">
@@ -803,6 +810,7 @@ function GradesPanel({
           detail="Результаты появятся после публикации школьного журнала."
         />
       )}
+      <StudentRoleJournals api={api} />
     </div>
   );
 }
@@ -1218,7 +1226,7 @@ function StudentApp({
       ) : selectedId === 'information' ? (
         <InfoPanel items={data.today.announcements} />
       ) : (
-        <GradesPanel items={grades} loading={gradesLoading} />
+        <GradesPanel items={grades} loading={gradesLoading} api={api} />
       )}
       <button className="panel-refresh" onClick={onReload}>
         <RefreshCw size={15} /> Обновить данные
@@ -1488,9 +1496,10 @@ function TeacherGroups({
         <div>
           <p className="eyebrow">Предметная работа</p>
           <h2>Мои группы</h2>
-          <p>Ученики, журнал и аналитика живут внутри группы.</p>
+          <p>Назначенные группы и журналы доступны только в пределах школьных назначений.</p>
         </div>
       </div>
+      <TeacherRoleJournals api={api} />
       {groups.length ? (
         <div className="group-grid">
           {groups.map((group) => (

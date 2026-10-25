@@ -267,15 +267,15 @@ class GoogleLiveClient:
             },
         )
 
-    def sheet_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
-        values = self.sheet_values_many(spreadsheet_id, [range_name])
+    def sheet_values(self, spreadsheet_id: str, range_name: str, *, value_render_option: str | None = None) -> list[list[Any]]:
+        values = self.sheet_values_many(spreadsheet_id, [range_name], **({"value_render_option": value_render_option} if value_render_option else {}))
         return values[0] if values else []
 
-    def sheet_values_many(self, spreadsheet_id: str, range_names: list[str]) -> list[list[list[str]]]:
+    def sheet_values_many(self, spreadsheet_id: str, range_names: list[str], *, value_render_option: str | None = None) -> list[list[list[Any]]]:
         payload = self.get(
             "https://sheets.googleapis.com/",
             f"v4/spreadsheets/{quote(spreadsheet_id, safe='')}/values:batchGet",
-            {"majorDimension": "ROWS", "ranges": range_names},
+            {"majorDimension": "ROWS", "ranges": range_names, **({"valueRenderOption": value_render_option} if value_render_option else {})},
         )
         value_ranges = payload.get("valueRanges") or []
         result: list[list[list[str]]] = []

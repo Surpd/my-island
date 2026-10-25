@@ -65,6 +65,7 @@ class JournalImportPostgresTests(unittest.TestCase):
         "journal_student_summaries",
         "journal_summary_history",
         "journal_sync_runs",
+        "journal_term_settings",
         "journal_group_mappings",
         "school_sources",
         "school_source_mappings",
@@ -126,8 +127,8 @@ class JournalImportPostgresTests(unittest.TestCase):
             # schema, so tests remain compatible with production until its migration.
             cls.admin_connection.execute(
                 f'ALTER TABLE "{cls.schema}".journal_students '
-                "ADD COLUMN entry_kind text NOT NULL DEFAULT 'individual', "
-                "ADD COLUMN classification_method text"
+                "ADD COLUMN IF NOT EXISTS entry_kind text NOT NULL DEFAULT 'individual', "
+                "ADD COLUMN IF NOT EXISTS classification_method text"
             )
             cls.admin_connection.execute(
                 f'''CREATE TABLE "{cls.schema}".journal_team_members (
@@ -176,7 +177,7 @@ class JournalImportPostgresTests(unittest.TestCase):
     def setUp(self):
         self.database = IsolatedPostgresDatabase(DATABASE_URL, self.schema)
         with self.database.connection() as connection:
-            connection.execute("TRUNCATE audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
+            connection.execute("TRUNCATE audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_term_settings, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
             connection.execute(
                 "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', %s, '9-А', 'active')",
                 ("Иванов Иван",),

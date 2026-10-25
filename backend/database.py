@@ -3986,7 +3986,11 @@ class Database:
             else:
                 term_number = current_term
             if term_number is not None:
-                occupied_by_other = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ? AND subject = ? AND term_number = ? AND id <> ? LIMIT 1", (source["spreadsheet_id"], source["grade"], source["academic_year"], source["subject"], term_number, source_row["id"] if source_row else -1)).fetchone()
+                exclusion = " AND id <> ?" if source_row else ""
+                parameters = (source["spreadsheet_id"], source["grade"], source["academic_year"], source["subject"], term_number)
+                if source_row:
+                    parameters += (source_row['id'],)
+                occupied_by_other = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ? AND subject = ? AND term_number = ?" + exclusion + " LIMIT 1", parameters).fetchone()
             else:
                 occupied_by_other = None
             if occupied_by_other and (not source_row or not source_row["term_number"] or source_row["period_status"] == "unassigned"):
@@ -4051,7 +4055,15 @@ class Database:
             else:
                 self.execute(connection, f"UPDATE journal_assessments SET active = {boolean_false} WHERE source_id = ?", (source_id,))
 
-            identities = self.execute(connection, "SELECT id, display_name FROM identities WHERE kind = 'student' AND status = 'active'").fetchall()
+            grade_prefix = f"{source['grade']}%"
+            identities = self.execute(connection, """SELECT i.id, i.display_name FROM identities i
+                WHERE i.kind = 'student' AND i.status = 'active' AND
+                  ((i.class_name LIKE ? AND substr(i.class_name, length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9') OR EXISTS (SELECT 1 FROM memberships m JOIN groups g ON g.id=m.group_id
+                    WHERE m.identity_id=i.id AND m.active IS TRUE AND m.member_role='student'
+                      AND (m.valid_from IS NULL OR m.valid_from<=CURRENT_DATE)
+                      AND (m.valid_until IS NULL OR m.valid_until>=CURRENT_DATE)
+                      AND g.archived_at IS NULL AND COALESCE(g.base_class_name,g.name) LIKE ?
+                      AND substr(COALESCE(g.base_class_name,g.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'))""", (grade_prefix, source['grade'], grade_prefix, source['grade'])).fetchall()
             by_name: dict[str, list[Any]] = {}
             for identity in identities:
                 normalized = " ".join(str(identity["display_name"]).casefold().replace("ё", "е").split())
@@ -4066,6 +4078,7 @@ class Database:
             student_ids: dict[tuple[str, str], Any] = {}
             student_identities: dict[Any, Any] = {}
             linked_students = 0
+            claimed_students: set[Any] = set()
             self.execute(connection, f"UPDATE journal_students SET active = {boolean_false} WHERE source_id = ?", (source_id,))
             for (group_marker, student_key), item in roster.items():
                 normalized_name = " ".join(str(item["student_name"]).casefold().replace("ё", "е").split())
@@ -4087,17 +4100,24 @@ class Database:
                     target_group = group_mapping["group_id"] if group_mapping else None
                     if target_group:
                         eligible = [candidate for candidate in matches if self.execute(connection, "SELECT 1 FROM memberships WHERE identity_id = ? AND group_id = ? AND active IS TRUE AND member_role = 'student' LIMIT 1", (candidate, target_group)).fetchone()]
-                        matches = eligible or matches
+                        matches = eligible
                     elif group_marker in {"A", "B", "C"}:
                         eligible = [candidate for candidate in matches if self.execute(connection, """SELECT 1 FROM memberships m JOIN groups g ON g.id = m.group_id
                             WHERE m.identity_id = ? AND m.active IS TRUE AND m.member_role = 'student'
                               AND lower(COALESCE(g.subject_subgroup, '')) = lower(?)
                               AND lower(COALESCE(g.subject, '')) = lower(?) LIMIT 1""", (candidate, group_marker, source["subject"])).fetchone()]
                         matches = eligible or matches
-                    elif group_marker == "all":
-                        eligible = [candidate for candidate in matches if self.execute(connection, "SELECT 1 FROM identities i WHERE i.id = ? AND (COALESCE(i.class_name,'') LIKE ? OR EXISTS (SELECT 1 FROM memberships m JOIN groups g ON g.id=m.group_id WHERE m.identity_id=i.id AND m.active IS TRUE AND m.member_role='student' AND COALESCE(g.base_class_name,g.name) LIKE ?))", (candidate, '9%', '9%')).fetchone()]
-                        matches = eligible or matches
-                is_team = bool(existing and existing['entry_kind'] == 'team')
+                # A reviewed alias or a unique canonical identity can survive a
+                # source name correction without creating a second grade row.
+                if not existing and len(matches) == 1:
+                    prior = self.execute(connection, """SELECT id,identity_id,match_status,match_method,entry_kind,student_key
+                        FROM journal_students WHERE source_id=? AND group_marker=? AND identity_id=? AND entry_kind='individual'""",
+                        (source_id, group_marker, matches[0])).fetchall()
+                    prior = [row for row in prior if row['id'] not in claimed_students and (group_marker,row['student_key']) not in roster]
+                    if len(prior) == 1:
+                        existing = prior[0]
+                        self.execute(connection, "UPDATE journal_students SET student_key=? WHERE id=?", (student_key,existing['id']))
+                is_team = bool(existing and existing['entry_kind'] == 'team' or item.get('entry_kind') == 'team')
                 identity_id = None if is_team else existing["identity_id"] if existing and existing["identity_id"] is not None else (matches[0] if len(matches) == 1 else None)
                 match_status = "linked" if identity_id is not None else "ambiguous" if len(matches) > 1 else "unlinked"
                 match_method = (existing["match_method"] if existing and existing["identity_id"] is not None else alias_method or ("canonical_name" if identity_id is not None else None))
@@ -4119,8 +4139,12 @@ class Database:
                     (source_id, student_key, item["student_name"], group_marker, identity_id, match_status, match_method, item.get("source_row") or item.get("raw_source", {}).get("student_row"), raw_student),
                 ).fetchone()
                 student_ids[(group_marker, student_key)] = row["id"]
-                student_identities[row['id']] = row['identity_id']
-                linked_students += int(row["identity_id"] is not None)
+                claimed_students.add(row['id'])
+                if is_team:
+                    self.execute(connection, "UPDATE journal_students SET entry_kind='team',identity_id=NULL,match_status='unlinked',match_method=NULL WHERE id=?", (row['id'],))
+                    identity_id = None
+                student_identities[row['id']] = identity_id
+                linked_students += int(identity_id is not None)
             mapped = 0
             existing_results = {(row['assessment_id'], row['journal_student_id']): dict(row) for row in self.execute(connection,
                 "SELECT result.* FROM journal_results result JOIN journal_assessments assessment ON assessment.id=result.assessment_id WHERE assessment.source_id = ?", (source_id,)).fetchall()}
@@ -4168,7 +4192,54 @@ class Database:
                 self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (row["id"], row["numeric_score"], row["status"], coordinate, encoded_json(row["raw_source"]), True))
                 self.execute(connection, "UPDATE journal_results SET source_coordinate = ? WHERE id = ?", (f"removed:{row['id']}:{coordinate}", row["id"]))
             self.execute(connection, "UPDATE journal_sources SET status = ? WHERE id = ?", ('ready' if results else 'empty', source_id))
+            self._infer_journal_groups(connection, source_id)
             return {"assessments": len(assessments), "results": len(results), "roster_students": len(roster), "linked_students": linked_students, "mapped_results": mapped, "summary_values": len(summaries or [])}
+
+    def _infer_journal_groups(self, connection: Any, source_id: Any) -> None:
+        """Reuse a canonical group only when its complete roster matches exactly.
+
+        An incomplete, mixed, team or ambiguous roster requires an admin mapping.
+        Existing mappings are never replaced by inference.
+        """
+        import re
+        source = self.execute(connection, "SELECT subject FROM journal_sources WHERE id=?", (source_id,)).fetchone()
+        if not source:
+            return
+        def subject_key(value: Any) -> str:
+            key = ' '.join(str(value or '').casefold().replace('ё','е').split())
+            key = re.sub(r'\s+(огэ|егэ|база|базовая|угл|профиль)$', '', key)
+            return 'английский' if key == 'английский язык' else key
+        subject = subject_key(source['subject'])
+        rosters: dict[str, list[Any]] = {}
+        for row in self.execute(connection, "SELECT group_marker,identity_id,entry_kind FROM journal_students WHERE source_id=? AND active IS TRUE", (source_id,)).fetchall():
+            rosters.setdefault(row['group_marker'], []).append(row)
+        groups: dict[Any, Any] = {}
+        for row in self.execute(connection, """SELECT g.id,g.group_type,g.subject,g.base_class_name,g.subject_subgroup,g.exam_track,m.identity_id
+            FROM groups g JOIN memberships m ON m.group_id=g.id JOIN identities i ON i.id=m.identity_id
+            WHERE g.archived_at IS NULL AND m.active IS TRUE AND m.member_role='student' AND i.kind='student' AND i.status='active'
+              AND (m.valid_from IS NULL OR m.valid_from<=CURRENT_DATE) AND (m.valid_until IS NULL OR m.valid_until>=CURRENT_DATE)""").fetchall():
+            group = groups.setdefault(row['id'], {**dict(row), 'members':set()})
+            group['members'].add(row['identity_id'])
+        for marker, rows in rosters.items():
+            if any(row['identity_id'] is None or row['entry_kind'] != 'individual' for row in rows):
+                continue
+            if self.execute(connection, "SELECT id FROM journal_group_mappings WHERE source_id=? AND group_marker=?", (source_id,marker)).fetchone():
+                continue
+            ids = {row['identity_id'] for row in rows}
+            if len(ids) != len(rows):
+                continue
+            candidates = [g for g in groups.values() if g['members'] == ids and
+                (subject_key(g['subject']) == subject or g['group_type'] == 'class' and (marker == 'all' or marker.startswith('block ')))]
+            subject_groups = [g for g in candidates if g['group_type'] != 'class']
+            candidates = subject_groups or candidates
+            if len(candidates) != 1:
+                continue
+            group = candidates[0]
+            self.execute(connection, """INSERT INTO journal_group_mappings(source_id,group_marker,group_id,base_class_name,subject_subgroup,exam_track,source)
+                VALUES (?,?,?,?,?,?,'canonical_roster') ON CONFLICT(source_id,group_marker) DO NOTHING""",
+                (source_id,marker,group['id'],group['base_class_name'],group['subject_subgroup'],group['exam_track']))
+            self.execute(connection, "INSERT INTO audit_log(action,entity_type,details) VALUES ('journal_group.canonical_roster','journal_source',?)",
+                (json.dumps({'source_id':str(source_id),'group_marker':marker,'group_id':str(group['id']),'roster_count':len(ids)}),))
 
     def map_journal_group(self, source_id: Any, group_marker: str, group_id: Any | None, actor_user_id: Any, *, base_class_name: str | None = None, subject_subgroup: str | None = None, classroom_course_id: Any | None = None, exam_track: str | None = None, source: str = "admin_override") -> Any:
         with self.connection() as connection:
@@ -4205,17 +4276,31 @@ class Database:
             rows = self.execute(
                 connection,
                 """SELECT ja.id AS assessment_id, ja.title, ja.assessed_on, ja.weight, ja.max_score,
-                          js2.id AS journal_student_id, COALESCE(jr.identity_id, js2.identity_id) AS identity_id,
-                          js2.display_name AS student_name, jr.numeric_score, jr.status, jr.source_coordinate,
+                          js2.id AS journal_student_id, student_identity.id AS identity_id,
+                          student_identity.display_name AS student_name, jr.numeric_score, jr.status, jr.source_coordinate,
                           js.subject, js.sheet_title, gm.group_marker, gm.base_class_name,
                           gm.subject_subgroup, gm.classroom_course_id, gm.exam_track
                      FROM journal_group_mappings gm
-                     JOIN journal_sources js ON js.id = gm.source_id
-                      JOIN journal_assessments ja ON ja.source_id = js.id
-                      JOIN journal_students js2 ON js2.source_id = js.id AND js2.group_marker = gm.group_marker
-                      LEFT JOIN journal_results jr ON jr.assessment_id = ja.id AND jr.journal_student_id = js2.id
-                    WHERE gm.group_id = ?
-                    ORDER BY ja.assessed_on, ja.source_column, jr.student_name""",
+                     JOIN groups mapped_group ON mapped_group.id = gm.group_id
+                       AND mapped_group.canonical IS TRUE AND mapped_group.archived_at IS NULL
+                     JOIN journal_sources js ON js.id = gm.source_id AND js.period_status = 'current'
+                     JOIN journal_assessments ja ON ja.source_id = js.id AND ja.active IS TRUE
+                       AND ja.group_marker IN (gm.group_marker, 'all')
+                     JOIN journal_students js2 ON js2.source_id = js.id AND js2.group_marker = gm.group_marker
+                       AND js2.active IS TRUE AND js2.entry_kind = 'individual' AND js2.match_status = 'linked'
+                     JOIN identities student_identity ON student_identity.id = js2.identity_id
+                       AND student_identity.kind = 'student' AND student_identity.status = 'active'
+                     LEFT JOIN journal_results jr ON jr.assessment_id = ja.id AND jr.journal_student_id = js2.id
+                       AND jr.is_current IS TRUE AND jr.group_marker IN (gm.group_marker, 'all')
+                       AND (jr.identity_id IS NULL OR jr.identity_id = student_identity.id)
+                    WHERE gm.group_id = ? AND EXISTS (
+                        SELECT 1 FROM memberships membership
+                         WHERE membership.group_id = gm.group_id AND membership.identity_id = student_identity.id
+                           AND membership.active IS TRUE AND membership.member_role = 'student'
+                           AND (membership.valid_from IS NULL OR membership.valid_from <= CURRENT_DATE)
+                           AND (membership.valid_until IS NULL OR membership.valid_until >= CURRENT_DATE)
+                    )
+                    ORDER BY ja.assessed_on, ja.source_column, student_identity.display_name""",
                 (group_id,),
             ).fetchall()
             return [dict(row) for row in rows]
@@ -4242,9 +4327,12 @@ class Database:
 
     def teacher_can_access_journal_marker(self, user_id: Any, source_id: Any, group_marker: str) -> bool:
         with self.connection() as connection:
-            row = self.execute(
-                connection,
-                """SELECT 1
+            return self._teacher_can_access_journal_marker(connection, user_id, source_id, group_marker)
+
+    def _teacher_can_access_journal_marker(self, connection: Any, user_id: Any, source_id: Any, group_marker: str) -> bool:
+        row = self.execute(
+            connection,
+            """SELECT 1
                      FROM users u
                      JOIN journal_group_mappings gm ON gm.source_id = ? AND gm.group_marker = ?
                      JOIN journal_sources js ON js.id = gm.source_id
@@ -4256,17 +4344,150 @@ class Database:
                            AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
                            AND (ta.subject = '' OR lower(ta.subject) = lower(js.subject))
                            AND (
-                             ta.group_id = gm.group_id
-                             OR (ta.subject_subgroup IS NOT NULL AND ta.subject_subgroup = gm.subject_subgroup)
+                              (gm.group_id IS NOT NULL AND ta.group_id = gm.group_id)
+                              OR (gm.group_id IS NULL AND gm.subject_subgroup IS NOT NULL
+                                  AND ta.group_id IS NOT NULL AND ta.subject_subgroup = gm.subject_subgroup
+                                  AND EXISTS (
+                                    SELECT 1 FROM memberships scope_membership
+                                    JOIN identities scope_identity ON scope_identity.id = scope_membership.identity_id
+                                    JOIN groups scope_group ON scope_group.id = scope_membership.group_id
+                                    WHERE scope_membership.group_id = ta.group_id
+                                      AND scope_membership.active IS TRUE AND scope_membership.member_role = 'student'
+                                      AND (scope_membership.valid_from IS NULL OR scope_membership.valid_from <= CURRENT_DATE)
+                                      AND (scope_membership.valid_until IS NULL OR scope_membership.valid_until >= CURRENT_DATE)
+                                      AND scope_identity.kind = 'student' AND scope_identity.status = 'active'
+                                      AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), 1, length(CAST(js.grade AS TEXT))) = CAST(js.grade AS TEXT)
+                                      AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), length(CAST(js.grade AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'
+                                  ))
                            )
-                           AND (ta.base_class_name IS NULL OR ta.base_class_name = gm.base_class_name)
+                            AND (ta.base_class_name IS NULL OR ta.base_class_name = gm.base_class_name)
                            AND (ta.classroom_course_id IS NULL OR ta.classroom_course_id = gm.classroom_course_id)
                            AND (ta.exam_track IS NULL OR ta.exam_track = gm.exam_track)
                       )
                     )""",
-                (source_id, group_marker, user_id),
-            ).fetchone()
-            return bool(row)
+            (source_id, group_marker, user_id),
+        ).fetchone()
+        return bool(row)
+
+    def teacher_journal_detail(self, user_id: Any, source_id: Any, group_marker: str) -> dict[str, Any] | None:
+        """Return a marker-scoped journal projection filtered to the teacher's canonical group membership."""
+        with self.connection() as connection:
+            if not self._teacher_can_access_journal_marker(connection, user_id, source_id, group_marker):
+                return None
+            source = self.execute(connection, """SELECT id, spreadsheet_title, grade, subject, sheet_title,
+                    academic_year, term_number, period_status, last_synced_at
+                FROM journal_sources WHERE id = ?""", (source_id,)).fetchone()
+            mapping = self.execute(connection, """SELECT group_id, base_class_name, subject_subgroup,
+                    classroom_course_id, exam_track FROM journal_group_mappings
+                WHERE source_id = ? AND group_marker = ?""", (source_id, group_marker)).fetchone()
+            if not source or not mapping:
+                return None
+
+            if mapping["group_id"] is not None:
+                group_ids = [mapping["group_id"]]
+            else:
+                group_ids = [row["group_id"] for row in self.execute(connection, """SELECT DISTINCT assignment.group_id
+                    FROM users app_user
+                    JOIN teacher_assignments assignment ON assignment.teacher_identity_id = app_user.identity_id
+                    WHERE app_user.id = ? AND assignment.active IS TRUE AND assignment.group_id IS NOT NULL
+                      AND (assignment.valid_from IS NULL OR assignment.valid_from <= CURRENT_DATE)
+                      AND (assignment.valid_until IS NULL OR assignment.valid_until >= CURRENT_DATE)
+                      AND assignment.subject_subgroup = ?
+                      AND (assignment.subject = '' OR lower(assignment.subject) = lower(?))
+                      AND (assignment.base_class_name IS NULL OR assignment.base_class_name = ?)
+                      AND (assignment.classroom_course_id IS NULL OR assignment.classroom_course_id = ?)
+                      AND (assignment.exam_track IS NULL OR assignment.exam_track = ?)
+                      AND EXISTS (SELECT 1 FROM memberships scope_membership
+                          JOIN identities scope_identity ON scope_identity.id = scope_membership.identity_id
+                          JOIN groups scope_group ON scope_group.id = scope_membership.group_id
+                          WHERE scope_membership.group_id = assignment.group_id
+                            AND scope_membership.active IS TRUE AND scope_membership.member_role = 'student'
+                            AND (scope_membership.valid_from IS NULL OR scope_membership.valid_from <= CURRENT_DATE)
+                            AND (scope_membership.valid_until IS NULL OR scope_membership.valid_until >= CURRENT_DATE)
+                            AND scope_identity.kind = 'student' AND scope_identity.status = 'active'
+                            AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), 1, length(CAST(? AS TEXT))) = CAST(? AS TEXT)
+                            AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9')""",
+                    (user_id, mapping["subject_subgroup"], source["subject"], mapping["base_class_name"], mapping["classroom_course_id"], mapping["exam_track"], source["grade"], source["grade"], source["grade"])).fetchall()]
+
+            group_ids = list(dict.fromkeys(group_ids))
+            if group_ids:
+                placeholders = ",".join("?" for _ in group_ids)
+                base_class_clause = ""
+                roster_params: tuple[Any, ...] = (*group_ids, source["grade"], source["grade"], source["grade"])
+                if mapping["group_id"] is None and mapping["base_class_name"]:
+                    base_class_clause = " AND COALESCE(canonical_identity.class_name, group_row.base_class_name, group_row.name) = ?"
+                    roster_params = (*roster_params, mapping["base_class_name"])
+                roster_rows = self.execute(connection, f"""SELECT DISTINCT canonical_identity.id, canonical_identity.display_name, canonical_identity.class_name
+                    FROM memberships membership
+                    JOIN identities canonical_identity ON canonical_identity.id = membership.identity_id
+                    JOIN groups group_row ON group_row.id = membership.group_id
+                    WHERE membership.group_id IN ({placeholders}) AND membership.active IS TRUE
+                      AND membership.member_role = 'student' AND canonical_identity.kind = 'student' AND canonical_identity.status = 'active'
+                      AND (membership.valid_from IS NULL OR membership.valid_from <= CURRENT_DATE)
+                      AND (membership.valid_until IS NULL OR membership.valid_until >= CURRENT_DATE)
+                      AND substr(COALESCE(canonical_identity.class_name, group_row.base_class_name, group_row.name), 1, length(CAST(? AS TEXT))) = CAST(? AS TEXT)
+                      AND substr(COALESCE(canonical_identity.class_name, group_row.base_class_name, group_row.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'{base_class_clause}""",
+                    roster_params).fetchall()
+            else:
+                roster_rows = []
+            roster = {str(row["id"]): dict(row) for row in roster_rows}
+
+            journal_students = []
+            if roster:
+                placeholders = ",".join("?" for _ in roster)
+                journal_students = self.execute(connection, f"""SELECT id, identity_id, display_name, group_marker
+                    FROM journal_students
+                    WHERE source_id = ? AND group_marker = ? AND identity_id IN ({placeholders})
+                      AND active IS TRUE AND entry_kind = 'individual' AND match_status = 'linked'
+                    ORDER BY lower(display_name)""", (source_id, group_marker, *roster.keys())).fetchall()
+
+            students = []
+            student_by_id = {}
+            for row in journal_students:
+                identity = roster.get(str(row["identity_id"]))
+                if not identity:
+                    continue
+                summaries = [dict(summary) for summary in self.execute(connection, """SELECT label, summary_type, numeric_value, text_value
+                    FROM journal_student_summaries WHERE journal_student_id = ? AND is_current IS TRUE
+                    ORDER BY summary_type, label""", (row["id"],)).fetchall()]
+                item = {"journal_student_id": row["id"], "identity_id": row["identity_id"],
+                    "display_name": identity["display_name"], "class_name": identity["class_name"],
+                    "summaries": summaries}
+                students.append(item)
+                student_by_id[row["id"]] = item
+
+            assignments = self.execute(connection, """SELECT id, title, assessed_on, weight, max_score, group_marker
+                FROM journal_assessments WHERE source_id = ? AND active IS TRUE
+                  AND group_marker IN (?, 'all') ORDER BY assessed_on, source_column, id""",
+                (source_id, group_marker)).fetchall()
+            assessment_ids = [row["id"] for row in assignments]
+            results_by_assessment: dict[Any, list[dict[str, Any]]] = {}
+            if assessment_ids and student_by_id:
+                assessment_placeholders = ",".join("?" for _ in assessment_ids)
+                student_placeholders = ",".join("?" for _ in student_by_id)
+                results = self.execute(connection, f"""SELECT result.assessment_id, student.display_name AS student_name,
+                        result.numeric_score AS score, result.status
+                    FROM journal_results result
+                    JOIN journal_students student ON student.id = result.journal_student_id
+                    WHERE result.assessment_id IN ({assessment_placeholders})
+                      AND result.journal_student_id IN ({student_placeholders})
+                      AND result.is_current IS TRUE
+                      AND (result.identity_id IS NULL OR result.identity_id = student.identity_id)
+                    ORDER BY result.assessment_id, lower(student.display_name)""",
+                    (*assessment_ids, *student_by_id.keys())).fetchall()
+                for result in results:
+                    results_by_assessment.setdefault(result["assessment_id"], []).append({
+                        "student_name": result["student_name"], "score": result["score"], "status": result["status"],
+                    })
+
+            return {
+                "source_id": source["id"],
+                "source": dict(source),
+                "group_marker": group_marker,
+                "students": students,
+                "assessments": [{**dict(assessment), "date": assessment["assessed_on"],
+                    "results": results_by_assessment.get(assessment["id"], [])} for assessment in assignments],
+            }
 
     def journal_status(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
@@ -4389,6 +4610,9 @@ class Database:
                 for row in self.execute(connection, f"SELECT journal_student_id, label, summary_type, numeric_value, text_value FROM journal_student_summaries WHERE is_current IS TRUE AND journal_student_id IN ({id_params})", ids).fetchall():
                     summaries.setdefault(row["journal_student_id"], []).append({"label": row["label"], "summary_type": row["summary_type"], "numeric_value": row["numeric_value"], "text_value": row["text_value"]})
             marker_rows = self.execute(connection, "SELECT DISTINCT group_marker FROM journal_students WHERE source_id = ? AND active IS TRUE ORDER BY group_marker", (source_id,)).fetchall()
+            mappings = self.execute(connection, """SELECT group_marker, group_id, base_class_name, subject_subgroup,
+                    classroom_course_id, exam_track, source
+                FROM journal_group_mappings WHERE source_id = ? ORDER BY group_marker""", (source_id,)).fetchall()
             members: dict[Any, list[dict[str, Any]]] = {}
             if ids:
                 for member in self.execute(connection,f"SELECT member.journal_student_id,member.identity_id,i.display_name,i.class_name FROM journal_team_members member JOIN identities i ON i.id=member.identity_id WHERE member.journal_student_id IN ({','.join('?' for _ in ids)}) ORDER BY i.display_name",tuple(ids)).fetchall():
@@ -4396,6 +4620,7 @@ class Database:
             return {
                 "source": dict(source),
                 "groups": [row["group_marker"] for row in marker_rows],
+                "mappings": [dict(row) for row in mappings],
                 "assessments": [{**dict(row), "group_marker": row["group_marker"]} for row in assignments if not group_marker or row["group_marker"] in {"all", group_marker}],
                 "students": [{**dict(row), "members": members.get(row['id'], []), "summaries": summaries.get(row["id"], []), "results": {str(item["id"]): values.get((row["id"], item["id"])) for item in assignments if not group_marker or item["group_marker"] in {"all", group_marker}}} for row in students],
             }
@@ -4487,7 +4712,7 @@ class Database:
         if self.execute(connection, "SELECT id FROM journal_sync_runs WHERE spreadsheet_id=? AND status='running' LIMIT 1", (spreadsheet_id,)).fetchone():
             raise ValueError('Сейчас выполняется синхронизация. Дождитесь её завершения и повторите предпросмотр.')
 
-    def _journal_match_preview(self, connection: Any, spreadsheet_id: str, source_name: str, identity_id: Any) -> dict[str, Any]:
+    def _journal_match_preview(self, connection: Any, spreadsheet_id: str, source_name: str, identity_id: Any, replace_existing: bool = False) -> dict[str, Any]:
         from backend.services.journal_matching import normalized_name, preview_fingerprint
         records = [dict(row) for row in self.execute(connection, """SELECT student.id,student.source_id,student.identity_id,student.match_status,student.match_method,
             student.display_name,student.updated_at,source.grade FROM journal_students student JOIN journal_sources source ON source.id=student.source_id
@@ -4499,7 +4724,7 @@ class Database:
         if len(grades) != 1:
             raise ValueError('Источник содержит записи разных классов. Требуется отдельная проверка.')
         identity = self._journal_identity(connection, identity_id, records[0]['grade'])
-        unresolved = [row for row in records if row['identity_id'] is None]
+        unresolved = [row for row in records if row['identity_id'] is None or replace_existing and str(row['identity_id']) != str(identity_id)]
         if not unresolved:
             raise ValueError('Это имя уже сопоставлено. Обновите список.')
         ids = [row['id'] for row in unresolved]
@@ -4510,11 +4735,15 @@ class Database:
             raise ValueError('Источник школьного журнала не зарегистрирован.')
         alias_key = 'alias:' + normalized_name(source_name)
         mapping = self.execute(connection, "SELECT * FROM school_source_mappings WHERE source_id=? AND external_key=? AND mapping_type='identity' AND valid_until IS NULL AND status<>'revoked'", (mapping_source['id'], alias_key)).fetchone()
-        if mapping and str(mapping['identity_id']) != str(identity_id) and mapping['manually_confirmed']:
+        if not replace_existing and mapping and str(mapping['identity_id']) != str(identity_id) and mapping['manually_confirmed']:
             raise ValueError('Для этого имени уже подтверждена другая связь. Сначала проверьте существующее соответствие.')
-        if any(row['identity_id'] is not None and str(row['identity_id']) != str(identity_id) for row in records):
+        if not replace_existing and any(row['identity_id'] is not None and str(row['identity_id']) != str(identity_id) for row in records):
             raise ValueError('В одном из предметов уже есть другая связь для этого имени. Она сохранена; требуется ручная проверка конфликта.')
-        payload = {'spreadsheet_id': spreadsheet_id, 'source_name': normalized_name(source_name), 'identity': identity,
+        for record in records:
+            groups = self.execute(connection, "SELECT gm.group_id FROM journal_group_mappings gm JOIN journal_students s ON s.source_id=gm.source_id AND s.group_marker=gm.group_marker WHERE s.id=? AND gm.group_id IS NOT NULL", (record['id'],)).fetchall()
+            if groups and not any(self.execute(connection, "SELECT 1 FROM memberships WHERE identity_id=? AND group_id=? AND active IS TRUE AND member_role='student' AND (valid_from IS NULL OR valid_from<=CURRENT_DATE) AND (valid_until IS NULL OR valid_until>=CURRENT_DATE)", (identity_id,g['group_id'])).fetchone() for g in groups):
+                raise ValueError('Имя встречается в несовместимых учебных группах. Общий алиас не применён; требуется проверка источника.')
+        payload = {'spreadsheet_id': spreadsheet_id, 'replace_existing': replace_existing, 'source_name': normalized_name(source_name), 'identity': identity,
                    'records': records, 'results': results, 'mapping': dict(mapping) if mapping else None}
         return {'source_name': source_name, 'identity': identity, 'record_count': len(unresolved),
                 'subject_count': len({row['source_id'] for row in unresolved}),
@@ -4522,16 +4751,16 @@ class Database:
                 'preview_token': preview_fingerprint(payload), '_records': unresolved, '_results': results,
                 '_mapping': dict(mapping) if mapping else None, '_mapping_source_id': mapping_source['id'], '_alias_key': alias_key}
 
-    def preview_journal_match(self, spreadsheet_id: str, source_name: str, identity_id: Any) -> dict[str, Any]:
+    def preview_journal_match(self, spreadsheet_id: str, source_name: str, identity_id: Any, replace_existing: bool = False) -> dict[str, Any]:
         with self.connection() as connection:
-            preview = self._journal_match_preview(connection, spreadsheet_id, source_name, identity_id)
+            preview = self._journal_match_preview(connection, spreadsheet_id, source_name, identity_id, replace_existing)
             return {key: value for key, value in preview.items() if not key.startswith('_')}
 
-    def confirm_journal_match(self, spreadsheet_id: str, source_name: str, identity_id: Any, preview_token: str, actor_user_id: Any) -> dict[str, int]:
+    def confirm_journal_match(self, spreadsheet_id: str, source_name: str, identity_id: Any, preview_token: str, actor_user_id: Any, replace_existing: bool = False) -> dict[str, int]:
         import hmac
         with self.connection() as connection:
             self._journal_mapping_lock(connection, spreadsheet_id)
-            preview = self._journal_match_preview(connection, spreadsheet_id, source_name, identity_id)
+            preview = self._journal_match_preview(connection, spreadsheet_id, source_name, identity_id, replace_existing)
             if not hmac.compare_digest(preview_token, preview['preview_token']):
                 raise ValueError('Данные изменились после предпросмотра. Проверьте новый предпросмотр.')
             previous_mapping = preview['_mapping']
@@ -4546,14 +4775,18 @@ class Database:
                 mapping_id = previous_mapping['id']
             ids = [row['id'] for row in preview['_records']]
             placeholders = ','.join('?' for _ in ids)
-            self.execute(connection, f"UPDATE journal_students SET identity_id=?,match_status='linked',match_method='admin_source_alias',updated_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders}) AND identity_id IS NULL AND entry_kind='individual'", (identity_id,*ids))
+            guard = '' if replace_existing else ' AND identity_id IS NULL'
+            self.execute(connection, f"UPDATE journal_students SET identity_id=?,match_status='linked',match_method='admin_source_alias',updated_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders}){guard} AND entry_kind='individual'", (identity_id,*ids))
             cursor = self.execute(connection, f"UPDATE journal_results SET identity_id=? WHERE journal_student_id IN ({placeholders})", (identity_id,*ids))
+            changed_results = cursor.rowcount
+            for source_id in {row['source_id'] for row in preview['_records']}:
+                self._infer_journal_groups(connection, source_id)
             # The audit stores previous associations by stable IDs for a targeted
             # recovery; scores and grade history are never rewritten here.
             audit = {'spreadsheet_id':spreadsheet_id,'identity_id':str(identity_id),'mapping_id':str(mapping_id),
                      'previous_mapping':previous_mapping,'previous_students':preview['_records'],'previous_results':preview['_results']}
             self.execute(connection, "INSERT INTO audit_log(actor_user_id,action,entity_type,details) VALUES (?,'journal_matching.confirmed','journal_source',?)", (actor_user_id,json.dumps(audit,ensure_ascii=False,default=str)))
-            return {'matched_records':len(ids),'updated_results':cursor.rowcount}
+            return {'matched_records':len(ids),'updated_results':changed_results}
 
     def journal_matching_overview(self, spreadsheet_id: str) -> dict[str, Any]:
         from backend.services.journal_matching import normalized_name, suggestion_reason
@@ -4592,7 +4825,21 @@ class Database:
                 item['subject_count'] = len(item.pop('_subjects'))
                 item.pop('_grades')
                 individuals.append(item)
-            return {'individuals':individuals,'teams':teams}
+            linked_rows = self.execute(connection, """SELECT s.display_name,s.source_id,s.identity_id,i.display_name identity_name,i.class_name,
+                (SELECT COUNT(*) FROM journal_results r WHERE r.journal_student_id=s.id AND r.is_current IS TRUE) result_count
+                FROM journal_students s JOIN journal_sources src ON src.id=s.source_id JOIN identities i ON i.id=s.identity_id
+                WHERE src.spreadsheet_id=? AND s.active IS TRUE AND s.entry_kind='individual' ORDER BY s.display_name,s.id""", (spreadsheet_id,)).fetchall()
+            linked: dict[Any, Any] = {}
+            for row in linked_rows:
+                key = (normalized_name(row['display_name']),row['identity_id'])
+                item = linked.setdefault(key, {'source_name':row['display_name'],'identity_id':row['identity_id'],
+                    'identity_name':row['identity_name'],'class_name':row['class_name'],'record_count':0,'result_count':0,'_subjects':set()})
+                item['record_count'] += 1
+                item['result_count'] += row['result_count']
+                item['_subjects'].add(row['source_id'])
+            for item in linked.values():
+                item['subject_count'] = len(item.pop('_subjects'))
+            return {'individuals':individuals,'teams':teams,'linked':list(linked.values())}
 
     def set_journal_team_members(self, team_id: Any, identity_ids: list[Any], actor_user_id: Any) -> dict[str, Any]:
         if self.database_url:
@@ -4674,7 +4921,17 @@ class Database:
 
     def journal_workbook_lock(self, spreadsheet_id: str):
         if not self.database_url:
-            return nullcontext(True)
+            @contextmanager
+            def local_lock():
+                with self._journal_lock_guard:
+                    lock = self._journal_locks.setdefault('book:' + spreadsheet_id, threading.Lock())
+                acquired = lock.acquire(blocking=False)
+                try:
+                    yield acquired
+                finally:
+                    if acquired:
+                        lock.release()
+            return local_lock()
 
         @contextmanager
         def hold_session_lock():
@@ -4699,3 +4956,73 @@ class Database:
         with self.connection() as connection:
             cursor = self.execute(connection, f"UPDATE journal_sync_runs SET counts = {raw_value} WHERE id = ? AND status = 'running'", (payload, run_id))
             return bool(cursor.rowcount)
+
+    def student_journals(self, identity_id: Any) -> list[dict[str, Any]]:
+        """Return current journal snapshots only for one active canonical student identity."""
+        with self.connection() as connection:
+            students = self.execute(connection, """SELECT student.id AS journal_student_id, student.display_name,
+                    student.group_marker, source.id AS source_id, source.spreadsheet_title,
+                    source.grade, source.subject, source.sheet_title, source.academic_year,
+                    source.term_number, source.period_status, source.last_synced_at
+                FROM journal_students student
+                JOIN identities canonical_identity ON canonical_identity.id = student.identity_id
+                    AND canonical_identity.kind = 'student' AND canonical_identity.status = 'active'
+                JOIN journal_sources source ON source.id = student.source_id
+                WHERE student.identity_id = ? AND student.active IS TRUE
+                    AND student.entry_kind = 'individual' AND student.match_status = 'linked'
+                ORDER BY source.grade, source.subject, source.academic_year, source.term_number, source.id""",
+                (identity_id,)).fetchall()
+
+            items: list[dict[str, Any]] = []
+            for student in students:
+                source_id = student["source_id"]
+                student_id = student["journal_student_id"]
+                assignments = self.execute(connection, """SELECT id, title, assessed_on, weight, max_score, group_marker
+                    FROM journal_assessments
+                    WHERE source_id = ? AND active IS TRUE AND group_marker IN (?, 'all')
+                    ORDER BY assessed_on, source_column, id""", (source_id, student["group_marker"])).fetchall()
+                assessment_ids = [row["id"] for row in assignments]
+                results = []
+                if assessment_ids:
+                    placeholders = ",".join("?" for _ in assessment_ids)
+                    results = [dict(row) for row in self.execute(connection, f"""SELECT assessment_id, numeric_score, status
+                        FROM journal_results
+                        WHERE journal_student_id = ? AND is_current IS TRUE
+                          AND assessment_id IN ({placeholders})
+                          AND (identity_id IS NULL OR identity_id = ?)
+                        ORDER BY assessment_id""", (student_id, *assessment_ids, identity_id)).fetchall()]
+                summaries = [dict(row) for row in self.execute(connection, """SELECT label, summary_type, numeric_value, text_value
+                    FROM journal_student_summaries
+                    WHERE journal_student_id = ? AND is_current IS TRUE
+                    ORDER BY summary_type, label""", (student_id,)).fetchall()]
+                items.append({
+                    "source": {key: student[key] for key in (
+                        "source_id", "spreadsheet_title", "grade", "subject", "sheet_title",
+                        "academic_year", "term_number", "period_status", "last_synced_at",
+                    )},
+                    "student": {
+                        "journal_student_id": student_id,
+                        "display_name": student["display_name"],
+                        "group_marker": student["group_marker"],
+                    },
+                    "assessments": [dict(row) for row in assignments],
+                    "results": results,
+                    "summaries": summaries,
+                })
+            return items
+
+    def teacher_journal_sources(self, user_id: Any) -> list[dict[str, Any]]:
+        """List only mapped journal group markers the teacher is authorized to open."""
+        with self.connection() as connection:
+            candidates = self.execute(connection, """SELECT source.id AS source_id, source.spreadsheet_title,
+                    source.grade, source.subject, source.sheet_title, source.academic_year,
+                    source.term_number, source.period_status, mapping.group_marker, mapping.group_id,
+                    mapping.base_class_name, mapping.subject_subgroup, mapping.classroom_course_id,
+                    mapping.exam_track
+                FROM journal_group_mappings mapping
+                JOIN journal_sources source ON source.id = mapping.source_id
+                ORDER BY source.grade, source.subject, source.academic_year, source.term_number,
+                    source.id, mapping.group_marker""").fetchall()
+            candidates = [dict(row) for row in candidates]
+        return [row for row in candidates
+                if self.teacher_can_access_journal_marker(user_id, row["source_id"], row["group_marker"])]

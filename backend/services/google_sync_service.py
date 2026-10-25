@@ -191,6 +191,19 @@ def refresh_classroom(database: Database, settings: Settings) -> dict[str, Any]:
 
 
 def refresh_journal(database: Database, settings: Settings, grade: int = 9, subject: str = "Математика", sheet_id: int | str | None = None) -> dict[str, Any]:
+    target_id = CURRENT_JOURNAL_SPREADSHEETS.get(grade)
+    if not target_id:
+        raise ValueError("Journal grade must be between 5 and 11")
+    with database.journal_workbook_lock("__school_import__") as available:
+        if not available:
+            raise GoogleLiveError("Сейчас обновляется другой журнал школы. Повторите позже.")
+        with database.journal_workbook_lock(target_id) as acquired:
+            if not acquired:
+                raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
+            return _refresh_single_journal(database, settings, grade, subject, sheet_id)
+
+
+def _refresh_single_journal(database: Database, settings: Settings, grade: int, subject: str, sheet_id: int | str | None) -> dict[str, Any]:
     if grade not in CURRENT_JOURNAL_SPREADSHEETS:
         raise ValueError("Journal grade must be between 5 and 11")
     spreadsheet_id = CURRENT_JOURNAL_SPREADSHEETS[grade]
@@ -205,7 +218,7 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
         if not selected or not sheet_title:
             raise GoogleLiveError(f"Journal tab {subject} was not found in {title}")
         escaped_title = sheet_title.replace("'", "''")
-        values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ")
+        values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
         counts = sync_journal_values(
             database,
             values,
@@ -228,10 +241,13 @@ def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9
     if grade not in CURRENT_JOURNAL_SPREADSHEETS and not spreadsheet_id:
         raise ValueError("Для этого класса не задан источник журнала")
     target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS[grade]
-    with database.journal_workbook_lock(target_id) as acquired:
-        if not acquired:
-            raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
-        return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id)
+    with database.journal_workbook_lock("__school_import__") as available:
+        if not available:
+            raise GoogleLiveError("Сейчас обновляется другой журнал школы. Повторите позже.")
+        with database.journal_workbook_lock(target_id) as acquired:
+            if not acquired:
+                raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
+            return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id)
 
 
 def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None) -> dict[str, Any]:
@@ -250,7 +266,7 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
         sheet_id = tab.get("sheetId")
         escaped_title = sheet_title.replace("'", "''")
         try:
-            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ")
+            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
             counts = sync_journal_values(
                 database, values, spreadsheet_id=target_id, spreadsheet_title=title,
                 grade=grade, subject=sheet_title.strip(), sheet_title=sheet_title, sheet_id=sheet_id,

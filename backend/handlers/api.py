@@ -207,6 +207,7 @@ class JournalMatchPreviewPayload(BaseModel):
     spreadsheet_id: str = Field(min_length=1, max_length=200)
     source_name: str = Field(min_length=1, max_length=300)
     identity_id: str = Field(min_length=1, max_length=100)
+    replace_existing: bool = False
 
 
 class JournalMatchConfirmPayload(JournalMatchPreviewPayload):
@@ -649,6 +650,14 @@ def create_router(database: Database) -> APIRouter:
         user = student_subject(telegram_user, x_student_preview_id)
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_official_grades_for_user(user["id"])]}
 
+    @router.get("/student/journals")
+    def student_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = student_subject(telegram_user, x_student_preview_id)
+        if not user["identity_id"]:
+            raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": database.student_journals(user["identity_id"])}
+
     @router.get("/student/homework")
     def student_homework(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -941,7 +950,11 @@ def create_router(database: Database) -> APIRouter:
     def admin_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        return {"items": database.journal_status(), "scheduler_configured": database.journal_scheduler_configured()}
+        items = database.journal_status()
+        connected = {item['spreadsheet_id'] for item in items}
+        return {"items": items, "scheduler_configured": database.journal_scheduler_configured(),
+                "known_sources": [{"grade": grade, "spreadsheet_id": key, "connected": key in connected}
+                                  for grade, key in CURRENT_JOURNAL_SPREADSHEETS.items()]}
 
     @router.post("/admin/journals/connect")
     def admin_journal_connect(payload: JournalConnectPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1035,7 +1048,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_matching_preview(payload: JournalMatchPreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return database.preview_journal_match(payload.spreadsheet_id,payload.source_name,payload.identity_id)
+            return database.preview_journal_match(payload.spreadsheet_id,payload.source_name,payload.identity_id,payload.replace_existing)
         except ValueError as error:
             raise HTTPException(status_code=409,detail=str(error)) from error
 
@@ -1043,7 +1056,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_matching_confirm(payload: JournalMatchConfirmPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            return database.confirm_journal_match(payload.spreadsheet_id,payload.source_name,payload.identity_id,payload.preview_token,actor['id'])
+            return database.confirm_journal_match(payload.spreadsheet_id,payload.source_name,payload.identity_id,payload.preview_token,actor['id'],payload.replace_existing)
         except ValueError as error:
             raise HTTPException(status_code=409,detail=str(error)) from error
 
@@ -1943,6 +1956,13 @@ def create_router(database: Database) -> APIRouter:
             return {"state": "not_configured", "user": None, "groups": []}
         return {"state": "approved", **profile}
 
+    @router.get("/teacher/journals")
+    def teacher_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        user = require_role(telegram_user, "teacher")
+        items = database.teacher_journal_sources(user["id"]) if user["identity_id"] else []
+        return {"state": "approved", "items": items}
+
     @router.get("/teacher/groups/{group_id}")
     def teacher_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -1970,9 +1990,10 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = require_role(telegram_user, "teacher")
         marker = group_marker.strip()
-        if not database.teacher_can_access_journal_marker(user["id"], source_id, marker):
+        detail = database.teacher_journal_detail(user["id"], source_id, marker)
+        if not detail:
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this journal subgroup")
-        return {"source_id": source_id, "group_marker": marker, **journal_view(database.list_journal_marker(source_id, marker))}
+        return detail
 
     @router.get("/teacher/information")
     def teacher_information(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

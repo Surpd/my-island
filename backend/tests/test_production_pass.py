@@ -138,8 +138,8 @@ class JournalTests(unittest.TestCase):
             self.assertEqual(ivan["results"][str(detail["assessments"][0]["id"])]["numeric_score"], 8.5)
             self.assertTrue(any(summary["label"] == "Итого" and summary["numeric_value"] == 8.5 for summary in ivan["summaries"]))
             self.assertEqual(view["students"][0]["name"], "Иванов Иван")
-            self.assertIn("Петрова Анна", {student["name"] for student in view["students"]})
-            self.assertEqual(view["analytics"]["average"], 7.83)
+            self.assertNotIn("Петрова Анна", {student["name"] for student in view["students"]})
+            self.assertEqual(view["analytics"]["average"], 8.5)
 
     def test_legacy_grade_nine_math_markers_normalize_to_confirmed_groups(self):
         parsed = parse_journal_values(
@@ -233,6 +233,47 @@ class JournalTests(unittest.TestCase):
                 mapping = connection.execute("SELECT identity_id,manually_confirmed FROM school_source_mappings WHERE external_key='alias:петрова анна'").fetchone()
             self.assertEqual((student["identity_id"], student["match_method"]), (identity["id"], "admin_selected"))
             self.assertEqual((mapping["identity_id"], mapping["manually_confirmed"]), (identity["id"], 1))
+
+    def test_grade_prefix_does_not_link_a_different_numeric_grade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "grade-boundary.db"))
+            database.initialize()
+            database.create_identity("student", "Synthetic Boundary Student", "50-А")
+            values = [["Дата", "01.09"], ["Задание", "ДЗ"], ["Вес", 1], ["Оценка", 5], ["Synthetic Boundary Student", 4]]
+
+            sync_journal_values(database, values, spreadsheet_id="grade-five", spreadsheet_title="Журнал 5 класса", grade=5, subject="Математика", sheet_title="Математика")
+
+            source_id = database.journal_status()[0]["id"]
+            student = database.journal_detail(source_id)["students"][0]
+            self.assertEqual(student["display_name"], "Synthetic Boundary Student")
+            self.assertIsNone(student["identity_id"])
+            self.assertEqual(student["match_status"], "unlinked")
+
+    def test_identity_rename_preserves_journal_ids_and_records_score_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(os.path.join(directory, "identity-rename.db"))
+            database.initialize()
+            identity = database.create_identity("student", "Иванов Иван", "9-А")
+            sync_journal_values(database, self.VALUES, spreadsheet_id="rename-grade-nine", spreadsheet_title="Журнал 9 класса", grade=9, subject="Математика", sheet_title="Математика", sheet_id=4)
+            with database.connection() as connection:
+                original_student = connection.execute("SELECT id,identity_id FROM journal_students WHERE source_id=(SELECT id FROM journal_sources WHERE spreadsheet_id=?) AND display_name=?", ("rename-grade-nine", "Иванов Иван")).fetchone()
+                original_result = connection.execute("SELECT id,numeric_score FROM journal_results WHERE journal_student_id=? AND is_current=1 ORDER BY id LIMIT 1", (original_student["id"],)).fetchone()
+
+            database.update_admin_identity(identity["id"], {"display_name": "Иванов Иванов"}, None)
+            changed = [list(row) for row in self.VALUES]
+            changed[5][1] = "9"
+            sync_journal_values(database, changed, spreadsheet_id="rename-grade-nine", spreadsheet_title="Журнал 9 класса", grade=9, subject="Математика", sheet_title="Математика", sheet_id=4)
+
+            with database.connection() as connection:
+                renamed_student = connection.execute("SELECT id,identity_id FROM journal_students WHERE source_id=(SELECT id FROM journal_sources WHERE spreadsheet_id=?) AND display_name=?", ("rename-grade-nine", "Иванов Иван")).fetchone()
+                result = connection.execute("SELECT id,numeric_score FROM journal_results WHERE journal_student_id=? AND is_current=1 ORDER BY id LIMIT 1", (renamed_student["id"],)).fetchone()
+                history = connection.execute("SELECT numeric_score FROM journal_result_history WHERE result_id=? ORDER BY id", (result["id"],)).fetchall()
+
+            self.assertEqual(renamed_student["id"], original_student["id"])
+            self.assertEqual(str(renamed_student["identity_id"]), str(identity["id"]))
+            self.assertEqual(result["id"], original_result["id"])
+            self.assertEqual(result["numeric_score"], 9.0)
+            self.assertEqual([row["numeric_score"] for row in history], [8.5])
 
     def test_ambiguous_or_partial_block_keeps_previous_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:

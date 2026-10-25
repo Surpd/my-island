@@ -2382,7 +2382,24 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .journal-connect-panel p, .journal-empty p { margin: 0; }
 .journal-connect-panel form { display: grid; gap: 8px; }
 .journal-connect-panel label { color: #45636b; font-size: 10px; font-weight: 800; }
-.journal-connect-panel input { min-width: 0; min-height: 40px; padding: 0 11px; border: 1px solid #d6e5e7; border-radius: 9px; color: #294b55; font: inherit; font-size: 11px; }
+.journal-connect-panel input, .journal-connect-panel select { min-width: 0; min-height: 40px; padding: 0 11px; border: 1px solid #d6e5e7; border-radius: 9px; background: #fff; color: #294b55; font: inherit; font-size: 11px; }
+.journal-grade-tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 7px; }
+.journal-grade-tabs button { display: grid; gap: 4px; min-height: 56px; padding: 9px 11px; border: 1px solid #dce8e9; border-radius: 9px; background: #fff; color: #315660; text-align: left; font-size: 12px; font-weight: 750; cursor: pointer; }
+.journal-grade-tabs button span { color: #7b9095; font-size: 9px; font-weight: 500; }
+.journal-grade-tabs button.is-active { border-color: #247b79; background: #eaf6f2; color: #205d5c; box-shadow: inset 0 0 0 1px #247b79; }
+.journal-grade-tabs button:focus-visible, .journal-matching-book:focus-visible { outline: 3px solid #78c0b7; outline-offset: 2px; }
+.journal-central-matching { display: grid; gap: 14px; }
+.journal-central-matching-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+.journal-central-matching-heading h2 { margin: 0; color: #244f55; font: 700 20px Georgia, serif; }
+.journal-central-matching-heading .admin-help-text { margin: 6px 0 0; }
+.journal-matching-books { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.journal-matching-book { display: grid; gap: 6px; min-width: 0; min-height: 58px; padding: 10px 12px; border: 1px solid #dfeaec; border-radius: 8px; background: #fff; color: #284b53; text-align: left; cursor: pointer; }
+.journal-matching-book strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.journal-matching-book span { color: #71868d; font-size: 10px; }
+.journal-matching-book.is-active { border-color: #247b79; background: #f0f8f5; }
+.journal-detail-nav { display: flex; flex-wrap: wrap; gap: 10px; }
+.journal-detail-nav label { display: grid; min-width: 180px; gap: 5px; color: #536e75; font-size: 10px; font-weight: 750; }
+.journal-detail-nav select { min-height: 38px; padding: 7px 10px; border: 1px solid #d4e1e2; border-radius: 8px; background: #fff; color: #284b53; font: inherit; font-size: 11px; }
 .journal-empty { display: grid; justify-items: center; gap: 11px; padding: 44px 18px; text-align: center; }
 .journal-empty p { max-width: 390px; color: #71868d; font-size: 12px; line-height: 1.55; }
 .journal-empty-mark, .journal-detail-icon, .journal-subject-icon { display: grid; place-items: center; flex: none; border-radius: 11px; background: #eaf5f1; color: #26746f; }
@@ -2501,6 +2518,10 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .journal-team-heading { margin-top: 18px; }
 @media (max-width: 760px) {
   .journal-connect-panel { grid-template-columns: 1fr; }
+  .journal-grade-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .journal-detail-nav { align-items: stretch; }
+  .journal-detail-nav label { min-width: min(100%, 160px); flex: 1; }
+  .journal-central-matching-heading { flex-direction: column; }
   .journal-book-heading, .journal-detail-head { align-items: flex-start; flex-direction: column; }
   .journal-book-actions { justify-items: start; }
   .journal-subject-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-inline: 12px; }
@@ -2508,6 +2529,9 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
   .journal-table-wrap { max-height: 65vh; }
   .journal-table .journal-student-column { width: 155px; min-width: 155px; }
   .journal-table .journal-assessment-column { width: 126px; min-width: 126px; }
+}
+@media (max-width: 420px) {
+  .journal-grade-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .admin-empty { padding: 22px 0 5px; color: #789097; font-size: 12px; }
 .admin-loading { display: flex; align-items: center; gap: 9px; padding: 42px 0; color: #6d858c; font-size: 12px; }
