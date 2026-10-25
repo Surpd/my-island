@@ -16,6 +16,27 @@ from backend.services.journal_import import sync_journal_values
 
 
 class JournalSchoolRolloutTests(unittest.TestCase):
+    def test_legacy_teacher_group_filters_other_subjects_in_the_same_class(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / 'subjects.db')
+            database.initialize()
+            student = database.create_identity('student','Student One','5-А')
+            teacher = database.create_identity('teacher','Teacher One')
+            group = database.create_group('5-А','class')
+            database.create_membership(group['id'],student['id'],'student','official_import')
+            with database.connection() as connection:
+                actor = connection.execute("INSERT INTO users(telegram_user_id,role,identity_id) VALUES (123,'teacher',?) RETURNING id",(teacher['id'],)).fetchone()[0]
+            database.set_teacher_assignment(teacher['id'],group['id'],'Math',True,actor)
+            values = [['Дата','01.09'],['Задание','Task'],['Вес',1],['Оценка',10],['Student One',5]]
+            for sheet_id,subject in ((1,'Math'),(2,'English')):
+                sync_journal_values(database,values,spreadsheet_id='shared-class',spreadsheet_title='Synthetic',grade=5,
+                    subject=subject,sheet_title=subject,sheet_id=sheet_id)
+            self.assertEqual({r['subject'] for r in database.list_group_journal(group['id'])},{'Math','English'})
+            self.assertEqual({r['subject'] for r in database.list_group_journal(group['id'],teacher_user_id=actor)},{'Math'})
+            with database.connection() as connection:
+                connection.execute("UPDATE teacher_assignments SET subject_subgroup='A' WHERE teacher_identity_id=?",(teacher['id'],))
+            self.assertEqual(database.list_group_journal(group['id'],teacher_user_id=actor),[])
+
     def test_empty_gradebook_roster_can_be_mapped_before_first_score(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / 'empty.db')

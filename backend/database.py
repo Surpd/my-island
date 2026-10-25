@@ -4269,14 +4269,14 @@ class Database:
             ).fetchone()
             return bool(row)
 
-    def list_group_journal(self, group_id: Any) -> list[dict[str, Any]]:
+    def list_group_journal(self, group_id: Any, *, teacher_user_id: Any | None = None) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
                 """SELECT ja.id AS assessment_id, ja.title, ja.assessed_on, ja.weight, ja.max_score,
                           js2.id AS journal_student_id, student_identity.id AS identity_id,
                           student_identity.display_name AS student_name, jr.numeric_score, jr.status, jr.source_coordinate,
-                          js.subject, js.sheet_title, gm.group_marker, gm.base_class_name,
+                          js.id AS source_id, js.subject, js.sheet_title, gm.group_marker, gm.base_class_name,
                           gm.subject_subgroup, gm.classroom_course_id, gm.exam_track
                      FROM journal_group_mappings gm
                      JOIN groups mapped_group ON mapped_group.id = gm.group_id
@@ -4301,7 +4301,17 @@ class Database:
                     ORDER BY ja.assessed_on, ja.source_column, student_identity.display_name""",
                 (group_id,),
             ).fetchall()
-            return [dict(row) for row in rows]
+            permissions: dict[tuple[Any, str], bool] = {}
+            items = []
+            for row in rows:
+                if teacher_user_id is not None:
+                    key = (row['source_id'], row['group_marker'])
+                    if key not in permissions:
+                        permissions[key] = self._teacher_can_access_journal_marker(connection, teacher_user_id, *key)
+                    if not permissions[key]:
+                        continue
+                items.append(dict(row))
+            return items
 
     def list_journal_marker(self, source_id: Any, group_marker: str) -> list[dict[str, Any]]:
         with self.connection() as connection:
@@ -4331,39 +4341,84 @@ class Database:
         row = self.execute(
             connection,
             """SELECT 1
-                     FROM users u
-                     JOIN journal_group_mappings gm ON gm.source_id = ? AND gm.group_marker = ?
-                     JOIN journal_sources js ON js.id = gm.source_id
-                    WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
-                      EXISTS (
-                        SELECT 1 FROM teacher_assignments ta
-                         WHERE ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
-                           AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
-                           AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
-                           AND (ta.subject = '' OR lower(ta.subject) = lower(js.subject))
-                           AND (
-                              (gm.group_id IS NOT NULL AND ta.group_id = gm.group_id)
-                              OR (gm.group_id IS NULL AND gm.subject_subgroup IS NOT NULL
-                                  AND ta.group_id IS NOT NULL AND ta.subject_subgroup = gm.subject_subgroup
-                                  AND EXISTS (
-                                    SELECT 1 FROM memberships scope_membership
-                                    JOIN identities scope_identity ON scope_identity.id = scope_membership.identity_id
-                                    JOIN groups scope_group ON scope_group.id = scope_membership.group_id
-                                    WHERE scope_membership.group_id = ta.group_id
-                                      AND scope_membership.active IS TRUE AND scope_membership.member_role = 'student'
-                                      AND (scope_membership.valid_from IS NULL OR scope_membership.valid_from <= CURRENT_DATE)
-                                      AND (scope_membership.valid_until IS NULL OR scope_membership.valid_until >= CURRENT_DATE)
-                                      AND scope_identity.kind = 'student' AND scope_identity.status = 'active'
-                                      AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), 1, length(CAST(js.grade AS TEXT))) = CAST(js.grade AS TEXT)
-                                      AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), length(CAST(js.grade AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'
-                                  ))
-                           )
-                            AND (ta.base_class_name IS NULL OR ta.base_class_name = gm.base_class_name)
-                           AND (ta.classroom_course_id IS NULL OR ta.classroom_course_id = gm.classroom_course_id)
-                           AND (ta.exam_track IS NULL OR ta.exam_track = gm.exam_track)
-                      )
-                    )""",
-            (source_id, group_marker, user_id),
+                 FROM users u
+                 JOIN journal_sources js ON js.id = ?
+                WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
+                  EXISTS (
+                    SELECT 1 FROM journal_group_mappings gm
+                     WHERE gm.source_id = js.id AND gm.group_marker = ?
+                       AND EXISTS (
+                         SELECT 1 FROM teacher_assignments ta
+                          WHERE ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
+                            AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                            AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                            AND (ta.subject = '' OR lower(ta.subject) = lower(js.subject))
+                            AND (
+                               (gm.group_id IS NOT NULL AND ta.group_id = gm.group_id)
+                               OR (gm.group_id IS NULL AND gm.subject_subgroup IS NOT NULL
+                                   AND ta.group_id IS NOT NULL AND ta.subject_subgroup = gm.subject_subgroup
+                                   AND EXISTS (
+                                     SELECT 1 FROM memberships scope_membership
+                                     JOIN identities scope_identity ON scope_identity.id = scope_membership.identity_id
+                                     JOIN groups scope_group ON scope_group.id = scope_membership.group_id
+                                     WHERE scope_membership.group_id = ta.group_id
+                                       AND scope_membership.active IS TRUE AND scope_membership.member_role = 'student'
+                                       AND (scope_membership.valid_from IS NULL OR scope_membership.valid_from <= CURRENT_DATE)
+                                       AND (scope_membership.valid_until IS NULL OR scope_membership.valid_until >= CURRENT_DATE)
+                                       AND scope_identity.kind = 'student' AND scope_identity.status = 'active'
+                                       AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), 1, length(CAST(js.grade AS TEXT))) = CAST(js.grade AS TEXT)
+                                       AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), length(CAST(js.grade AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'
+                                   ))
+                            )
+                             AND (ta.subject_subgroup IS NULL OR trim(ta.subject_subgroup) = ''
+                               OR ta.subject_subgroup = COALESCE(gm.subject_subgroup,
+                                 (SELECT mapped_group.subject_subgroup FROM groups mapped_group
+                                  WHERE mapped_group.id = gm.group_id AND mapped_group.canonical IS TRUE
+                                    AND mapped_group.archived_at IS NULL)))
+                             AND (ta.base_class_name IS NULL OR ta.base_class_name = gm.base_class_name)
+                             AND (ta.classroom_course_id IS NULL OR ta.classroom_course_id = gm.classroom_course_id)
+                             AND (ta.exam_track IS NULL OR ta.exam_track = gm.exam_track)
+                       )
+                  )
+                  OR (
+                    ? = 'all'
+                    AND NOT EXISTS (SELECT 1 FROM journal_group_mappings gm WHERE gm.source_id = js.id AND gm.group_marker = 'all')
+                    AND EXISTS (SELECT 1 FROM journal_students marker_student
+                        WHERE marker_student.source_id = js.id AND marker_student.group_marker = 'all'
+                          AND marker_student.active IS TRUE AND marker_student.entry_kind = 'individual'
+                          AND marker_student.match_status = 'linked' AND marker_student.identity_id IS NOT NULL)
+                    AND EXISTS (
+                      SELECT 1 FROM teacher_assignments ta
+                      JOIN groups assigned_group ON assigned_group.id = ta.group_id
+                        AND assigned_group.group_type = 'class' AND assigned_group.canonical IS TRUE
+                        AND assigned_group.archived_at IS NULL
+                      WHERE ta.teacher_identity_id = u.identity_id AND ta.active IS TRUE
+                        AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                        AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                        AND ta.subject IS NOT NULL AND trim(ta.subject) <> '' AND ta.subject = js.subject
+                        AND (ta.subject_subgroup IS NULL OR trim(ta.subject_subgroup) = '')
+                        AND (ta.exam_track IS NULL OR trim(ta.exam_track) = '')
+                        AND ta.classroom_course_id IS NULL
+                        AND (ta.base_class_name IS NULL OR trim(ta.base_class_name) = '' OR trim(ta.base_class_name) = COALESCE(assigned_group.base_class_name, assigned_group.name))
+                        AND substr(COALESCE(assigned_group.base_class_name, assigned_group.name), 1, length(CAST(js.grade AS TEXT))) = CAST(js.grade AS TEXT)
+                        AND substr(COALESCE(assigned_group.base_class_name, assigned_group.name), length(CAST(js.grade AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'
+                        AND EXISTS (
+                          SELECT 1 FROM memberships assigned_membership
+                          JOIN identities assigned_student ON assigned_student.id = assigned_membership.identity_id
+                            AND assigned_student.kind = 'student' AND assigned_student.status = 'active'
+                          JOIN journal_students own_marker_student ON own_marker_student.source_id = js.id
+                            AND own_marker_student.group_marker = 'all' AND own_marker_student.identity_id = assigned_student.id
+                            AND own_marker_student.active IS TRUE AND own_marker_student.entry_kind = 'individual'
+                            AND own_marker_student.match_status = 'linked'
+                          WHERE assigned_membership.group_id = assigned_group.id
+                            AND assigned_membership.active IS TRUE AND assigned_membership.member_role = 'student'
+                            AND (assigned_membership.valid_from IS NULL OR assigned_membership.valid_from <= CURRENT_DATE)
+                            AND (assigned_membership.valid_until IS NULL OR assigned_membership.valid_until >= CURRENT_DATE)
+                        )
+                    )
+                  )
+                )""",
+            (source_id, user_id, group_marker, group_marker),
         ).fetchone()
         return bool(row)
 
@@ -4378,10 +4433,32 @@ class Database:
             mapping = self.execute(connection, """SELECT group_id, base_class_name, subject_subgroup,
                     classroom_course_id, exam_track FROM journal_group_mappings
                 WHERE source_id = ? AND group_marker = ?""", (source_id, group_marker)).fetchone()
-            if not source or not mapping:
+            if not source:
                 return None
 
-            if mapping["group_id"] is not None:
+            if mapping is None:
+                if group_marker != "all":
+                    return None
+                group_ids = [row["group_id"] for row in self.execute(connection, """SELECT DISTINCT assignment.group_id
+                    FROM users app_user
+                    JOIN teacher_assignments assignment ON assignment.teacher_identity_id = app_user.identity_id
+                    JOIN groups assigned_group ON assigned_group.id = assignment.group_id
+                      AND assigned_group.group_type = 'class' AND assigned_group.canonical IS TRUE
+                      AND assigned_group.archived_at IS NULL
+                    WHERE app_user.id = ? AND assignment.active IS TRUE
+                      AND (assignment.valid_from IS NULL OR assignment.valid_from <= CURRENT_DATE)
+                      AND (assignment.valid_until IS NULL OR assignment.valid_until >= CURRENT_DATE)
+                      AND assignment.subject IS NOT NULL AND trim(assignment.subject) <> '' AND assignment.subject = ?
+                      AND (assignment.subject_subgroup IS NULL OR trim(assignment.subject_subgroup) = '')
+                      AND (assignment.exam_track IS NULL OR trim(assignment.exam_track) = '')
+                      AND assignment.classroom_course_id IS NULL
+                      AND (assignment.base_class_name IS NULL OR trim(assignment.base_class_name) = '' OR trim(assignment.base_class_name) = COALESCE(assigned_group.base_class_name, assigned_group.name))
+                      AND substr(COALESCE(assigned_group.base_class_name, assigned_group.name), 1, length(CAST(? AS TEXT))) = CAST(? AS TEXT)
+                      AND substr(COALESCE(assigned_group.base_class_name, assigned_group.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'
+                    """, (user_id, source["subject"], source["grade"], source["grade"], source["grade"])).fetchall()]
+                mapping = {"group_id": None, "base_class_name": None, "subject_subgroup": None,
+                    "classroom_course_id": None, "exam_track": None}
+            elif mapping["group_id"] is not None:
                 group_ids = [mapping["group_id"]]
             else:
                 group_ids = [row["group_id"] for row in self.execute(connection, """SELECT DISTINCT assignment.group_id
@@ -5007,7 +5084,7 @@ class Database:
             return items
 
     def teacher_journal_sources(self, user_id: Any) -> list[dict[str, Any]]:
-        """List only mapped journal group markers the teacher is authorized to open."""
+        """List mapped markers and eligible ungrouped all-class markers for the teacher."""
         with self.connection() as connection:
             candidates = self.execute(connection, """SELECT source.id AS source_id, source.spreadsheet_title,
                     source.grade, source.subject, source.sheet_title, source.academic_year,
@@ -5019,5 +5096,19 @@ class Database:
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number,
                     source.id, mapping.group_marker""").fetchall()
             candidates = [dict(row) for row in candidates]
+            fallback_sources = self.execute(connection, """SELECT source.id AS source_id, source.spreadsheet_title,
+                    source.grade, source.subject, source.sheet_title, source.academic_year,
+                    source.term_number, source.period_status, 'all' AS group_marker, NULL AS group_id,
+                    NULL AS base_class_name, NULL AS subject_subgroup, NULL AS classroom_course_id,
+                    NULL AS exam_track
+                FROM journal_sources source
+                WHERE NOT EXISTS (SELECT 1 FROM journal_group_mappings mapping
+                    WHERE mapping.source_id = source.id AND mapping.group_marker = 'all')
+                  AND EXISTS (SELECT 1 FROM journal_students marker_student
+                    WHERE marker_student.source_id = source.id AND marker_student.group_marker = 'all'
+                      AND marker_student.active IS TRUE AND marker_student.entry_kind = 'individual'
+                      AND marker_student.match_status = 'linked' AND marker_student.identity_id IS NOT NULL)
+                ORDER BY source.grade, source.subject, source.academic_year, source.term_number, source.id""").fetchall()
+            candidates.extend(dict(row) for row in fallback_sources)
         return [row for row in candidates
                 if self.teacher_can_access_journal_marker(user_id, row["source_id"], row["group_marker"])]

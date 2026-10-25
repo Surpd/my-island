@@ -176,6 +176,79 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual({row["student_name"] for row in group_journal}, {"Student One"})
         self.assertTrue(all(row["identity_id"] == self.student_identity for row in group_journal))
 
+    def test_unmapped_all_marker_falls_back_only_to_assigned_canonical_class(self):
+        with self.database.connection() as connection:
+            student_a = self.database.execute(connection,
+                "INSERT INTO identities(kind, display_name, class_name) VALUES ('student', 'Class A Student', '7-А') RETURNING id").fetchone()["id"]
+            student_b = self.database.execute(connection,
+                "INSERT INTO identities(kind, display_name, class_name) VALUES ('student', 'Class B Student', '7-Б') RETURNING id").fetchone()["id"]
+            class_a = self.database.execute(connection,
+                "INSERT INTO groups(name, group_type, subject, base_class_name, canonical) VALUES ('7-А', 'class', 'Math', '7-А', 1) RETURNING id").fetchone()["id"]
+            class_b = self.database.execute(connection,
+                "INSERT INTO groups(name, group_type, subject, base_class_name, canonical) VALUES ('7-Б', 'class', 'Math', '7-Б', 1) RETURNING id").fetchone()["id"]
+            self.database.execute(connection, """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref)
+                VALUES (?, ?, 'student', 'test_fixture', '7-a'), (?, ?, 'student', 'test_fixture', '7-b')""",
+                (class_a, student_a, class_b, student_b))
+            self.database.execute(connection, """INSERT INTO teacher_assignments(
+                teacher_identity_id, group_id, subject, active, created_by)
+                VALUES (?, ?, 'Math', 1, ?)""", (self.teacher_identity, class_a, self.teacher_user))
+
+            source_ids = {}
+            for subject in ("Math", "English"):
+                source_id = self.database.execute(connection, """INSERT INTO journal_sources(
+                    spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, academic_year,
+                    term_number, period_status, status)
+                    VALUES (?, 'Grade 7', 7, ?, ?, '2026/27', 1, 'current', 'ready') RETURNING id""",
+                    (f"shared-{subject.lower()}", subject, f"{subject} all")).fetchone()["id"]
+                source_ids[subject] = source_id
+                assessment_id = self.database.execute(connection, """INSERT INTO journal_assessments(
+                    source_id, external_key, title, assessed_on, source_column, group_marker)
+                    VALUES (?, ?, ?, '2026-09-03', 'B', 'all') RETURNING id""",
+                    (source_id, f"work-{subject}", f"{subject} shared work")).fetchone()["id"]
+                for key, identity_id, name in (("a", student_a, "Class A Student"), ("b", student_b, "Class B Student")):
+                    journal_student_id = self.database.execute(connection, """INSERT INTO journal_students(
+                        source_id, student_key, entry_kind, display_name, group_marker, identity_id, match_status)
+                        VALUES (?, ?, 'individual', ?, 'all', ?, 'linked') RETURNING id""",
+                        (source_id, f"{subject}-{key}", name, identity_id)).fetchone()["id"]
+                    self.database.execute(connection, """INSERT INTO journal_results(
+                        assessment_id, journal_student_id, identity_id, student_name, group_marker,
+                        numeric_score, source_coordinate)
+                        VALUES (?, ?, ?, ?, 'all', 5, ?)""",
+                        (assessment_id, journal_student_id, identity_id, name, f"{key}-{subject}"))
+            mapped_source = self.database.execute(connection, """INSERT INTO journal_sources(
+                spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, academic_year,
+                term_number, period_status, status)
+                VALUES ('shared-math-mapped', 'Grade 7', 7, 'Math', 'Math mapped all', '2026/27', 1, 'current', 'ready') RETURNING id""").fetchone()["id"]
+            source_ids["Mapped"] = mapped_source
+            self.database.execute(connection, """INSERT INTO journal_group_mappings(source_id, group_marker, group_id)
+                VALUES (?, 'all', ?)""", (mapped_source, class_b))
+            no_intersection_source = self.database.execute(connection, """INSERT INTO journal_sources(
+                spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, academic_year,
+                term_number, period_status, status)
+                VALUES ('shared-math-class-b-only', 'Grade 7', 7, 'Math', 'Math class B only', '2026/27', 1, 'current', 'ready') RETURNING id""").fetchone()["id"]
+            source_ids["NoOwnClassStudent"] = no_intersection_source
+            self.database.execute(connection, """INSERT INTO journal_students(
+                source_id, student_key, entry_kind, display_name, group_marker, identity_id, match_status)
+                VALUES (?, 'math-b-only', 'individual', 'Class B Student', 'all', ?, 'linked')""",
+                (no_intersection_source, student_b))
+
+        pairs = self.database.teacher_journal_sources(self.teacher_user)
+        math_pairs = [item for item in pairs if item["source_id"] == source_ids["Math"] and item["group_marker"] == "all"]
+        self.assertEqual(len(math_pairs), 1)
+        self.assertFalse(any(item["source_id"] == source_ids["English"] for item in pairs))
+        self.assertFalse(any(item["source_id"] == source_ids["Mapped"] for item in pairs))
+        self.assertFalse(any(item["source_id"] == source_ids["NoOwnClassStudent"] for item in pairs))
+
+        detail = self.database.teacher_journal_detail(self.teacher_user, source_ids["Math"], "all")
+        self.assertIsNotNone(detail)
+        self.assertEqual([student["display_name"] for student in detail["students"]], ["Class A Student"])
+        self.assertEqual([result["student_name"] for result in detail["assessments"][0]["results"]], ["Class A Student"])
+        self.assertFalse(self.database.teacher_can_access_journal_marker(self.teacher_user, source_ids["English"], "all"))
+        self.assertIsNone(self.database.teacher_journal_detail(self.teacher_user, source_ids["English"], "all"))
+        self.assertFalse(self.database.teacher_can_access_journal_marker(self.teacher_user, source_ids["Mapped"], "all"))
+        self.assertFalse(self.database.teacher_can_access_journal_marker(self.teacher_user, source_ids["NoOwnClassStudent"], "all"))
+        self.assertIsNone(self.database.teacher_journal_detail(self.teacher_user, source_ids["NoOwnClassStudent"], "all"))
+
     def test_role_and_unlinked_identity_checks_fail_closed(self):
         self.assertEqual(self.client.get("/api/teacher/journals", headers={"X-Dev-Auth": "student-auth"}).status_code, 403)
         self.assertEqual(self.client.get("/api/student/journals", headers={"X-Dev-Auth": "teacher-auth"}).status_code, 403)

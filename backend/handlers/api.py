@@ -1969,7 +1969,7 @@ def create_router(database: Database) -> APIRouter:
         user = require_role(telegram_user, "teacher")
         if not database.teacher_can_access_group(user["id"], group_id):
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this group")
-        journal = journal_view(database.list_group_journal(group_id))
+        journal = journal_view(database.list_group_journal(group_id, teacher_user_id=user['id']))
         grade_histories = journal.pop("students")
         students = database.list_group_students(group_id)
         if not students:
