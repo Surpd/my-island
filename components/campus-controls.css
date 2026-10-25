@@ -1,0 +1,22 @@
+.campus-role-switch { display: grid; gap: 2px; font-size: 11px; padding: 4px 8px; border-radius: 12px; background: #f4faf9; color: #193d46; }
+.campus-role-switch select { min-height: 36px; max-width: 155px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 650; }
+.campus-period { display: flex; flex-wrap: wrap; justify-content: center; align-items: end; gap: 8px; margin-bottom: 16px; }
+.campus-period label { display: grid; gap: 4px; font-size: 11px; }
+.campus-period button, .campus-period input { min-height: 44px; border: 1px solid #d6e2e2; border-radius: 10px; background: #fff; color: #193d46; padding: 7px 10px; font: inherit; }
+.campus-period button { display: inline-flex; align-items: center; justify-content: center; }
+.campus-period input { max-width: 155px; }
+.campus-role-switch :focus-visible, .campus-period :focus-visible { outline: 3px solid #176f68; outline-offset: 2px; }
+.preview-runtime-banner { position: fixed; z-index: 100; inset: 0 0 auto; min-height: 32px; padding: 6px 10px; background: #7350ae; color: white; font-size: 11px; overflow-wrap: anywhere; text-align: center; }
+.preview-runtime .scene-topbar { top: max(42px, calc(var(--tg-safe-top, 0px) + var(--tg-content-safe-top, 0px))); }
+.campus-source-warning { margin: 0 0 12px; padding: 12px; border-radius: 10px; background: #fff4d9; color: #634a15; font-size: 13px; }
+
+body .day-picker { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.preview-runtime .scene-focus-back { top: max(44px, calc(var(--tg-safe-top, 0px) + var(--tg-content-safe-top, 0px) + 12px)); }
+.campus-source-warning { display: block; position: fixed; z-index: 96; left: 12px; right: 12px; top: calc(var(--tg-safe-top, 0px) + var(--tg-content-safe-top, 0px) + 80px); max-height: 100px; overflow: auto; }
+
+.campus-error-actions { position: fixed; z-index: 101; right: 12px; top: 12px; }
+
+.preview-runtime-banner button { margin-left: 8px; padding: 4px 8px; min-height: 32px; border: 1px solid #ffffff80; border-radius: 7px; background: transparent; color: inherit; font: inherit; }
+
+.preview-runtime .spatial-sheet { height: min(760px, calc(100% - max(100px, var(--scene-safe-top, 0px)))); }
+.preview-runtime .detail-panel { top: 48px; height: calc(100% - 48px); }

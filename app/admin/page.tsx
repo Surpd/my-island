@@ -34,6 +34,11 @@ import { ScheduleSourceReview } from '@/components/schedule-source-review';
 import { TeacherDirectoryAdmin } from '@/components/teacher-directory-admin';
 import { AdminJournals } from '@/components/admin-journals';
 import { GoogleConnectionCard } from '@/components/google-connection-card';
+import { MiniappPreview } from '@/components/miniapp-preview';
+import { MobilePublishedSchedule } from '@/components/mobile-published-schedule';
+import { CampusRoleSwitch, useTelegramBack, type CampusRole } from '@/components/campus-controls';
+import { useTelegramLayout } from '../telegram-layout';
+import '../admin-integration.css';
 
 const ScheduleConstructor = dynamic(
   () => import('@/components/schedule-constructor').then((module) => module.ScheduleConstructor),
@@ -41,7 +46,7 @@ const ScheduleConstructor = dynamic(
 );
 
 type RecordValue = Record<string, any>;
-type Session = { id: string | number; role: string; identity_id?: string | number | null };
+type Session = { id: string | number; role: string; roles?: string[]; identity_id?: string | number | null };
 type ApiError = Error & { status?: number; details?: unknown };
 
 const runtimeEnv =
@@ -60,6 +65,7 @@ const nav = [
   { href: '/admin/people', label: 'Ученики и группы', icon: GraduationCap },
   { href: '/admin/journals', label: 'Журналы и оценки', icon: BookOpen },
   { href: '/admin/teachers', label: 'Преподаватели', icon: UserRoundCog },
+  { href: '/admin/preview', label: 'Предпросмотр', icon: Search },
   { href: '/admin/settings', label: 'Настройки', icon: Settings },
 ];
 const legacyNav = [
@@ -108,6 +114,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const dev = localDevAuth();
   if (dev) headers.set('X-Dev-Auth', dev);
   if (typeof window !== 'undefined') {
+    const signed = window.Telegram?.WebApp?.initData || window.sessionStorage.getItem('my_island_telegram_init_data');
+    if (signed) { headers.set('X-Telegram-Init-Data', signed); window.sessionStorage.setItem('my_island_telegram_init_data', signed); }
+  }
+  if (typeof window !== 'undefined') {
     const schoolSession = window.sessionStorage.getItem('my_island_school_admin_session');
     const browserSession = window.sessionStorage.getItem('my_island_admin_session');
     const schoolAdminSession = schoolSession || browserSession;
@@ -116,7 +126,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // X-Dev-Auth transport using the explicit browser: prefix. Keeping the
     // transport aligned here makes hosted Sites work even when third-party
     // cookies are unavailable.
-    if (browserSession) headers.set('X-Dev-Auth', `browser:${browserSession}`);
+    if (browserSession) { headers.set('X-Dev-Auth', `browser:${browserSession}`); headers.delete('X-Telegram-Init-Data'); }
   }
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response: Response;
@@ -518,9 +528,22 @@ function System({ navigate }: { navigate: (href: string) => void }) {
   return <div className="admin-stack"><div className="admin-page-actions"><p>Подключения и состояние школьных сервисов.</p><button className="admin-button admin-button--quiet" onClick={load}><RefreshCw size={15} /> Обновить</button></div><section className="admin-panel"><div className="admin-panel__heading"><h2>Backend и школьная база</h2><Status value={data.health?.schema_status} /></div><dl className="admin-definition-list"><dt>Backend</dt><dd><Status value="healthy" /> доступен</dd><dt>Школьная база</dt><dd><Status value={data.settings?.database_configured ? 'configured' : 'local'} /> {data.settings?.database_configured ? 'подключена' : 'локальный режим'}</dd></dl></section><GoogleConnectionCard api={api} apiOrigin={API_BASE} /><section className="admin-panel"><h2>Синхронизация</h2><dl className="admin-definition-list"><dt>Последняя успешная</dt><dd>{formatDate(state.overview?.last_successful_sync)}</dd><dt>Последняя сверка</dt><dd>{statusLabel(state.overview?.last_reconciliation_status)} · {formatDate(state.overview?.last_reconciliation_at)}</dd></dl></section><details className="admin-panel workspace-details"><summary>Диагностика и технические сведения</summary><h3>Записи школьной базы</h3><div className="admin-inline-stats">{Object.entries(data.health?.counts || {}).map(([key, value]) => countLinks[key] ? <button className="admin-inline-stat admin-inline-stat--clickable" key={key} onClick={() => navigate(countLinks[key])}><strong>{String(value)}</strong><span>{countLabels[key] || key}</span></button> : <div key={key}><strong>{String(value)}</strong><span>{countLabels[key] || key}</span></div>)}</div><div className="admin-callout admin-callout--muted"><Database size={16} /><span>Применённых исторических изменений: {display(data.health?.semantics?.candidate_changes?.historical, '0')} · активных кандидатов: {display(data.health?.semantics?.candidate_changes?.active, '0')} · открытых проблем: {display(data.health?.semantics?.resolution_issues?.active, '0')}.</span></div><h3>Проверки схемы</h3><div className="admin-detail-list">{Object.entries(data.health?.schema || {}).map(([key, value]: [string, any]) => <div key={key}><strong>{key}</strong><small><Status value={value.ok ? 'current' : 'attention'} /> · требуется: {value.required.join(', ')}</small></div>)}</div></details></div>;
 }
 
+function ResponsiveSchedule() {
+  const [mobile, setMobile] = useState<boolean | null>(null);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 740px)');
+    const update = () => setMobile(media.matches); update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+  if (mobile === null) return <Loading />;
+  return mobile ? <MobilePublishedSchedule api={api} /> : <ScheduleConstructor api={api} />;
+}
+
 function AppContent({ path, navigate }: { path: string; navigate: (href: string) => void }) {
+  if (path === '/admin/preview') return <MiniappPreview key={`${routeQuery().get('identity_id') || ''}:${routeQuery().get('kind') || ''}`} api={api} sourceLabel={dataSourceLabel} initialIdentity={routeQuery().get('identity_id') || ''} initialKind={routeQuery().get('kind') || 'student'} initialDay={routeQuery().get('day') || ''} localAdmin={Boolean(localDevAuth())} />;
   if (path === '/admin/teachers') return <TeacherDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} schoolMode={schoolMode} navigate={navigate} />;
-  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} section="groups" schoolMode={schoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
+  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} section="groups" navigate={navigate} schoolMode={schoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
   if (path === '/admin/people/legacy') return <People navigate={navigate} />;
   if (path.startsWith('/admin/people/')) return <PersonDetail id={path.split('/').pop() || ''} navigate={navigate} />;
   if (path.startsWith('/admin/groups/')) return <GroupDetail id={path.split('/').pop() || ''} navigate={navigate} />;
@@ -530,8 +553,8 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   if (path.startsWith('/admin/sources/')) return <Sources id={path.split('/').pop()} navigate={navigate} />;
   if (path === '/admin/sources') return <Sources navigate={navigate} />;
   if (path === '/admin/reconciliation' || path.startsWith('/admin/reconciliation/')) return <Reconciliation />;
-  if (path === '/admin/schedule/constructor') return <ScheduleConstructor api={api} />;
-  if (path === '/admin/schedule') return <ScheduleConstructor api={api} />;
+  if (path === '/admin/schedule/constructor') return <ResponsiveSchedule />;
+  if (path === '/admin/schedule') return <ResponsiveSchedule />;
   if (path === '/admin/journals') return <AdminJournals api={api} apiOrigin={API_BASE} />;
   if (path === '/admin/classroom') return <ClassroomHistory />;
   if (path === '/admin/audit') return <Audit />;
@@ -540,31 +563,40 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   return <Overview navigate={navigate} />;
 }
 
-export default function AdminPage() {
+export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedSession?: Session; onRoleChange?: (role: CampusRole) => void } = {}) {
+  useTelegramLayout();
   const { path, navigate } = useRoute();
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<Session | null>(embeddedSession || null);
   const [checking, setChecking] = useState(true);
   const [connectionError, setConnectionError] = useState<unknown>(null);
   useEffect(() => {
-    if (localDevAuth()) {
-      setSession({ id: 1, role: 'admin' });
-      setChecking(false);
-      return;
-    }
-    api<{ user: Session }>('/api/admin/auth/session')
-      .then((result) => { setConnectionError(null); setSession(result.user); })
-      .catch((error: ApiError) => {
-        if (error.status === 401 || error.status === 403) setSession(null);
-        else setConnectionError(error);
-      })
-      .finally(() => setChecking(false));
-  }, []);
-  const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); setSession(null); };
+    if (embeddedSession) { setSession(embeddedSession); setChecking(false); return; }
+    let active = true;
+    const check = async () => {
+      // Direct Telegram launches may hydrate before the SDK script arrives.
+      if (!localDevAuth() && !window.sessionStorage.getItem('my_island_admin_session')) {
+        const deadline = Date.now() + 3000;
+        while (!window.Telegram?.WebApp && Date.now() < deadline && active) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!active) return;
+      try { const result = await api<{ user: Session }>('/api/admin/auth/session'); if (active) { setConnectionError(null); setSession(result.user); } }
+      catch (error) { if (active) { const status = (error as ApiError).status; if (status === 401 || status === 403) setSession(null); else setConnectionError(error); } }
+      finally { if (active) setChecking(false); }
+    };
+    void check(); return () => { active = false; };
+  }, [embeddedSession]);
+  useTelegramBack(path !== '/admin', () => navigate('/admin'));
+  const switchRole = (role: CampusRole) => {
+    if (!session?.roles?.includes(role)) return;
+    if (onRoleChange) { onRoleChange(role); return; }
+    window.location.assign(`/?role=${encodeURIComponent(role)}`);
+  };
+  const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); window.sessionStorage.removeItem('my_island_telegram_init_data'); setSession(null); };
   if (checking) return <main className="admin-login"><Loading /></main>;
   if (connectionError) return <main className="admin-login"><div className="admin-login-card"><span className="admin-data-source">{dataSourceLabel}</span><ErrorState error={connectionError} onRetry={() => window.location.reload()} /></div></main>;
   if (!session) return <Login onLoggedIn={setSession} />;
-  const modernWorkspace = ['/admin', '/admin/people', '/admin/people/groups', '/admin/teachers', '/admin/settings', '/admin/system', '/admin/schedule/constructor'].includes(path);
-  return <div className={`admin-console campus-shell ${modernWorkspace ? 'admin-workspace' : ''} ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''}`}>{modernWorkspace ? <a className="admin-skip-link" href="#admin-content">Перейти к содержимому</a> : null}<Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main id="admin-content" tabIndex={-1} className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} /> : null}<AppContent path={path} navigate={navigate} /></main></div>;
+  const modernWorkspace = ['/admin', '/admin/people', '/admin/people/groups', '/admin/teachers', '/admin/settings', '/admin/system', '/admin/preview', '/admin/schedule/constructor'].includes(path);
+  return <div className={`admin-console campus-shell ${modernWorkspace ? 'admin-workspace' : ''} ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''}`}>{modernWorkspace ? <a className="admin-skip-link" href="#admin-content">Перейти к содержимому</a> : null}<Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main id="admin-content" tabIndex={-1} className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} /> : null}<div className="admin-role-toolbar"><CampusRoleSwitch roles={session.roles || [session.role]} value="admin" onChange={switchRole} /></div><AppContent path={path} navigate={navigate} /></main></div>;
 }
 
 

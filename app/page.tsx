@@ -1,6 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { campusLessons, campusStudentDays } from '../components/campus-schedule';
+import { CampusRoleSwitch, CampusPeriod, dateISO, periodFor, useCampusScreen, type CampusRole } from '../components/campus-controls';
+const ModernAdmin = dynamic(() => import('./admin/page'), { ssr: false });
+const studentScreens = ['schedule', 'homework', 'grades', 'information', 'profile'] as const;
+const teacherScreens = ['schedule', 'groups', 'information', 'homeroom', 'profile'] as const;
 import {
   BarChart3,
   BookOpen,
@@ -225,10 +231,14 @@ const API_BASE = String(
     (isLocalBuild ? 'http://127.0.0.1:8000' : ''),
 ).replace(/\/$/, '');
 let activeTelegramInitData = '';
-let activeStudentPreviewId = '';
+const activeStudentPreviewId = '';
+let activeRolePreviewId = '';
+let previewLocalAdmin = false;
+let previewInitData = '';
 
 function devHeader(): string | undefined {
   if (!isLocalBuild || typeof window === 'undefined') return undefined;
+  if (new URLSearchParams(window.location.search).has('embeddedPreview')) return previewLocalAdmin && runtimeEnv.VITE_SCHOOL_DIRECTORY_MODE !== 'school' ? 'admin:1' : undefined;
   const role = new URLSearchParams(window.location.search).get('role');
   return role === 'admin'
     ? 'admin:1'
@@ -241,6 +251,9 @@ async function telegramInitData(): Promise<
   | { kind: 'telegram_sdk_missing' | 'telegram_init_data_empty' }
 > {
   if (isLocalBuild && devHeader()) return { kind: 'ready', value: '' };
+  if (typeof window !== 'undefined' && window.sessionStorage.getItem('my_island_admin_session')) return { kind: 'ready', value: '' };
+  const saved = typeof window !== 'undefined' ? window.sessionStorage.getItem('my_island_telegram_init_data') : '';
+  if (saved) return { kind: 'ready', value: saved };
   const deadline = Date.now() + 3000;
   let found = false;
   while (Date.now() < deadline) {
@@ -248,7 +261,7 @@ async function telegramInitData(): Promise<
       typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
     if (app) {
       found = true;
-      if (app.initData) return { kind: 'ready', value: app.initData };
+      if (app.initData) { window.sessionStorage.setItem('my_island_telegram_init_data', app.initData); return { kind: 'ready', value: app.initData }; }
     }
     await new Promise((resolve) => window.setTimeout(resolve, 50));
   }
@@ -272,13 +285,20 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (options.body) headers.set('Content-Type', 'application/json');
   const local = devHeader();
   if (local) headers.set('X-Dev-Auth', local);
-  if (activeTelegramInitData)
+  const browserToken = typeof window !== 'undefined' ? window.sessionStorage.getItem('my_island_admin_session') : null;
+  if (browserToken) headers.set('X-Dev-Auth', `browser:${browserToken}`);
+  if (activeRolePreviewId) {
+    if (options.method && options.method.toUpperCase() !== 'GET') throw new ApiError('api_error', 'Предпросмотр доступен только для чтения', 403);
+    headers.set('X-Preview-Id', activeRolePreviewId);
+    if (previewInitData && !browserToken) headers.set('X-Telegram-Init-Data', previewInitData);
+  }
+  if (activeTelegramInitData && !activeRolePreviewId && !browserToken)
     headers.set('X-Telegram-Init-Data', activeTelegramInitData);
   if (activeStudentPreviewId)
     headers.set('X-Student-Preview-Id', activeStudentPreviewId);
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
   } catch {
     throw new ApiError('network_error', 'Сервис временно недоступен');
   }
@@ -490,7 +510,7 @@ function Topbar({
     <header className="scene-topbar">
       <div className="topbar-actions">
         {right}
-        <button className="profile-button" onClick={onProfile}>
+        <button className="profile-button" aria-label="Открыть профиль" onClick={onProfile}>
           <span className="profile-avatar">{name.slice(0, 1)}</span>
           <span className="profile-name">{name.split(' ')[0]}</span>
           <ChevronDown size={15} />
@@ -522,11 +542,11 @@ function ScheduleItemRow({ item }: { item: StudentScheduleItem }) {
   return <article className="student-schedule-lesson"><time>{item.slot.start}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{[item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span></div></article>;
 }
 
-function StudentSchedulePanel({ projection }: { projection: StudentScheduleProjection }) {
-  const initial = scheduleStartingDay(projection.days);
+function StudentSchedulePanel({ projection, initialDay }: { projection: StudentScheduleProjection; initialDay?: string }) {
+  const initial = initialDay || scheduleStartingDay(projection.days);
   const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
-  const days = Array.from({ length: 5 }, (_, index) =>
+  const days = Array.from({ length: 7 }, (_, index) =>
     isoDate(addDays(monday, index)),
   );
   const day = projection.days.find((item) => item.date === selectedDay);
@@ -579,20 +599,21 @@ function StudentSchedulePanel({ projection }: { projection: StudentScheduleProje
   );
 }
 
-function SchedulePanel({ schedule, dayBlocks = [] }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[] }) {
-  const initial = schedule.map((lesson) => lesson.lesson_date).sort()[0] || dayBlocks.map((block) => block.lesson_date).sort()[0] || isoDate(new Date());
+function SchedulePanel({ schedule, dayBlocks = [], initialDay }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[]; initialDay?: string }) {
+  const initial = initialDay || schedule.map((lesson) => lesson.lesson_date).sort()[0] || dayBlocks.map((block) => block.lesson_date).sort()[0] || isoDate(new Date());
   const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
-  const days = Array.from({ length: 5 }, (_, index) => isoDate(addDays(monday, index)));
+  const days = Array.from({ length: 7 }, (_, index) => isoDate(addDays(monday, index)));
   const entries = schedule.filter((lesson) => lesson.lesson_date === selectedDay).sort((a, b) => a.start_time.localeCompare(b.start_time));
   return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{dayBlocks.some((block) => block.lesson_date === selectedDay) ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." />}</div>;
 }
 
-function ScheduleFocusPeek({ projection }: { projection: StudentScheduleProjection }) {
-  const today = projection.days.find((day) => day.date === isoDate(new Date()));
+function ScheduleFocusPeek({ projection, referenceDay }: { projection: StudentScheduleProjection; referenceDay?: string }) {
+  const selected = referenceDay || isoDate(new Date());
+  const today = projection.days.find((day) => day.date === selected);
   const items = today?.items.filter((item) => item.state !== 'no_lesson').sort((a, b) => a.slot.start.localeCompare(b.slot.start)) || [];
   const now = new Date();
-  const minutes = now.getHours() * 60 + now.getMinutes();
+  const minutes = selected === isoDate(now) ? now.getHours() * 60 + now.getMinutes() : -1;
   const next = items.find((item) => {
     const [hours, mins] = item.slot.start.split(':').map(Number);
     return hours * 60 + mins >= minutes;
@@ -734,7 +755,7 @@ function ProfilePanel({
       <div className="verified-card">
         <ShieldCheck size={19} />
         <div>
-          <strong>Профиль подтверждён</strong>
+          <strong>{activeRolePreviewId ? 'Школьная личность найдена' : 'Профиль подтверждён'}</strong>
           <span>Вам доступны разделы и группы, назначенные школой.</span>
         </div>
         <Check size={18} />
@@ -747,7 +768,7 @@ function ProfilePanel({
           {profile.groups.map((group) => (
             <div className="group-card" key={`${group.id}-${group.name}`}>
               <div>
-                <strong>{group.name}</strong>
+                <strong>{group.display_name || group.name}</strong>
                 <span>
                   {[
                     group.subject,
@@ -765,54 +786,8 @@ function ProfilePanel({
     </div>
   );
 }
-function GradesPanel({
-  items,
-  loading,
-  api,
-}: {
-  items: Array<Record<string, unknown>> | null;
-  loading: boolean;
-  api: RoleJournalsApi;
-}) {
-  return (
-    <div className="section-panel">
-      <div className="panel-intro">
-        <span className="panel-icon panel-icon--violet">
-          <BarChart3 size={21} />
-        </span>
-        <div>
-          <p className="eyebrow">Официальный журнал</p>
-          <h2>Оценки</h2>
-          <p>Отдельно от Classroom grades.</p>
-        </div>
-      </div>
-      {loading ? (
-        <LoadingState label="Проверяем журнал" />
-      ) : items?.length ? (
-        <div className="grades-stack">
-          {items.map((item, index) => (
-            <div className="grade-card" key={index}>
-              <div>
-                <strong>{displayValue(item.subject, 'Предмет')}</strong>
-                <span>
-                  {displayValue(item.graded_on)} · вес{' '}
-                  {displayValue(item.weight, '—')}
-                </span>
-              </div>
-              <b>{displayValue(item.value, displayValue(item.status, '—'))}</b>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <EmptyState
-          icon={BarChart3}
-          title="Оценок пока нет"
-          detail="Результаты появятся после публикации школьного журнала."
-        />
-      )}
-      <StudentRoleJournals api={api} />
-    </div>
-  );
+function GradesPanel({ api }: { api: RoleJournalsApi }) {
+  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--violet"><BarChart3 size={21} /></span><div><h2>Оценки</h2><p>Работы и результаты школьных журналов.</p></div></div><StudentRoleJournals api={api} /></div>;
 }
 
 type SceneHotspot = {
@@ -913,6 +888,7 @@ function TodaySheet({
   homework = [],
   information = [],
   teacher = false,
+  referenceDay,
   onOpen,
 }: {
   lessons: Lesson[];
@@ -920,6 +896,7 @@ function TodaySheet({
   homework?: Homework[];
   information?: Information[];
   teacher?: boolean;
+  referenceDay?: string;
   onOpen: (view: string) => void;
 }) {
   const sorted = [...lessons].sort((a, b) =>
@@ -927,6 +904,7 @@ function TodaySheet({
   );
   const next =
     sorted.find((lesson) => {
+      if (referenceDay && referenceDay !== dateISO()) return true;
       const [hours, minutes] = lesson.start_time.split(':').map(Number);
       return (
         hours * 60 + minutes >=
@@ -1016,7 +994,7 @@ function TodaySheet({
   return (
     <SpatialSheet
       title="Сегодня"
-      kicker={formatDate(isoDate(new Date()), true)}
+      kicker={formatDate(referenceDay || isoDate(new Date()), true)}
       icon="schedule"
       peek={peek}
       full={full}
@@ -1149,27 +1127,20 @@ function SceneFrame({
 function StudentApp({
   data,
   onReload,
+  roleControl,
+  day,
+  onDayChange,
 }: {
   data: ApiData;
   onReload: () => void;
+  roleControl?: React.ReactNode;
+  day: string;
+  onDayChange: (day: string) => void;
 }) {
-  const [view, setView] = useState<StudentView>(null);
-  const [grades, setGrades] = useState<Array<Record<string, unknown>> | null>(
-    null,
-  );
-  const [gradesLoading, setGradesLoading] = useState(false);
-  const open = (next: StudentView) => {
-    setView(next);
-    if (next === 'grades' && grades === null) {
-      setGradesLoading(true);
-      void api<{ items: Array<Record<string, unknown>> }>('/api/student/grades')
-        .then((result) => setGrades(result.items))
-        .catch(() => setGrades([]))
-        .finally(() => setGradesLoading(false));
-    }
-  };
-  const name = data.profile.user.display_name;
+  const [view, setView] = useCampusScreen<NonNullable<StudentView>>(studentScreens);
+  const open = (next: StudentView) => setView(next);
   const selectedId = view && view !== 'profile' ? view : null;
+  const name = data.profile.user.display_name;
   const studentLocations: SceneHotspot[] = islandLocations.map((location) => ({
     ...location,
     icon: location.id,
@@ -1181,7 +1152,7 @@ function StudentApp({
   const hasScheduleProjection = Array.isArray(data.scheduleProjection.days);
   const contextualPeek =
     selectedId === 'schedule' ? (
-      hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : 'Ближайших занятий нет'} />
+      hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} referenceDay={day} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : 'Ближайших занятий нет'} />
     ) : selectedId === 'homework' ? (
       <SheetSummary
         icon="homework"
@@ -1200,13 +1171,7 @@ function StudentApp({
       <SheetSummary
         icon="grades"
         label="Журнал"
-        value={
-          gradesLoading
-            ? 'Загружаем оценки…'
-            : grades?.length
-              ? `${grades.length} записей`
-              : 'Оценок пока нет'
-        }
+        value="Работы и результаты" detail="Откройте школьные журналы"
       />
     );
   const contextual = selectedId ? (
@@ -1219,14 +1184,15 @@ function StudentApp({
       kicker="Место на острове"
       peek={contextualPeek}
     >
+      {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        hasScheduleProjection ? <StudentSchedulePanel projection={data.scheduleProjection} /> : <SchedulePanel schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} />
+        hasScheduleProjection ? <StudentSchedulePanel key={day} projection={data.scheduleProjection} initialDay={day} /> : <SchedulePanel key={day} schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} initialDay={day} />
       ) : selectedId === 'homework' ? (
         <HomeworkPanel homework={data.homework} />
       ) : selectedId === 'information' ? (
         <InfoPanel items={data.today.announcements} />
       ) : (
-        <GradesPanel items={grades} loading={gradesLoading} api={api} />
+        <GradesPanel api={api} />
       )}
       <button className="panel-refresh" onClick={onReload}>
         <RefreshCw size={15} /> Обновить данные
@@ -1244,6 +1210,7 @@ function StudentApp({
         sheet={
           contextual || (
             <TodaySheet
+              referenceDay={day}
               lessons={data.today.schedule}
               dayBlock={data.today.day_block}
               homework={data.today.homework}
@@ -1253,7 +1220,7 @@ function StudentApp({
           )
         }
       >
-        <Topbar name={name} onProfile={() => open('profile')} />
+        <Topbar name={name} onProfile={() => open('profile')} right={roleControl} />
       </SceneFrame>
       {view === 'profile' && (
         <PanelShell
@@ -1537,13 +1504,19 @@ function TeacherApp({
   onLogout,
   onReload,
   onOpenAdmin,
+  roleControl,
+  day,
+  onDayChange,
 }: {
   data: TeacherData;
   onLogout: () => void;
   onReload: () => void;
   onOpenAdmin?: () => void;
+  roleControl?: React.ReactNode;
+  day: string;
+  onDayChange: (day: string) => void;
 }) {
-  const [view, setView] = useState<TeacherView>(null);
+  const [view, setView] = useCampusScreen<NonNullable<TeacherView>>(teacherScreens);
   const homeroom = data.groups.find((group) => group.is_homeroom);
   const teacherLocations: SceneHotspot[] = teacherCampusLocations
     .filter((location) => location.id !== 'homeroom' || Boolean(homeroom))
@@ -1613,8 +1586,9 @@ function TeacherApp({
       kicker="Рабочая зона кампуса"
       peek={teacherPeek}
     >
+      {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        <SchedulePanel schedule={data.schedule} />
+        <SchedulePanel key={day} schedule={data.schedule} initialDay={day} />
       ) : selectedId === 'groups' ? (
         <TeacherGroups
           groups={data.groups.filter((group) => !group.is_homeroom)}
@@ -1647,6 +1621,7 @@ function TeacherApp({
         sheet={
           contextual || (
             <TodaySheet
+              referenceDay={day}
               lessons={data.today}
               information={data.information}
               teacher
@@ -1656,14 +1631,14 @@ function TeacherApp({
         }
       >
         <Topbar
-          name="Учитель"
+          name={data.profile?.user.display_name || "Учитель"}
           onProfile={() => setView('profile')}
           right={
-            onOpenAdmin && (
+            roleControl || (onOpenAdmin && (
               <button className="top-action" onClick={onOpenAdmin}>
                 <ShieldCheck size={16} /> <span>Admin</span>
               </button>
-            )
+            ))
           }
         />
       </SceneFrame>
@@ -3442,230 +3417,135 @@ function PendingState({
   );
 }
 
+type EmbeddedPreviewConfig = { id: string; role: 'student' | 'teacher'; day: string; initData?: string; localAdmin?: boolean; revision?: number };
+
 export default function Home() {
   useTelegramLayout();
-  useEffect(() => {
-    if (!isLocalBuild) return;
-    let dispose: (() => void) | undefined;
-    let cancelled = false;
-    void import('./spatial-qa').then(({ installSpatialQa }) => {
-      if (!cancelled) dispose = installSpatialQa();
-    });
-    return () => {
-      cancelled = true;
-      dispose?.();
-    };
-  }, []);
+  const [embedded] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('embeddedPreview'));
+  const [config, setConfig] = useState<EmbeddedPreviewConfig | null>(null);
   const [state, setState] = useState<LoadState>('loading');
+  const [errorMessage, setErrorMessage] = useState('');
   const [session, setSession] = useState<Session | null>(null);
   const [data, setData] = useState<ApiData | null>(null);
   const [teacherData, setTeacherData] = useState<TeacherData | null>(null);
-  const [section, setSection] = useState<
-    'student' | 'teacher' | 'admin' | 'student-preview'
-  >('student');
-  const [previewTarget, setPreviewTarget] = useState('');
-  const [authKey, setAuthKey] = useState(0);
-  const desiredRole =
-    typeof window !== 'undefined'
-      ? (() => {
-          const role = new URLSearchParams(window.location.search).get('role');
-          return role === 'admin' || role === 'teacher' ? role : 'student';
-        })()
-      : 'student';
-  const loadStudentData = useCallback(async () => {
-    const today = isoDate(new Date());
-    const end = isoDate(addDays(new Date(), 6));
-    const [day, schedule, homework, profile] = await Promise.all([
-      api<ApiData['today']>(`/api/student/today?day=${today}`),
-      api<StudentScheduleProjection & { items: Lesson[] }>(
-        `/api/student/schedule?start_day=${today}&end_day=${end}`,
-      ),
-      api<{ items: Homework[] }>('/api/student/homework'),
-      api<Profile>('/api/student/profile'),
-    ]);
-    return {
-      today: day,
-      schedule: schedule.items,
-      scheduleProjection: schedule,
-      scheduleDayBlocks: schedule.day_blocks || [],
-      homework: homework.items,
-      profile,
-    };
-  }, []);
-  const loadTeacherData = useCallback(async () => {
-    const today = isoDate(new Date());
-    const end = isoDate(addDays(new Date(), 6));
-    const [home, schedule, courses, profile] = await Promise.all([
-      api<{ schedule: Lesson[]; groups: Group[]; information: Information[] }>(
-        '/api/teacher/home',
-      ),
-      api<{ items: Lesson[] }>(
-        `/api/teacher/schedule?start_day=${today}&end_day=${end}`,
-      ),
-      api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'),
-      api<Profile & { state: string }>('/api/teacher/profile'),
-    ]);
-    const next = {
-      today: home.schedule,
-      groups: home.groups,
-      information: home.information,
-      schedule: schedule.items,
-      courses: courses.items,
-      profile: profile.user ? profile : null,
-    };
-    setTeacherData(next);
-    return next;
-  }, []);
-  const load = useCallback(async () => {
-    setState('loading');
-    const telegram = await telegramInitData();
-    if (telegram.kind !== 'ready') {
-      setState(telegram.kind);
-      return;
-    }
-    activeTelegramInitData = telegram.value;
-    activeStudentPreviewId = '';
-    try {
-      const next = await api<Session>('/api/auth/session', {
-        method: 'POST',
-        body: JSON.stringify({
-          role: desiredRole,
-          init_data: telegram.value || null,
-        }),
-      });
-      setSession(next);
-      if (next.state !== 'approved') {
-        setState('needs_identity');
-        return;
-      }
-      const role = next.user.role;
-      setSection(
-        role === 'admin' ? 'admin' : role === 'teacher' ? 'teacher' : 'student',
-      );
-      if (role === 'admin') {
-        setState('approved');
-        return;
-      }
-      if (role === 'teacher') {
-        await loadTeacherData();
-        setState('approved');
-        return;
-      }
-      setData(await loadStudentData());
-      setState('approved');
-    } catch (error) {
-      setState(error instanceof ApiError ? error.kind : 'api_error');
-    }
-  }, [desiredRole, loadStudentData, loadTeacherData]);
+  const [desiredRole, setDesiredRole] = useState<CampusRole>(() => {
+    if (typeof window === 'undefined') return 'student';
+    const role = new URLSearchParams(window.location.search).get('role');
+    return role === 'admin' || role === 'teacher' ? role : 'student';
+  });
+  const [day, setDay] = useState(() => {
+    const value = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('date') : null;
+    return value && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) ? value : dateISO();
+  });
+  const [reload, setReload] = useState(0);
+  const [scheduleWarning, setScheduleWarning] = useState('');
+  const sequence = useRef(0);
+  const chosenDay = config?.day || day;
+  const actualRole = config?.role || session?.user.role || desiredRole;
+
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
-    return () => window.clearTimeout(timer);
-  }, [authKey, load]);
-  const startPreview = async (userId: string) => {
-    try {
-      const preview = await api<{ id: string; target: { display_name: string; class_name?: string | null } }>(
-        '/api/admin/student-previews',
-        { method: 'POST', body: JSON.stringify({ target_user_id: userId }) },
-      );
-      activeStudentPreviewId = preview.id;
-      setPreviewTarget(`${preview.target.display_name} · ${preview.target.class_name || 'класс не указан'}`);
-      // Load the target through the preview header before switching screens. If
-      // any one of the student endpoints rejects, do not leave a half-open
-      // preview token behind in the admin session.
-      const next = await loadStudentData();
-      setData(next);
-      setSection('student-preview');
-    } catch (error) {
-      activeStudentPreviewId = '';
-      setPreviewTarget('');
-      setData(null);
-      throw error;
-    }
-  };
-  const exitPreview = async () => {
-    if (activeStudentPreviewId)
-      await api(`/api/admin/student-previews/${activeStudentPreviewId}/end`, {
-        method: 'POST',
-      }).catch(() => undefined);
-    activeStudentPreviewId = '';
-    setPreviewTarget('');
-    setSection('admin');
-    setData(null);
-  };
-  const openTeacher = async () => {
-    setState('loading');
-    try {
-      if (!teacherData) await loadTeacherData();
-      setSection('teacher');
-      setState('approved');
-    } catch (error) {
-      setState(error instanceof ApiError ? error.kind : 'api_error');
-    }
-  };
-  if (state === 'loading')
-    return (
-      <main className="status-screen status-screen--island">
-        <div className="loading-orb">
-          <LoaderCircle className="spin" size={28} />
-          <span>Открываем остров…</span>
-        </div>
-      </main>
-    );
-  if (
-    state === 'approved' &&
-    section === 'admin' &&
-    session?.user.roles?.includes('admin')
-  )
-    return (
-      <AdminApp
-        onPreview={(id) => startPreview(id)}
-        onBackToTeacher={
-          session.user.roles.includes('teacher')
-            ? () => void openTeacher()
-            : undefined
+    if (!embedded) return;
+    const receive = (event: MessageEvent) => {
+      if (event.source !== window.parent || event.origin !== window.location.origin) return;
+      const value = event.data;
+      if (value?.type !== 'my-island:preview-config' || typeof value.id !== 'string' || !['student', 'teacher'].includes(value.role) || !/^\d{4}-\d{2}-\d{2}$/.test(value.day) || Number.isNaN(Date.parse(value.day))) return;
+      setConfig({ id: value.id, role: value.role, day: value.day, initData: String(value.initData || ''), localAdmin: value.localAdmin === true, revision: Number(value.revision || 0) });
+    };
+    window.addEventListener('message', receive);
+    window.parent.postMessage({ type: 'my-island:preview-ready' }, window.location.origin);
+    return () => { window.removeEventListener('message', receive); activeRolePreviewId = ''; previewInitData = ''; previewLocalAdmin = false; };
+  }, [embedded]);
+
+  useEffect(() => {
+    if (embedded && !config) return;
+    const version = ++sequence.current;
+    const current = () => version === sequence.current;
+    const load = async () => {
+      setState('loading'); setErrorMessage(''); setScheduleWarning('');
+      try {
+        let role = desiredRole;
+        if (config) {
+          activeRolePreviewId = config.id; previewInitData = config.initData || ''; previewLocalAdmin = Boolean(config.localAdmin); role = config.role;
+        } else {
+          activeRolePreviewId = ''; previewInitData = ''; previewLocalAdmin = false;
+          const telegram = await telegramInitData();
+          if (!current()) return;
+          if (telegram.kind !== 'ready') { setState(telegram.kind); return; }
+          activeTelegramInitData = telegram.value;
+          const next = await api<Session>('/api/auth/session', { method: 'POST', body: JSON.stringify({ role: desiredRole, init_data: telegram.value || null }) });
+          if (!current()) return;
+          setSession(next);
+          if (next.state !== 'approved') { setState('needs_identity'); return; }
+          role = next.user.role as CampusRole;
         }
-        onLogout={() => setState('api_error')}
-      />
-    );
-  if (state === 'approved' && section === 'student-preview' && data)
-    return (
-      <div className="preview-mode">
-        <div className="preview-banner">
-          <span>
-            <ShieldCheck size={16} /> Предпросмотр:{' '}
-            <strong>{previewTarget}</strong> · только чтение
-          </span>
-          <button onClick={() => void exitPreview()}>Выйти</button>
-        </div>
-        <StudentApp
-          data={data}
-          onReload={() => void loadStudentData().then(setData)}
-        />
-      </div>
-    );
-  if (state === 'approved' && section === 'teacher' && teacherData)
-    return (
-      <TeacherApp
-        data={teacherData}
-        onOpenAdmin={
-          session?.user.roles?.includes('admin')
-            ? () => setSection('admin')
-            : undefined
+        if (role === 'admin') { if (current()) setState('approved'); return; }
+        const period = periodFor(chosenDay);
+        let scheduleState = '';
+        if (role === 'student') {
+          const [today, schedule, homework, profile] = await Promise.all([
+            api<ApiData['today']>(`/api/student/today?day=${chosenDay}`),
+            api<StudentScheduleProjection & { state?: string }>(`/api/student/schedule?start_day=${period.start}&end_day=${period.end}`),
+            api<{ items: Homework[] }>('/api/student/homework'), api<Profile>('/api/student/profile'),
+          ]);
+          scheduleState = schedule.state || '';
+          if (current()) setData({ today: { ...today, schedule: campusLessons(today.schedule) }, schedule: campusLessons(schedule.items), scheduleProjection: { ...schedule, items: campusLessons(schedule.items), days: Array.isArray(schedule.days) ? schedule.days : campusStudentDays(schedule.items) }, scheduleDayBlocks: schedule.day_blocks || [], homework: homework.items, profile });
+        } else {
+          const [home, schedule, courses, profile] = await Promise.all([
+            api<{ schedule: Lesson[]; groups: Group[]; information: Information[] }>(`/api/teacher/home?day=${chosenDay}`),
+            api<{ items: Lesson[]; state?: string }>(`/api/teacher/schedule?start_day=${period.start}&end_day=${period.end}`),
+            api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'), api<Profile & { state: string }>('/api/teacher/profile'),
+          ]);
+          scheduleState = schedule.state || '';
+          if (!profile.user) throw new ApiError('api_error', 'К роли преподавателя ещё не привязана школьная личность.', 403);
+          if (current()) setTeacherData({ today: campusLessons(home.schedule), groups: home.groups, information: home.information, schedule: campusLessons(schedule.items), courses: courses.items, profile: profile.user ? profile : null });
         }
-        onReload={() => setAuthKey((value) => value + 1)}
-        onLogout={() => setState('api_error')}
-      />
-    );
-  if (state !== 'approved' || !data)
-    return (
-      <PendingState
-        state={state === 'approved' ? 'api_error' : state}
-        onRetry={() => setAuthKey((value) => value + 1)}
-      />
-    );
-  return (
-    <StudentApp data={data} onReload={() => setAuthKey((value) => value + 1)} />
-  );
+        if (!current()) return;
+        if (scheduleState === 'canonical_backend_disabled') setScheduleWarning('Источник расписания ещё не активирован. Это не подтверждение отсутствия занятий.');
+        else if (/unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked/.test(scheduleState)) setScheduleWarning('Опубликованное расписание за этот период недоступно. Проверьте выбранную неделю и настройки источника.');
+        setState('approved');
+        if (embedded) window.parent.postMessage({ type: 'my-island:preview-loaded' }, window.location.origin);
+      } catch (error) {
+        if (!current()) return;
+        const message = error instanceof Error ? error.message : 'Не удалось загрузить данные';
+        setErrorMessage(message); setState(error instanceof ApiError ? error.kind : 'api_error');
+        if (embedded) window.parent.postMessage({ type: 'my-island:preview-error', message }, window.location.origin);
+      }
+    };
+    void load();
+    return () => { sequence.current = version + 1; };
+  }, [embedded, config, desiredRole, chosenDay, reload]);
+
+  const switchRole = (role: CampusRole) => {
+    if (!session?.user.roles?.includes(role)) return;
+    const url = new URL(window.location.href); url.searchParams.set('role', role); url.searchParams.delete('screen'); url.hash = '';
+    window.history.replaceState({}, '', `${url.pathname}${url.search}`); setDesiredRole(role);
+  };
+  const changeDay = (value: string) => {
+    if (embedded) { window.parent.postMessage({ type: 'my-island:preview-date', day: value }, window.location.origin); return; }
+    const url = new URL(window.location.href); url.searchParams.set('date', value); window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`); setDay(value);
+  };
+  const roleControl = !embedded && session ? <CampusRoleSwitch roles={session.user.roles || [session.user.role]} value={actualRole} onChange={switchRole} /> : undefined;
+  const refresh = () => setReload((value) => value + 1);
+  const leave = () => {
+    if (embedded) { window.parent.postMessage({ type: 'my-island:preview-close' }, window.location.origin); return; }
+    void (async () => {
+      if (window.sessionStorage.getItem('my_island_admin_session')) await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined);
+      window.sessionStorage.removeItem('my_island_admin_session'); window.sessionStorage.removeItem('my_island_telegram_init_data');
+      window.Telegram?.WebApp?.close?.(); setState('telegram_init_data_empty'); setErrorMessage('Сессия завершена. Для входа откройте My Island снова.');
+    })();
+  };
+
+  if (state === 'loading' || (embedded && !config)) return <main className="status-screen status-screen--island"><div className="loading-orb"><LoaderCircle className="spin" size={28} /><span>Открываем остров…</span></div></main>;
+  if (state !== 'approved') return <>{roleControl ? <div className="campus-error-actions">{roleControl}</div> : null}{errorMessage ? <div className="campus-source-warning" role="alert">{errorMessage}</div> : null}<PendingState state={state} onRetry={refresh} /></>;
+  if (actualRole === 'admin' && session?.user.roles?.includes('admin')) {
+    if (new URLSearchParams(window.location.search).has('legacyAdmin')) return <AdminApp onPreview={async () => { window.location.assign('/admin/preview'); }} onLogout={leave} />;
+    return <ModernAdmin embeddedSession={session.user} onRoleChange={switchRole} />;
+  }
+  return <div className={embedded ? 'preview-runtime' : undefined}>
+    {embedded ? <div className="preview-runtime-banner">Предпросмотр · {actualRole === 'teacher' ? teacherData?.profile?.user.display_name : data?.profile.user.display_name} · только чтение <button onClick={leave}>В админку</button></div> : null}
+    {scheduleWarning ? <output className="campus-source-warning">{scheduleWarning}</output> : null}
+    {actualRole === 'teacher' && teacherData ? <TeacherApp data={teacherData} onReload={refresh} onLogout={leave} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} /> : data ? <StudentApp data={data} onReload={refresh} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} /> : <PendingState state="api_error" onRetry={refresh} />}
+  </div>;
 }
 
 declare global {
@@ -3673,6 +3553,8 @@ declare global {
     Telegram?: {
       WebApp?: {
         initData?: string;
+        close?: () => void;
+        BackButton?: { show: () => void; hide: () => void; onClick: (callback: () => void) => void; offClick: (callback: () => void) => void };
         isVersionAtLeast?: (version: string) => boolean;
         ready?: () => void;
         expand?: () => void;
