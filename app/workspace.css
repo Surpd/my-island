@@ -216,81 +216,6 @@
 .admin-workspace .constructor-catalog-dialog::backdrop { background: transparent; }
 .admin-workspace :is(.school-editor-dialog, .constructor-conflict-dialog) > footer { position: sticky; z-index: 1; bottom: 0; padding-top: 12px; border-top: 1px solid var(--ws-line); background: #fff; }
 .admin-workspace .constructor-conflict-dialog h2 { font: 650 21px/1.3 var(--ws-font); }
-.admin-workspace .journal-workspace { gap: 14px; color: var(--ws-ink); font-family: var(--ws-font); }
-.admin-workspace .journal-workspace .admin-panel { border-color: var(--ws-line); border-radius: 10px; background: var(--ws-surface); box-shadow: none; }
-.admin-workspace .journal-workspace .journal-book,
-.admin-workspace .journal-workspace .journal-table-panel { padding: 0; }
-.admin-workspace .journal-workspace :is(.admin-help-text, .journal-book-heading p, .journal-subject-copy small, .journal-sync-status, .journal-tab-settings small, .journal-mapping-row small) { color: var(--ws-muted); }
-.admin-workspace .journal-intro { align-items: center; gap: 16px; }
-.admin-workspace .journal-intro > p { max-width: 650px; margin: 0; color: var(--ws-muted); font-size: 13px; }
-.admin-workspace .journal-connect-panel { grid-template-columns: minmax(0, 1fr) minmax(280px, .8fr); gap: 22px; }
-.admin-workspace .journal-connect-panel :is(label, .admin-help-text) { color: var(--ws-muted); font-size: 12px; }
-.admin-workspace .journal-workspace :is(input, select, textarea) { border-color: var(--ws-line); border-radius: 7px; background-color: var(--ws-surface); color: var(--ws-ink); font: inherit; }
-.admin-workspace .journal-grade-tabs { gap: 8px; }
-.admin-workspace .journal-grade-tabs button { min-height: 58px; border-color: var(--ws-line); border-radius: 8px; background: var(--ws-surface); color: var(--ws-ink); font-size: 13px; font-weight: 600; }
-.admin-workspace .journal-grade-tabs button span { color: var(--ws-muted); font-size: 11px; }
-.admin-workspace .journal-grade-tabs button.is-active { border-color: var(--ws-accent); background: var(--ws-soft); color: var(--ws-accent); box-shadow: inset 0 0 0 1px var(--ws-accent); }
-.admin-workspace .journal-workspace :is(.journal-book-heading h2, .journal-detail-title h2) { color: var(--ws-ink); font: 650 22px/1.3 var(--ws-font); letter-spacing: -.35px; }
-.admin-workspace .journal-book-heading { padding: 18px 20px; border-color: var(--ws-line); }
-.admin-workspace .journal-book-actions { gap: 9px; }
-.admin-workspace .journal-subject-heading { color: var(--ws-ink); font-size: 13px; }
-.admin-workspace .journal-subject-heading span { background: var(--ws-soft); color: var(--ws-accent); }
-.admin-workspace .journal-subject-card { border-color: var(--ws-line); background: var(--ws-surface); }
-.admin-workspace .journal-subject-card:hover { background: var(--ws-soft); }
-.admin-workspace .journal-subject-copy strong { color: var(--ws-ink); font-size: 12px; font-weight: 600; }
-.admin-workspace :is(.journal-empty-mark, .journal-detail-icon, .journal-subject-icon) { background: var(--ws-soft); color: var(--ws-accent); }
-.admin-workspace .journal-detail-nav label { color: var(--ws-muted); font-size: 12px; font-weight: 600; }
-.admin-workspace .journal-detail-nav select { min-height: 40px; border-color: var(--ws-line); border-radius: 7px; color: var(--ws-ink); font-size: 13px; }
-.admin-workspace .journal-group-tabs { gap: 5px; }
-.admin-workspace .journal-group-tabs button { min-height: 38px; border-color: var(--ws-line); border-radius: 7px; color: var(--ws-muted); font-size: 12px; font-weight: 600; }
-.admin-workspace .journal-group-tabs button.is-active { border-color: var(--ws-accent); background: var(--ws-soft); color: var(--ws-accent); }
-.admin-workspace .journal-detail-head { align-items: center; }
-.admin-workspace .journal-table-panel { padding: 0; overflow: hidden; }
-.admin-workspace .journal-table-wrap { border-color: var(--ws-line); }
-.admin-workspace .journal-table { font-family: var(--ws-font); }
-.admin-workspace .journal-table :is(th, td) { border-color: var(--ws-line); }
-.admin-workspace .journal-table th { background: #edf3f1; color: var(--ws-muted); font-size: 12px; font-weight: 600; }
-.admin-workspace .journal-table td { color: var(--ws-ink); font-size: 12px; }
-.admin-workspace .journal-table tbody tr:hover { background: var(--ws-soft); }
-.admin-workspace .journal-table .journal-student-column { background: #f7faf9; box-shadow: 1px 0 0 var(--ws-line); }
-.admin-workspace .journal-table tbody .journal-student-column { background: var(--ws-surface); }
-.admin-workspace .journal-table tbody tr:hover .journal-student-column { background: var(--ws-soft); }
-.admin-workspace .journal-table .journal-summary-column { background: #edf3f1; }
-.admin-workspace .journal-table .journal-score-cell--summary { background: #f7faf9; }
-.admin-workspace .journal-table .journal-assessment-column strong { color: var(--ws-ink); font-size: 11px; }
-.admin-workspace .journal-table .journal-assessment-column small { color: var(--ws-muted); font-size: 10px; }
-.admin-workspace .journal-central-matching { gap: 14px; }
-.admin-workspace .journal-central-matching-heading h2 { color: var(--ws-ink); font: 650 20px/1.3 var(--ws-font); }
-.admin-workspace .journal-matching-book { border-color: var(--ws-line); border-radius: 8px; background: var(--ws-surface); color: var(--ws-ink); }
-.admin-workspace .journal-matching-book span { color: var(--ws-muted); }
-.admin-workspace .journal-matching-book.is-active { border-color: var(--ws-accent); background: var(--ws-soft); }
-.admin-workspace .journal-matching-panel { border-color: var(--ws-line); border-radius: 9px; background: var(--ws-paper); }
-.admin-workspace .journal-matching-panel h3 { color: var(--ws-ink); font-size: 14px; font-weight: 650; }
-.admin-workspace .journal-mapping-row { border-color: var(--ws-line); border-radius: 8px; background: var(--ws-surface); }
-.admin-workspace .journal-mapping-row > div:first-child strong { color: var(--ws-ink); font-size: 13px; font-weight: 600; }
-.admin-workspace .journal-batch-tools { border-color: var(--ws-line); border-radius: 9px; background: var(--ws-surface); }
-.admin-workspace .journal-alias-list label { border-color: var(--ws-line); border-radius: 7px; background: var(--ws-paper); }
-.admin-workspace .journal-alias-list strong, .admin-workspace .journal-tab-settings strong { color: var(--ws-ink); }
-.admin-workspace .journal-candidate-picker :is(input, select), .admin-workspace .journal-create-fields input, .admin-workspace .journal-map-controls :is(input, select) { border-color: var(--ws-line); border-radius: 7px; color: var(--ws-ink); }
-.admin-workspace .journal-scope-tabs { background: var(--ws-paper); }
-.admin-workspace .journal-scope-tabs button { color: var(--ws-muted); font-size: 12px; }
-.admin-workspace .journal-scope-tabs button.is-active { background: var(--ws-surface); color: var(--ws-accent); }
-.admin-workspace .journal-combobox-label, .admin-workspace .journal-create-fields label, .admin-workspace .journal-detail-nav label { color: var(--ws-muted); }
-.admin-workspace .journal-candidate-options { border-color: var(--ws-line); border-radius: 8px; background: var(--ws-surface); }
-.admin-workspace .journal-candidate-options [role="option"] { color: var(--ws-ink); }
-.admin-workspace .journal-candidate-options [role="option"]:hover, .admin-workspace .journal-candidate-options [role="option"][aria-selected="true"] { background: var(--ws-soft); }
-.admin-workspace .journal-match-review { border-color: var(--ws-line); border-radius: 8px; background: var(--ws-soft); }
-.admin-workspace .journal-match-review p, .admin-workspace .journal-match-review small { color: var(--ws-ink); }
-.admin-workspace .journal-duplicate-warning { color: #805d2b; }
-.admin-workspace .journal-tab-settings { border-color: var(--ws-line); border-radius: 8px; background: var(--ws-surface); }
-.admin-workspace .journal-tab-setting-row { border-color: var(--ws-line); }
-.admin-workspace .journal-create-student { border-color: var(--ws-line); }
-.admin-workspace .journal-tab-settings label { border-color: var(--ws-line); }
-.admin-workspace .journal-tab-settings summary, .admin-workspace .journal-create-student summary, .admin-workspace .journal-back { color: var(--ws-accent); }
-.admin-workspace .journal-tab-settings select { border-color: var(--ws-line); color: var(--ws-ink); }
-.admin-workspace .journal-source-error { border: 1px solid var(--ws-line); background: var(--ws-paper); color: #805d2b; }
-.admin-workspace .journal-toggle { color: var(--ws-muted); font-size: 12px; }
-.admin-workspace .journal-workspace :is(.journal-grade-tabs, .journal-group-tabs, .journal-matching-books, .journal-subject-grid) button:focus-visible { outline-color: var(--ws-accent); }
 .admin-login { background: #eaf2ef; }
 .admin-login-card { border-color: #c9dbd3; border-radius: 14px; box-shadow: 0 16px 60px #163d4512; }
 .admin-login-card h1 { font: 650 27px/1.25 var(--ws-font); letter-spacing: -.6px; }
@@ -883,3 +808,85 @@
   .constructor-week-period { padding:10px 0 0; }
   .constructor-week-row .constructor-draft-actions { display:flex; flex-wrap:wrap; }
 }
+
+/* Journals share the active Campus shell used by People and Dashboard. */
+.campus-shell .journal-workspace { --ws-ink:var(--cp-ink); --ws-muted:var(--cp-muted); --ws-accent:var(--cp-blue); --ws-soft:var(--cp-bg); --ws-line:var(--cp-line); --ws-paper:var(--cp-bg); --ws-surface:var(--cp-paper); --ws-font:var(--cp-font); font:13px/1.5 var(--cp-font); }
+.campus-shell .journal-workspace { gap: 14px; color: var(--cp-ink); font-family: var(--cp-font); }
+.campus-shell .journal-workspace .admin-panel { border-color: var(--cp-line); border-radius: 10px; background: var(--cp-paper); box-shadow: none; }
+.campus-shell .journal-workspace .journal-book,
+.campus-shell .journal-workspace .journal-table-panel { padding: 0; }
+.campus-shell .journal-workspace :is(.admin-help-text, .journal-book-heading p, .journal-subject-copy small, .journal-sync-status, .journal-tab-settings small, .journal-mapping-row small) { color: var(--cp-muted); }
+.campus-shell .journal-intro { align-items: center; gap: 16px; }
+.campus-shell .journal-intro > p { max-width: 650px; margin: 0; color: var(--cp-muted); font-size: 13px; }
+.campus-shell .journal-connect-panel { grid-template-columns: minmax(0, 1fr) minmax(280px, .8fr); gap: 22px; }
+.campus-shell .journal-connect-panel :is(label, .admin-help-text) { color: var(--cp-muted); font-size: 12px; }
+.campus-shell .journal-workspace :is(input, select, textarea) { border-color: var(--cp-line); border-radius: 7px; background-color: var(--cp-paper); color: var(--cp-ink); font: inherit; }
+.campus-shell .journal-grade-tabs { gap: 8px; }
+.campus-shell .journal-grade-tabs button { min-height: 58px; border-color: var(--cp-line); border-radius: 8px; background: var(--cp-paper); color: var(--cp-ink); font-size: 13px; font-weight: 600; }
+.campus-shell .journal-grade-tabs button span { color: var(--cp-muted); font-size: 11px; }
+.campus-shell .journal-grade-tabs button.is-active { border-color: var(--cp-blue); background: var(--cp-bg); color: var(--cp-blue); box-shadow: inset 0 0 0 1px var(--cp-blue); }
+.campus-shell .journal-workspace :is(.journal-book-heading h2, .journal-detail-title h2) { color: var(--cp-ink); font: 650 22px/1.3 var(--cp-font); letter-spacing: -.35px; }
+.campus-shell .journal-book-heading { padding: 18px 20px; border-color: var(--cp-line); }
+.campus-shell .journal-book-actions { gap: 9px; }
+.campus-shell .journal-subject-heading { color: var(--cp-ink); font-size: 13px; }
+.campus-shell .journal-subject-heading span { background: var(--cp-bg); color: var(--cp-blue); }
+.campus-shell .journal-subject-card { border-color: var(--cp-line); background: var(--cp-paper); }
+.campus-shell .journal-subject-card:hover { background: var(--cp-bg); }
+.campus-shell .journal-subject-copy strong { color: var(--cp-ink); font-size: 12px; font-weight: 600; }
+.campus-shell :is(.journal-empty-mark, .journal-detail-icon, .journal-subject-icon) { background: var(--cp-bg); color: var(--cp-blue); }
+.campus-shell .journal-detail-nav label { color: var(--cp-muted); font-size: 12px; font-weight: 600; }
+.campus-shell .journal-detail-nav select { min-height: 40px; border-color: var(--cp-line); border-radius: 7px; color: var(--cp-ink); font-size: 13px; }
+.campus-shell .journal-group-tabs { gap: 5px; }
+.campus-shell .journal-group-tabs button { min-height: 38px; border-color: var(--cp-line); border-radius: 7px; color: var(--cp-muted); font-size: 12px; font-weight: 600; }
+.campus-shell .journal-group-tabs button.is-active { border-color: var(--cp-blue); background: var(--cp-bg); color: var(--cp-blue); }
+.campus-shell .journal-detail-head { align-items: center; }
+.campus-shell .journal-table-panel { padding: 0; overflow: hidden; }
+.campus-shell .journal-table-wrap { border-color: var(--cp-line); }
+.campus-shell .journal-table { font-family: var(--cp-font); }
+.campus-shell .journal-table :is(th, td) { border-color: var(--cp-line); }
+.campus-shell .journal-table th { background: var(--cp-bg); color: var(--cp-muted); font-size: 12px; font-weight: 600; }
+.campus-shell .journal-table td { color: var(--cp-ink); font-size: 12px; }
+.campus-shell .journal-table tbody tr:hover { background: var(--cp-bg); }
+.campus-shell .journal-table .journal-student-column { background: var(--cp-bg); box-shadow: 1px 0 0 var(--cp-line); }
+.campus-shell .journal-table tbody .journal-student-column { background: var(--cp-paper); }
+.campus-shell .journal-table tbody tr:hover .journal-student-column { background: var(--cp-bg); }
+.campus-shell .journal-table .journal-summary-column { background: var(--cp-bg); }
+.campus-shell .journal-table .journal-score-cell--summary { background: var(--cp-bg); }
+.campus-shell .journal-table .journal-assessment-column strong { color: var(--cp-ink); font-size: 11px; }
+.campus-shell .journal-table .journal-assessment-column small { color: var(--cp-muted); font-size: 10px; }
+.campus-shell .journal-central-matching { gap: 14px; }
+.campus-shell .journal-central-matching-heading h2 { color: var(--cp-ink); font: 650 20px/1.3 var(--cp-font); }
+.campus-shell .journal-matching-book { border-color: var(--cp-line); border-radius: 8px; background: var(--cp-paper); color: var(--cp-ink); }
+.campus-shell .journal-matching-book span { color: var(--cp-muted); }
+.campus-shell .journal-matching-book.is-active { border-color: var(--cp-blue); background: var(--cp-bg); }
+.campus-shell .journal-matching-panel { border-color: var(--cp-line); border-radius: 9px; background: var(--cp-bg); }
+.campus-shell .journal-matching-panel h3 { color: var(--cp-ink); font-size: 14px; font-weight: 650; }
+.campus-shell .journal-mapping-row { border-color: var(--cp-line); border-radius: 8px; background: var(--cp-paper); }
+.campus-shell .journal-mapping-row > div:first-child strong { color: var(--cp-ink); font-size: 13px; font-weight: 600; }
+.campus-shell .journal-batch-tools { border-color: var(--cp-line); border-radius: 9px; background: var(--cp-paper); }
+.campus-shell .journal-alias-list label { border-color: var(--cp-line); border-radius: 7px; background: var(--cp-bg); }
+.campus-shell .journal-alias-list strong, .campus-shell .journal-tab-settings strong { color: var(--cp-ink); }
+.campus-shell .journal-candidate-picker :is(input, select), .campus-shell .journal-create-fields input, .campus-shell .journal-map-controls :is(input, select) { border-color: var(--cp-line); border-radius: 7px; color: var(--cp-ink); }
+.campus-shell .journal-scope-tabs { background: var(--cp-bg); }
+.campus-shell .journal-scope-tabs button { color: var(--cp-muted); font-size: 12px; }
+.campus-shell .journal-scope-tabs button.is-active { background: var(--cp-paper); color: var(--cp-blue); }
+.campus-shell .journal-combobox-label, .campus-shell .journal-create-fields label, .campus-shell .journal-detail-nav label { color: var(--cp-muted); }
+.campus-shell .journal-candidate-options { border-color: var(--cp-line); border-radius: 8px; background: var(--cp-paper); }
+.campus-shell .journal-candidate-options [role="option"] { color: var(--cp-ink); }
+.campus-shell .journal-candidate-options [role="option"]:hover, .campus-shell .journal-candidate-options [role="option"][aria-selected="true"] { background: var(--cp-bg); }
+.campus-shell .journal-match-review { border-color: var(--cp-line); border-radius: 8px; background: var(--cp-bg); }
+.campus-shell .journal-match-review p, .campus-shell .journal-match-review small { color: var(--cp-ink); }
+.campus-shell .journal-duplicate-warning { color: #805d2b; }
+.campus-shell .journal-tab-settings { border-color: var(--cp-line); border-radius: 8px; background: var(--cp-paper); }
+.campus-shell .journal-tab-setting-row { border-color: var(--cp-line); }
+.campus-shell .journal-create-student { border-color: var(--cp-line); }
+.campus-shell .journal-tab-settings label { border-color: var(--cp-line); }
+.campus-shell .journal-tab-settings summary, .campus-shell .journal-create-student summary, .campus-shell .journal-back { color: var(--cp-blue); }
+.campus-shell .journal-tab-settings select { border-color: var(--cp-line); color: var(--cp-ink); }
+.campus-shell .journal-source-error { border: 1px solid var(--cp-line); background: var(--cp-bg); color: #805d2b; }
+.campus-shell .journal-toggle { color: var(--cp-muted); font-size: 12px; }
+.campus-shell .journal-workspace :is(.journal-grade-tabs, .journal-group-tabs, .journal-matching-books, .journal-subject-grid) button:focus-visible { outline-color: var(--cp-blue); }
+
+.campus-shell .journal-workspace .admin-button { min-height:36px; padding:8px 12px; border:1px solid var(--cp-line); border-radius:8px; background:var(--cp-paper); color:var(--cp-ink); font:600 11px/1.5 var(--cp-font); box-shadow:none; }
+.campus-shell .journal-workspace .admin-button--primary { background:var(--cp-coral); border-color:var(--cp-coral); color:var(--cp-paper); }
+.campus-shell .journal-workspace .admin-panel { border-radius:14px; }
