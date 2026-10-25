@@ -4262,10 +4262,8 @@ class Database:
         with self.connection() as connection:
             row = self.execute(
                 connection,
-                """SELECT 1
-                     FROM journal_assessments ja
-                     JOIN journal_results jr ON jr.assessment_id = ja.id
-                    WHERE ja.source_id = ? AND jr.group_marker = ?
+                """SELECT 1 FROM journal_students
+                    WHERE source_id = ? AND group_marker = ? AND active IS TRUE
                     LIMIT 1""",
                 (source_id, group_marker),
             ).fetchone()

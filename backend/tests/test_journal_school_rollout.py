@@ -16,6 +16,17 @@ from backend.services.journal_import import sync_journal_values
 
 
 class JournalSchoolRolloutTests(unittest.TestCase):
+    def test_empty_gradebook_roster_can_be_mapped_before_first_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / 'empty.db')
+            database.initialize()
+            sync_journal_values(database,[['Дата',''],['Задание',''],['Вес',''],['Оценка',''],['Student One','']],
+                spreadsheet_id='empty',spreadsheet_title='Synthetic',grade=5,subject='Math',sheet_title='Math',sheet_id=1)
+            source = database.journal_status()[0]
+            self.assertEqual(source['result_count'],0)
+            self.assertTrue(database.journal_group_marker_exists(source['id'],'all'))
+            self.assertFalse(database.journal_group_marker_exists(source['id'],'foreign'))
+
     def test_scheduler_detection_executes_query_at_its_own_entry_point(self):
         database = Database(database_url='postgresql://synthetic')
         connection = Mock()
