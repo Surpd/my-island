@@ -120,5 +120,48 @@ class JournalImportParserTests(unittest.TestCase):
         self.assertEqual({item["group_marker"] for item in parsed["results"]}, {"Group Alpha", "Group Beta"})
 
 
+    def test_auxiliary_exercise_table_does_not_extend_main_gradebook(self):
+        values = [
+            ["Дата", 46310], ["Задание", "Контрольная"], ["Вес", 1], ["Оценка", 10],
+            ["Иванов Иван", 8],
+            ["Дата", 46314], ["Задание", "Домашняя работа"], ["Вес", 1], ["Оценка", 10],
+            ["Иванов Иван", 9],
+            [46317], ["Ученик", "✓", "✗"], ["Иванов Иван", "✓", "✗"],
+            ["Верных по заданию", 1, 0],
+        ]
+
+        parsed = parse_journal_values(values, grade=11, subject="Математика", sheet_title="Математика")
+
+        self.assertEqual([item["title"] for item in parsed["assessments"]], ["Контрольная", "Домашняя работа"])
+        self.assertEqual({item["student_name"] for item in parsed["students"]}, {"Иванов Иван"})
+        self.assertEqual(len(parsed["results"]), 2)
+
+    def test_paired_art_history_names_are_teams_and_comments_are_hidden(self):
+        values = [
+            ["Дата", "01.09"], ["Задание", "Проект"], ["Вес", 1], ["Оценка", 10],
+            ["Агата и Тая (личный комментарий)", 8],
+        ]
+
+        parsed = parse_journal_values(values, grade=10, subject="История искусства", sheet_title="История искусства")
+
+        student = parsed["students"][0]
+        self.assertEqual(student["student_name"], "Агата и Тая")
+        self.assertEqual(student["entry_kind"], "team")
+        self.assertEqual(student["raw_source"]["source_name"], "Агата и Тая (личный комментарий)")
+        self.assertEqual(parsed["results"][0]["student_name"], "Агата и Тая")
+
+
+    def test_appended_multiline_comment_is_hidden_but_preserved_raw(self):
+        values = [
+            ["Дата", "01.09"], ["Задание", "Работа"], ["Вес", 1], ["Оценка", 10],
+            ["Иванов Иван\nличная пометка", 8],
+        ]
+
+        parsed = parse_journal_values(values, grade=10, subject="История", sheet_title="История")
+
+        self.assertEqual(parsed["students"][0]["student_name"], "Иванов Иван")
+        self.assertEqual(parsed["students"][0]["raw_source"]["source_name"], "Иванов Иван\nличная пометка")
+
+
 if __name__ == "__main__":
     unittest.main()

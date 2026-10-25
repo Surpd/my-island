@@ -21,11 +21,15 @@ def suggestion_reason(source_name: str, target_name: str) -> str | None:
     source, target = normalized_name(source_name).split(), normalized_name(target_name).split()
     if len(source) != 2 or len(target) != 2:
         return None
-    short_names = {"виктория": "вика", "екатерина": "катя", "петр": "петя", "михаил": "миша", "александр": "саша", "анастасия": "настя", "алексей": "леша", "мария": "маша", "дарья": "даша", "елизавета": "лиза", "николай": "коля", "василий": "вася", "константин": "костя"}
-    if source[0] == target[0] and short_names.get(source[1], source[1]) == short_names.get(target[1], target[1]):
-        return "Совпадает фамилия; полная и краткая формы имени. Требуется подтверждение."
-    if source[1] == target[1] and SequenceMatcher(None, source[0], target[0]).ratio() >= 0.85:
-        return "Совпадает имя; похожая фамилия с возможной опечаткой. Требуется подтверждение."
+    short_names = {"виктория": "вика", "екатерина": "катя", "петр": "петя", "михаил": "миша", "александр": "саша", "анастасия": "настя", "алексей": "леша", "мария": "маша", "дарья": "даша", "елизавета": "лиза", "николай": "коля", "василий": "вася", "константин": "костя", "даниил": "даня", "данила": "даня"}
+    for left in (source, source[::-1]):
+        for right in (target, target[::-1]):
+            if left == right:
+                return "Совпадают имя и фамилия; проверьте соответствие."
+            if left[0] == right[0] and short_names.get(left[1], left[1]) == short_names.get(right[1], right[1]):
+                return "Совпадает фамилия; полная и краткая формы имени. Требуется подтверждение."
+            if left[1] == right[1] and SequenceMatcher(None, left[0], right[0]).ratio() >= 0.85:
+                return "Совпадает имя; похожая фамилия. Требуется подтверждение."
     return None
 
 

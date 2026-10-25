@@ -633,6 +633,7 @@ CREATE TABLE IF NOT EXISTS journal_sources (
   term_number INTEGER CHECK (term_number BETWEEN 1 AND 3),
   period_status TEXT NOT NULL DEFAULT 'current' CHECK (period_status IN ('current','archived','unassigned')),
   auto_sync_enabled INTEGER NOT NULL DEFAULT 0,
+  excluded_from_journals INTEGER NOT NULL DEFAULT 0,
   source_hash TEXT,
   status TEXT NOT NULL DEFAULT 'ready',
   last_synced_at TEXT,
@@ -1115,6 +1116,7 @@ class Database:
             "journal_sources": {
                 "sheet_id": "TEXT",
                 "auto_sync_enabled": "INTEGER NOT NULL DEFAULT 0",
+                "excluded_from_journals": "INTEGER NOT NULL DEFAULT 0",
             },
             "journal_assessments": {
                 "value_signature": "TEXT",
@@ -4570,7 +4572,7 @@ class Database:
                 connection,
                 """SELECT js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                           js.academic_year, js.term_number, js.period_status,
-                          js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled,
+                          js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled, js.excluded_from_journals,
                           (SELECT run.id FROM journal_sync_runs run WHERE run.spreadsheet_id = js.spreadsheet_id AND run.status = 'running' ORDER BY run.started_at DESC LIMIT 1) AS active_run_id,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE THEN ja.id END) AS assessment_count,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE AND jr.is_current IS TRUE THEN jr.id END) AS result_count,
@@ -4584,7 +4586,7 @@ class Database:
                      LEFT JOIN journal_students result_student ON result_student.id=jr.journal_student_id
                     GROUP BY js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                       js.academic_year, js.term_number, js.period_status,
-                      js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled
+                      js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled, js.excluded_from_journals
                     ORDER BY js.grade, js.subject""",
             ).fetchall()
             items: list[dict[str, Any]] = []
@@ -4660,7 +4662,7 @@ class Database:
             return True
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
-            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, auto_sync_enabled FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
+            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, auto_sync_enabled, excluded_from_journals FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
             if not source:
                 return None
             params: tuple[Any, ...] = (source_id,)
@@ -4737,7 +4739,7 @@ class Database:
     def journal_auto_sync_sources(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = self.execute(connection, """SELECT spreadsheet_id, MAX(spreadsheet_title) AS spreadsheet_title, MAX(grade) AS grade
-                FROM journal_sources WHERE auto_sync_enabled IS TRUE GROUP BY spreadsheet_id ORDER BY grade""").fetchall()
+                FROM journal_sources WHERE auto_sync_enabled IS TRUE AND excluded_from_journals IS FALSE GROUP BY spreadsheet_id ORDER BY grade""").fetchall()
             return [dict(row) for row in rows]
 
     def journal_sync_history(self, spreadsheet_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -4755,7 +4757,22 @@ class Database:
             cursor = self.execute(connection, "UPDATE journal_sources SET auto_sync_enabled = ? WHERE spreadsheet_id = ?", (bool(enabled), spreadsheet_id))
             return int(cursor.rowcount or 0)
 
-    def _journal_identity(self, connection: Any, identity_id: Any, grade: int) -> dict[str, Any]:
+    def journal_source_sync_settings(self, spreadsheet_id: str) -> list[dict[str, Any]]:
+        with self.connection() as connection:
+            return [dict(row) for row in self.execute(connection, "SELECT id,spreadsheet_id,sheet_id,sheet_title,auto_sync_enabled,excluded_from_journals FROM journal_sources WHERE spreadsheet_id=?", (spreadsheet_id,)).fetchall()]
+
+    def set_journal_source_mode(self, source_id: Any, mode: str) -> dict[str, Any]:
+        if mode not in {'auto', 'manual', 'excluded'}:
+            raise ValueError('Неизвестный режим источника.')
+        with self.connection() as connection:
+            source = self.execute(connection, "SELECT spreadsheet_id FROM journal_sources WHERE id=?", (source_id,)).fetchone()
+            if not source:
+                raise ValueError('Источник не найден.')
+            self._journal_mapping_lock(connection, source['spreadsheet_id'])
+            self.execute(connection, "UPDATE journal_sources SET auto_sync_enabled=?,excluded_from_journals=? WHERE id=?", (mode == 'auto',mode == 'excluded',source_id))
+            return {'source_id':str(source_id),'mode':mode,'auto_sync_enabled':mode == 'auto','excluded_from_journals':mode == 'excluded'}
+
+    def _journal_identity(self, connection: Any, identity_id: Any, grade: int, allow_cross_grade: bool = False) -> dict[str, Any]:
         from backend.services.journal_matching import belongs_to_grade
         if self.database_url:
             import uuid
@@ -4772,7 +4789,7 @@ class Database:
             FROM memberships m JOIN groups g ON g.id=m.group_id WHERE m.identity_id=? AND m.active IS TRUE
             AND m.member_role='student' AND (m.valid_from IS NULL OR m.valid_from<=CURRENT_DATE)
             AND (m.valid_until IS NULL OR m.valid_until>=CURRENT_DATE) ORDER BY g.id""", (identity_id,)).fetchall()]
-        if not belongs_to_grade(item, grade):
+        if not allow_cross_grade and not belongs_to_grade(item, grade):
             raise ValueError('Класс или действующая учебная группа ученика не соответствует журналу.')
         return item
 
@@ -4784,7 +4801,7 @@ class Database:
         if self.execute(connection, "SELECT id FROM journal_sync_runs WHERE spreadsheet_id=? AND status='running' LIMIT 1", (spreadsheet_id,)).fetchone():
             raise ValueError('Сейчас выполняется синхронизация. Дождитесь её завершения и повторите предпросмотр.')
 
-    def _journal_match_preview(self, connection: Any, spreadsheet_id: str, source_name: str, identity_id: Any, replace_existing: bool = False) -> dict[str, Any]:
+    def _journal_match_preview(self, connection: Any, spreadsheet_id: str, source_name: str, identity_id: Any, replace_existing: bool = False, allow_cross_grade: bool = False) -> dict[str, Any]:
         from backend.services.journal_matching import normalized_name, preview_fingerprint
         records = [dict(row) for row in self.execute(connection, """SELECT student.id,student.source_id,student.identity_id,student.match_status,student.match_method,
             student.display_name,student.updated_at,source.grade FROM journal_students student JOIN journal_sources source ON source.id=student.source_id
@@ -4795,7 +4812,7 @@ class Database:
         grades = {row['grade'] for row in records}
         if len(grades) != 1:
             raise ValueError('Источник содержит записи разных классов. Требуется отдельная проверка.')
-        identity = self._journal_identity(connection, identity_id, records[0]['grade'])
+        identity = self._journal_identity(connection, identity_id, records[0]['grade'],allow_cross_grade)
         unresolved = [row for row in records if row['identity_id'] is None or replace_existing and str(row['identity_id']) != str(identity_id)]
         if not unresolved:
             raise ValueError('Это имя уже сопоставлено. Обновите список.')
@@ -4812,10 +4829,11 @@ class Database:
         if not replace_existing and any(row['identity_id'] is not None and str(row['identity_id']) != str(identity_id) for row in records):
             raise ValueError('В одном из предметов уже есть другая связь для этого имени. Она сохранена; требуется ручная проверка конфликта.')
         for record in records:
-            groups = self.execute(connection, "SELECT gm.group_id FROM journal_group_mappings gm JOIN journal_students s ON s.source_id=gm.source_id AND s.group_marker=gm.group_marker WHERE s.id=? AND gm.group_id IS NOT NULL", (record['id'],)).fetchall()
+            groups = self.execute(connection, "SELECT gm.group_id,g.group_type FROM journal_group_mappings gm JOIN groups g ON g.id=gm.group_id JOIN journal_students s ON s.source_id=gm.source_id AND s.group_marker=gm.group_marker WHERE s.id=? AND gm.group_id IS NOT NULL", (record['id'],)).fetchall()
+            groups = [g for g in groups if not (allow_cross_grade and g['group_type'] == 'class')]
             if groups and not any(self.execute(connection, "SELECT 1 FROM memberships WHERE identity_id=? AND group_id=? AND active IS TRUE AND member_role='student' AND (valid_from IS NULL OR valid_from<=CURRENT_DATE) AND (valid_until IS NULL OR valid_until>=CURRENT_DATE)", (identity_id,g['group_id'])).fetchone() for g in groups):
                 raise ValueError('Имя встречается в несовместимых учебных группах. Общий алиас не применён; требуется проверка источника.')
-        payload = {'spreadsheet_id': spreadsheet_id, 'replace_existing': replace_existing, 'source_name': normalized_name(source_name), 'identity': identity,
+        payload = {'spreadsheet_id': spreadsheet_id, 'replace_existing': replace_existing, 'allow_cross_grade':allow_cross_grade, 'source_name': normalized_name(source_name), 'identity': identity,
                    'records': records, 'results': results, 'mapping': dict(mapping) if mapping else None}
         return {'source_name': source_name, 'identity': identity, 'record_count': len(unresolved),
                 'subject_count': len({row['source_id'] for row in unresolved}),
@@ -4835,30 +4853,33 @@ class Database:
             preview = self._journal_match_preview(connection, spreadsheet_id, source_name, identity_id, replace_existing)
             if not hmac.compare_digest(preview_token, preview['preview_token']):
                 raise ValueError('Данные изменились после предпросмотра. Проверьте новый предпросмотр.')
-            previous_mapping = preview['_mapping']
-            raw = '?::jsonb' if self.database_url else '?'
-            if not previous_mapping or str(previous_mapping['identity_id']) != str(identity_id) or previous_mapping['status'] != 'confirmed' or not previous_mapping['manually_confirmed']:
-                if previous_mapping:
-                    self.execute(connection, "UPDATE school_source_mappings SET valid_until=CURRENT_DATE,updated_at=CURRENT_TIMESTAMP WHERE id=?", (previous_mapping['id'],))
-                mapping_id = self.execute(connection, f"""INSERT INTO school_source_mappings(source_id,external_key,mapping_type,identity_id,status,manually_confirmed,evidence,created_by,supersedes_mapping_id)
-                    VALUES (?,?,'identity',?,'confirmed',TRUE,{raw},?,?) RETURNING id""",
-                    (preview['_mapping_source_id'],preview['_alias_key'],identity_id,json.dumps({'source':'journal_matching','confirmation':'admin_preview_confirmed'}),actor_user_id,previous_mapping['id'] if previous_mapping else None)).fetchone()['id']
-            else:
-                mapping_id = previous_mapping['id']
-            ids = [row['id'] for row in preview['_records']]
-            placeholders = ','.join('?' for _ in ids)
-            guard = '' if replace_existing else ' AND identity_id IS NULL'
-            self.execute(connection, f"UPDATE journal_students SET identity_id=?,match_status='linked',match_method='admin_source_alias',updated_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders}){guard} AND entry_kind='individual'", (identity_id,*ids))
-            cursor = self.execute(connection, f"UPDATE journal_results SET identity_id=? WHERE journal_student_id IN ({placeholders})", (identity_id,*ids))
-            changed_results = cursor.rowcount
-            for source_id in {row['source_id'] for row in preview['_records']}:
-                self._infer_journal_groups(connection, source_id)
-            # The audit stores previous associations by stable IDs for a targeted
-            # recovery; scores and grade history are never rewritten here.
-            audit = {'spreadsheet_id':spreadsheet_id,'identity_id':str(identity_id),'mapping_id':str(mapping_id),
-                     'previous_mapping':previous_mapping,'previous_students':preview['_records'],'previous_results':preview['_results']}
-            self.execute(connection, "INSERT INTO audit_log(actor_user_id,action,entity_type,details) VALUES (?,'journal_matching.confirmed','journal_source',?)", (actor_user_id,json.dumps(audit,ensure_ascii=False,default=str)))
-            return {'matched_records':len(ids),'updated_results':changed_results}
+            return self._apply_journal_match(connection, spreadsheet_id, identity_id, preview, actor_user_id, replace_existing)
+
+    def _apply_journal_match(self, connection: Any, spreadsheet_id: str, identity_id: Any, preview: dict[str, Any], actor_user_id: Any, replace_existing: bool = False) -> dict[str, int]:
+        previous_mapping = preview['_mapping']
+        raw = '?::jsonb' if self.database_url else '?'
+        if not previous_mapping or str(previous_mapping['identity_id']) != str(identity_id) or previous_mapping['status'] != 'confirmed' or not previous_mapping['manually_confirmed']:
+            if previous_mapping:
+                self.execute(connection, "UPDATE school_source_mappings SET valid_until=CURRENT_DATE,updated_at=CURRENT_TIMESTAMP WHERE id=?", (previous_mapping['id'],))
+            mapping_id = self.execute(connection, f"""INSERT INTO school_source_mappings(source_id,external_key,mapping_type,identity_id,status,manually_confirmed,evidence,created_by,supersedes_mapping_id)
+                VALUES (?,?,'identity',?,'confirmed',TRUE,{raw},?,?) RETURNING id""",
+                (preview['_mapping_source_id'],preview['_alias_key'],identity_id,json.dumps({'source':'journal_matching','confirmation':'admin_preview_confirmed'}),actor_user_id,previous_mapping['id'] if previous_mapping else None)).fetchone()['id']
+        else:
+            mapping_id = previous_mapping['id']
+        ids = [row['id'] for row in preview['_records']]
+        placeholders = ','.join('?' for _ in ids)
+        guard = '' if replace_existing else ' AND identity_id IS NULL'
+        self.execute(connection, f"UPDATE journal_students SET identity_id=?,match_status='linked',match_method='admin_source_alias',updated_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders}){guard} AND entry_kind='individual'", (identity_id,*ids))
+        cursor = self.execute(connection, f"UPDATE journal_results SET identity_id=? WHERE journal_student_id IN ({placeholders})", (identity_id,*ids))
+        changed_results = cursor.rowcount
+        for source_id in {row['source_id'] for row in preview['_records']}:
+            self._infer_journal_groups(connection, source_id)
+        # The audit stores previous associations by stable IDs for a targeted
+        # recovery; scores and grade history are never rewritten here.
+        audit = {'spreadsheet_id':spreadsheet_id,'identity_id':str(identity_id),'mapping_id':str(mapping_id),
+                 'previous_mapping':previous_mapping,'previous_students':preview['_records'],'previous_results':preview['_results']}
+        self.execute(connection, "INSERT INTO audit_log(actor_user_id,action,entity_type,details) VALUES (?,'journal_matching.confirmed','journal_source',?)", (actor_user_id,json.dumps(audit,ensure_ascii=False,default=str)))
+        return {'matched_records':len(ids),'updated_results':changed_results}
 
     def journal_matching_overview(self, spreadsheet_id: str) -> dict[str, Any]:
         from backend.services.journal_matching import normalized_name, suggestion_reason

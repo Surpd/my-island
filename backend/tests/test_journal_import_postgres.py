@@ -37,7 +37,7 @@ class IsolatedPostgresDatabase(Database):
         import psycopg
         from psycopg.rows import dict_row
 
-        connection = psycopg.connect(self.database_url, row_factory=dict_row)
+        connection = psycopg.connect(self.database_url, row_factory=dict_row, connect_timeout=15, keepalives=1, keepalives_idle=15, keepalives_interval=5, keepalives_count=3)
         try:
             connection.execute(f'SET search_path TO "{self.schema}"')
             yield connection
@@ -95,7 +95,7 @@ class JournalImportPostgresTests(unittest.TestCase):
         cls.schema = "journal_it_" + uuid.uuid4().hex
         from psycopg.rows import dict_row
 
-        cls.admin_connection = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        cls.admin_connection = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=15, keepalives=1, keepalives_idle=15, keepalives_interval=5, keepalives_count=3)
         try:
             cls.admin_connection.execute(f'CREATE SCHEMA "{cls.schema}"')
             for table in cls.TABLES:
@@ -211,6 +211,12 @@ class JournalImportPostgresTests(unittest.TestCase):
                 (900000 + int(uuid.uuid4().hex[:8], 16),),
             ).fetchone()["id"]
         return str(source["id"]), str(identity["id"]), str(actor)
+
+    def test_admin_creation_and_source_settings_regression(self):
+        from backend.tests.test_journal_admin_matching import exercise_matching
+        with self.database.connection() as connection:
+            connection.execute("ALTER TABLE journal_sources ADD COLUMN IF NOT EXISTS excluded_from_journals boolean NOT NULL DEFAULT false")
+        exercise_matching(self.database)
 
     def test_matching_preview_is_read_only_and_confirmation_updates_only_journal_links(self):
         student_id, identity_id, actor_id = self._matching_fixture()

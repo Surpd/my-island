@@ -152,6 +152,11 @@ def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list
                 found[kind] = next_index
             if _normalized(_cell(values[next_index], 0)) == "участники" and any(re.search(r"оценка.*из\s*\d+", _normalized(v)) for v in values[next_index][1:]):
                 found.setdefault("max_score", next_index)
+        # A date-like row is only a gradebook block when it is followed by an
+        # assignment-title header. Auxiliary tables often have their own dates
+        # but use labels such as "Ученик" and statistics, not assignment columns.
+        if "title" not in found:
+            continue
         missing = set(HEADER_ALIASES) - found.keys()
         # Project checklists deliberately have no numerical weights/maxima.
         if _normalized(sheet_title).startswith("проекты") and found.get("title") == index + 1:
@@ -163,6 +168,15 @@ def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list
         expected = ", ".join(sorted(next(iter(HEADER_ALIASES.values()))))
         raise ValueError(f"{sheet_title}: не найден блок с датой, работой, весом и максимальным баллом")
     return blocks
+
+
+def _display_name(value: str) -> str:
+    """Remove appended private comments from a display name conservatively."""
+    # Notes are commonly appended on a new line or in parentheses. Do not
+    # split on ordinary spaces/punctuation, which can be part of a real name.
+    name = re.split(r"\s*\r?\n\s*", value, maxsplit=1)[0].strip()
+    name = re.sub(r"\s*\([^()]*\)\s*$", "", name).strip()
+    return name
 
 
 def _section_label(value: object) -> bool:
@@ -184,6 +198,12 @@ def parse_journal_values(
     if not values:
         raise ValueError(f"{sheet_title}: журнал пуст")
     blocks = _header_blocks(values, sheet_title)
+    # Auxiliary exercise/statistics tables may start with their own date row,
+    # followed by a compact roster header rather than gradebook metadata.
+    auxiliary_starts = [index for index, row in enumerate(values)
+                        if (_header_kind(_cell(row, 0)) == "date" or _date(_cell(row, 0), school_year_start) is not None)
+                        and index + 1 < len(values)
+                        and _normalized(_cell(values[index + 1], 0)) == "ученик"]
     width = max((len(row) for row in values), default=0)
     assessments: list[dict[str, Any]] = []
     students_by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -218,11 +238,15 @@ def parse_journal_values(
         summary_columns = [(column, str(_cell(title_row, column) or "").strip(), _summary_type(_cell(title_row, column))) for column in range(1, width) if _summary_type(_cell(title_row, column))]
         metadata_rows = {key: values[row_index] for key, row_index in block.items()}
         end = blocks[block_index + 1]["date"] if block_index + 1 < len(blocks) else len(values)
+        later_auxiliary = [start for start in auxiliary_starts if start > max(block.values())]
+        if later_auxiliary:
+            end = min(end, min(later_auxiliary))
         student_rows: list[tuple[int, str, str]] = []
         current_marker = marker
         for row_index in range(max(block.values()) + 1, end):
             row = values[row_index]
-            name = str(_cell(row, 0) if _cell(row, 0) is not None else "").strip()
+            raw_name = str(_cell(row, 0) if _cell(row, 0) is not None else "").strip()
+            name = _display_name(raw_name)
             normalized_name = _normalized(name)
             if not name or normalized_name in SUMMARY_HEADERS or _header_kind(name):
                 continue
@@ -241,8 +265,10 @@ def parse_journal_values(
             student_key = f"{_normalized(name)}|{student_marker}"
             students_by_key.setdefault((student_marker, student_key), {
                 "student_name": name, "student_key": student_key, "group_marker": student_marker,
-                "entry_kind": "team" if re.match(r"^(?:команда|team)\b", _normalized(name)) else "individual",
-                "source_row": row_index + 1, "raw_source": {"student_row": row_index + 1},
+                "entry_kind": "team" if (re.match(r"^(?:команда|team)\b", _normalized(name)) or
+                    (grade in {10, 11} and _normalized(subject) in {"история искусства", "art history"} and
+                     re.search(r"\s+и\s+", _normalized(name)))) else "individual",
+                "source_row": row_index + 1, "raw_source": {"student_row": row_index + 1, "source_name": str(_cell(values[row_index], 0) or "").strip()},
             })
 
         for row_index, name, student_marker in student_rows:
@@ -280,7 +306,7 @@ def parse_journal_values(
                 student_key = f"{_normalized(name)}|{student_marker}"
                 student = students_by_key.setdefault((student_marker, student_key), {
                     "student_name": name, "student_key": student_key, "group_marker": student_marker,
-                    "source_row": row_index + 1, "raw_source": {"student_row": row_index + 1},
+                    "source_row": row_index + 1, "raw_source": {"student_row": row_index + 1, "source_name": str(_cell(values[row_index], 0) or "").strip()},
                 })
                 raw_value = _cell(values[row_index], column)
                 text_value = str(raw_value if raw_value is not None else "").strip()

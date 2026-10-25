@@ -214,6 +214,29 @@ class JournalMatchConfirmPayload(JournalMatchPreviewPayload):
     preview_token: str = Field(min_length=64, max_length=64)
 
 
+class JournalBatchPayload(BaseModel):
+    allow_cross_grade: bool = False
+    spreadsheet_id: str = Field(min_length=1, max_length=200)
+    source_names: list[str] = Field(min_length=1, max_length=50)
+    identity_id: str = Field(min_length=1, max_length=100)
+    preview_token: str = ""
+
+
+class JournalCreateStudentPayload(BaseModel):
+    spreadsheet_id: str = Field(min_length=1, max_length=200)
+    source_names: list[str] = Field(min_length=1, max_length=50)
+    surname: str = Field(min_length=1, max_length=100)
+    given_name: str = Field(min_length=1, max_length=100)
+    grade: int = Field(ge=5, le=11)
+    comment: str = Field(default="", max_length=1000)
+    preview_token: str = ""
+
+
+class JournalSourceSettingsPayload(BaseModel):
+    source_id: str = Field(min_length=1, max_length=100)
+    mode: str = "auto"
+
+
 class JournalTeamMembersPayload(BaseModel):
     identity_ids: list[str] = Field(max_length=30)
 
@@ -292,7 +315,7 @@ def _refresh_grade_journal_background(database: Database, settings: Any, grade: 
         success_count = sum(item.get("status") == "success" for item in tabs)
         failed_count = sum(item.get("status") == "error" for item in tabs)
         run_status = "success" if result.get("status") == "success" else "partial"
-        database.finish_journal_sync(run_id, status=run_status, counts={"completed_tabs": len(tabs), "total_tabs": len(tabs), "succeeded": success_count, "failed": failed_count})
+        database.finish_journal_sync(run_id, status=run_status, counts={"completed_tabs": len(tabs), "total_tabs": len(tabs), "succeeded": success_count, "failed": failed_count, "skipped": sum(tab.get("status") == "skipped" for tab in tabs), "excluded": sum(tab.get("status") == "excluded" for tab in tabs)})
         if trigger_kind == "manual" and actor_id is not None:
             try:
                 database.record_audit_event("journal_sync.completed", "journal_sync", {"spreadsheet_id": spreadsheet_id, "grade": grade, "status": run_status}, actor_id)
@@ -965,6 +988,7 @@ def create_router(database: Database) -> APIRouter:
         spreadsheet_id = match.group(1) if match else raw
         if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", spreadsheet_id):
             raise HTTPException(status_code=400, detail="Укажите ссылку на Google Таблицу или её идентификатор")
+        already_connected = any(item["spreadsheet_id"] == spreadsheet_id for item in database.journal_status())
         run_id = database.start_journal_sync(spreadsheet_id, payload.grade, None, "manual")
         if run_id is None:
             raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
@@ -973,7 +997,7 @@ def create_router(database: Database) -> APIRouter:
             success = result.get("status") == "success"
             scheduler_configured = database.journal_scheduler_configured()
             automation_enabled = success and payload.auto_sync_enabled and scheduler_configured
-            if automation_enabled:
+            if automation_enabled and not already_connected:
                 database.set_journal_auto_sync(spreadsheet_id, True)
             database.finish_journal_sync(run_id, status="success" if success else "partial", counts={"tabs": len(result.get("tabs", []))})
             database.record_audit_event("journal_source.connected", "journal_source", {"spreadsheet_id": spreadsheet_id, "grade": payload.grade, "auto_sync_enabled": automation_enabled}, actor["id"])
@@ -1043,6 +1067,73 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_matching(spreadsheet_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         return database.journal_matching_overview(spreadsheet_id)
+
+    @router.get("/admin/journals/matching/candidates")
+    def journal_candidates(grade: int, scope: str = "class", q: str = "", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        from backend.services.journal_admin_matching import candidates
+        try:
+            return {"items":candidates(database,grade,scope,q)}
+        except ValueError as error:
+            raise HTTPException(status_code=400,detail=str(error)) from error
+
+    @router.post("/admin/journals/matching/batch-preview")
+    def journal_batch_preview(payload: JournalBatchPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        from backend.services.journal_admin_matching import batch
+        try:
+            return batch(database,payload.model_dump(),actor['id'],confirm=False)
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
+    @router.post("/admin/journals/matching/batch-confirm")
+    def journal_batch_confirm(payload: JournalBatchPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        from backend.services.journal_admin_matching import batch
+        try:
+            return batch(database,payload.model_dump(),actor['id'],confirm=True)
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
+    @router.post("/admin/journals/matching/create-preview")
+    def journal_create_preview(payload: JournalCreateStudentPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        from backend.services.journal_admin_matching import create_student
+        try:
+            return create_student(database,payload.model_dump(),actor['id'],confirm=False)
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
+    @router.post("/admin/journals/matching/create-confirm")
+    def journal_create_confirm(payload: JournalCreateStudentPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        from backend.services.journal_admin_matching import create_student
+        try:
+            return create_student(database,payload.model_dump(),actor['id'],confirm=True)
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+
+    @router.post("/admin/journals/source-settings")
+    def journal_source_settings(payload: JournalSourceSettingsPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        try:
+            result = database.set_journal_source_mode(payload.source_id,payload.mode)
+        except ValueError as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
+        database.record_audit_event("journal_source.settings_changed","journal_source",result,actor['id'])
+        return result
+
+    @router.post("/admin/journals/source-refresh")
+    def journal_source_refresh(payload: JournalSourceSettingsPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data,x_dev_auth,x_telegram_init_data),"admin")
+        detail = database.journal_detail(payload.source_id)
+        if not detail:
+            raise HTTPException(status_code=404,detail="Источник не найден")
+        source = detail['source']
+        try:
+            return refresh_journal(database,get_settings(),int(source['grade']),source['sheet_title'],sheet_id=source['sheet_id'],spreadsheet_id=source['spreadsheet_id'])
+        except (ValueError,GoogleLiveError,RuntimeError) as error:
+            raise HTTPException(status_code=409,detail=str(error)) from error
 
     @router.post("/admin/journals/matching/preview")
     def admin_journal_matching_preview(payload: JournalMatchPreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
