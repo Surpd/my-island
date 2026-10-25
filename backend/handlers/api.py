@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Cookie, Header, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
@@ -32,7 +32,7 @@ from backend.services.schedule_sheet_publishing import export_saved_week
 from backend.services.school_template_selection import open_active_school_template
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
 from backend.services.google_sync_service import CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
-from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, schedule_admin_observability
+from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability
 from backend.services.canonical_weekly_refresh import preview_current_template, preview_current_week, refresh_current_week
 from backend.services.schedule_drafts import (
     audience_preview, get_draft, preview_changes,
@@ -54,6 +54,27 @@ from backend.services.student_membership_reconciliation import fetch_authoritati
 from backend.services.telegram_admin_bot import handle_admin_code_update
 
 logger = logging.getLogger(__name__)
+_APPROVED_SCHOOL_PROJECT = "kmrcbewmxeqqxfauiwyy"
+GENERIC_PREVIEW_SCHOOL_MODE_DETAIL = (
+    "Generic previews are unavailable in local read-only school mode. "
+    "Use the school directory workspace backed by its approved source database."
+)
+
+
+def _preview_data_source(database: Database, settings: Any) -> str:
+    if bool(getattr(settings, "local_test_mode", False)):
+        return "local_test"
+    configured_url = getattr(settings, "database_url", None)
+    database_url = getattr(database, "database_url", None)
+    if not database_url or database_url != configured_url:
+        return "unconfigured"
+    parsed = urlparse(database_url)
+    approved_host = parsed.hostname in {
+        f"db.{_APPROVED_SCHOOL_PROJECT}.supabase.co",
+        "aws-1-eu-west-1.pooler.supabase.com",
+    }
+    approved_user = bool(parsed.username and parsed.username.endswith(f".{_APPROVED_SCHOOL_PROJECT}"))
+    return "school" if approved_host and approved_user else "unconfigured"
 
 
 class SessionPayload(BaseModel):
@@ -124,6 +145,11 @@ class RolesPayload(BaseModel):
 
 class StudentPreviewPayload(BaseModel):
     target_user_id: str
+
+
+class PreviewPayload(BaseModel):
+    target_identity_id: str
+    role: str
 
 
 class MembershipOverridePayload(BaseModel):
@@ -333,7 +359,12 @@ def _refresh_grade_journal_background(database: Database, settings: Any, grade: 
 
 
 def create_router(database: Database) -> APIRouter:
-    router = APIRouter(prefix="/api")
+    async def reject_preview_writes(request: Request):
+        if (request.headers.get("x-preview-id") or request.headers.get("x-student-preview-id")) and request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+            # Lifecycle end is an authenticated admin action and does not use a preview header.
+            raise HTTPException(status_code=403, detail="Preview sessions are read-only")
+
+    router = APIRouter(prefix="/api", dependencies=[Depends(reject_preview_writes)])
     from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
 
     def authenticate(init_data: str | None, dev_auth: str | None, telegram_header: str | None = None, browser_session: str | None = None):
@@ -591,7 +622,7 @@ def create_router(database: Database) -> APIRouter:
         database.record_audit_event("admin_auth.login", "admin_browser_session", {"transport": "browser"}, user_id)
         return {
             "state": "approved",
-            "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]},
+            "user": {"id": user["id"], "role": "admin", "roles": database.list_user_roles(user["id"]), "identity_id": user["identity_id"]},
             # The HttpOnly cookie remains the primary transport. This browser-origin
             # fallback is needed for hosted sites that block
             # cross-site cookies; the frontend keeps it in sessionStorage only.
@@ -599,17 +630,18 @@ def create_router(database: Database) -> APIRouter:
         }
 
     @router.get("/admin/auth/session")
-    def admin_browser_session(x_dev_auth: str | None = Header(default=None), my_island_admin_session: str | None = Cookie(default=None)):
-        telegram_user = authenticate(None, x_dev_auth, browser_session=my_island_admin_session)
+    def admin_browser_session(x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), my_island_admin_session: str | None = Cookie(default=None)):
+        telegram_user = authenticate(None, x_dev_auth, telegram_header=x_telegram_init_data, browser_session=my_island_admin_session)
         user = require_role(telegram_user, "admin")
-        return {"state": "approved", "mode": "browser" if my_island_admin_session else "dev", "user": {"id": user["id"], "role": "admin", "identity_id": user["identity_id"]}}
+        return {"state": "approved", "mode": "browser" if my_island_admin_session or telegram_user.get("browser_session") else "telegram", "user": {"id": user["id"], "role": "admin", "roles": database.list_user_roles(user["id"]), "identity_id": user["identity_id"]}}
 
     @router.post("/admin/auth/logout")
-    def admin_browser_logout(response: Response, my_island_admin_session: str | None = Cookie(default=None)):
-        if my_island_admin_session:
-            session = database.get_admin_browser_session(my_island_admin_session)
+    def admin_browser_logout(response: Response, x_dev_auth: str | None = Header(default=None), my_island_admin_session: str | None = Cookie(default=None)):
+        browser_token = my_island_admin_session or (x_dev_auth.removeprefix("browser:") if x_dev_auth and x_dev_auth.startswith("browser:") else None)
+        if browser_token:
+            session = database.get_admin_browser_session(browser_token)
             if session:
-                database.revoke_admin_browser_session(my_island_admin_session)
+                database.revoke_admin_browser_session(browser_token)
                 database.record_audit_event("admin_auth.logout", "admin_browser_session", {"transport": "browser"}, session["user_id"])
         response.delete_cookie("my_island_admin_session", path="/")
         return {"state": "logged_out"}
@@ -622,12 +654,28 @@ def create_router(database: Database) -> APIRouter:
             preview = database.get_active_student_preview(preview_id, actor["id"])
             legacy_target = database.get_user_by_id(preview["target_user_id"]) if preview and not preview["target_identity_id"] else None
             target = database.get_student_identity(preview["target_identity_id"] if preview and preview["target_identity_id"] else (legacy_target["identity_id"] if legacy_target else ""))
-            if not target or not target["identity_id"] or target["kind"] != "student":
+            canonical = database.get_identity(target["identity_id"]) if target and target["identity_id"] else None
+            if not target or not canonical or canonical["status"] != "active" or target["kind"] != "student":
                 raise HTTPException(status_code=403, detail="Student preview is invalid or expired")
             return target
         if not actor or not actor["identity_id"] or not database.user_has_role(actor["id"], "student"):
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
         return actor
+
+    def preview_subject(telegram_user: dict, preview_id: str | None, role: str):
+        actor = authenticated_user(telegram_user)
+        if not actor or not database.user_has_role(actor["id"], "admin"):
+            raise HTTPException(status_code=403, detail="Admin role required for preview")
+        preview = database.get_active_student_preview(preview_id, actor["id"]) if preview_id else None
+        identity_id = preview["target_identity_id"] if preview else None
+        target = database.get_identity(identity_id) if identity_id else None
+        if not target or target["kind"] != role or target["status"] != "active":
+            raise HTTPException(status_code=403, detail="Preview is invalid, expired, or has the wrong role")
+        return {"id": f"identity:{target['id']}", "identity_id": target["id"], "role": role,
+                "display_name": target["display_name"], "class_name": target["class_name"], "kind": target["kind"]}
+
+    def preview_teacher_groups(user: dict) -> list[dict[str, Any]]:
+        return database.list_teacher_groups(user["id"])
 
     @router.post("/auth/session")
     def session(payload: SessionPayload, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -635,7 +683,11 @@ def create_router(database: Database) -> APIRouter:
         selected_role = payload.role if payload.role in {"student", "teacher", "admin"} else "student"
         if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"}:
             selected_role = telegram_user["role"]
-        user = database.get_or_create_user(telegram_user["id"], selected_role)
+        # Public role selection is only a selector among roles already held.
+        # New Telegram principals always start as students; privileged roles
+        # are granted only by bootstrap or the explicit admin role manager.
+        initial_role = telegram_user["role"] if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"} else "student"
+        user = database.get_or_create_user(telegram_user["id"], initial_role)
         settings = get_settings()
         bootstrap_roles = ("teacher", "admin") if telegram_user["id"] in settings.telegram_bootstrap_user_ids else ()
         user = database.ensure_bootstrap_roles(telegram_user["id"], bootstrap_roles) or user
@@ -648,14 +700,17 @@ def create_router(database: Database) -> APIRouter:
     @router.post("/identity/claim")
     def create_identity_claim(payload: ClaimPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = database.get_or_create_user(telegram_user["id"], payload.role)
+        initial_role = telegram_user["role"] if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"} else "student"
+        user = database.get_or_create_user(telegram_user["id"], initial_role)
+        if payload.role not in {"student", "teacher"}:
+            raise HTTPException(status_code=400, detail="Only student or teacher identities can be claimed")
         claim = claim_identity(database, user["id"], payload.identity_id, payload.role)
         return {"id": claim["id"], "status": claim["status"]}
 
     @router.get("/student/today")
-    def student_today(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+    def student_today(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = student_subject(telegram_user, x_student_preview_id)
+        user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
         requested_day = day or date.today().isoformat()
         try:
             date.fromisoformat(requested_day)
@@ -668,23 +723,26 @@ def create_router(database: Database) -> APIRouter:
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "schedule": schedule, "day_block": None, "schedule_issues": projection.get("issues", []), "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
 
     @router.get("/student/grades")
-    def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+    def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = student_subject(telegram_user, x_student_preview_id)
+        user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_official_grades_for_user(user["id"])]}
 
     @router.get("/student/journals")
-    def student_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+    def student_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = student_subject(telegram_user, x_student_preview_id)
+        user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
         if not user["identity_id"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": database.student_journals(user["identity_id"])}
+        mapping_state = database.preview_journal_diagnostics(user["identity_id"])["mapping_state"]
+        return {"mode": "preview" if (x_preview_id or x_student_preview_id) else ("dev" if telegram_user.get("dev") else "telegram"),
+                "state": "approved", "mapping_state": mapping_state,
+                "items": database.student_journals(user["identity_id"])}
 
     @router.get("/student/homework")
-    def student_homework(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+    def student_homework(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = student_subject(telegram_user, x_student_preview_id)
+        user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
         return {
             "mode": "dev" if telegram_user.get("dev") else "telegram",
             "state": "approved",
@@ -693,9 +751,9 @@ def create_router(database: Database) -> APIRouter:
         }
 
     @router.get("/student/schedule")
-    def student_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+    def student_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = student_subject(telegram_user, x_student_preview_id)
+        user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
         try:
             date.fromisoformat(start_day)
             if end_day:
@@ -708,9 +766,14 @@ def create_router(database: Database) -> APIRouter:
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), **projection}
 
     @router.get("/student/profile")
-    def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id")):
+    def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = student_subject(telegram_user, x_student_preview_id)
+        user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
+        if str(user["id"]).startswith("identity:"):
+            person = database.get_people_library_person(user["identity_id"])
+            if not person:
+                raise HTTPException(status_code=404, detail="Student identity was not found")
+            return {"mode": "preview", "state": "approved", "user": {"id": str(person["id"]), "identity_id": str(person["id"]), "role": "student", "display_name": person["display_name"], "class_name": person.get("class_name")}, "groups": [{"id": str(item["id"]), "name": item.get("display_name") or item.get("name")} for item in person.get("groups", [])]}
         profile = database.get_student_profile(user["id"])
         if not profile:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
@@ -1751,6 +1814,48 @@ def create_router(database: Database) -> APIRouter:
         result = effective_blocks(database, week_start) if canonical_admin_backend_enabled() and week_start else {"status": "canonical_not_materialized", "items": []}
         return {"items": result.get("items", []), "status": result.get("status")}
 
+    @router.get("/admin/schedule/published-view")
+    def admin_schedule_published_view(week_start: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        try:
+            selected = date.fromisoformat(week_start)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="week_start must be an ISO date") from error
+        if selected.weekday() != 0:
+            raise HTTPException(status_code=400, detail="week_start must be Monday")
+        if not canonical_admin_backend_enabled():
+            return {"status": "canonical_backend_disabled", "published": False, "week_start": week_start, "effective_week_id": None, "items": []}
+        result = published_week_view(database, week_start)
+        with database.connection() as connection:
+            group_rows = database.execute(connection, "SELECT id,name,display_name FROM groups WHERE canonical IS TRUE").fetchall()
+            teacher_rows = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()
+        group_names = {str(row["id"]): str(row["display_name"] or row["name"]) for row in group_rows}
+        teacher_names = {str(row["id"]): str(row["display_name"] or row["id"]) for row in teacher_rows}
+        items = []
+        for block in result.get("items", []):
+            assignments = []
+            for raw in block.get("assignments", []):
+                assignment = dict(raw)
+                metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), dict) else {}
+                details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), dict) else {}
+                group_ids = [str(value) for value in assignment.get("canonical_group_ids") or []]
+                raw_audience = metadata.get("audience") if isinstance(metadata.get("audience"), dict) else {}
+                audience_rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), dict) else {}
+                audience = {**raw_audience, **audience_rule, "canonical_group_ids": group_ids,
+                            "groups": [group_names[group_id] for group_id in group_ids if group_id in group_names]}
+                teacher_ids = [str(value) for value in assignment.get("teacher_ids") or []]
+                teachers = metadata.get("teachers") if isinstance(metadata.get("teachers"), list) else []
+                if not teachers:
+                    teachers = [teacher_names[teacher_id] for teacher_id in teacher_ids if teacher_id in teacher_names]
+                assignments.append({**assignment,
+                    "title": str(details.get("activityNameSnapshot") or details.get("title") or assignment.get("activity") or ""),
+                    "audience": audience, "teachers": [str(name) for name in teachers],
+                    "room": str(metadata.get("room") or "")})
+            weekday = block.get("weekday")
+            items.append({**block, "date": (selected + timedelta(days=int(weekday))).isoformat() if weekday is not None else None,
+                          "assignments": assignments})
+        return {**{key: value for key, value in result.items() if key != "items"}, "items": items}
+
     @router.get("/admin/schedule/issues")
     def admin_schedule_issues(week_start: str | None = None, status: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
@@ -1960,6 +2065,89 @@ def create_router(database: Database) -> APIRouter:
         database.record_audit_event("user_roles.updated", "user", {"target_user_id": str(target["id"]), "roles": updated}, reviewer["id"])
         return {"user_id": target["id"], "roles": updated, "primary_role": primary_role}
 
+    def require_generic_preview_scope() -> None:
+        settings = get_settings()
+        local_school_mode = (os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" or
+                             os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1")
+        if not settings.local_test_mode and local_school_mode:
+            raise HTTPException(status_code=409, detail=GENERIC_PREVIEW_SCHOOL_MODE_DETAIL)
+
+    @router.get("/admin/previews/people")
+    def preview_people(role: str, q: str | None = None, class_name: str | None = None, group_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(actor, "admin")
+        require_generic_preview_scope()
+        if role not in {"student", "teacher"}:
+            raise HTTPException(status_code=400, detail="role must be student or teacher")
+        items = database.list_preview_people(role, q, class_name, group_id)
+        filters = database.list_people_filter_options(role=role)
+        groups = [{"id": str(item["id"]), "name": item.get("display_name") or item["name"]} for item in filters["groups"]]
+        classes = [str(item["value"]) for item in filters["classes"]]
+        return {"items": items, "groups": groups, "classes": classes}
+
+    @router.post("/admin/previews")
+    def start_preview(payload: PreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        reviewer = require_role(actor, "admin")
+        require_generic_preview_scope()
+        if payload.role not in {"student", "teacher"}:
+            raise HTTPException(status_code=400, detail="role must be student or teacher")
+        target = database.get_identity(payload.target_identity_id)
+        if not target or target["kind"] != payload.role or target["status"] != "active":
+            raise HTTPException(status_code=404, detail="Active canonical identity was not found")
+        created_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        preview = database.create_student_preview(reviewer["id"], reviewer["id"], created_at, expires_at, target_identity_id=target["id"])
+        return {"id": preview["id"], "role": payload.role,
+                "target": {"identity_id": str(target["id"]), "display_name": target["display_name"], "class_name": target["class_name"]},
+                "expires_at": preview["expires_at"]}
+
+    @router.post("/admin/previews/{preview_id}/end")
+    def end_preview(preview_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        reviewer = require_role(actor, "admin")
+        require_generic_preview_scope()
+        return {"ended": database.end_student_preview(preview_id, reviewer["id"])}
+
+    @router.get("/admin/previews/{preview_id}/diagnostics")
+    def preview_diagnostics(preview_id: str, start_day: str | None = None, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        reviewer = require_role(actor, "admin")
+        require_generic_preview_scope()
+        preview = database.get_active_student_preview(preview_id, reviewer["id"])
+        target = database.get_identity(preview["target_identity_id"]) if preview and preview["target_identity_id"] else None
+        if not target or target["status"] != "active":
+            raise HTTPException(status_code=404, detail="Preview is invalid or expired")
+        if start_day:
+            try:
+                date.fromisoformat(start_day)
+                if end_day:
+                    date.fromisoformat(end_day)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
+        person = database.get_people_library_person(target["id"])
+        memberships = (person or {}).get("groups", [])
+        if target["kind"] == "teacher":
+            memberships = [{"id": item.get("group_id"), "name": item.get("group_display_name") or item.get("group_name")}
+                          for item in (person or {}).get("teacher_assignments", []) if item.get("group_id") is not None]
+        schedule = None
+        if target["kind"] == "student" and start_day:
+            schedule = project_student_range(database, target["id"], start_day, end_day)
+        elif target["kind"] == "teacher" and start_day:
+            schedule = project_teacher_range(database, target["id"], start_day, end_day)
+        journal_data = database.preview_journal_diagnostics(target["id"]) if target["kind"] == "student" else None
+        journal_state = journal_data["mapping_state"] if journal_data else "not_applicable"
+        schedule_data = {"state": (schedule or {}).get("status", "not_requested"),
+                         "lesson_count": len((schedule or {}).get("items", [])),
+                         "issues": (schedule or {}).get("issues", [])}
+        journal = {"state": journal_state, "count": journal_data["current_result_count"], **journal_data} if journal_data else {"state": "not_applicable", "count": 0}
+        settings = get_settings()
+        data_source = _preview_data_source(database, settings)
+        return {"identity": {"identity_id": str(target["id"]), "kind": target["kind"], "display_name": target["display_name"], "class_name": target["class_name"]},
+                "groups": [{"id": str(item.get("id")), "name": item.get("display_name") or item.get("name")} for item in memberships if item.get("id") is not None],
+                "schedule": schedule_data, "journals": journal, "source_mode": "canonical", "data_source": data_source,
+                "issues": schedule_data["issues"], "expires_at": preview["expires_at"]}
+
     @router.post("/admin/student-previews")
     def start_student_preview(payload: StudentPreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -1998,17 +2186,17 @@ def create_router(database: Database) -> APIRouter:
         return {"items": database.list_schedule_explanations_for_user(target["id"], start_day, end_day)}
 
     @router.get("/teacher/courses")
-    def teacher_courses(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_courses(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         if not user["identity_id"]:
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "not_configured", "items": []}
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(item) for item in database.list_teacher_courses(user["id"])]}
 
     @router.get("/teacher/home")
-    def teacher_home(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_home(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         requested_day = day or date.today().isoformat()
         try:
             date.fromisoformat(requested_day)
@@ -2024,6 +2212,9 @@ def create_router(database: Database) -> APIRouter:
                 "information": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")],
             }
         schedule_projection = project_teacher_range(database, user["identity_id"], requested_day)
+        if x_preview_id:
+            return {"state": schedule_projection.get("status"), "schedule": schedule_projection.get("items", []),
+                    "schedule_issues": schedule_projection.get("issues", []), "groups": preview_teacher_groups(user), "information": []}
         return {
             "state": schedule_projection.get("status"),
             "schedule": schedule_projection.get("items", []),
@@ -2033,31 +2224,33 @@ def create_router(database: Database) -> APIRouter:
         }
 
     @router.get("/teacher/groups")
-    def teacher_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
-        return {"items": database.list_teacher_groups(user["id"]) if user["identity_id"] else []}
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
+        return {"items": preview_teacher_groups(user) if x_preview_id else (database.list_teacher_groups(user["id"]) if user["identity_id"] else [])}
 
     @router.get("/teacher/profile")
-    def teacher_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
+        if x_preview_id:
+            return {"state": "approved", "user": {"identity_id": str(user["identity_id"]), "display_name": user["display_name"], "class_name": user["class_name"]}, "groups": preview_teacher_groups(user)}
         profile = database.get_teacher_profile(user["id"])
         if not profile:
             return {"state": "not_configured", "user": None, "groups": []}
         return {"state": "approved", **profile}
 
     @router.get("/teacher/journals")
-    def teacher_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         items = database.teacher_journal_sources(user["id"]) if user["identity_id"] else []
         return {"state": "approved", "items": items}
 
     @router.get("/teacher/groups/{group_id}")
-    def teacher_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         if not database.teacher_can_access_group(user["id"], group_id):
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this group")
         journal = journal_view(database.list_group_journal(group_id, teacher_user_id=user['id']))
@@ -2077,9 +2270,9 @@ def create_router(database: Database) -> APIRouter:
         return {"students": students, "grade_histories": grade_histories, **journal}
 
     @router.get("/teacher/journals/{source_id}/{group_marker}")
-    def teacher_journal_marker(source_id: str, group_marker: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_journal_marker(source_id: str, group_marker: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         marker = group_marker.strip()
         detail = database.teacher_journal_detail(user["id"], source_id, marker)
         if not detail:
@@ -2087,15 +2280,17 @@ def create_router(database: Database) -> APIRouter:
         return detail
 
     @router.get("/teacher/information")
-    def teacher_information(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_information(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
+        if x_preview_id:
+            return {"items": []}
         return {"items": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")]}
 
     @router.get("/teacher/schedule")
-    def teacher_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def teacher_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = require_role(telegram_user, "teacher")
+        user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         try:
             date.fromisoformat(start_day)
             if end_day:
@@ -2108,5 +2303,12 @@ def create_router(database: Database) -> APIRouter:
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "items": [], "issues": []}
         projection = project_teacher_range(database, user["identity_id"], start_day, end_day)
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "items": projection.get("items", []), "issues": projection.get("issues", [])}
+
+    @router.api_route("/student/{preview_guard_path:path}", methods=["POST", "PUT", "PATCH", "DELETE"])
+    @router.api_route("/teacher/{preview_guard_path:path}", methods=["POST", "PUT", "PATCH", "DELETE"])
+    def preview_write_fallback(preview_guard_path: str, request: Request):
+        if request.headers.get("x-preview-id") or request.headers.get("x-student-preview-id"):
+            raise HTTPException(status_code=403, detail="Preview sessions are read-only")
+        raise HTTPException(status_code=404, detail="Not found")
 
     return router

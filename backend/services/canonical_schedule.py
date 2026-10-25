@@ -1699,3 +1699,22 @@ def effective_blocks(database: Database, week_start: str) -> dict[str, Any]:
         return {"status": "canonical_not_materialized", "week_start": week_start, "items": []}
     return {"status": effective["canonical_status"], "week_start": week_start, "effective_week": effective,
             "items": _block_rows(database, effective["effective_week_id"])}
+
+
+def published_week_view(database: Database, week_start: str) -> dict[str, Any]:
+    """Read runtime-selected effective blocks only for approved canonical versions."""
+    result = effective_blocks(database, week_start)
+    published = result.get("status") in {"approved_baseline", "approved_with_exceptions", "authoritative"}
+    if not published:
+        return {"status": result.get("status", "canonical_not_materialized"), "published": False,
+                "week_start": week_start,
+                "effective_week_id": (result.get("effective_week") or {}).get("effective_week_id"), "items": []}
+
+    items = []
+    for block in result.get("items") or []:
+        patch = block.get("patch") if isinstance(block.get("patch"), Mapping) else {}
+        assignments = [] if block.get("change_kind") == "cancelled" else _assignments(
+            database, block.get("canonical_block_id"), patch)
+        items.append({**block, "assignments": assignments})
+    return {"status": result["status"], "published": True, "week_start": week_start,
+            "effective_week_id": (result.get("effective_week") or {}).get("effective_week_id"), "items": items}

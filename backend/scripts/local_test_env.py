@@ -6,7 +6,7 @@ application. It never reads or copies values from the user's .env file.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 import json
 import os
 from pathlib import Path
@@ -224,6 +224,28 @@ def seed_database() -> None:
                     ).fetchone()
                 synthetic_teachers[f"{grade}:{lane}"] = (str(row["id"]), display_name)
 
+        # The local admin is also a real canonical teacher identity so E2E can
+        # verify role switching on the same browser-authenticated principal.
+        multi_role_admin = connection.execute("SELECT id FROM users WHERE telegram_user_id=900002").fetchone()
+        multi_role_teacher_id = synthetic_teachers["7:0"][0]
+        connection.execute("UPDATE users SET role='admin',identity_id=? WHERE id=?", (multi_role_teacher_id, multi_role_admin["id"]))
+        connection.execute(
+            "INSERT INTO user_roles(user_id,role,source) VALUES (?,'teacher','local_e2e') ON CONFLICT(user_id,role) DO NOTHING",
+            (multi_role_admin["id"],),
+        )
+        connection.execute(
+            "INSERT INTO account_identity_links(user_id,identity_id,status,source,source_ref,confirmed_by,confirmed_at) "
+            "VALUES (?,?,'confirmed','local_e2e','local-e2e:admin-teacher',?,CURRENT_TIMESTAMP) "
+            "ON CONFLICT(user_id) DO UPDATE SET identity_id=excluded.identity_id,status='confirmed',source='local_e2e',source_ref=excluded.source_ref,confirmed_by=excluded.confirmed_by,confirmed_at=excluded.confirmed_at",
+            (multi_role_admin["id"], multi_role_teacher_id, multi_role_admin["id"]),
+        )
+        connection.execute(
+            "INSERT INTO teacher_assignments(teacher_identity_id,group_id,subject,base_class_name,active,source,source_ref,created_by) "
+            "VALUES (?,?,'Математика','7',1,'local_e2e','local-e2e:admin-teacher',?) "
+            "ON CONFLICT(teacher_identity_id,group_id,subject,capability,source,source_ref) DO UPDATE SET active=1,base_class_name=excluded.base_class_name",
+            (multi_role_teacher_id, group_id, multi_role_admin["id"]),
+        )
+
         def ensure_student(source_ref: str, name: str, grade: str) -> str:
             identity = connection.execute(
                 "SELECT id FROM identities WHERE origin='local_e2e' AND source_ref=?", (source_ref,),
@@ -312,7 +334,7 @@ def seed_database() -> None:
                     (group_ids[group_name], identity_id, f"e2e:{group_name}:{identity_id}", student_user_id),
                 )
 
-    from backend.services.canonical_schedule import import_canonical_artifact
+    from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week
 
     def assigned(activity: str, audience: dict, *, room: str = "", teacher_key: str = "7:0") -> dict:
         teacher_id, teacher_name = synthetic_teachers[teacher_key]
@@ -367,6 +389,65 @@ def seed_database() -> None:
         "blocks": blocks,
     }
     import_canonical_artifact(database, artifact, status="approved_baseline")
+    # Provide a real, published effective week for read-only schedule E2E
+    # checks. The fixed historical week is stable; the rolling week makes the
+    # local app useful on the current date as well.
+    materialize_effective_week(database, "local-e2e-template", week_start)
+    today = date.today()
+    current_monday = (today - timedelta(days=today.weekday())).isoformat()
+    if current_monday != week_start:
+        materialize_effective_week(database, "local-e2e-template", current_monday)
+
+    # Synthetic journal data for the seeded accountless canonical student and
+    # an accountless peer. This source is local-only and deliberately shares a
+    # source so student preview isolation can be checked by score.
+    peer_ref = "local-e2e:journal-peer"
+    with database.connection() as connection:
+        peer = database.execute(connection, "SELECT id FROM identities WHERE origin='local_e2e' AND source_ref=? LIMIT 1", (peer_ref,)).fetchone()
+        if peer:
+            database.execute(connection, "UPDATE identities SET display_name='Local E2E Journal Peer',class_name='7',status='active' WHERE id=?", (peer["id"],))
+        else:
+            peer = database.execute(connection, """INSERT INTO identities(kind,display_name,class_name,origin,source_ref)
+                VALUES ('student','Local E2E Journal Peer','7','local_e2e',?) RETURNING id""", (peer_ref,)).fetchone()
+        source_id = database.execute(connection, """INSERT INTO journal_sources(
+            spreadsheet_id,spreadsheet_title,grade,subject,sheet_title,academic_year,period_status,status,source_hash)
+            VALUES ('local-e2e-journal','Local E2E journal',7,'Математика','Local E2E','2026/27','current','ready','local-e2e-journal-v1')
+            ON CONFLICT(spreadsheet_id,sheet_title) DO UPDATE SET spreadsheet_title=excluded.spreadsheet_title,
+                grade=excluded.grade,subject=excluded.subject,status=excluded.status,source_hash=excluded.source_hash
+            RETURNING id""").fetchone()["id"]
+        assessment_id = database.execute(connection, """INSERT INTO journal_assessments(
+            source_id,external_key,title,assessed_on,max_score,source_column,active,last_seen_at)
+            VALUES (?,'local-e2e-check','Local E2E check','2026-09-22',10,'B',1,CURRENT_TIMESTAMP)
+            ON CONFLICT(source_id,external_key) DO UPDATE SET title=excluded.title,assessed_on=excluded.assessed_on,
+                max_score=excluded.max_score,source_column=excluded.source_column,active=1
+            RETURNING id""", (source_id,)).fetchone()["id"]
+        student_rows = []
+        for identity_id, key, display_name, score in (
+            (identities["student"], "local-e2e-student", "Тестовый ученик", 8),
+            (peer["id"], "local-e2e-peer", "Local E2E Journal Peer", 3),
+        ):
+            journal_student_id = database.execute(connection, """INSERT INTO journal_students(
+                source_id,student_key,display_name,group_marker,identity_id,match_status,match_method,active)
+                VALUES (?,?,?,'7',?,'linked','local_e2e',1)
+                ON CONFLICT(source_id,group_marker,student_key) DO UPDATE SET display_name=excluded.display_name,
+                    identity_id=excluded.identity_id,match_status='linked',match_method='local_e2e',active=1
+                RETURNING id""", (source_id, key, display_name, identity_id)).fetchone()["id"]
+            student_rows.append((journal_student_id, identity_id, display_name, score))
+        database.execute(connection, """INSERT INTO journal_group_mappings(
+            source_id,group_marker,group_id,base_class_name,source,created_by)
+            VALUES (?,'7',?,'7','local_e2e',?)
+            ON CONFLICT(source_id,group_marker) DO UPDATE SET group_id=excluded.group_id,
+                base_class_name=excluded.base_class_name,source='local_e2e',created_by=excluded.created_by""",
+            (source_id, group_id, teacher_user_id))
+        for journal_student_id, identity_id, display_name, score in student_rows:
+            database.execute(connection, """INSERT INTO journal_results(
+                assessment_id,journal_student_id,identity_id,student_name,group_marker,numeric_score,status,source_coordinate,is_current)
+            VALUES (?,?,?,?,'7',?,'graded',?,1)
+                ON CONFLICT(assessment_id,source_coordinate) DO UPDATE SET journal_student_id=excluded.journal_student_id,
+                    identity_id=excluded.identity_id,student_name=excluded.student_name,numeric_score=excluded.numeric_score,
+                    status=excluded.status,group_marker=excluded.group_marker,is_current=1""",
+                (assessment_id, journal_student_id, identity_id, display_name, score,
+                 f"Local E2E!B{1 if identity_id == identities['student'] else 2}"))
 
 
 def run_api() -> None:

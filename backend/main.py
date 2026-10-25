@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from backend.database import Database
 from backend.config import get_settings
-from backend.handlers.api import create_router
+from backend.handlers.api import GENERIC_PREVIEW_SCHOOL_MODE_DETAIL, create_router
 from backend.handlers.school_directory_api import create_school_directory_router
 from backend.services.auth import is_loopback_dev_auth_request
 from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
@@ -44,6 +44,11 @@ async def forward_admin_browser_session(request, call_next):
             (name, value) for name, value in request.scope.get("headers", [])
             if name.lower() != b"x-dev-auth"
         ]
+    local_school_mode = (os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" or
+                         os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1")
+    if (not settings.local_test_mode and local_school_mode and request.method == "POST"
+            and request.url.path.startswith("/api/admin/previews")):
+        return JSONResponse(status_code=409, content={"detail": GENERIC_PREVIEW_SCHOOL_MODE_DETAIL})
     if not settings.local_test_mode and os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1":
         if request.url.path == "/api/integrations/google/callback":
             return JSONResponse(status_code=403, content={"detail": "Google integration changes are disabled in local school mode"})

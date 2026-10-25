@@ -191,7 +191,7 @@ class JournalSyncResilienceTests(unittest.TestCase):
         self.assertEqual(client.sheet_values.call_args_list[1].args[1], "'History'!A:ZZ")
         run = self.database.get_journal_sync_run(run_id)
         self.assertEqual(run["status"], "running")
-        self.assertEqual(run["counts"], {"completed_tabs": 2, "total_tabs": 2, "succeeded": 1, "failed": 1})
+        self.assertEqual(run["counts"], {"completed_tabs": 2, "total_tabs": 2, "succeeded": 1, "failed": 1, "skipped": 0, "excluded": 0})
         with self.database.connection() as connection:
             source = self.database.execute(connection, "SELECT last_error FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", ("book-progress", "2")).fetchone()
         self.assertEqual(source["last_error"], "Не удалось обновить вкладку. Предыдущие данные сохранены.")
@@ -221,7 +221,7 @@ class JournalSyncResilienceTests(unittest.TestCase):
         run = self.database.get_journal_sync_run(item["run_id"])
         self.assertEqual(run["trigger_kind"], "scheduled")
         self.assertEqual(run["status"], "success")
-        self.assertEqual(run["counts"], {"completed_tabs": 1, "total_tabs": 1, "succeeded": 1, "failed": 0})
+        self.assertEqual(run["counts"], {"completed_tabs": 1, "total_tabs": 1, "succeeded": 1, "failed": 0, "skipped": 0, "excluded": 0})
 
     def test_unexpected_refresh_failure_finishes_run_and_next_refresh_succeeds(self):
         user_id = self._create_admin()

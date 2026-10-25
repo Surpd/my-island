@@ -1384,6 +1384,44 @@ class Database:
                 (preview_id, actor_user_id),
             ).fetchone()
 
+    def list_preview_people(self, role: str, query: str | None = None, class_name: str | None = None, group_id: str | None = None) -> list[dict[str, Any]]:
+        """List active canonical identities eligible for read-only role preview."""
+        if query and not query.isascii():
+            # SQLite's built-in lower() is ASCII-only. For Unicode search, use
+            # Python's Unicode casefold over the bounded role catalog instead.
+            needle = query.strip().casefold()
+            people = [person for person in self.list_people_library_summary(kind=role)
+                      if needle in f"{person.get('display_name') or ''} {person.get('class_name') or ''}".casefold()]
+        else:
+            people = self.list_people_library_summary(kind=role, query=query)
+        result = []
+        for person in people:
+            raw_groups = person.get("groups", [])
+            if role == "teacher":
+                raw_groups = [{"id": assignment.get("group_id"), "name": assignment.get("group_display_name") or assignment.get("group_name"),
+                               "class_name": assignment.get("grade_level") or assignment.get("base_class_name")}
+                              for assignment in person.get("teacher_assignments", [])]
+            groups = [{"id": str(group.get("id")), "name": group.get("display_name") or group.get("name")}
+                      for group in raw_groups if group.get("id") is not None]
+            if class_name and class_name not in {person.get("class_name"), *(group.get("class_name") for group in raw_groups)}:
+                continue
+            if group_id and str(group_id) not in {group["id"] for group in groups}:
+                continue
+            result.append({"identity_id": str(person["id"]), "kind": person["kind"],
+                           "display_name": person["display_name"], "class_name": person.get("class_name"), "groups": groups})
+        return result
+
+    def preview_journal_diagnostics(self, identity_id: Any) -> dict[str, Any]:
+        """Report mapping and result counts so empty journals are distinguishable from missing mappings."""
+        with self.connection() as connection:
+            linked = self.execute(connection, "SELECT COUNT(*) AS count FROM journal_students WHERE identity_id=? AND active IS TRUE AND entry_kind='individual' AND match_status='linked'", (identity_id,)).fetchone()
+            mapped = self.execute(connection, "SELECT COUNT(*) AS count FROM journal_students WHERE identity_id=? AND active IS TRUE AND entry_kind='individual'", (identity_id,)).fetchone()
+            results = self.execute(connection, "SELECT COUNT(*) AS count FROM journal_results r JOIN journal_students s ON s.id=r.journal_student_id JOIN journal_assessments a ON a.id=r.assessment_id WHERE s.identity_id=? AND s.active IS TRUE AND a.active IS TRUE AND r.is_current IS TRUE", (identity_id,)).fetchone()
+            sources = self.execute(connection, "SELECT COUNT(DISTINCT source_id) AS count FROM journal_students WHERE identity_id=? AND active IS TRUE AND entry_kind='individual'", (identity_id,)).fetchone()
+            return {"mapped_roster_count": int(mapped["count"]), "linked_roster_count": int(linked["count"]),
+                    "current_result_count": int(results["count"]), "mapped_source_count": int(sources["count"]),
+                    "mapping_state": "missing_mapping" if not mapped["count"] else ("unlinked_mapping" if not linked["count"] else ("mapped_empty" if not results["count"] else "has_results"))}
+
     def end_student_preview(self, preview_id: str, actor_user_id: Any) -> bool:
         import json
         with self.connection() as connection:
@@ -1709,18 +1747,17 @@ class Database:
 
     def list_teacher_courses(self, user_id: Any) -> list[Any]:
         with self.connection() as connection:
-            return self.execute(
-                connection,
-                """SELECT c.external_course_id, c.title, c.section, c.description, c.group_id, g.name AS group_name
+            identity_id = str(user_id).removeprefix("identity:") if str(user_id).startswith("identity:") else None
+            sql = """SELECT c.external_course_id, c.title, c.section, c.description, c.group_id, g.name AS group_name
                      FROM classroom_courses c JOIN groups g ON g.id = c.group_id
                       JOIN teacher_assignments ta ON ta.group_id = g.id AND ta.active IS TRUE
-                      JOIN users u ON u.identity_id = ta.teacher_identity_id
-                     WHERE u.id = ?
+                      WHERE ta.teacher_identity_id = ?
                        AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
                        AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
-                    ORDER BY c.title""",
-                (user_id,),
-            ).fetchall()
+                    ORDER BY c.title"""
+            if identity_id is None:
+                sql = sql.replace("WHERE ta.teacher_identity_id = ?", "JOIN users u ON u.identity_id = ta.teacher_identity_id WHERE u.id = ?")
+            return self.execute(connection, sql, (identity_id or user_id,)).fetchall()
 
     def list_users_with_groups(self) -> list[Any]:
         with self.connection() as connection:
@@ -2181,14 +2218,34 @@ class Database:
                 })
             return result
 
-    def list_people_filter_options(self) -> dict[str, list[dict[str, Any]]]:
+    def list_people_filter_options(self, role: str | None = None) -> dict[str, list[dict[str, Any]]]:
         with self.connection() as connection:
-            classes = self.execute(
+            class_rows = self.execute(
                 connection,
                 """SELECT DISTINCT class_name AS value FROM identities
                     WHERE status = 'active' AND class_name IS NOT NULL AND trim(class_name) <> ''
                     ORDER BY class_name""",
             ).fetchall()
+            class_values = {str(row["value"]) for row in class_rows if row["value"]}
+            if role == "teacher":
+                assignment_classes = self.execute(
+                    connection,
+                    """SELECT class_value FROM (
+                           SELECT ta.grade_level AS class_value FROM teacher_assignments ta
+                            WHERE ta.active IS TRUE AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                              AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                           UNION SELECT ta.base_class_name AS class_value FROM teacher_assignments ta
+                            WHERE ta.active IS TRUE AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                              AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                           UNION SELECT g.base_class_name AS class_value FROM teacher_assignments ta
+                            JOIN groups g ON g.id = ta.group_id
+                            WHERE ta.active IS TRUE AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE)
+                              AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE)
+                       ) assignment_classes
+                       WHERE class_value IS NOT NULL AND trim(class_value) <> '' ORDER BY class_value""",
+                ).fetchall()
+                class_values.update(str(row["class_value"]) for row in assignment_classes if row["class_value"])
+            classes = [{"value": value, "label": value} for value in sorted(class_values)]
             groups = self.execute(
                 connection,
                 """SELECT id, name, display_name, group_type, base_class_name, subject
@@ -2196,7 +2253,7 @@ class Database:
                     ORDER BY COALESCE(display_name, name), name""",
             ).fetchall()
             return {
-                "classes": [{"value": row["value"], "label": row["value"]} for row in classes],
+                "classes": classes,
                 "groups": [dict(row) for row in groups],
             }
 
@@ -3304,9 +3361,8 @@ class Database:
 
     def teacher_can_access_group(self, user_id: Any, group_id: Any) -> bool:
         with self.connection() as connection:
-            row = self.execute(
-                connection,
-                """SELECT 1 FROM users u
+            identity_id = str(user_id).removeprefix("identity:") if str(user_id).startswith("identity:") else None
+            sql = """SELECT 1 FROM users u
                      WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
                        EXISTS (SELECT 1 FROM teacher_assignments ta WHERE ta.teacher_identity_id = u.identity_id AND ta.group_id = ? AND ta.active IS TRUE
                          AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE))
@@ -3315,16 +3371,16 @@ class Database:
                          AND (ta.valid_from IS NULL OR ta.valid_from <= CURRENT_DATE) AND (ta.valid_until IS NULL OR ta.valid_until >= CURRENT_DATE))
                        OR EXISTS (SELECT 1 FROM homeroom_assignments h WHERE h.teacher_identity_id = u.identity_id AND h.class_group_id = ? AND h.active IS TRUE
                          AND (h.valid_from IS NULL OR h.valid_from <= CURRENT_DATE) AND (h.valid_until IS NULL OR h.valid_until >= CURRENT_DATE))
-                     )""",
-                 (user_id, group_id, group_id, group_id),
-            ).fetchone()
+                     )"""
+            if identity_id is not None:
+                sql = sql.replace("FROM users u", "FROM identities u").replace("u.identity_id", "u.id")
+            row = self.execute(connection, sql, (identity_id or user_id, group_id, group_id, group_id)).fetchone()
             return bool(row)
 
     def list_teacher_groups(self, user_id: Any) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = self.execute(
-                connection,
-                """SELECT DISTINCT g.id, g.name, g.display_name, g.group_type, COALESCE(ta.subject, '') AS subject,
+            identity_id = str(user_id).removeprefix("identity:") if str(user_id).startswith("identity:") else None
+            sql = """SELECT DISTINCT g.id, g.name, g.display_name, g.group_type, COALESCE(ta.subject, '') AS subject,
                           COALESCE(ta.base_class_name, '') AS base_class_name,
                           COALESCE(ta.subject_subgroup, '') AS subject_subgroup,
                           ta.classroom_course_id AS classroom_course_id,
@@ -3346,9 +3402,12 @@ class Database:
                         AND (sm.valid_from IS NULL OR sm.valid_from <= CURRENT_DATE) AND (sm.valid_until IS NULL OR sm.valid_until >= CURRENT_DATE)
                     WHERE u.id = ?
                      GROUP BY g.id, g.name, g.display_name, g.group_type, ta.subject, ta.base_class_name, ta.subject_subgroup, ta.classroom_course_id, ta.exam_track, h.id
-                    ORDER BY is_homeroom DESC, g.name""",
-                (user_id,),
-            ).fetchall()
+                    ORDER BY is_homeroom DESC, g.name"""
+            params = (user_id,)
+            if identity_id is not None:
+                sql = sql.replace("FROM users u", "FROM identities u").replace("u.identity_id", "u.id")
+                params = (identity_id,)
+            rows = self.execute(connection, sql, params).fetchall()
             return [dict(row) for row in rows]
 
     def list_group_students(self, group_id: Any) -> list[dict[str, Any]]:
@@ -4340,9 +4399,8 @@ class Database:
             return self._teacher_can_access_journal_marker(connection, user_id, source_id, group_marker)
 
     def _teacher_can_access_journal_marker(self, connection: Any, user_id: Any, source_id: Any, group_marker: str) -> bool:
-        row = self.execute(
-            connection,
-            """SELECT 1
+        identity_id = str(user_id).removeprefix("identity:") if str(user_id).startswith("identity:") else None
+        sql = """SELECT 1
                  FROM users u
                  JOIN journal_sources js ON js.id = ?
                 WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
@@ -4419,14 +4477,21 @@ class Database:
                         )
                     )
                   )
-                )""",
-            (source_id, user_id, group_marker, group_marker),
-        ).fetchone()
+                )"""
+        params = (source_id, user_id, group_marker, group_marker)
+        if identity_id is not None:
+            sql = sql.replace("FROM users u", "FROM identities u").replace("u.identity_id", "u.id")
+            params = (source_id, identity_id, group_marker, group_marker)
+        row = self.execute(connection, sql, params).fetchone()
         return bool(row)
 
     def teacher_journal_detail(self, user_id: Any, source_id: Any, group_marker: str) -> dict[str, Any] | None:
         """Return a marker-scoped journal projection filtered to the teacher's canonical group membership."""
         with self.connection() as connection:
+            preview_identity_id = str(user_id).removeprefix("identity:") if str(user_id).startswith("identity:") else None
+            actor_table = "identities" if preview_identity_id is not None else "users"
+            actor_identity_expr = "app_user.id" if preview_identity_id is not None else "app_user.identity_id"
+            actor_id = preview_identity_id if preview_identity_id is not None else user_id
             if not self._teacher_can_access_journal_marker(connection, user_id, source_id, group_marker):
                 return None
             source = self.execute(connection, """SELECT id, spreadsheet_title, grade, subject, sheet_title,
@@ -4441,8 +4506,8 @@ class Database:
             if mapping is None:
                 if group_marker != "all":
                     return None
-                group_ids = [row["group_id"] for row in self.execute(connection, """SELECT DISTINCT assignment.group_id
-                    FROM users app_user
+                group_ids = [row["group_id"] for row in self.execute(connection, f"""SELECT DISTINCT assignment.group_id
+                    FROM {actor_table} app_user
                     JOIN teacher_assignments assignment ON assignment.teacher_identity_id = app_user.identity_id
                     JOIN groups assigned_group ON assigned_group.id = assignment.group_id
                       AND assigned_group.group_type = 'class' AND assigned_group.canonical IS TRUE
@@ -4457,14 +4522,14 @@ class Database:
                       AND (assignment.base_class_name IS NULL OR trim(assignment.base_class_name) = '' OR trim(assignment.base_class_name) = COALESCE(assigned_group.base_class_name, assigned_group.name))
                       AND substr(COALESCE(assigned_group.base_class_name, assigned_group.name), 1, length(CAST(? AS TEXT))) = CAST(? AS TEXT)
                       AND substr(COALESCE(assigned_group.base_class_name, assigned_group.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9'
-                    """, (user_id, source["subject"], source["grade"], source["grade"], source["grade"])).fetchall()]
+                    """.replace("app_user.identity_id", actor_identity_expr), (actor_id, source["subject"], source["grade"], source["grade"], source["grade"])).fetchall()]
                 mapping = {"group_id": None, "base_class_name": None, "subject_subgroup": None,
                     "classroom_course_id": None, "exam_track": None}
             elif mapping["group_id"] is not None:
                 group_ids = [mapping["group_id"]]
             else:
-                group_ids = [row["group_id"] for row in self.execute(connection, """SELECT DISTINCT assignment.group_id
-                    FROM users app_user
+                group_ids = [row["group_id"] for row in self.execute(connection, f"""SELECT DISTINCT assignment.group_id
+                    FROM {actor_table} app_user
                     JOIN teacher_assignments assignment ON assignment.teacher_identity_id = app_user.identity_id
                     WHERE app_user.id = ? AND assignment.active IS TRUE AND assignment.group_id IS NOT NULL
                       AND (assignment.valid_from IS NULL OR assignment.valid_from <= CURRENT_DATE)
@@ -4483,8 +4548,7 @@ class Database:
                             AND (scope_membership.valid_until IS NULL OR scope_membership.valid_until >= CURRENT_DATE)
                             AND scope_identity.kind = 'student' AND scope_identity.status = 'active'
                             AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), 1, length(CAST(? AS TEXT))) = CAST(? AS TEXT)
-                            AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9')""",
-                    (user_id, mapping["subject_subgroup"], source["subject"], mapping["base_class_name"], mapping["classroom_course_id"], mapping["exam_track"], source["grade"], source["grade"], source["grade"])).fetchall()]
+                            AND substr(COALESCE(scope_identity.class_name, scope_group.base_class_name, scope_group.name), length(CAST(? AS TEXT)) + 1, 1) NOT BETWEEN '0' AND '9')""".replace("app_user.identity_id", actor_identity_expr), (actor_id, mapping["subject_subgroup"], source["subject"], mapping["base_class_name"], mapping["classroom_course_id"], mapping["exam_track"], source["grade"], source["grade"], source["grade"])).fetchall()]
 
             group_ids = list(dict.fromkeys(group_ids))
             if group_ids:
