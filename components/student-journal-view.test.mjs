@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { journalKey, journalValue, recentStudentResults, studentJournalRows, studentResultText, studentSummaryPreview } from './student-journal-view.ts';
+import { journalKey, journalValue, recentStudentResults, studentJournalRows, studentResultText, studentSummaryPreview, studentSubjectIndicator, studentPeriodKey, studentResultDisplay } from './student-journal-view.ts';
 
 function journal(overrides = {}) {
   return { source: { source_id: 'math-I', subject: 'Математика', term_number: 1, period_status: 'current' },
@@ -44,4 +44,26 @@ test('only confirmed source summaries can be used as a compact attainment indica
 test('independent source rosters remain distinct even when subject names coincide', () => {
   assert.notEqual(journalKey(journal()), journalKey(journal({ source: { source_id: 'math-II', subject: 'Математика', term_number: 2, period_status: 'archived' } })));
   assert.notEqual(journalKey(journal()), journalKey(journal({ student: { journal_student_id: 'roster-B', group_marker: 'B' } })));
+});
+
+test('subject row chooses exactly one indicator without averaging arbitrary points', () => {
+  assert.equal(studentSubjectIndicator(journal()).value, '15/20');
+  assert.equal(studentSubjectIndicator(journal()).kind, 'points');
+  const summaries = [{ summary_type: 'average_grade', label: 'Официальная средняя', numeric_value: 4.6 }];
+  assert.equal(studentSubjectIndicator(journal({ summaries })).value, '4,6');
+  assert.equal(studentSubjectIndicator(journal({ summaries })).kind, 'average');
+  assert.equal(studentSubjectIndicator(journal({ results: [] })).kind, 'empty');
+  assert.notEqual(studentPeriodKey(journal()), studentPeriodKey(journal({ source: { source_id: 'next', term_number: 2, period_status: 'current' } })));
+});
+test('most recent work comes first but undated work is not falsely presented as newest', () => {
+  const item = journal();
+  item.assessments.push({ id: 5, title: 'Без даты', group_marker: 'A' });
+  assert.deepEqual(studentJournalRows(item, true).map(row => row.assessment.id), [4, 3, 2, 1, 5]);
+});
+test('numeric zero, ordinary marks, points and special statuses remain distinct', () => {
+  assert.equal(studentResultDisplay({ numeric_score: 0 }).value, '0');
+  assert.equal(studentResultDisplay({ numeric_score: 5 }).kind, 'grade');
+  assert.equal(studentResultDisplay({ numeric_score: 15 }, 20).value, '15/20');
+  assert.equal(studentResultDisplay({ numeric_score: null, status: 'Не был' }).kind, 'status');
+  assert.equal(studentResultDisplay(undefined).kind, 'empty');
 });

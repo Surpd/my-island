@@ -27,12 +27,17 @@ export function journalValue(value: unknown): string {
   return typeof value === 'number' ? text.replace('.', ',') : text;
 }
 
-export function studentJournalRows(item: StudentJournalItem) {
+export function studentJournalRows(item: StudentJournalItem, newestFirst = false) {
   const results = new Map(item.results.map(result => [String(result.assessment_id), result]));
   return item.assessments
     .filter(assessment => !assessment.group_marker || assessment.group_marker === 'all' || assessment.group_marker === item.student.group_marker)
     .map(assessment => ({ assessment, result: results.get(String(assessment.id)) }))
-    .sort((a, b) => (a.assessment.assessed_on || '9999').localeCompare(b.assessment.assessed_on || '9999'));
+    .sort((a, b) => {
+      const left = a.assessment.assessed_on;
+      const right = b.assessment.assessed_on;
+      if (!left || !right) return left ? -1 : right ? 1 : 0;
+      return newestFirst ? right.localeCompare(left) : left.localeCompare(right);
+    });
 }
 
 export function studentResultText(result: StudentJournalItem['results'][number] | undefined, maxScore?: number | null): string {
@@ -45,9 +50,39 @@ export function studentResultText(result: StudentJournalItem['results'][number] 
 }
 
 export function recentStudentResults(item: StudentJournalItem) {
-  return studentJournalRows(item)
+  return studentJournalRows(item, true)
     .filter(row => studentResultText(row.result))
-    .slice(-3).reverse();
+    .slice(0, 3);
+}
+
+export function studentPeriodKey(item: StudentJournalItem): string {
+  return `period:${JSON.stringify([item.source.academic_year, item.source.term_number ?? null, item.source.period_status])}`;
+}
+
+export function studentPeriodLabel(item: StudentJournalItem): string {
+  const { term_number: term, academic_year: year, period_status: status } = item.source;
+  const name = term ? `${['I', 'II', 'III'][term - 1] || term} триместр` : 'Период не указан';
+  return [name, year, status === 'archived' ? 'архив' : ''].filter(Boolean).join(' · ');
+}
+
+export function studentResultDisplay(result: StudentJournalItem['results'][number] | undefined, maxScore?: number | null) {
+  const score = journalValue(result?.numeric_score);
+  const rawStatus = journalValue(result?.status);
+  const status = rawStatus.toLowerCase() === 'graded' ? '' : rawStatus;
+  const maximum = typeof maxScore === 'number' && Number.isFinite(maxScore) && maxScore > 0 ? journalValue(maxScore) : '';
+  return {
+    value: score ? `${score}${maximum ? `/${maximum}` : ''}` : status || 'Нет результата',
+    kind: score ? maximum ? 'points' : 'grade' : status ? 'status' : 'empty',
+    note: score ? status : '',
+  };
+}
+
+export function studentSubjectIndicator(item: StudentJournalItem) {
+  const average = studentSummaryPreview(item).find(summary => summary.summary_type === 'average_grade');
+  if (average) return { value: journalValue(average.numeric_value ?? average.text_value), kind: 'average', note: average.label || 'Средняя оценка' };
+  const latest = recentStudentResults(item)[0];
+  return latest ? { ...studentResultDisplay(latest.result, latest.assessment.max_score), note: latest.assessment.title }
+    : { value: 'Нет оценок', kind: 'empty', note: 'В выбранном журнале пока нет результатов' };
 }
 
 export function studentSummaryPreview(item: StudentJournalItem) {

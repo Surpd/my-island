@@ -1,22 +1,22 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const SUBJECT = 'Математика';
-const LONG_SUBJECT = 'История и культура островных государств и народов мира';
+const LONG_SUBJECT = 'Культура и история народов Тихоокеанского архипелага';
 
-function journal(sourceId: string, periodStatus: string, term: number, marker: string, subject = SUBJECT) {
+function journal(sourceId: string, periodStatus: string, term: number, marker: string, subject = SUBJECT, score: number | null = 5, status: string | null = null) {
   const isCurrent = periodStatus === 'current';
   return {
     source: {
       source_id: sourceId,
       spreadsheet_title: isCurrent ? `Журнал ${subject} · ${marker}` : `Архив ${subject} · ${marker}`,
-      grade: 7,
+      grade: 11,
       subject,
-      sheet_title: `7 класс · ${marker}`,
+      sheet_title: `11 класс · ${marker}`,
       academic_year: '2026/27',
       term_number: term,
       period_status: periodStatus,
     },
-    student: { journal_student_id: `student-${sourceId}`, display_name: 'Синтетический ученик', group_marker: marker },
+    student: { journal_student_id: `student-${sourceId}`, display_name: 'E2E Student Fixture', group_marker: marker },
     // Deliberately supplied out of order to catch UI that does not sort assessments.
     assessments: isCurrent && sourceId === 'source-current'
       ? [
@@ -25,6 +25,7 @@ function journal(sourceId: string, periodStatus: string, term: number, marker: s
           { id: 'a-zero', title: 'Нулевой результат', assessed_on: '2026-10-10', group_marker: marker },
           { id: 'a-old', title: 'Ранняя работа', assessed_on: '2026-09-25', group_marker: marker },
           { id: 'a-unpublished', title: 'Ещё не опубликовано', assessed_on: '2026-10-25', group_marker: marker },
+          { id: 'a-undated', title: 'Работа без даты', group_marker: marker },
         ]
       : [{ id: `a-${sourceId}`, title: `Работа ${marker}`, assessed_on: '2026-09-15', group_marker: marker }],
     results: isCurrent && sourceId === 'source-current'
@@ -33,11 +34,12 @@ function journal(sourceId: string, periodStatus: string, term: number, marker: s
           { assessment_id: 'a-missed', numeric_score: null, status: 'Не был' },
           { assessment_id: 'a-zero', numeric_score: 0, status: null },
           { assessment_id: 'a-old', numeric_score: 4, status: null },
+          { assessment_id: 'a-undated', numeric_score: 3, status: null },
         ]
-      : [{ assessment_id: `a-${sourceId}`, numeric_score: 5, status: null }],
-    // A supplied summary stays identifiable as a source value; no other average is implied.
+      : [{ assessment_id: `a-${sourceId}`, numeric_score: score, status }],
+    // A supplied official summary takes precedence over the underlying points in the compact row.
     summaries: isCurrent && sourceId === 'source-current'
-      ? [{ label: 'Баллы за период', summary_type: 'points', numeric_value: 15, text_value: null }]
+      ? [{ label: 'Официальная оценка', summary_type: 'average_grade', numeric_value: 4.6, text_value: null }]
       : [],
   };
 }
@@ -66,7 +68,7 @@ async function installStudentApi(page: Page, journals: unknown, scheduleState = 
 async function openGrades(page: Page) {
   await page.goto('/?role=student&date=2026-10-26&screen=grades');
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Мои оценки', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Оценки', level: 2 })).toBeVisible();
   await expect(page.getByLabel('Период')).toBeVisible();
 }
 
@@ -115,56 +117,97 @@ test('student journals keep sources and periods separate and show chronological 
   await page.setViewportSize({ width: 390, height: 900 });
   await installStudentApi(page, {
     items: [
-      journal('source-current', 'current', 2, '7A'),
-      journal('source-current-b', 'current', 2, '7Б', LONG_SUBJECT),
-      journal('source-archive', 'archived', 1, '7A'),
+      journal('source-current', 'current', 2, '11A'),
+      journal('source-current-b', 'current', 2, '11Б'),
+      journal('source-long', 'current', 2, '11В', LONG_SUBJECT),
+      journal('source-zero', 'current', 2, '11Г', 'Физика', 0),
+      journal('source-status', 'current', 2, '11Д', 'Химия', null, 'Не был'),
+      journal('source-archive', 'archived', 1, '11A'),
     ],
   });
   await openGrades(page);
 
   const mathCards = page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true });
-  await expect(mathCards).toHaveCount(1);
+  await expect(mathCards).toHaveCount(2);
+  await expect(page.locator('.student-subject-row')).toHaveCount(5);
+  const officialRow = mathCards.first();
+  const compactRowBox = await officialRow.boundingBox();
+  expect(compactRowBox).toBeTruthy();
+  expect(compactRowBox!.height).toBeLessThanOrEqual(100);
+  await expect(officialRow.locator('.student-subject-indicator')).toHaveCount(1);
+  await expect(officialRow.locator('.student-subject-indicator')).toContainText(/4[,.]6/);
+  await expect(officialRow).not.toContainText('15/20');
+  await expect(officialRow).not.toContainText('Не был');
+  await expect(officialRow).not.toContainText('0');
+  await expect(mathCards.nth(1).locator('.student-subject-indicator')).toHaveText('5');
+  await expect(mathCards.first()).toContainText('11A');
+  await expect(mathCards.nth(1)).toContainText('11Б');
   await expect(page.getByRole('button', { name: `Открыть журнал: ${LONG_SUBJECT}`, exact: true })).toBeVisible();
-  await expect(page.getByText(/7A/).first()).toBeVisible();
-  await expect(page.getByText(/II триместр/).first()).toBeVisible();
-  await expect(page.getByText('15 / 20', { exact: true })).toBeVisible();
-  await expect(page.getByText('Не был', { exact: true })).toBeVisible();
-  await expect(page.getByText('0', { exact: true })).toBeVisible();
-  // Assessment names are reserved for the detail view, including work without a result.
-  for (const title of ['Последняя контрольная', 'Ещё не опубликовано', 'Работа 7A']) {
+  const longTitleBox = await page.getByRole('button', { name: `Открыть журнал: ${LONG_SUBJECT}`, exact: true }).locator('strong').boundingBox();
+  expect(longTitleBox).toBeTruthy();
+  expect(longTitleBox!.height).toBeGreaterThan(20);
+  expect(longTitleBox!.height).toBeLessThanOrEqual(52);
+  await expect(page.getByRole('button', { name: 'Открыть журнал: Физика', exact: true }).locator('.student-subject-indicator')).toHaveText('0');
+  await expect(page.getByRole('button', { name: 'Открыть журнал: Химия', exact: true }).locator('.student-subject-indicator')).toHaveText('Не был');
+  for (const title of ['Последняя контрольная', 'Ещё не опубликовано', 'Работа 11A']) {
     await expect(page.getByText(title, { exact: true })).toHaveCount(0);
   }
 
-  await page.screenshot({ path: '.local-test/grades-ui/subjects-390.png' });
-  await mathCards.click();
+  await mathCards.first().click();
   const detail = page.locator('.student-journal-detail');
-  await expect(detail.getByRole('heading', { name: SUBJECT, level: 3 })).toBeVisible();
+  await expect(detail.getByRole('heading', { name: SUBJECT, level: 2 })).toBeVisible();
+  await expect(detail.getByRole('heading', { name: 'Оценки', level: 2 })).toHaveCount(0);
   await expect(detail.getByRole('button', { name: 'К предметам', exact: true })).toBeVisible();
-  await expect(detail.getByText('15', { exact: true }).first()).toBeVisible(); // points remain points, never become a grade average of 5
+  await expect(detail.getByText(/15\s*\/\s*20/).first()).toBeVisible(); // points remain points, never become a grade average of 5
   await expect(detail.getByText('0', { exact: true })).toBeVisible(); // a real zero is not treated as missing
   await expect(detail.getByText('Не был', { exact: true })).toBeVisible();
-  await expect(detail.getByText('Баллы за период')).toBeVisible(); // only the supplied summary is shown
+  await expect(detail.getByText('Официальная оценка')).toBeVisible();
   await expect(detail.getByText(/вес\s+—|максимум\s+—/i)).toHaveCount(0);
-  await page.screenshot({ path: '.local-test/grades-ui/journal-390.png' });
   const detailText = await detail.innerText();
-  expect(detailText.indexOf('Ранняя работа')).toBeLessThan(detailText.indexOf('Работа со статусом'));
-  expect(detailText.indexOf('Работа со статусом')).toBeLessThan(detailText.indexOf('Нулевой результат'));
-  expect(detailText.indexOf('Нулевой результат')).toBeLessThan(detailText.indexOf('Последняя контрольная'));
+  expect(detailText.indexOf('Ещё не опубликовано')).toBeLessThan(detailText.indexOf('Последняя контрольная'));
+  expect(detailText.indexOf('Последняя контрольная')).toBeLessThan(detailText.indexOf('Нулевой результат'));
+  expect(detailText.indexOf('Нулевой результат')).toBeLessThan(detailText.indexOf('Работа со статусом'));
+  expect(detailText.indexOf('Работа со статусом')).toBeLessThan(detailText.indexOf('Ранняя работа'));
+  expect(detailText.indexOf('Ранняя работа')).toBeLessThan(detailText.indexOf('Работа без даты'));
+  const sheet = page.locator('.student-journal-sheet');
+  const sheetBox = await sheet.boundingBox();
+  expect(sheetBox!.height).toBeGreaterThan(900 * 0.85);
+  await expect(detail.locator('.student-journal-header')).toHaveCSS('position', 'sticky');
+  const bottomPadding = await sheet.evaluate(element => Number.parseFloat(getComputedStyle(element).paddingBottom));
+  expect(bottomPadding).toBeGreaterThanOrEqual(14);
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--tg-safe-top', '47px');
+    document.documentElement.style.setProperty('--tg-content-safe-top', '56px');
+    document.documentElement.style.setProperty('--tg-content-safe-bottom', '34px');
+  });
+  expect(await sheet.evaluate(element => Number.parseFloat(getComputedStyle(element).paddingBottom))).toBeGreaterThanOrEqual(34);
+  expect((await sheet.boundingBox())!.y).toBeGreaterThanOrEqual(103);
+  await page.evaluate(() => {
+    for (const property of ['--tg-safe-top', '--tg-content-safe-top', '--tg-content-safe-bottom']) document.documentElement.style.removeProperty(property);
+  });
   for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await detail.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   }
   await detail.getByRole('button', { name: 'К предметам', exact: true }).click();
-  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toBeVisible();
+  await expect(mathCards.first()).toBeVisible();
 
   const period = page.getByLabel('Период');
+  await expect(period).toHaveValue('current');
+  const currentPeriodLabel = await period.locator('option:checked').textContent();
+  expect(currentPeriodLabel).toMatch(/II триместр/);
+  expect(currentPeriodLabel).toContain('2026/27');
   await period.selectOption('archived');
   await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(1);
   await expect(page.getByText('Последняя контрольная')).toHaveCount(0);
-  await expect(page.getByText('5', { exact: true })).toBeVisible();
-  await expect(page.getByText(/I триместр/).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true }).locator('.student-subject-indicator')).toHaveText('5');
+  await expect(page.getByRole('heading', { name: /^I триместр.*2026/, level: 3 })).toBeVisible();
+  const termOption = (await page.locator('select[aria-label="Период"] option').allTextContents()).find(label => /^I триместр(?:\s|·|$)/.test(label));
+  expect(termOption).toBeTruthy();
+  await period.selectOption({ label: termOption! });
+  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(1);
   await period.selectOption('all');
-  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(3);
 
   for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 900 });
@@ -175,7 +218,7 @@ test('student journals keep sources and periods separate and show chronological 
 
 test('returning from a journal restores the subject list scroll and focus', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await installStudentApi(page, { items: Array.from({ length: 12 }, (_, index) => journal(`scroll-${index}`, 'current', 2, '7A', `Предмет ${index + 1}`)) });
+  await installStudentApi(page, { items: Array.from({ length: 12 }, (_, index) => journal(`scroll-${index}`, 'current', 2, '11А', `Предмет ${index + 1}`)) });
   await openGrades(page);
   const last = page.getByRole('button', { name: 'Открыть журнал: Предмет 12', exact: true });
   const scroll = page.locator('.sheet-full');
@@ -200,7 +243,7 @@ test('missing mapping is explained and unpublished schedule warning stays out of
   await expect(page.locator('.campus-schedule-notice:visible').first()).toBeVisible();
   await page.goto('/?role=student&date=2026-10-26&screen=grades');
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Мои оценки', level: 2 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Оценки', level: 2 })).toBeVisible();
   await expect(page.locator('.campus-schedule-notice:visible')).toHaveCount(0);
 });
 

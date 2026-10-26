@@ -1035,7 +1035,7 @@ function ContextualSheet({
       title={title}
       kicker={kicker}
       icon={icon}
-      className="context-sheet"
+      className={`context-sheet${icon === 'grades' ? ' student-journal-sheet' : ''}`}
       peek={<div className="context-peek">{peek}</div>}
       full={children}
     />
