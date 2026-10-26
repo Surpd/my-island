@@ -1,6 +1,7 @@
 import copy
 import tempfile
 import unittest
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,9 @@ from backend.services.constructor_publication import (
 from backend.services.schedule_experiments import create_experiment, get_experiment, save_experiment
 from backend.services.canonical_weekly_refresh import refresh_current_week
 from backend.services.school_template_selection import open_active_school_template
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from backend.handlers.api import create_router
 
 
 class ConstructorPublicationTests(unittest.TestCase):
@@ -81,6 +85,85 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(student["items"][0]["activity"], "Math")
         self.assertEqual(len(list_publications(self.database)["items"]), 2)
         self.assertEqual(get_experiment(self.database, draft["id"])["payload"], draft["payload"])
+
+    def test_admin_published_view_returns_effective_override_and_hides_unapproved_week(self):
+        draft = self.draft()
+        self.publish(draft)
+        override = self.draft([self.lesson(subject="Science", room="202")])
+        self.publish(override, "week", week_start="2026-10-19")
+
+        admin = self.database.get_or_create_user(990001, "admin")
+        with self.database.connection() as connection:
+            self.database.execute(connection, "INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test') ON CONFLICT(user_id,role) DO NOTHING", (admin["id"],))
+        challenge, _ = self.database.create_admin_login_challenge(admin["id"])
+        token, _ = self.database.consume_admin_login_challenge(challenge)
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        with patch.dict(os.environ, {"SCHEDULE_BACKEND": "canonical"}):
+            response = client.get("/api/admin/schedule/published-view?week_start=2026-10-19", headers={"X-Dev-Auth": f"browser:{token}"})
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["published"])
+        self.assertEqual(body["status"], "authoritative")
+        assignment = body["items"][0]["assignments"][0]
+        self.assertEqual(assignment["activity"], "Science")
+        self.assertEqual(assignment["title"], "Science")
+        self.assertEqual(assignment["room"], "202")
+        self.assertEqual(assignment["teachers"], ["Synthetic Teacher"])
+        self.assertIsInstance(assignment["audience"], dict)
+
+        from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week, published_week_view
+        import_canonical_artifact(self.database, {"version_id": "approved-source", "status": "authoritative",
+            "source_snapshot": {"id": "approved-source-snapshot", "fingerprint": "approved-source-fingerprint"},
+            "blocks": self.artifact_blocks_for_draft()}, status="authoritative")
+        materialize_effective_week(self.database, "approved-source", "2026-11-02")
+        source_week = published_week_view(self.database, "2026-11-02")
+        self.assertTrue(source_week["published"])
+        self.assertEqual(source_week["status"], "authoritative")
+
+        import_canonical_artifact(self.database, {"version_id": "unconfirmed-draft", "status": "draft",
+            "source_snapshot": {"id": "draft-source", "fingerprint": "draft-fingerprint"},
+            "blocks": self.artifact_blocks_for_draft()}, status="draft")
+        materialize_effective_week(self.database, "unconfirmed-draft", "2026-10-26")
+        hidden = published_week_view(self.database, "2026-10-26")
+        self.assertFalse(hidden["published"])
+        self.assertEqual(hidden["status"], "draft")
+        self.assertEqual(hidden["items"], [])
+        for projection in (
+            canonical.project_student_range(self.database, self.student["id"], "2026-10-26"),
+            canonical.project_teacher_range(self.database, self.teacher["id"], "2026-10-26"),
+        ):
+            self.assertEqual(projection["status"], "not_published")
+            self.assertEqual(projection["items"], [])
+
+    def test_overview_uses_historical_runtime_week_after_new_template(self):
+        def imported(version):
+            canonical.import_canonical_artifact(self.database, {
+                "version_id": version,
+                "source_snapshot": {"id": f"snapshot-{version}", "fingerprint": f"fingerprint-{version}"},
+                "blocks": self.artifact_blocks_for_draft(),
+            }, status="approved_with_exceptions")
+        imported("historical-approved")
+        week = canonical.materialize_effective_week(self.database, "historical-approved", "2026-09-21")
+        imported("latest-template")
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE canonical_schedule_versions SET approved_at='2099-01-01' WHERE version_id='latest-template'")
+        self.assertEqual(canonical.canonical_version(self.database)["version_id"], "latest-template")
+        overview = canonical.effective_status(self.database, "2026-09-21")
+        runtime = canonical.published_week_view(self.database, "2026-09-21")
+        self.assertTrue(runtime["published"])
+        self.assertEqual(overview["effective_week"]["effective_week_id"], week["effective_week_id"])
+        self.assertEqual(overview["effective_week"]["effective_week_id"], runtime["effective_week_id"])
+        self.assertEqual(overview["canonical"]["version_id"], "historical-approved")
+        self.assertEqual(overview["status"], runtime["status"])
+
+    def artifact_blocks_for_draft(self):
+        return {"draft-block": {"weekday": 0, "slot": {"start": "09:00", "end": "09:45"},
+            "grade_scope": "9", "status": "resolved", "mode": "SINGLE",
+            "assignments": [{"activity": "Draft Leak", "role": "primary",
+                "audience": {"type": "canonical_groups", "canonical_group_ids": [str(self.math["id"])]},
+                "teacher_ids": [str(self.teacher["id"])], "source_cells": ["Q1"]}]}}
 
     def test_stale_preview_revision_directory_and_head_rejected(self):
         draft = self.draft()

@@ -1,0 +1,20 @@
+.admin-role-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.admin-role-toolbar:empty { display: none; }
+.admin-console-main { min-width: 0; }
+.admin-console { padding-top: calc(var(--tg-safe-top, 0px) + var(--tg-content-safe-top, 0px)); padding-bottom: var(--tg-safe-bottom, 0px); }
+.admin-console .admin-table-wrap { max-width: 100%; overflow-x: auto; }
+.admin-console dialog { max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px - var(--tg-safe-top, 0px) - var(--tg-content-safe-top, 0px)); overflow: auto; }
+@media (max-width: 740px) {
+  .admin-console { max-width: 100%; overflow-x: clip; }
+  .admin-console-main { padding-left: 12px; padding-right: 12px; }
+  .admin-console .admin-page-actions, .admin-console .admin-button-row { flex-wrap: wrap; }
+  .admin-console .admin-button { min-height: 44px; }
+  .admin-console .admin-two-col { grid-template-columns: minmax(0, 1fr); }
+  .admin-console .school-editor-dialog, .admin-console .teacher-editor-dialog { width: calc(100vw - 24px); min-width: 0; }
+  .admin-console input, .admin-console select, .admin-console textarea { max-width: 100%; }
+}
+
+@media (max-width: 740px) {
+ .admin-console--constructor .admin-console-main { height: auto; min-height: 0; overflow: visible; }
+ .admin-console--constructor { height: auto; min-height: 100dvh; overflow-y: auto; }
+}

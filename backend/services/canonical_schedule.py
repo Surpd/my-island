@@ -977,7 +977,13 @@ def effective_status(database: Database, week_start: str | None = None) -> dict[
     version = canonical_version(database)
     result = {"canonical": version, "effective_week": None, "status": "canonical_not_imported" if not version else version["status"]}
     if week_start and version:
-        result["effective_week"] = _effective_week(database, version["version_id"], week_start)
+        # Historical weeks keep their own approved base after a newer template
+        # is saved. Match the runtime selector rather than hiding that week.
+        effective = _effective_week(database, None, week_start)
+        result["effective_week"] = effective
+        if effective:
+            result["canonical"] = canonical_version(database, effective["version_id"])
+            result["status"] = effective["canonical_status"]
     return result
 
 
@@ -1616,10 +1622,14 @@ def project_student_range(database: Database, identity_id: Any, start_day: str, 
         if week not in projections:
             projections[week] = project_student(database, identity_id, week)
         cursor += timedelta(days=1)
-    items = [item for projection in projections.values() for item in projection["items"] if start_day <= str(item.get("date")) <= finish]
-    issues = [issue for projection in projections.values() for issue in projection["issues"]]
+    approved = {"approved_baseline", "approved_with_exceptions", "authoritative"}
+    items = [item for projection in projections.values() if projection["status"] in approved
+             for item in projection["items"] if start_day <= str(item.get("date")) <= finish]
+    issues = [issue for projection in projections.values() if projection["status"] in approved for issue in projection["issues"]]
     statuses = [projection["status"] for projection in projections.values()]
-    status = next((item for item in statuses if item not in {"approved_baseline", "approved_with_exceptions", "authoritative"}), statuses[0] if statuses else "canonical_not_materialized")
+    status = next((item for item in statuses if item not in approved), statuses[0] if statuses else "canonical_not_materialized")
+    if status in {"draft", "superseded"}:
+        status = "not_published"
     return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues}
 
 
@@ -1686,6 +1696,8 @@ def project_teacher_range(database: Database, identity_id: Any, start_day: str, 
     if last < first:
         raise ValueError("end_day must not precede start_day")
     projection = project_teacher(database, identity_id, _week_start(start_day))
+    if projection["status"] in {"draft", "superseded"}:
+        return {**projection, "status": "not_published", "items": [], "issues": [], "start_day": start_day, "end_day": finish}
     projection["start_day"] = start_day
     projection["end_day"] = finish
     projection["items"] = [item for item in projection.get("items", []) if start_day <= str(item.get("date")) <= finish]
@@ -1699,3 +1711,22 @@ def effective_blocks(database: Database, week_start: str) -> dict[str, Any]:
         return {"status": "canonical_not_materialized", "week_start": week_start, "items": []}
     return {"status": effective["canonical_status"], "week_start": week_start, "effective_week": effective,
             "items": _block_rows(database, effective["effective_week_id"])}
+
+
+def published_week_view(database: Database, week_start: str) -> dict[str, Any]:
+    """Read runtime-selected effective blocks only for approved canonical versions."""
+    result = effective_blocks(database, week_start)
+    published = result.get("status") in {"approved_baseline", "approved_with_exceptions", "authoritative"}
+    if not published:
+        return {"status": result.get("status", "canonical_not_materialized"), "published": False,
+                "week_start": week_start,
+                "effective_week_id": (result.get("effective_week") or {}).get("effective_week_id"), "items": []}
+
+    items = []
+    for block in result.get("items") or []:
+        patch = block.get("patch") if isinstance(block.get("patch"), Mapping) else {}
+        assignments = [] if block.get("change_kind") == "cancelled" else _assignments(
+            database, block.get("canonical_block_id"), patch)
+        items.append({**block, "assignments": assignments})
+    return {"status": result["status"], "published": True, "week_start": week_start,
+            "effective_week_id": (result.get("effective_week") or {}).get("effective_week_id"), "items": items}

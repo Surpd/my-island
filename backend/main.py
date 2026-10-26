@@ -9,16 +9,21 @@ from fastapi.responses import JSONResponse
 
 from backend.database import Database
 from backend.config import get_settings
-from backend.handlers.api import create_router
+from backend.handlers.api import GENERIC_PREVIEW_SCHOOL_MODE_DETAIL, create_router
 from backend.handlers.school_directory_api import create_school_directory_router
 from backend.services.auth import is_loopback_dev_auth_request
 from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
 from backend.handlers.constructor_publication_api import create_constructor_publication_router
 from backend.handlers.teacher_ui_colors_api import create_school_teacher_ui_colors_router
+from backend.services.school_preview_workspace import SchoolPreviewDatabase
 
 
 settings = get_settings()
-database = Database(settings.database_path, settings.database_url)
+school_preview_mode = (os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1"
+                       and os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1"
+                       and not settings.local_test_mode)
+database = (SchoolPreviewDatabase(settings.database_url) if school_preview_mode
+            else Database(settings.database_path, settings.database_url))
 database.initialize()
 if isolated_consolidation_enabled():
     from backend.services.constructor_publication import initialize_publication_schema
@@ -44,6 +49,11 @@ async def forward_admin_browser_session(request, call_next):
             (name, value) for name, value in request.scope.get("headers", [])
             if name.lower() != b"x-dev-auth"
         ]
+    local_school_mode = (os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" or
+                         os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1")
+    if (not settings.local_test_mode and local_school_mode and not isinstance(database, SchoolPreviewDatabase) and request.method == "POST"
+            and request.url.path.startswith("/api/admin/previews")):
+        return JSONResponse(status_code=409, content={"detail": GENERIC_PREVIEW_SCHOOL_MODE_DETAIL})
     if not settings.local_test_mode and os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1":
         if request.url.path == "/api/integrations/google/callback":
             return JSONResponse(status_code=403, content={"detail": "Google integration changes are disabled in local school mode"})
@@ -55,6 +65,15 @@ async def forward_admin_browser_session(request, call_next):
                 ("POST", "/api/admin/school/auth/logout"),
                 ("POST", "/api/admin/schedule/experiments/school/audience-preview"),
             }
+            if isinstance(database, SchoolPreviewDatabase):
+                # Only the isolated lifecycle store can write preview state;
+                # every school-data connection remains transaction READ ONLY.
+                allowed_local_operations.add(("POST", "/api/auth/session"))
+                if request.method == "POST" and (
+                    request.url.path == "/api/admin/previews"
+                    or re.fullmatch(r"/api/admin/previews/[0-9a-fA-F-]{36}/end", request.url.path)
+                ):
+                    allowed_local_operations.add((request.method, request.url.path))
             # These endpoints write only to school-experiments.sqlite3. The
             # source database still uses transaction-enforced read-only access.
             local_draft_operation = (

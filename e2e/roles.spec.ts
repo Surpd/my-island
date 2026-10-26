@@ -8,7 +8,7 @@ test('Admin authenticates locally, reads API, and navigates key sections', async
     if (response.url().startsWith(API)) responses.push(response.status());
   });
   await page.goto('/admin/schedule?role=admin');
-  await expect(page.getByRole('heading', { name: 'Расписание' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Конструктор расписания' })).toBeVisible();
   await expect.poll(() => responses.filter((status) => status === 200).length).toBeGreaterThan(2);
 
   await page.locator('.admin-console-sidebar nav button').nth(2).click();
@@ -19,10 +19,11 @@ test('Admin authenticates locally, reads API, and navigates key sections', async
   await page.getByRole('button', { name: 'Преподаватели', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Преподаватели' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Система', exact: true }).click();
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/settings/);
-  await expect(page.getByRole('heading', { name: 'Состояние сервера' })).toBeVisible();
-  await expect(page.getByText('локальная SQLite')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
+  await expect(page.getByText('исправно доступен')).toBeVisible();
+  await expect(page.getByText('локальный режим')).toBeVisible();
 });
 
 test('Teacher and student load their interfaces; student cannot access admin API', async ({ page }) => {
@@ -40,11 +41,11 @@ test('Teacher and student load their interfaces; student cannot access admin API
   await expect(page.getByText('Расписание', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Ближайших занятий нет')).toBeVisible();
 
-  await page.goto('/');
+  await page.goto('/?date=2026-09-21');
   await expect(page.getByRole('button', { name: /Расписание/ }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Расписание', exact: true }).first().click();
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-  await expect(page.getByText('Занятий нет', { exact: true })).toBeVisible();
+  await expect(page.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
   await page.locator('.scene-focus-back').click();
   await page.locator('.profile-button').click();
   await expect(page.getByRole('heading', { name: 'Тестовый ученик' })).toBeVisible();

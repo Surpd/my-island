@@ -1,0 +1,20 @@
+.miniapp-preview { min-width: 0; }
+.miniapp-preview-grid { display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; margin-top: 20px; }
+.miniapp-preview-controls { display: grid; gap: 14px; min-width: 0; }
+.miniapp-preview-controls h2, .miniapp-preview-controls h3 { margin: 0; }
+.miniapp-preview-controls label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; min-width: 0; }
+.miniapp-preview-controls input, .miniapp-preview-controls select { width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 1px solid var(--ws-line, #d6e2e2); border-radius: 8px; background: white; color: inherit; font: inherit; }
+.miniapp-preview-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.miniapp-preview-controls .admin-button { justify-content: center; min-height: 44px; white-space: normal; }
+.miniapp-preview-diagnostics { display: grid; gap: 10px; border-top: 1px solid var(--ws-line, #d6e2e2); padding-top: 18px; }
+.miniapp-preview-diagnostics dl { display: grid; gap: 5px; margin: 0; overflow-wrap: anywhere; }
+.miniapp-preview-diagnostics dt { font-size: 12px; color: var(--ws-muted, #526c75); }
+.miniapp-preview-diagnostics dd { margin: 0 0 10px; font-size: 13px; }
+.miniapp-preview-stage { min-width: 0; padding: 0 0 20px; }
+.miniapp-preview-caption { text-align: center; font-size: 13px; overflow-wrap: anywhere; }
+.miniapp-phone-scroll { max-width: 100%; overflow: auto; padding: 6px; }
+.miniapp-phone-scroll iframe { display: block; max-width: none; box-sizing: content-box; border: 5px solid #193d46; border-radius: 26px; margin: 0 auto; background: #f2f6f5; }
+.miniapp-preview-placeholder { display: grid; place-content: center; text-align: center; justify-items: center; gap: 16px; min-height: 460px; padding: 24px; border: 1px dashed #a9c4c4; border-radius: 20px; }
+.miniapp-preview-placeholder p { max-width: 36ch; line-height: 1.6; }
+@media (max-width: 1050px) { .miniapp-preview-grid { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 14px; } }
+@media (max-width: 740px) { .miniapp-preview-grid { grid-template-columns: minmax(0, 1fr); } .miniapp-preview-controls { padding: 14px; } .miniapp-phone-scroll { padding: 0 0 10px; } .miniapp-phone-scroll iframe { margin-left: 0; } }

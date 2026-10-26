@@ -309,8 +309,8 @@ export function parseQuick(text: string, contextClassId: string, groups: Schedul
       || group.name.match(/(?:группа|group)\s*(\d{1,2})\s*$/iu)?.[1]
       || group.subject_subgroup?.match(/^\s*(\d{1,2})\s*$/u)?.[1];
     if (number) return [number];
-    const short = normalize(shortGroup(group.name, subjectHit?.subject || group.subject || '', requestedGrade));
-    return short && short !== normalize(group.name) ? short.split(' ') : normalize(group.name).split(' ');
+    const short = groupLetter(shortGroup(group.name, subjectHit?.subject || group.subject || '', requestedGrade));
+    return short && short !== groupLetter(group.name) ? short.split(' ') : groupLetter(group.name).split(' ');
   };
   const containsSequence = (tokens: string[], marker: string[]) => marker.length > 0 && tokens.some((_, index) => marker.every((part, offset) => tokens[index + offset] === part));
   const groupCandidates = groups.filter((group) => {
@@ -321,13 +321,13 @@ export function parseQuick(text: string, contextClassId: string, groups: Schedul
         || students.some((student) => student.groups.includes(group.id) && student.classes.some((id) => classes.find((item) => item.id === id)?.name.startsWith(requestedGrade)));
       if (!belongs && exactClassMatches.length === 0) return false;
     }
-    const remainingWords = words.filter((_, index) => !used.has(index));
+    const remainingWords = words.filter((_, index) => !used.has(index)).map(groupLetter);
     const marker = groupMarkers(group);
     return containsSequence(remainingWords, marker) || marker.length === 1 && remainingWords.includes(marker[0]);
   });
   if (groupCandidates.length) {
     const markers = new Set(groupCandidates.flatMap(groupMarkers));
-    words.forEach((word, index) => { if (markers.has(word) || /^(?:группа|группу|гр)$/u.test(word)) used.add(index); });
+    words.forEach((word, index) => { if (markers.has(groupLetter(word)) || /^(?:группа|группу|гр)$/u.test(word)) used.add(index); });
   }
   const teacherMatches = teachers.map((teacher) => {
     const parts = normalize(teacher.name).split(' ').filter(Boolean);

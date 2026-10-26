@@ -59,6 +59,23 @@ class AdminConsoleDatabaseTests(unittest.TestCase):
         response = TestClient(app).get("/api/admin/groups", headers={"X-Dev-Auth": "admin:1"})
         self.assertNotEqual(response.status_code, 404)
 
+    def test_journal_matching_routes_require_admin_and_review_token(self):
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        self.assertEqual(client.get('/api/admin/journals/matching?spreadsheet_id=book').status_code, 401)
+        code, _ = self.database.create_admin_login_challenge(self.user_id)
+        token, _ = self.database.consume_admin_login_challenge(code)
+        headers = {'X-Dev-Auth': f'browser:{token}'}
+        with patch.object(self.database, 'journal_matching_overview', return_value={'individuals': [], 'teams': []}):
+            self.assertEqual(client.get('/api/admin/journals/matching?spreadsheet_id=book', headers=headers).json(), {'individuals': [], 'teams': []})
+        with patch.object(self.database, 'preview_journal_match', side_effect=ValueError('Stale candidate')):
+            response = client.post('/api/admin/journals/matching/preview', headers=headers, json={'spreadsheet_id':'book','source_name':'Synthetic Student','identity_id':'1'})
+            self.assertEqual(response.status_code, 409)
+        self.assertEqual(client.post('/api/admin/journals/matching/confirm', headers=headers, json={'spreadsheet_id':'book','source_name':'Synthetic Student','identity_id':'1'}).status_code, 422)
+        self.assertEqual(client.post('/api/admin/journals/1/students/1/match', headers=headers, json={'identity_id':'1'}).status_code, 409)
+
     def test_admin_student_schedule_route_is_available(self):
         from fastapi import FastAPI
 

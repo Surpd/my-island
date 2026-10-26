@@ -104,7 +104,10 @@ class ReadOnlySchoolDatabase(Database):
         import psycopg
         from psycopg.rows import dict_row
 
-        connection = psycopg.connect(self.database_url, row_factory=dict_row, connect_timeout=10)
+        # Transaction pooling can switch physical sessions between transactions;
+        # psycopg's automatic prepared names must not leak across those clients.
+        connection = psycopg.connect(self.database_url, row_factory=dict_row, connect_timeout=10,
+                                     prepare_threshold=None)
         try:
             connection.execute("SET TRANSACTION READ ONLY")
             if connection.execute("SELECT current_setting('transaction_read_only') AS mode").fetchone()["mode"] != "on":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from backend.config import Settings
@@ -9,6 +10,7 @@ from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.journal_import import sync_journal_values
+from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
 
@@ -49,6 +51,10 @@ def _client(settings: Settings, database: Database | None = None) -> tuple[Googl
 
 class TeacherDirectoryApplyBlocked(RuntimeError):
     """The authoritative teacher source is not safe to apply yet."""
+
+
+class JournalSourceExcluded(ValueError):
+    """The requested tab was explicitly excluded from journal imports."""
 
 
 def _structured_teacher_source(settings: Settings, database: Database | None = None) -> tuple[str, str, str, list[list[str]]]:
@@ -189,10 +195,23 @@ def refresh_classroom(database: Database, settings: Settings) -> dict[str, Any]:
     return {"course_id": course_id, "course_name": course.get("name"), "counts": sync_classroom_course(database, client, course, teacher_account=teacher_account)}
 
 
-def refresh_journal(database: Database, settings: Settings, grade: int = 9, subject: str = "Математика", sheet_id: int | str | None = None) -> dict[str, Any]:
-    if grade not in CURRENT_JOURNAL_SPREADSHEETS:
+def refresh_journal(database: Database, settings: Settings, grade: int = 9, subject: str = "Математика", sheet_id: int | str | None = None, *, spreadsheet_id: str | None = None) -> dict[str, Any]:
+    target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS.get(grade)
+    if not target_id:
         raise ValueError("Journal grade must be between 5 and 11")
-    spreadsheet_id = CURRENT_JOURNAL_SPREADSHEETS[grade]
+    with database.journal_workbook_lock("__school_import__") as available:
+        if not available:
+            raise GoogleLiveError("Сейчас обновляется другой журнал школы. Повторите позже.")
+        with database.journal_workbook_lock(target_id) as acquired:
+            if not acquired:
+                raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
+            return _refresh_single_journal(database, settings, grade, subject, sheet_id, spreadsheet_id=target_id)
+
+
+def _refresh_single_journal(database: Database, settings: Settings, grade: int, subject: str, sheet_id: int | str | None, *, spreadsheet_id: str | None = None) -> dict[str, Any]:
+    if grade not in CURRENT_JOURNAL_SPREADSHEETS and not spreadsheet_id:
+        raise ValueError("Journal grade must be between 5 and 11")
+    spreadsheet_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS[grade]
     try:
         client, _ = _client(settings, database)
         metadata = client.spreadsheet(spreadsheet_id)
@@ -203,31 +222,46 @@ def refresh_journal(database: Database, settings: Settings, grade: int = 9, subj
         sheet_title = str(selected.get("title", "")) if selected else None
         if not selected or not sheet_title:
             raise GoogleLiveError(f"Journal tab {subject} was not found in {title}")
+        preference = load_source_settings(database, spreadsheet_id).get(str(selected.get("sheetId")))
+        if preference and preference.get("excluded_from_journals"):
+            raise JournalSourceExcluded("Эта вкладка исключена из журналов и не может быть обновлена.")
         escaped_title = sheet_title.replace("'", "''")
-        values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ")
+        values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
         counts = sync_journal_values(
             database,
             values,
             spreadsheet_id=spreadsheet_id,
             spreadsheet_title=title,
             grade=grade,
-            subject=subject,
+            subject=sheet_title.strip(),
             sheet_title=sheet_title,
             sheet_id=selected.get("sheetId"),
         )
+    except JournalSourceExcluded:
+        raise
     except (GoogleLiveError, ValueError, RuntimeError) as error:
         database.record_journal_failure(spreadsheet_id, subject, str(error))
         database.record_audit_event("journal_sync.failed", "journal_sync", {"grade": grade, "subject": subject, "error": str(error)})
         raise
-    database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "subject": subject, **counts})
+    database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": spreadsheet_id, "subject": sheet_title, **counts})
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": sheet_title, "sheet_id": selected.get("sheetId"), "counts": counts}
 
 
-def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual") -> dict[str, Any]:
-    """Import every gradebook tab in one connected workbook using stable Google tab IDs."""
+def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual", run_id: Any | None = None) -> dict[str, Any]:
     if grade not in CURRENT_JOURNAL_SPREADSHEETS and not spreadsheet_id:
         raise ValueError("Для этого класса не задан источник журнала")
     target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS[grade]
+    with database.journal_workbook_lock("__school_import__") as available:
+        if not available:
+            raise GoogleLiveError("Сейчас обновляется другой журнал школы. Повторите позже.")
+        with database.journal_workbook_lock(target_id) as acquired:
+            if not acquired:
+                raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
+            return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id)
+
+
+def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None) -> dict[str, Any]:
+    """Import every gradebook tab in one connected workbook using stable Google tab IDs."""
     client, _ = _client(settings, database)
     metadata = client.spreadsheet(target_id)
     title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
@@ -235,28 +269,68 @@ def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9
     if not tabs:
         raise GoogleLiveError(f"В источнике {title} нет вкладок")
     outcomes = []
-    for tab in tabs:
-        sheet_title = str(tab.get("title", "")).strip()
+    valid_tabs = [tab for tab in tabs if str(tab.get("title", "")).strip() and tab.get("sheetId") is not None]
+    source_settings = load_source_settings(database, target_id)
+    sync_tabs, skipped_count, excluded_count = select_sync_tabs(valid_tabs, source_settings, trigger_kind=trigger_kind)
+    total_tabs = len(valid_tabs)
+    sync_tab_ids = {str(tab.get("sheetId")) for tab in sync_tabs}
+    for tab in valid_tabs:
+        sheet_title = str(tab.get("title", ""))
         sheet_id = tab.get("sheetId")
-        if not sheet_title or sheet_id is None:
+        if str(sheet_id) not in sync_tab_ids:
+            preference = source_settings.get(str(sheet_id))
+            status = "excluded" if preference and preference.get("excluded_from_journals") else "skipped"
+            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": status})
+            if run_id is not None:
+                database.update_journal_sync_progress(run_id, {
+                    "completed_tabs": len(outcomes), "total_tabs": total_tabs,
+                    "succeeded": sum(item["status"] == "success" for item in outcomes),
+                    "failed": sum(item["status"] == "error" for item in outcomes),
+                    "skipped": sum(item["status"] == "skipped" for item in outcomes),
+                    "excluded": sum(item["status"] == "excluded" for item in outcomes),
+                })
             continue
         escaped_title = sheet_title.replace("'", "''")
         try:
-            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ")
+            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
             counts = sync_journal_values(
                 database, values, spreadsheet_id=target_id, spreadsheet_title=title,
-                grade=grade, subject=sheet_title, sheet_title=sheet_title, sheet_id=sheet_id,
+                grade=grade, subject=sheet_title.strip(), sheet_title=sheet_title, sheet_id=sheet_id,
             )
             outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "success", "counts": counts})
-        except (GoogleLiveError, ValueError, RuntimeError) as error:
-            database.record_journal_failure(target_id, sheet_title, str(error))
-            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "error", "error": str(error)[:1000]})
+        except Exception as error:
+            error_message = _safe_journal_error_message(error)
+            logging.getLogger(__name__).error("Journal tab import failed spreadsheet_id=%s sheet_id=%s error_type=%s error=%s", target_id, sheet_id, type(error).__name__, error_message)
+            try:
+                database.record_journal_failure(target_id, sheet_title.strip(), "Не удалось обновить вкладку. Предыдущие данные сохранены.",
+                    grade=grade, spreadsheet_title=title, sheet_title=sheet_title, sheet_id=sheet_id)
+            except Exception as record_error:
+                logging.getLogger(__name__).error("Failed to persist journal tab failure spreadsheet_id=%s sheet_id=%s error_type=%s", target_id, sheet_id, type(record_error).__name__)
+            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "error", "error": f"{type(error).__name__}: {error_message}"[:1000]})
+        if run_id is not None:
+            succeeded = sum(item["status"] == "success" for item in outcomes)
+            failed = sum(item["status"] == "error" for item in outcomes)
+            database.update_journal_sync_progress(run_id, {
+                "completed_tabs": len(outcomes), "total_tabs": total_tabs,
+                "succeeded": succeeded, "failed": failed,
+                "skipped": skipped_count, "excluded": excluded_count,
+            })
     success_count = sum(item["status"] == "success" for item in outcomes)
-    if not success_count:
+    failure_count = sum(item["status"] == "error" for item in outcomes)
+    if not success_count and not (skipped_count or excluded_count):
         raise GoogleLiveError("Не удалось импортировать ни одной вкладки; предыдущие данные сохранены")
     if trigger_kind == "manual":
         database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": target_id, "successful_tabs": success_count, "failed_tabs": len(outcomes) - success_count})
-    return {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade, "status": "success" if success_count == len(outcomes) else "partial", "tabs": outcomes}
+    status = "partial" if failure_count or (success_count and success_count + skipped_count + excluded_count != len(outcomes)) else "success"
+    return {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade, "status": status,
+            "skipped_tabs": skipped_count, "excluded_tabs": excluded_count, "tabs": outcomes}
+
+
+def _safe_journal_error_message(error: Exception) -> str:
+    diagnostic = getattr(error, "diag", None)
+    if diagnostic is not None:
+        return str(getattr(diagnostic, "message_primary", None) or type(error).__name__)[:1000]
+    return str(error)[:1000]
 
 
 def refresh_teacher_directory(database: Database, settings: Settings) -> dict[str, Any]:

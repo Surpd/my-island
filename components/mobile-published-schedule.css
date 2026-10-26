@@ -1,0 +1,73 @@
+.mobile-published-schedule {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mobile-published-schedule__header,
+.mobile-published-schedule__week-controls,
+.mobile-published-schedule__time,
+.mobile-published-schedule__assignment > span,
+.mobile-published-schedule__state--error {
+  display: flex;
+  align-items: center;
+}
+
+.mobile-published-schedule__header {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-published-schedule__header h2 {
+  margin: 3px 0 0;
+  color: var(--cp-ink, #263743);
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.mobile-published-schedule__refresh,
+.mobile-published-schedule__week-controls button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--cp-line, #dce2e8);
+  border-radius: 10px;
+  background: var(--cp-paper, #fff);
+  color: var(--cp-ink, #263743);
+  cursor: pointer;
+}
+
+.mobile-published-schedule__refresh:disabled { opacity: .6; cursor: wait; }
+.mobile-published-schedule__week-controls { gap: 8px; margin-top: 16px; }
+.mobile-published-schedule__week-controls label { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: center; gap: 8px; color: var(--cp-muted, #687783); font-size: 12px; }
+.mobile-published-schedule__week-controls input { min-width: 0; width: min(100%, 160px); height: 40px; padding: 0 8px; border: 1px solid var(--cp-line, #dce2e8); border-radius: 9px; background: var(--cp-paper, #fff); color: var(--cp-ink, #263743); font: inherit; }
+.mobile-published-schedule__range { margin: 9px 0 15px; color: var(--cp-muted, #687783); font-size: 12px; text-align: center; }
+.mobile-published-schedule__state { margin: 0; padding: 14px; border: 1px solid var(--cp-line, #dce2e8); border-radius: 10px; color: var(--cp-muted, #687783); font-size: 13px; line-height: 1.45; background: var(--cp-bg, #f5f7f9); }
+.mobile-published-schedule__state--error { flex-wrap: wrap; gap: 8px; color: #8d3434; }
+.mobile-published-schedule__state--error span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.mobile-published-schedule__state--error button { min-height: 36px; padding: 6px 10px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.mobile-published-schedule__days { display: grid; gap: 15px; min-width: 0; }
+.mobile-published-schedule__day { min-width: 0; }
+.mobile-published-schedule__day h3 { margin: 0 0 8px; color: var(--cp-ink, #263743); font-size: 14px; font-weight: 650; text-transform: capitalize; }
+.mobile-published-schedule__block { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; min-width: 0; padding: 12px 0; border-top: 1px solid var(--cp-line, #dce2e8); }
+.mobile-published-schedule__block.is-cancelled { opacity: .68; }
+.mobile-published-schedule__time { align-items: flex-start; gap: 6px; color: var(--cp-muted, #687783); font-size: 12px; line-height: 1.4; white-space: normal; }
+.mobile-published-schedule__time svg,
+.mobile-published-schedule__assignment > span svg { flex: 0 0 auto; }
+.mobile-published-schedule__lessons { display: grid; gap: 8px; min-width: 0; }
+.mobile-published-schedule__assignment { display: grid; gap: 4px; min-width: 0; }
+.mobile-published-schedule__assignment strong { color: var(--cp-ink, #263743); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
+.mobile-published-schedule__assignment > span { gap: 5px; min-width: 0; color: var(--cp-muted, #687783); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.mobile-published-schedule__notice { color: #8a6222; font-size: 11px; }
+.mobile-published-schedule .is-spinning { animation: mobile-schedule-spin 1s linear infinite; }
+
+@keyframes mobile-schedule-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 420px) {
+  .mobile-published-schedule__block { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
+  .mobile-published-schedule__week-controls { gap: 5px; }
+  .mobile-published-schedule__week-controls label { gap: 5px; font-size: 11px; }
+}

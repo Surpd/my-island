@@ -250,27 +250,6 @@ class GoogleLiveClient:
             {"fields": "spreadsheetId,properties.title,sheets(properties,merges)"},
         )
 
-
-def load_google_client(
-    config: GoogleIntegrationConfig,
-    store: GoogleTokenStore,
-    allowed_email: str | None = None,
-) -> tuple[GoogleLiveClient, str]:
-    """Load the shared server credential, verify its identity, and bootstrap DB storage."""
-    token = store.load()
-    if not token or not token.get("refresh_token"):
-        raise GoogleLiveError("Stored Google refresh token is required")
-    client = GoogleLiveClient(config, token, store)
-    account = str(client.userinfo().get("email") or "").strip().casefold()
-    expected = str(allowed_email or "").strip().casefold()
-    if not account:
-        raise GoogleLiveError("Google userinfo did not return an email")
-    if expected and account != expected:
-        raise GoogleLiveError(f"Подключите аккаунт {expected}")
-    if store.database and not store.database.get_google_oauth_credential():
-        store.save(client.token, account_email=account)
-    return client, account
-
     def sheet_grid_range(self, spreadsheet_id: str, title: str, a1_range: str = "A1:V200") -> dict[str, Any]:
         escaped = title.replace("'", "''")
         return self.get(
@@ -288,15 +267,15 @@ def load_google_client(
             },
         )
 
-    def sheet_values(self, spreadsheet_id: str, range_name: str) -> list[list[str]]:
-        values = self.sheet_values_many(spreadsheet_id, [range_name])
+    def sheet_values(self, spreadsheet_id: str, range_name: str, *, value_render_option: str | None = None) -> list[list[Any]]:
+        values = self.sheet_values_many(spreadsheet_id, [range_name], **({"value_render_option": value_render_option} if value_render_option else {}))
         return values[0] if values else []
 
-    def sheet_values_many(self, spreadsheet_id: str, range_names: list[str]) -> list[list[list[str]]]:
+    def sheet_values_many(self, spreadsheet_id: str, range_names: list[str], *, value_render_option: str | None = None) -> list[list[list[Any]]]:
         payload = self.get(
             "https://sheets.googleapis.com/",
             f"v4/spreadsheets/{quote(spreadsheet_id, safe='')}/values:batchGet",
-            {"majorDimension": "ROWS", "ranges": range_names},
+            {"majorDimension": "ROWS", "ranges": range_names, **({"valueRenderOption": value_render_option} if value_render_option else {})},
         )
         value_ranges = payload.get("valueRanges") or []
         result: list[list[list[str]]] = []
@@ -331,7 +310,6 @@ def load_google_client(
             page_token = payload.get("nextPageToken")
             if not page_token:
                 return items
-
     def student_submissions(self, course_id: str, coursework_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         page_token: str | None = None
@@ -357,3 +335,24 @@ def load_google_client(
             page_token = payload.get("nextPageToken")
             if not page_token:
                 return items
+
+
+def load_google_client(
+    config: GoogleIntegrationConfig,
+    store: GoogleTokenStore,
+    allowed_email: str | None = None,
+) -> tuple[GoogleLiveClient, str]:
+    """Load the shared server credential, verify its identity, and bootstrap DB storage."""
+    token = store.load()
+    if not token or not token.get("refresh_token"):
+        raise GoogleLiveError("Stored Google refresh token is required")
+    client = GoogleLiveClient(config, token, store)
+    account = str(client.userinfo().get("email") or "").strip().casefold()
+    expected = str(allowed_email or "").strip().casefold()
+    if not account:
+        raise GoogleLiveError("Google userinfo did not return an email")
+    if expected and account != expected:
+        raise GoogleLiveError(f"Подключите аккаунт {expected}")
+    if store.database and not store.database.get_google_oauth_credential():
+        store.save(client.token, account_email=account)
+    return client, account
