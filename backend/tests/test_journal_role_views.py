@@ -176,6 +176,15 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual({row["student_name"] for row in group_journal}, {"Student One"})
         self.assertTrue(all(row["identity_id"] == self.student_identity for row in group_journal))
 
+    def test_teacher_journal_source_catalogue_reuses_one_connection_and_keeps_scope(self):
+        with patch.object(self.database, "connection", wraps=self.database.connection) as connection_spy:
+            pairs = self.database.teacher_journal_sources(self.teacher_user)
+
+        self.assertEqual(connection_spy.call_count, 1)
+        self.assertEqual(len(pairs), 2)
+        self.assertEqual({item["group_marker"] for item in pairs}, {"A"})
+        self.assertEqual(set(item["source_id"] for item in pairs), set(self.source_ids))
+
     def test_unmapped_all_marker_falls_back_only_to_assigned_canonical_class(self):
         with self.database.connection() as connection:
             student_a = self.database.execute(connection,

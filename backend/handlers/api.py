@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
 
 from backend.database import Database
+from backend.services.school_preview_workspace import SchoolPreviewDatabase
 from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.admin import (
@@ -687,7 +688,12 @@ def create_router(database: Database) -> APIRouter:
         # New Telegram principals always start as students; privileged roles
         # are granted only by bootstrap or the explicit admin role manager.
         initial_role = telegram_user["role"] if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"} else "student"
-        user = database.get_or_create_user(telegram_user["id"], initial_role)
+        try:
+            user = database.get_or_create_user(telegram_user["id"], initial_role)
+        except ValueError as error:
+            if isinstance(database, SchoolPreviewDatabase):
+                raise HTTPException(status_code=403, detail="An existing school account is required") from error
+            raise
         settings = get_settings()
         bootstrap_roles = ("teacher", "admin") if telegram_user["id"] in settings.telegram_bootstrap_user_ids else ()
         user = database.ensure_bootstrap_roles(telegram_user["id"], bootstrap_roles) or user
@@ -2069,7 +2075,7 @@ def create_router(database: Database) -> APIRouter:
         settings = get_settings()
         local_school_mode = (os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" or
                              os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1")
-        if not settings.local_test_mode and local_school_mode:
+        if not settings.local_test_mode and local_school_mode and not isinstance(database, SchoolPreviewDatabase):
             raise HTTPException(status_code=409, detail=GENERIC_PREVIEW_SCHOOL_MODE_DETAIL)
 
     @router.get("/admin/previews/people")
@@ -2097,7 +2103,11 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=404, detail="Active canonical identity was not found")
         created_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
         expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-        preview = database.create_student_preview(reviewer["id"], reviewer["id"], created_at, expires_at, target_identity_id=target["id"])
+        if isinstance(database, SchoolPreviewDatabase):
+            preview = database.create_student_preview(reviewer["id"], reviewer["id"], created_at, expires_at,
+                                                      target_identity_id=target["id"], role=payload.role)
+        else:
+            preview = database.create_student_preview(reviewer["id"], reviewer["id"], created_at, expires_at, target_identity_id=target["id"])
         return {"id": preview["id"], "role": payload.role,
                 "target": {"identity_id": str(target["id"]), "display_name": target["display_name"], "class_name": target["class_name"]},
                 "expires_at": preview["expires_at"]}

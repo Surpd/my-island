@@ -130,6 +130,33 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertFalse(hidden["published"])
         self.assertEqual(hidden["status"], "draft")
         self.assertEqual(hidden["items"], [])
+        for projection in (
+            canonical.project_student_range(self.database, self.student["id"], "2026-10-26"),
+            canonical.project_teacher_range(self.database, self.teacher["id"], "2026-10-26"),
+        ):
+            self.assertEqual(projection["status"], "not_published")
+            self.assertEqual(projection["items"], [])
+
+    def test_overview_uses_historical_runtime_week_after_new_template(self):
+        def imported(version):
+            canonical.import_canonical_artifact(self.database, {
+                "version_id": version,
+                "source_snapshot": {"id": f"snapshot-{version}", "fingerprint": f"fingerprint-{version}"},
+                "blocks": self.artifact_blocks_for_draft(),
+            }, status="approved_with_exceptions")
+        imported("historical-approved")
+        week = canonical.materialize_effective_week(self.database, "historical-approved", "2026-09-21")
+        imported("latest-template")
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE canonical_schedule_versions SET approved_at='2099-01-01' WHERE version_id='latest-template'")
+        self.assertEqual(canonical.canonical_version(self.database)["version_id"], "latest-template")
+        overview = canonical.effective_status(self.database, "2026-09-21")
+        runtime = canonical.published_week_view(self.database, "2026-09-21")
+        self.assertTrue(runtime["published"])
+        self.assertEqual(overview["effective_week"]["effective_week_id"], week["effective_week_id"])
+        self.assertEqual(overview["effective_week"]["effective_week_id"], runtime["effective_week_id"])
+        self.assertEqual(overview["canonical"]["version_id"], "historical-approved")
+        self.assertEqual(overview["status"], runtime["status"])
 
     def artifact_blocks_for_draft(self):
         return {"draft-block": {"weekday": 0, "slot": {"start": "09:00", "end": "09:45"},

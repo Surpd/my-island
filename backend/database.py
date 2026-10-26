@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 
 def _schedule_grade(value: Any) -> str:
@@ -933,7 +934,11 @@ class Database:
                 from psycopg.rows import dict_row
             except ImportError as error:
                 raise RuntimeError("psycopg is required when DATABASE_URL is configured") from error
-            connection = psycopg.connect(self.database_url, row_factory=dict_row, autocommit=self.autocommit)
+            endpoint = urlsplit(self.database_url)
+            pooler_options = ({"prepare_threshold": None}
+                              if (endpoint.hostname or "").endswith(".pooler.supabase.com") and endpoint.port == 6543 else {})
+            connection = psycopg.connect(self.database_url, row_factory=dict_row, autocommit=self.autocommit,
+                                         **pooler_options)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             connection = sqlite3.connect(self.path)
@@ -5195,5 +5200,7 @@ class Database:
                       AND marker_student.match_status = 'linked' AND marker_student.identity_id IS NOT NULL)
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number, source.id""").fetchall()
             candidates.extend(dict(row) for row in fallback_sources)
-        return [row for row in candidates
-                if self.teacher_can_access_journal_marker(user_id, row["source_id"], row["group_marker"])]
+            # Keep the same authorization predicate, but reuse this read
+            # transaction instead of reconnecting once per journal marker.
+            return [row for row in candidates
+                    if self._teacher_can_access_journal_marker(connection, user_id, row["source_id"], row["group_marker"])]
