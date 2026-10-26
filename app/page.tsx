@@ -1523,7 +1523,7 @@ function TeacherApp({
     .map((location) => ({ ...location, icon: location.id }));
   const selectedId = view && view !== 'profile' ? view : null;
   const nextTeacherLesson = [...data.schedule]
-    .filter((lesson) => lesson.lesson_date >= isoDate(new Date()))
+    .filter((lesson) => lesson.lesson_date >= day)
     .sort((a, b) =>
       `${a.lesson_date}${a.start_time}`.localeCompare(
         `${b.lesson_date}${b.start_time}`,
@@ -3449,7 +3449,12 @@ export default function Home() {
       if (event.source !== window.parent || event.origin !== window.location.origin) return;
       const value = event.data;
       if (value?.type !== 'my-island:preview-config' || typeof value.id !== 'string' || !['student', 'teacher'].includes(value.role) || !/^\d{4}-\d{2}-\d{2}$/.test(value.day) || Number.isNaN(Date.parse(value.day))) return;
-      setConfig({ id: value.id, role: value.role, day: value.day, initData: String(value.initData || ''), localAdmin: value.localAdmin === true, revision: Number(value.revision || 0) });
+      const next = { id: value.id, role: value.role, day: value.day, initData: String(value.initData || ''), localAdmin: value.localAdmin === true, revision: Number(value.revision || 0) };
+      // ready/onLoad may both deliver the same configuration. Do not reboot
+      // Campus and interrupt navigation when the school queries finish slowly.
+      setConfig((previous) => previous && previous.id === next.id && previous.role === next.role
+        && previous.day === next.day && previous.initData === next.initData
+        && previous.localAdmin === next.localAdmin && previous.revision === next.revision ? previous : next);
     };
     window.addEventListener('message', receive);
     window.parent.postMessage({ type: 'my-island:preview-ready' }, window.location.origin);

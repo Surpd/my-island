@@ -41,11 +41,11 @@ test('Teacher and student load their interfaces; student cannot access admin API
   await expect(page.getByText('Расписание', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Ближайших занятий нет')).toBeVisible();
 
-  await page.goto('/');
+  await page.goto('/?date=2026-09-21');
   await expect(page.getByRole('button', { name: /Расписание/ }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Расписание', exact: true }).first().click();
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-  await expect(page.getByText('Занятий нет', { exact: true })).toBeVisible();
+  await expect(page.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
   await page.locator('.scene-focus-back').click();
   await page.locator('.profile-button').click();
   await expect(page.getByRole('heading', { name: 'Тестовый ученик' })).toBeVisible();

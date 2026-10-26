@@ -11,7 +11,14 @@ async function personNamed(page: Page, role: 'student' | 'teacher', name: string
 }
 
 async function openSelectedPerson(page: Page, person: PreviewPerson) {
-  await page.getByLabel('Поиск человека').fill(person.display_name);
+  await Promise.all([
+    page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/admin/previews/people'
+        && url.searchParams.get('q') === person.display_name && response.ok();
+    }),
+    page.getByLabel('Поиск человека').fill(person.display_name),
+  ]);
   const identity = page.getByLabel('Личность');
   await expect(identity.locator(`option[value="${person.identity_id}"]`)).toHaveCount(1);
   await expect(identity).toBeEnabled();
@@ -46,8 +53,8 @@ async function scoreFor(page: Page, previewId: string) {
   return journals.flatMap((journal) => journal.results.map((result) => result.numeric_score).filter((score): score is number => score !== null));
 }
 
-async function expandSchedule(frame: Frame) {
-  await frame.getByRole('button', { name: 'Расписание', exact: true }).first().click();
+async function expandSchedule(frame: Frame, alreadySelected = false) {
+  if (!alreadySelected) await frame.getByRole('button', { name: 'Расписание', exact: true }).first().click();
   const collapse = frame.getByRole('button', { name: 'Свернуть раздел', exact: true });
   if (await collapse.isVisible().catch(() => false)) await collapse.click();
   await frame.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
@@ -91,6 +98,11 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect.poll(async () => (await scoreFor(page, peerPreview)).includes(3)).toBe(true);
     await expect(frame.getByText('3', { exact: true })).toBeVisible();
 
+    const studentApiRequests: string[] = [];
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname;
+      if (['/api/student/today', '/api/student/schedule', '/api/student/homework', '/api/student/profile'].includes(path)) studentApiRequests.push(path);
+    });
     const studentPreview = await openSelectedPerson(page, student);
     previewIds.push(studentPreview);
     frame = await previewFrame(page);
@@ -98,6 +110,28 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expandSchedule(frame);
     await expect(frame.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
     await expect.poll(async () => (await scoreFor(page, studentPreview)).includes(8)).toBe(true);
+
+    // Duplicate config messages can arrive from both iframe onLoad and the ready handshake.
+    // A repeated identical config must not remount Campus, collapse the open panel, or reload its APIs.
+    await frame.evaluate(() => {
+      type HandshakeWindow = Window & { __previewConfigMessages?: number };
+      const target = window as HandshakeWindow;
+      target.__previewConfigMessages = 0;
+      target.addEventListener('message', (event: MessageEvent) => {
+        if (event.source === window.parent && event.origin === window.location.origin && event.data?.type === 'my-island:preview-config') {
+          target.__previewConfigMessages = (target.__previewConfigMessages || 0) + 1;
+        }
+      }, true);
+    });
+    const apiRequestsBeforeDuplicate = studentApiRequests.length;
+    await page.evaluate((config) => {
+      const iframe = document.querySelector<HTMLIFrameElement>('iframe[title="Предпросмотр My Island"]');
+      iframe?.contentWindow?.postMessage(config, window.location.origin);
+    }, { type: 'my-island:preview-config', id: studentPreview, role: 'student', day: FIXTURE_MONDAY, initData: '', localAdmin: true, revision: 0 });
+    await expect.poll(() => frame.evaluate(() => (window as Window & { __previewConfigMessages?: number }).__previewConfigMessages)).toBe(1);
+    await frame.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => window.setTimeout(resolve, 250)))));
+    await expect(frame.getByRole('button', { name: 'Свернуть раздел', exact: true })).toBeVisible();
+    expect(studentApiRequests).toHaveLength(apiRequestsBeforeDuplicate);
 
     await page.getByLabel('Дата').fill(FIXTURE_SUNDAY);
     await expect(frame.getByLabel('Дата расписания')).toHaveValue(FIXTURE_SUNDAY);
@@ -112,7 +146,9 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     previewIds.push(teacherPreview);
     await page.getByLabel('Дата').fill(FIXTURE_MONDAY);
     const teacherFrame = await previewFrame(page);
-    await expandSchedule(teacherFrame);
+    await teacherFrame.getByRole('button', { name: 'Расписание', exact: true }).first().click();
+    await expect(teacherFrame.getByText('09:00 · Математика', { exact: true })).toBeVisible();
+    await expandSchedule(teacherFrame, true);
     await expect(teacherFrame.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
 
     for (const width of ['360', '390', '430']) {
