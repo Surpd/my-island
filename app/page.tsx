@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { campusLessons, campusStudentDays } from '../components/campus-schedule';
+import { formatLessonTime, formatLessonTimeRange } from '../components/lesson-time';
 import { CampusRoleSwitch, CampusPeriod, dateISO, periodFor, useCampusScreen, type CampusRole } from '../components/campus-controls';
 const ModernAdmin = dynamic(() => import('./admin/page'), { ssr: false });
 const studentScreens = ['schedule', 'homework', 'grades', 'information', 'profile'] as const;
@@ -449,7 +450,7 @@ function EmptyState({
 function LessonRow({ lesson }: { lesson: Lesson }) {
   return (
     <div className="lesson-card">
-      <time>{lesson.start_time}</time>
+      <time>{formatLessonTime(lesson.start_time) || 'Время не указано'}</time>
       <div className="lesson-card__body">
         <strong>{lesson.subject}</strong>
         <span>
@@ -531,15 +532,15 @@ function scheduleStartingDay(days: StudentScheduleDay[]) {
 
 function ScheduleItemRow({ item }: { item: StudentScheduleItem }) {
   if (item.state === 'special_event') {
-    return <article className="student-schedule-event"><span className="student-schedule-event__mark">✦</span><div><small>Событие</small><strong>{item.special_event?.title}</strong><span>{[item.slot.start, item.slot.end].filter(Boolean).join('–')} {item.room ? `· ${item.room}` : ''}</span></div></article>;
+    return <article className="student-schedule-event"><span className="student-schedule-event__mark">✦</span><div><small>Событие</small><strong>{item.special_event?.title}</strong><span>{formatLessonTimeRange(item.slot.start, item.slot.end)} {item.room ? `· ${item.room}` : ''}</span></div></article>;
   }
   if (item.state === 'conflict') {
     const title = item.conflict?.alternatives.map((alternative) => alternative.title).join(' / ') || 'Расписание уточняется';
-    return <article className="student-schedule-conflict"><span className="student-schedule-conflict__mark">?</span><div><small>Уточняется</small><strong>{title}</strong><span>{item.slot.start}{item.slot.end ? `–${item.slot.end}` : ''}</span></div></article>;
+    return <article className="student-schedule-conflict"><span className="student-schedule-conflict__mark">?</span><div><small>Уточняется</small><strong>{title}</strong><span>{formatLessonTimeRange(item.slot.start, item.slot.end)}</span></div></article>;
   }
   if (item.state !== 'lesson') return null;
   const context = Array.isArray(item.group_context) ? item.group_context.join(' · ') : item.group_context;
-  return <article className="student-schedule-lesson"><time>{item.slot.start}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{[item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span></div></article>;
+  return <article className="student-schedule-lesson"><time>{formatLessonTime(item.slot.start) || 'Время не указано'}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{[item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span></div></article>;
 }
 
 function StudentSchedulePanel({ projection, initialDay }: { projection: StudentScheduleProjection; initialDay?: string }) {
@@ -615,17 +616,22 @@ function ScheduleFocusPeek({ projection, referenceDay }: { projection: StudentSc
   const now = new Date();
   const minutes = selected === isoDate(now) ? now.getHours() * 60 + now.getMinutes() : -1;
   const next = items.find((item) => {
-    const [hours, mins] = item.slot.start.split(':').map(Number);
+    const formatted = formatLessonTime(item.slot.start);
+    if (!formatted) return false;
+    const [hours, mins] = formatted.split(':').map(Number);
     return hours * 60 + mins >= minutes;
   });
   const current = items.find((item) => {
-    const [hours, mins] = item.slot.start.split(':').map(Number);
-    const [endHours, endMins] = (item.slot.end || item.slot.start).split(':').map(Number);
+    const startTime = formatLessonTime(item.slot.start);
+    const endTime = formatLessonTime(item.slot.end) || startTime;
+    if (!startTime || !endTime) return false;
+    const [hours, mins] = startTime.split(':').map(Number);
+    const [endHours, endMins] = endTime.split(':').map(Number);
     return hours * 60 + mins <= minutes && endHours * 60 + endMins > minutes;
   });
   const anchor = current || next;
   const remaining = items.filter((item) => !anchor || item.slot.start >= anchor.slot.start).slice(0, 3);
-  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || 'Учебный день закончен'}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${anchor.slot.start}${anchor.slot.end ? `–${anchor.slot.end}` : ''}${anchor.room ? ` · ${anchor.room}` : ''}` : 'На сегодня всё'}</span></div></div>{remaining.length > 1 && <div className="schedule-focus-peek__queue">{remaining.slice(0, 3).map((item, index) => <span key={`${item.slot.start}-${index}`}><b>{item.slot.start}</b>{item.state === 'conflict' ? 'Уточняется' : item.state === 'special_event' ? item.special_event?.title : item.canonical_title}</span>)}</div>}</div>;
+  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || 'Учебный день закончен'}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${formatLessonTimeRange(anchor.slot.start, anchor.slot.end)}${anchor.room ? ` · ${anchor.room}` : ''}` : 'На сегодня всё'}</span></div></div>{remaining.length > 1 && <div className="schedule-focus-peek__queue">{remaining.slice(0, 3).map((item, index) => <span key={`${item.slot.start}-${index}`}><b>{formatLessonTime(item.slot.start) || 'Время не указано'}</b>{item.state === 'conflict' ? 'Уточняется' : item.state === 'special_event' ? item.special_event?.title : item.canonical_title}</span>)}</div>}</div>;
 }
 function HomeworkPanel({ homework }: { homework: Homework[] }) {
   return (
@@ -787,7 +793,7 @@ function ProfilePanel({
   );
 }
 function GradesPanel({ api }: { api: RoleJournalsApi }) {
-  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--violet"><BarChart3 size={21} /></span><div><h2>Оценки</h2><p>Работы и результаты школьных журналов.</p></div></div><StudentRoleJournals api={api} /></div>;
+  return <div className="section-panel"><StudentRoleJournals api={api} /></div>;
 }
 
 type SceneHotspot = {
@@ -882,12 +888,17 @@ function SpatialSheet({
   );
 }
 
+function ScheduleNotice({ message }: { message: string }) {
+  return <output className="campus-schedule-notice">{message}</output>;
+}
+
 function TodaySheet({
   lessons,
   dayBlock,
   homework = [],
   information = [],
   teacher = false,
+  scheduleWarning = '',
   referenceDay,
   onOpen,
 }: {
@@ -896,6 +907,7 @@ function TodaySheet({
   homework?: Homework[];
   information?: Information[];
   teacher?: boolean;
+  scheduleWarning?: string;
   referenceDay?: string;
   onOpen: (view: string) => void;
 }) {
@@ -905,7 +917,9 @@ function TodaySheet({
   const next =
     sorted.find((lesson) => {
       if (referenceDay && referenceDay !== dateISO()) return true;
-      const [hours, minutes] = lesson.start_time.split(':').map(Number);
+      const formatted = formatLessonTime(lesson.start_time);
+      if (!formatted) return false;
+      const [hours, minutes] = formatted.split(':').map(Number);
       return (
         hours * 60 + minutes >=
         new Date().getHours() * 60 + new Date().getMinutes()
@@ -923,15 +937,15 @@ function TodaySheet({
         <IslandIcon name="schedule" size={20} />
         <span>
           <small>
-            {dayBlock
+            {scheduleWarning ? 'Расписание' : dayBlock
               ? 'Самостоятельная работа'
               : next
-              ? `${next.start_time} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
+              ? `${formatLessonTime(next.start_time) || 'Время не указано'} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
               : 'Учебный день'}
           </small>
-          <strong>{dayBlock ? 'SDEP' : next?.subject || 'Сегодня без занятий'}</strong>
+          <strong>{scheduleWarning ? 'Неделя недоступна' : dayBlock ? 'SDEP' : next?.subject || 'Сегодня без занятий'}</strong>
           <em>
-            {dayBlock
+            {scheduleWarning ? 'Откройте расписание для подробностей' : dayBlock
               ? dayBlock.description
               : next
               ? [next.room, scopeMarker(next)].filter(Boolean).join(' · ') ||
@@ -959,7 +973,7 @@ function TodaySheet({
   );
   const full = (
     <div className="today-expanded">
-      {dayBlock ? (
+      {scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : dayBlock ? (
         <div className="today-sdep-line">
           <IslandIcon name="schedule" size={18} />
           <span><strong>SDEP</strong><small>Самостоятельная работа весь учебный день</small></span>
@@ -1130,12 +1144,14 @@ function StudentApp({
   roleControl,
   day,
   onDayChange,
+  scheduleWarning,
 }: {
   data: ApiData;
   onReload: () => void;
   roleControl?: React.ReactNode;
   day: string;
   onDayChange: (day: string) => void;
+  scheduleWarning: string;
 }) {
   const [view, setView] = useCampusScreen<NonNullable<StudentView>>(studentScreens);
   const open = (next: StudentView) => setView(next);
@@ -1152,7 +1168,7 @@ function StudentApp({
   const hasScheduleProjection = Array.isArray(data.scheduleProjection.days);
   const contextualPeek =
     selectedId === 'schedule' ? (
-      hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} referenceDay={day} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : 'Ближайших занятий нет'} />
+      scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} referenceDay={day} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : 'Ближайших занятий нет'} />
     ) : selectedId === 'homework' ? (
       <SheetSummary
         icon="homework"
@@ -1186,7 +1202,7 @@ function StudentApp({
     >
       {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        hasScheduleProjection ? <StudentSchedulePanel key={day} projection={data.scheduleProjection} initialDay={day} /> : <SchedulePanel key={day} schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} initialDay={day} />
+        scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : hasScheduleProjection ? <StudentSchedulePanel key={day} projection={data.scheduleProjection} initialDay={day} /> : <SchedulePanel key={day} schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} initialDay={day} />
       ) : selectedId === 'homework' ? (
         <HomeworkPanel homework={data.homework} />
       ) : selectedId === 'information' ? (
@@ -1211,6 +1227,7 @@ function StudentApp({
           contextual || (
             <TodaySheet
               referenceDay={day}
+              scheduleWarning={view === 'profile' ? '' : scheduleWarning}
               lessons={data.today.schedule}
               dayBlock={data.today.day_block}
               homework={data.today.homework}
@@ -1507,6 +1524,7 @@ function TeacherApp({
   roleControl,
   day,
   onDayChange,
+  scheduleWarning,
 }: {
   data: TeacherData;
   onLogout: () => void;
@@ -1515,6 +1533,7 @@ function TeacherApp({
   roleControl?: React.ReactNode;
   day: string;
   onDayChange: (day: string) => void;
+  scheduleWarning: string;
 }) {
   const [view, setView] = useCampusScreen<NonNullable<TeacherView>>(teacherScreens);
   const homeroom = data.groups.find((group) => group.is_homeroom);
@@ -1532,7 +1551,7 @@ function TeacherApp({
   const subjectGroups = data.groups.filter((group) => !group.is_homeroom);
   const teacherPeek =
     selectedId === 'schedule' ? (
-      <SheetSummary
+      scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : <SheetSummary
         icon="schedule"
         label={
           nextTeacherLesson
@@ -1541,7 +1560,7 @@ function TeacherApp({
         }
         value={
           nextTeacherLesson
-            ? `${nextTeacherLesson.start_time} · ${nextTeacherLesson.subject}`
+            ? `${formatLessonTime(nextTeacherLesson.start_time) || 'Время не указано'} · ${nextTeacherLesson.subject}`
             : 'Ближайших занятий нет'
         }
         detail={nextTeacherLesson?.audience || undefined}
@@ -1588,7 +1607,7 @@ function TeacherApp({
     >
       {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        <SchedulePanel key={day} schedule={data.schedule} initialDay={day} />
+        scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : <SchedulePanel key={day} schedule={data.schedule} initialDay={day} />
       ) : selectedId === 'groups' ? (
         <TeacherGroups
           groups={data.groups.filter((group) => !group.is_homeroom)}
@@ -1622,6 +1641,7 @@ function TeacherApp({
           contextual || (
             <TodaySheet
               referenceDay={day}
+              scheduleWarning={view === 'profile' ? '' : scheduleWarning}
               lessons={data.today}
               information={data.information}
               teacher
@@ -3548,8 +3568,7 @@ export default function Home() {
   }
   return <div className={embedded ? 'preview-runtime' : undefined}>
     {embedded ? <div className="preview-runtime-banner">Предпросмотр · {actualRole === 'teacher' ? teacherData?.profile?.user.display_name : data?.profile.user.display_name} · только чтение <button onClick={leave}>В админку</button></div> : null}
-    {scheduleWarning ? <output className="campus-source-warning">{scheduleWarning}</output> : null}
-    {actualRole === 'teacher' && teacherData ? <TeacherApp data={teacherData} onReload={refresh} onLogout={leave} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} /> : data ? <StudentApp data={data} onReload={refresh} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} /> : <PendingState state="api_error" onRetry={refresh} />}
+    {actualRole === 'teacher' && teacherData ? <TeacherApp data={teacherData} onReload={refresh} onLogout={leave} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} scheduleWarning={scheduleWarning} /> : data ? <StudentApp data={data} onReload={refresh} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} scheduleWarning={scheduleWarning} /> : <PendingState state="api_error" onRetry={refresh} />}
   </div>;
 }
 

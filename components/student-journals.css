@@ -1,0 +1,38 @@
+.student-journals { min-width: 0; color: var(--ink); }
+.student-journals-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 16px; }
+.student-journals-heading h2 { margin: 0; font-size: 21px; line-height: 1.25; }
+.student-journals .journal-detail-nav { margin: 12px 0 16px; }
+.student-journals .journal-period-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13px; }
+.student-journals select { max-width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper, white); color: inherit; font: inherit; }
+.student-subject-list { display: grid; gap: 10px; min-width: 0; }
+.student-subject-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-width: 0; min-height: 72px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper, white); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.student-subject-copy { display: grid; gap: 5px; min-width: 0; flex: 1; }
+.student-subject-copy > strong { font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; }
+.student-subject-copy > small, .student-subject-empty { color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.student-subject-card > svg { flex: 0 0 auto; color: var(--muted); }
+.student-subject-summary { font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.student-recent-results { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; }
+.student-recent-results > span:first-child { color: var(--muted); font-size: 12px; }
+.student-result { display: inline-flex; justify-content: center; align-items: center; min-width: 30px; max-width: 100%; padding: 5px 8px; border-radius: 8px; background: var(--teal-light, #edf6f4); color: var(--ink); font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.student-journal-back { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; padding: 8px 10px; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper, white); color: inherit; font: inherit; cursor: pointer; }
+.student-journal-detail { min-width: 0; }
+.student-journal-detail h3 { margin: 0 0 8px; font-size: 20px; line-height: 1.3; overflow-wrap: anywhere; }
+.student-journal-context { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.student-journal-context > span { display: block; }
+.student-journal-summaries { display: grid; gap: 8px; margin: 0 0 18px; padding: 12px; border-radius: 12px; background: var(--teal-light, #edf6f4); }
+.student-journal-summaries > div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.student-journal-summaries dt { min-width: 0; overflow-wrap: anywhere; }
+.student-journal-summaries dd { flex: 0 0 auto; margin: 0; max-width: 50%; overflow-wrap: anywhere; font-weight: 650; font-variant-numeric: tabular-nums; }
+.student-journal-assessments { list-style: none; margin: 0; padding: 0; }
+.student-assessment { display: grid; grid-template-columns: minmax(0, 1fr) minmax(64px, 100px); align-items: start; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+.student-assessment > div { display: grid; gap: 5px; min-width: 0; }
+.student-assessment strong { font-size: 14px; line-height: 1.45; font-weight: 600; overflow-wrap: anywhere; }
+.student-assessment small { color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.student-assessment .student-result { justify-self: end; text-align: center; }
+.student-assessment.is-ungraded strong { color: var(--muted); font-weight: 400; }
+.student-result.is-empty { background: transparent; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.4; }
+.student-journals button:focus-visible, .student-journals select:focus-visible { outline: 3px solid var(--teal, #176f68); outline-offset: 3px; }
+@media (max-width: 390px) {
+  .student-subject-card { padding: 12px; gap: 8px; }
+  .student-assessment { gap: 9px; grid-template-columns: minmax(0, 1fr) minmax(58px, 86px); }
+}

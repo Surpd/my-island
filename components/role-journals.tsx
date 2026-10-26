@@ -1,34 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, LoaderCircle, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, ChevronLeft, ChevronRight, LoaderCircle, RefreshCw } from 'lucide-react';
+import { journalKey, journalValue, recentStudentResults, studentJournalRows, studentResultText, studentSummaryPreview, type StudentJournalItem } from './student-journal-view';
+import './student-journals.css';
 
 export type RoleJournalsApi = <T>(path: string, options?: RequestInit) => Promise<T>;
-
-type StudentJournalItem = {
-  source: {
-    source_id: string | number;
-    spreadsheet_title: string;
-    grade: number;
-    subject: string;
-    sheet_title: string;
-    academic_year: string;
-    term_number?: number | null;
-    period_status: string;
-    last_synced_at?: string | null;
-  };
-  student: { journal_student_id: string | number; display_name: string; group_marker: string };
-  assessments: Array<{
-    id: string | number;
-    title: string;
-    assessed_on?: string | null;
-    weight?: number | null;
-    max_score?: number | null;
-    group_marker: string;
-  }>;
-  results: Array<{ assessment_id: string | number; numeric_score: number | null; status?: string | null }>;
-  summaries: Array<{ label: string; summary_type: string; numeric_value: number | null; text_value: string | null }>;
-};
 
 type TeacherJournalSource = {
   source_id: string | number;
@@ -119,7 +96,7 @@ function periodMatches(status: string | undefined, view: JournalView): boolean {
   return status === 'current';
 }
 
-function periodViewControl(view: JournalView, onChange: (view: JournalView) => void) {
+function PeriodViewControl({ view, onChange }: { view: JournalView; onChange: (view: JournalView) => void }) {
   return <label className="journal-period-filter">Период
     <select value={view} onChange={(event) => onChange(event.target.value as JournalView)}>
       <option value="current">Текущие</option>
@@ -159,6 +136,10 @@ export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
   const [error, setError] = useState('');
   const [view, setView] = useState<JournalView>('current');
   const [reload, setReload] = useState(0);
+  const [selectedKey, setSelectedKey] = useState('');
+  const sectionRef = useRef<HTMLElement>(null);
+  const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const listScrollTop = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -167,66 +148,85 @@ export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
       setError('');
       try {
         const result = await api<{ items?: StudentJournalItem[]; mapping_state?: string }>('/api/student/journals');
-        if (active) {
-          setError('');
-          setItems(Array.isArray(result?.items) ? result.items : []);
-          setMappingState(result?.mapping_state || null);
-        }
+        if (!active) return;
+        setItems(Array.isArray(result?.items) ? result.items : []);
+        setMappingState(result?.mapping_state || null);
       } catch (cause) {
-        if (active) {
-          setError(journalError(cause, 'Не удалось загрузить результаты школьного журнала.'));
-          setItems(null);
-          setMappingState(null);
-        }
+        if (!active) return;
+        setError(journalError(cause, 'Не удалось загрузить результаты школьного журнала.'));
+        setItems(null);
+        setMappingState(null);
       }
     }
     void load();
     return () => { active = false; };
   }, [api, reload]);
 
-  const visibleItems = useMemo(() => (items || []).filter((item) => periodMatches(item.source?.period_status, view)), [items, view]);
-  const archivedAvailable = Boolean(items?.some((item) => item.source?.period_status === 'archived'));
-  const unassignedAvailable = Boolean(items?.some((item) => item.source?.period_status === 'unassigned'));
+  const visibleItems = useMemo(() => (items || []).filter(item => periodMatches(item.source?.period_status, view)), [items, view]);
+  const selected = visibleItems.find(item => journalKey(item) === selectedKey);
+  const archivedAvailable = Boolean(items?.some(item => item.source?.period_status === 'archived'));
+  const unassignedAvailable = Boolean(items?.some(item => item.source?.period_status === 'unassigned'));
+  const scrollContainer = () => sectionRef.current?.closest<HTMLElement>('.sheet-full');
+  const openJournal = (item: StudentJournalItem) => {
+    listScrollTop.current = scrollContainer()?.scrollTop || 0;
+    setSelectedKey(journalKey(item));
+    requestAnimationFrame(() => {
+      scrollContainer()?.scrollTo({ top: 0 });
+      detailHeadingRef.current?.focus({ preventScroll: true });
+    });
+  };
+  const backToSubjects = () => {
+    const previousKey = selectedKey;
+    setSelectedKey('');
+    requestAnimationFrame(() => {
+      scrollContainer()?.scrollTo({ top: listScrollTop.current });
+      Array.from(sectionRef.current?.querySelectorAll<HTMLButtonElement>('.student-subject-card') || [])
+        .find(button => button.dataset.journalKey === previousKey)?.focus({ preventScroll: true });
+    });
+  };
+  const changePeriod = (next: JournalView) => {
+    setView(next); setSelectedKey(''); listScrollTop.current = 0;
+    scrollContainer()?.scrollTo({ top: 0 });
+  };
 
-  return (
-    <section className="profile-section" aria-labelledby="student-journals-title">
-      <div className="subsection-title" id="student-journals-title"><BookOpen size={16} /> Школьные журналы</div>
-      {error ? <p className="sync-summary sync-summary--empty" role="alert">{error} <button className="panel-refresh" onClick={() => setReload((value) => value + 1)}><RefreshCw size={15} /> Повторить</button></p> : null}
-      {items === null && !error ? <div className="loading-state"><LoaderCircle size={17} className="spin" /> Загружаем результаты</div> : null}
-      {items !== null && !error ? <>
-      <div className="journal-detail-nav">{periodViewControl(view, setView)}</div>
+  return <section ref={sectionRef} className="student-journals" aria-labelledby="student-journals-title">
+    <div className="student-journals-heading"><BookOpen size={20} aria-hidden="true" /><h2 id="student-journals-title">Мои оценки</h2></div>
+    {error ? <p className="sync-summary sync-summary--empty" role="alert">{error} <button className="panel-refresh" onClick={() => { setSelectedKey(''); setReload(value => value + 1); }}><RefreshCw size={15} /> Повторить</button></p> : null}
+    {items === null && !error ? <output className="loading-state"><LoaderCircle size={17} className="spin" /> Загружаем результаты</output> : null}
+    {items !== null && !error ? <>
+      <div className="journal-detail-nav"><PeriodViewControl view={view} onChange={changePeriod} /></div>
       {!visibleItems.length ? <p className="sync-summary sync-summary--empty">{periodEmptyText(view, archivedAvailable, unassignedAvailable, mappingState)}</p> : null}
       {mappingState === 'mapped_empty' && visibleItems.length > 0 ? <p className="sync-summary sync-summary--empty">Сопоставление подтверждено, опубликованных оценок пока нет.</p> : null}
-      {visibleItems.length ? visibleItems.map((item) => {
-        const resultByAssessment = new Map(item.results.map((result) => [String(result.assessment_id), result]));
-        const syncedAt = item.source.last_synced_at ? new Date(item.source.last_synced_at.replace(' ', 'T')) : null;
-        const syncedLabel = syncedAt && !Number.isNaN(syncedAt.getTime()) ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(syncedAt) : item.source.last_synced_at;
-        return (
-          <article className="profile-section" key={`${item.source.source_id}:${item.student.journal_student_id}`}>
-            <div className="subsection-title">
-              <span>{item.source.grade} класс · {item.source.subject}</span>
-              <small>{termLabel(item.source)}{syncedLabel ? ` · обновлено ${syncedLabel}` : ''}</small>
-            </div>
-            {item.assessments.length ? (
-              <div className="assessment-list">
-                {item.assessments.map((assessment) => {
-                  const result = resultByAssessment.get(String(assessment.id));
-                  return (
-                    <div className="assessment-card" key={assessment.id}>
-                      <div><strong>{assessment.title}</strong><small>{formatDate(assessment.assessed_on)} · вес {display(assessment.weight)} · максимум {display(assessment.max_score)}</small></div>
-                      <span className="count-badge">{valueText(result?.numeric_score ?? null, result?.status)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : <p className="sync-summary sync-summary--empty">Работы пока не опубликованы.</p>}
-            {item.summaries.length ? <div className="assessment-list">{item.summaries.map((summary) => <div className="context-link" key={`${summary.summary_type}:${summary.label}`}><span>{summary.label}</span><strong>{summaryText(summary)}</strong></div>)}</div> : null}
-          </article>
-        );
-      }) : null}
-      </> : null}
-    </section>
-  );
+      {selected ? <div className="student-journal-detail">
+        <button type="button" className="student-journal-back" onClick={backToSubjects}><ChevronLeft size={18} aria-hidden="true" /> К предметам</button>
+        <h3 ref={detailHeadingRef} tabIndex={-1}>{selected.source.subject}</h3>
+        <p className="student-journal-context">{termLabel(selected.source)} · {selected.source.academic_year} · {selected.source.grade} класс{selected.student.group_marker !== 'all' ? ` · группа ${selected.student.group_marker}` : ''}<span>{selected.source.sheet_title}</span>{selected.source.last_synced_at ? <span>Обновлено {formatDate(selected.source.last_synced_at)}</span> : null}</p>
+        {selected.summaries.some(summary => journalValue(summary.numeric_value ?? summary.text_value)) ? <dl className="student-journal-summaries">{selected.summaries.filter(summary => journalValue(summary.numeric_value ?? summary.text_value)).map(summary => <div key={`${summary.summary_type}:${summary.label}`}><dt>{summary.label}</dt><dd>{summaryText(summary)}</dd></div>)}</dl> : null}
+        <ol className="student-journal-assessments" aria-label="Работы по датам">{studentJournalRows(selected).map(({ assessment, result }) => {
+          const text = studentResultText(result, assessment.max_score);
+          const metadata = [formatDate(assessment.assessed_on),
+            assessment.weight !== null && assessment.weight !== undefined && Number.isFinite(assessment.weight) && assessment.weight >= 0 ? `вес ${journalValue(assessment.weight)}` : '',
+            assessment.max_score !== null && assessment.max_score !== undefined && Number.isFinite(assessment.max_score) && assessment.max_score > 0 ? `максимум ${journalValue(assessment.max_score)}` : ''].filter(Boolean);
+          return <li className={`student-assessment${text ? '' : ' is-ungraded'}`} key={assessment.id}>
+            <div><strong>{assessment.title}</strong><small>{metadata.join(' · ')}</small></div>
+            <span className={`student-result${text ? '' : ' is-empty'}`}>{text || 'Пока без результата'}</span>
+          </li>;
+        })}</ol>
+        {!studentJournalRows(selected).length ? <p className="sync-summary sync-summary--empty">Работы пока не опубликованы.</p> : null}
+      </div> : <div className="student-subject-list" aria-label="Предметы и результаты">{visibleItems.map(item => {
+        const recent = recentStudentResults(item);
+        const summaries = studentSummaryPreview(item);
+        return <button type="button" className="student-subject-card" key={journalKey(item)} data-journal-key={journalKey(item)} aria-label={`Открыть журнал: ${item.source.subject}`} onClick={() => openJournal(item)}>
+          <span className="student-subject-copy"><strong>{item.source.subject}</strong>
+            <small>{termLabel(item.source)} · {item.source.academic_year}{item.student.group_marker !== 'all' ? ` · группа ${item.student.group_marker}` : ''}</small>
+            <small className="student-journal-source">{item.source.sheet_title}</small>
+            {summaries.map(summary => <span className="student-subject-summary" key={`${summary.summary_type}:${summary.label}`}>{summary.label}: <b>{summaryText(summary)}</b></span>)}
+            {recent.length ? <span className="student-recent-results"><span>Последние результаты</span>{recent.map(({ assessment, result }) => <span className="student-result" key={assessment.id} title={`${assessment.title} · ${formatDate(assessment.assessed_on)}`}>{studentResultText(result, assessment.max_score)}</span>)}</span> : <span className="student-subject-empty">Пока нет оценок</span>}
+          </span><ChevronRight size={20} aria-hidden="true" />
+        </button>;
+      })}</div>}
+    </> : null}
+  </section>;
 }
 
 export function TeacherRoleJournals({ api }: { api: RoleJournalsApi }) {
@@ -295,7 +295,7 @@ export function TeacherRoleJournals({ api }: { api: RoleJournalsApi }) {
       {sourceError ? <p className="sync-summary sync-summary--empty" role="alert">{sourceError} <button className="panel-refresh" onClick={() => setSourceReload((value) => value + 1)}><RefreshCw size={15} /> Повторить</button></p> : null}
       {sources === null && !sourceError ? <div className="loading-state"><LoaderCircle size={17} className="spin" /> Загружаем доступные журналы</div> : null}
       {sources !== null && !sourceError ? <>
-          <div className="journal-detail-nav">{periodViewControl(view, (next) => { setDetailError(''); setView(next); })}</div>
+          <div className="journal-detail-nav"><PeriodViewControl view={view} onChange={next => { setDetailError(''); setView(next); }} /></div>
           {!visibleSources.length ? <p className="sync-summary sync-summary--empty">{sources.length === 0 ? 'Подтверждённых назначений на группы журнала пока нет.' : view === 'archived' ? 'Для архивных журналов назначений нет.' : view === 'current' && sources.some((item) => item.period_status === 'unassigned') ? 'В текущем периоде назначений нет. Журналы без назначенного периода доступны в выборе «Все периоды».' : view === 'current' && archivedAvailable ? 'В текущем периоде назначений нет. Архивные журналы доступны в выборе периода.' : 'Подтверждённых назначений на группы журнала пока нет.'}</p> : <>
           <div className="journal-detail-nav"><label>Источник и группа
             <select value={selected ? `${selected.source_id}:${selected.group_marker}` : ''} onChange={(event) => { setDetailError(''); setSelectedKey(event.target.value); }}>

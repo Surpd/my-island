@@ -32,6 +32,7 @@ import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
+import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
 import { groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
@@ -2775,7 +2776,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             ))}
                           </select>
                         </label>
-                        {selected.kind === 'event' ? <label>Начало <input type="time" value={selected.start || payload.slots[selected.period]?.start || ''} onChange={(event) => updateLesson(selected.id, { start: event.target.value })} /></label> : <label>Время <select value={selected.period} onChange={(event) => updateLesson(selected.id, { period: Number(event.target.value) })}>{payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {slot.start}–{slot.end}</option>)}</select></label>}
+                        {selected.kind === 'event' ? <label>Начало <input type="time" value={selected.start || payload.slots[selected.period]?.start || ''} onChange={(event) => updateLesson(selected.id, { start: event.target.value })} /></label> : <label>Время <select value={selected.period} onChange={(event) => updateLesson(selected.id, { period: Number(event.target.value) })}>{payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {formatLessonTimeRange(slot.start, slot.end)}</option>)}</select></label>}
                       </div>
                       {selected.kind !== 'event' && selected.end && selected.end !== payload.slots[selected.period]?.end ? <label>Конец многослотового занятия <input type="time" value={selected.end} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label> : null}
                       {selected.kind === 'event' ? <fieldset className="constructor-event-fields"><legend>Событие · время и сопровождение</legend>

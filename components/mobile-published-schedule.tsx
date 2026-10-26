@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, ChevronLeft, ChevronRight, Clock3, MapPin, RefreshCw, Users } from 'lucide-react';
+import { formatLessonTimeRange } from './lesson-time';
 import './mobile-published-schedule.css';
 
 export type MobileScheduleApi = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -184,7 +185,7 @@ export function MobilePublishedSchedule({ api }: { api: MobileScheduleApi }) {
           const assignments = blockAssignments(block);
           const cancelled = block.change_kind === 'cancelled' || block.status === 'cancelled';
           return <article className={`mobile-published-schedule__block${cancelled ? ' is-cancelled' : ''}`} key={`${block.block_key || 'block'}:${index}`}>
-            <div className="mobile-published-schedule__time"><Clock3 size={14} /><span>{block.start_time || 'Время не указано'}{block.end_time ? `–${block.end_time}` : ''}</span></div>
+            <div className="mobile-published-schedule__time"><Clock3 size={14} /><span>{formatLessonTimeRange(block.start_time, block.end_time)}</span></div>
             <div className="mobile-published-schedule__lessons">
               {assignments.length ? assignments.map((assignment, assignmentIndex) => {
                 const audience = assignmentAudience(assignment, block);

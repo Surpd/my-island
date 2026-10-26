@@ -94,9 +94,9 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect(frame.getByRole('button', { name: 'Оценки', exact: true }).first()).toBeVisible();
     await frame.getByRole('button', { name: 'Оценки', exact: true }).first().click();
     await frame.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-    await expect(frame.getByRole('region', { name: 'Школьные журналы' })).toBeVisible();
+    await expect(frame.getByRole('region', { name: 'Мои оценки' })).toBeVisible();
     await expect.poll(async () => (await scoreFor(page, peerPreview)).includes(3)).toBe(true);
-    await expect(frame.getByText('3', { exact: true })).toBeVisible();
+    await expect(frame.locator('.student-recent-results .student-result').filter({ hasText: /^3 \/ 10$/ })).toBeVisible();
 
     const studentApiRequests: string[] = [];
     page.on('request', (request) => {
