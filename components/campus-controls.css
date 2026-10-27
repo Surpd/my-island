@@ -13,7 +13,9 @@
 body .day-picker { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .preview-runtime .scene-focus-back { top: max(44px, calc(var(--tg-safe-top, 0px) + var(--tg-content-safe-top, 0px) + 12px)); }
 .campus-source-warning { display: block; }
-.campus-schedule-notice { display: block; position: static; margin: 0 0 12px; padding: 12px; border: 1px solid #ead8a4; border-radius: 10px; background: #fff4d9; color: #634a15; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.campus-schedule-notice { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; position: static; margin: 0 0 12px; padding: 12px; border: 1px solid #ead8a4; border-radius: 10px; background: #fff4d9; color: #634a15; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.campus-schedule-notice > span { min-width: 0; }
+.campus-schedule-notice > button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 36px; width: 36px; min-height: 36px; margin: -6px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
 
 .campus-error-actions { position: fixed; z-index: 101; right: 12px; top: 12px; }
 

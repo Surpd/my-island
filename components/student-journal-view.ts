@@ -51,8 +51,48 @@ export function studentResultText(result: StudentJournalItem['results'][number] 
 
 export function recentStudentResults(item: StudentJournalItem) {
   return studentJournalRows(item, true)
-    .filter(row => studentResultText(row.result))
+    .filter(row => typeof row.result?.numeric_score === 'number' && Number.isFinite(row.result.numeric_score))
     .slice(0, 3);
+}
+
+export function recentStudentStatuses(item: StudentJournalItem) {
+  return studentJournalRows(item, true)
+    .map(row => ({ ...row, status: compactStudentStatus(row.result?.status) }))
+    .filter(row => (row.result?.numeric_score === null || row.result?.numeric_score === undefined) && Boolean(row.status))
+    .slice(0, 2);
+}
+
+/** Only recognized pupil-facing outcomes belong in the compact subject row. */
+function compactStudentStatus(value: unknown): string {
+  const raw = journalValue(value).trim();
+  if (!raw) return '';
+  const normalized = raw.toLocaleLowerCase('ru-RU').replace(/[ё]/g, 'е').replace(/[.]/g, '').replace(/\s+/g, ' ');
+  const labels: Record<string, string> = {
+    'не был': 'Не был', 'не была': 'Не была', 'отсутствовал': 'Отсутствовал', 'отсутствовала': 'Отсутствовала',
+    'н/б': 'Не был', 'нб': 'Не был', 'н.б': 'Не был', 'absent': 'Не был', 'not present': 'Не был',
+    'уважительная причина': 'Уважительная причина', 'освобожден': 'Освобождён', 'освобождена': 'Освобождена', 'excused': 'Уважительная причина',
+    'опоздал': 'Опоздал', 'опоздала': 'Опоздала', 'late': 'Опоздал',
+    'зачет': 'Зачёт', 'зачтено': 'Зачтено', 'сдал': 'Сдал', 'сдала': 'Сдала', 'passed': 'Сдал',
+    'незачет': 'Незачёт', 'не зачтено': 'Не зачтено', 'не сдал': 'Не сдал', 'не сдала': 'Не сдала', 'failed': 'Не сдал',
+    'не выполнено': 'Не выполнено', 'выполнено': 'Выполнено', 'не проверено': 'Не проверено',
+  };
+  return labels[normalized] || '';
+}
+
+/** A short, cross-subject snapshot suitable for the campus peek. */
+export function recentResultsAcrossSubjects(items: StudentJournalItem[], limit = 3) {
+  const seen = new Set<string>();
+  const results: Array<{ item: StudentJournalItem; assessment: StudentJournalItem['assessments'][number]; result: StudentJournalItem['results'][number] | undefined }> = [];
+  const candidates = items.flatMap(item => recentStudentResults(item).map(row => ({ item, ...row })))
+    .sort((a, b) => (b.assessment.assessed_on || '').localeCompare(a.assessment.assessed_on || ''));
+  for (const row of candidates) {
+    const subject = row.item.source.subject.trim().toLocaleLowerCase();
+    if (!subject || seen.has(subject)) continue;
+    seen.add(subject);
+    results.push(row);
+    if (results.length >= limit) break;
+  }
+  return results;
 }
 
 export function studentPeriodKey(item: StudentJournalItem): string {
@@ -78,8 +118,6 @@ export function studentResultDisplay(result: StudentJournalItem['results'][numbe
 }
 
 export function studentSubjectIndicator(item: StudentJournalItem) {
-  const average = studentSummaryPreview(item).find(summary => summary.summary_type === 'average_grade');
-  if (average) return { value: journalValue(average.numeric_value ?? average.text_value), kind: 'average', note: average.label || 'Средняя оценка' };
   const latest = recentStudentResults(item)[0];
   return latest ? { ...studentResultDisplay(latest.result, latest.assessment.max_score), note: latest.assessment.title }
     : { value: 'Нет оценок', kind: 'empty', note: 'В выбранном журнале пока нет результатов' };
@@ -87,6 +125,6 @@ export function studentSubjectIndicator(item: StudentJournalItem) {
 
 export function studentSummaryPreview(item: StudentJournalItem) {
   // Never infer a grading scale or derive an average from assessment points.
-  return item.summaries.filter(summary => ['average_grade', 'term_grade', 'final_grade'].includes(summary.summary_type)
+  return item.summaries.filter(summary => ['term_grade', 'final_grade'].includes(summary.summary_type)
     && journalValue(summary.numeric_value ?? summary.text_value)).slice(0, 2);
 }
