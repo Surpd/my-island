@@ -111,6 +111,7 @@ button {
   display: flex;
   align-items: center;
 }
+.today-open-button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 11px; border: 1px solid rgb(255 255 255/50%); border-radius: 999px; background: rgb(12 42 55/26%); color: white; font: inherit; font-size: 12px; cursor: pointer; backdrop-filter: blur(15px); }
 .brand-lockup {
   gap: 10px;
   text-shadow: 0 2px 12px rgb(7 30 44/34%);
@@ -512,8 +513,8 @@ button {
 }
 .day-picker {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
   margin-bottom: 17px;
 }
 .day-picker button {
@@ -521,7 +522,8 @@ button {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 4px;
+  min-height: 58px;
+  padding: 6px 1px;
   border: 1px solid var(--line);
   border-radius: 11px;
   background: white;
@@ -536,8 +538,36 @@ button {
   text-transform: uppercase;
 }
 .day-picker strong {
-  font-size: 13px;
+  font-size: 12px;
 }
+.day-picker em {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+.day-picker button.is-active em { color: white; }
+.student-schedule-lesson--button {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.student-schedule-lesson--button:focus-visible,
+.student-lesson-detail button:focus-visible {
+  outline: 3px solid var(--teal);
+  outline-offset: 2px;
+}
+.student-lesson-detail h2 { margin: 8px 0 18px; color: var(--navy); font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+.student-lesson-detail dl { display: grid; gap: 10px; margin: 0; }
+.student-lesson-detail dl > div { display: grid; grid-template-columns: minmax(92px, .65fr) minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.student-lesson-detail dt { color: var(--muted); font-size: 13px; }
+.student-lesson-detail dd { margin: 0; color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
+.today-expanded-date { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+.today-expanded-date strong { color: var(--ink); font-size: 14px; }
+.today-recent-grades { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.today-recent-grades > header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.today-recent-grades > header button { display: inline-flex; align-items: center; min-height: 40px; gap: 3px; padding: 0 5px; border: 0; background: transparent; color: var(--teal); font: inherit; font-size: 12px; font-weight: 650; }
 .panel-date {
   display: flex;
   justify-content: space-between;

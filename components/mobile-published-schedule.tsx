@@ -110,8 +110,8 @@ function stateMessage(status: string | undefined, overview: Overview | null): st
   return '';
 }
 
-export function MobilePublishedSchedule({ api }: { api: MobileScheduleApi }) {
-  const [weekStart, setWeekStart] = useState(() => mondayOf(isoDate(new Date())));
+export function MobilePublishedSchedule({ api, initialWeekStart }: { api: MobileScheduleApi; initialWeekStart?: string }) {
+  const [weekStart, setWeekStart] = useState(() => mondayOf(initialWeekStart && /^\d{4}-\d{2}-\d{2}$/.test(initialWeekStart) ? initialWeekStart : isoDate(new Date())));
   const [overview, setOverview] = useState<Overview | null>(null);
   const [response, setResponse] = useState<LessonResponse | null>(null);
   const [error, setError] = useState('');

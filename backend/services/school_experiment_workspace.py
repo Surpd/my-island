@@ -86,6 +86,8 @@ def _primary_subject_teacher_defaults(
 class ReadOnlySchoolDatabase(Database):
     """Expose Database's read methods, but roll back every read-only transaction."""
 
+    read_only = True
+
     def __init__(self, url: str) -> None:
         parsed = urlparse(url)
         if parsed.hostname not in {"aws-1-eu-west-1.pooler.supabase.com", f"db.{EXPECTED_PROJECT}.supabase.co"}:

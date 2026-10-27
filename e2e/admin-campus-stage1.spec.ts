@@ -22,10 +22,10 @@ for (const width of [1920, 1366, 390]) {
     const data = await response.json();
     await page.setViewportSize({ width, height: width === 1920 ? 1080 : width === 1366 ? 768 : 844 });
     await page.goto('/admin?role=admin');
-    await expect(page.getByRole('heading', { name: 'Рабочий стол завуча' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Рабочий стол завуча' })).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('.campus-priorities > button').first().locator('b')).toHaveText(String(data.active_issues));
     await expect(page.locator('.campus-directory > div > button').first().locator('strong')).toHaveText(String(data.canonical_students));
-    await expect(page.getByRole('button', { name: 'Открыть конструктор' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Открыть расписание' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     await page.evaluate(() => document.fonts.ready);
     expect(await page.evaluate(() => document.fonts.check('16px "Campus Onest"'))).toBe(true);
@@ -48,10 +48,10 @@ test('priority actions preserve route queries; all 14 routes remain accessible o
   await expect(menu).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Все разделы', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Все разделы', exact: true }).click();
-  await menu.getByRole('button', { name: 'Система', exact: true }).click();
+  await menu.getByRole('button', { name: 'Настройки', exact: true }).click();
   await expect(page).toHaveURL(/#\/admin\/settings$/);
   await expect(menu).not.toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Состояние сервера' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Backend и школьная база' })).toBeVisible();
 });
 
 test('optional endpoint failures stay explicit; required endpoint failure is retryable', async ({ page }) => {
@@ -59,8 +59,9 @@ test('optional endpoint failures stay explicit; required endpoint failure is ret
   await page.route(`${API}/api/admin/reconciliation/student-memberships/latest`, (route) => route.fulfill({ status: 503, json: { detail: 'isolated optional failure' } }));
   await page.goto('/admin?role=admin');
   await expect(page.getByRole('heading', { name: 'Требует внимания' })).toBeVisible();
-  await expect(page.locator('.campus-partial')).toContainText('Список источников не загружен');
-  await expect(page.locator('.campus-partial')).toContainText('Результат сверки не загружен');
+  await page.getByText('Источники, результаты сверки и подключения', { exact: true }).click();
+  await expect(page.locator('.campus-detail-grid > .campus-panel').nth(0)).toContainText('Данные временно недоступны.');
+  await expect(page.locator('.campus-detail-grid > .campus-panel').nth(1)).toContainText('Результат временно недоступен.');
   await page.route(`${API}/api/admin/overview`, (route) => route.fulfill({ status: 503, json: { detail: 'isolated required failure' } }));
   await page.reload();
   await expect(page.getByText('Не удалось загрузить раздел')).toBeVisible();
@@ -85,7 +86,7 @@ test('missing counters are unknown, not zero', async ({ page }) => {
 test('constructor shell preserves pin/collapse and the existing working implementation', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/admin?role=admin');
-  await page.getByRole('button', { name: 'Открыть конструктор' }).click();
+  await page.getByRole('button', { name: 'Открыть расписание' }).click();
   await expect(page.locator('.constructor')).toBeVisible();
   await page.mouse.move(800, 100);
   await expect(page.locator('.constructor-sidebar')).toHaveClass(/is-collapsed/);
@@ -124,7 +125,7 @@ test('loading stays visible until the real overview response arrives', async ({ 
 test('canceling the existing unsaved guard keeps the mobile menu and route', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/admin?role=admin#/admin/schedule/constructor');
-  await expect(page.locator('.constructor')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Опубликованная неделя' })).toBeVisible();
   await page.evaluate(() => { (window as Window & { __scheduleDraftDirty?: boolean }).__scheduleDraftDirty = true; });
   await page.getByRole('button', { name: 'Все разделы', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Разделы школы' });

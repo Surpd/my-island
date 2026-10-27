@@ -2,6 +2,7 @@ import copy
 import tempfile
 import unittest
 import os
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -188,15 +189,15 @@ class ConstructorPublicationTests(unittest.TestCase):
                                 preview_token=p["preview_token"])
         self.assertIsNone(canonical.canonical_version(self.database))
 
-    def test_unknown_teacher_review_and_empty_memberships_block(self):
+    def test_unknown_teacher_review_and_empty_memberships_are_excluded(self):
         for lesson in [self.lesson(teacherId="unknown"), self.lesson(review_required=True),
                        self.lesson(audience={"kind": "groups", "group_ids": ["missing"]})]:
             draft = self.draft([lesson])
             p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
-            self.assertFalse(p["can_publish"])
-            with self.assertRaises(PublicationBlocked):
-                publish_publication(self.database, draft["id"], scope_kind="template", expected_revision=1,
-                                    preview_token=p["preview_token"], confirmed=True)
+            self.assertTrue(p["can_publish"])
+            self.assertEqual(p["summary"]["ready_lessons"], 0)
+            self.assertEqual(p["deferred"][0]["action"], "excluded")
+            self.assertTrue(p["diagnostics"])
 
     def test_parallel_groups_and_remaining_memberships_runtime(self):
         grouped = self.lesson(audience={"kind": "groups", "group_ids": [str(self.math["id"])]})
@@ -209,6 +210,156 @@ class ConstructorPublicationTests(unittest.TestCase):
         second = canonical.project_student(self.database, self.other_student["id"], "2026-10-19")
         self.assertEqual(first["items"][0]["activity"], "Math")
         self.assertEqual(second["items"][0]["activity"], "Other")
+
+    def test_information_only_does_not_defer_and_is_audited(self):
+        draft = self.draft([self.lesson(room="")])
+        p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertTrue(p["can_publish"])
+        self.assertEqual(p["summary"]["info_count"], 1)
+        self.assertEqual(p["summary"]["deferred_lessons"], 0)
+        self.publish(draft)
+        self.assertEqual(list_publications(self.database)["items"][0]["diagnostics"][0]["code"], "missing_room")
+
+    def test_legacy_history_keeps_preserved_base_meaning_without_inventing_counts(self):
+        result = self.publish(self.draft())
+        with self.database.connection() as connection:
+            row = self.database.execute(connection, "SELECT metadata FROM schedule_constructor_publications WHERE id=?", (result["publication_id"],)).fetchone()
+            metadata = json.loads(row["metadata"])
+            metadata["preview"].pop("summary")
+            metadata["preview"]["deferred"] = [{"lesson_id":"old-deferred", "reason":"Unresolved change retained in draft; base block preserved"}]
+            self.database.execute(connection, "UPDATE schedule_constructor_publications SET metadata=? WHERE id=?", (json.dumps(metadata), result["publication_id"]))
+        history = list_publications(self.database)["items"][0]
+        self.assertEqual(history["deferred"][0]["action"], "preserved_base")
+        self.assertIsNone(history["summary"])
+
+    def test_first_template_partial_keeps_draft_and_only_valid_runtime(self):
+        draft = self.draft([self.lesson(), self.lesson(id="bad", day=1, teacherId="missing")])
+        original = copy.deepcopy(draft["payload"])
+        p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertEqual(p["summary"]["ready_lessons"], 1)
+        self.assertEqual(p["summary"]["deferred_lessons"], 1)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-26")
+        self.assertEqual(get_experiment(self.database, draft["id"])["payload"], original)
+        for identity in (self.student, self.other_student):
+            rows = canonical.project_student(self.database, identity["id"], "2026-10-26")["items"]
+            self.assertEqual([r["activity"] for r in rows], ["Math"])
+        self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-26")["items"][0]["activity"], "Math")
+
+    def test_bad_parallel_member_does_not_expand_remaining_audience(self):
+        draft = self.draft([
+            self.lesson(teacherId="unknown", audience={"kind":"groups", "group_ids":[str(self.math["id"])]}),
+            self.lesson(id="remaining", subject="Other", teacherId=str(self.other_teacher["id"]),
+                audience={"kind":"available_slot", "grade":"9", "class_ids":[str(self.group["id"])]}),
+            self.lesson(id="good", day=1)])
+        p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertEqual(p["summary"]["ready_lessons"], 1)
+        self.assertEqual(p["summary"]["deferred_lessons"], 2)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-26")
+        for identity in (self.student, self.other_student):
+            self.assertFalse(any(r.get("activity") == "Other" for r in canonical.project_student(self.database, identity["id"], "2026-10-26")["items"]))
+
+    def test_overlapping_different_slots_defer_both_and_same_subject_is_not_exempt(self):
+        draft = self.draft([self.lesson(), self.lesson(id="collision", start="09:15", end="09:50", period=1),
+                            self.lesson(id="good", day=1)])
+        p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertEqual(p["summary"]["ready_lessons"], 1)
+        self.assertEqual({d["lesson_id"] for d in p["deferred"]}, {"l1", "collision"})
+
+    def test_structural_errors_still_block_and_fingerprint_is_required(self):
+        for lessons in ([self.lesson(), self.lesson()], [self.lesson(day=9)]):
+            draft = self.draft(lessons)
+            p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+            self.assertFalse(p["can_publish"])
+            with self.assertRaises(PublicationBlocked):
+                publish_publication(self.database, draft["id"], scope_kind="template", expected_revision=1,
+                                    preview_token=p["preview_token"], confirmed=True)
+        draft = self.draft()
+        with self.assertRaises(PublicationConflict):
+            publish_publication(self.database, draft["id"], scope_kind="template", expected_revision=1,
+                                preview_token="wrong", confirmed=True)
+
+    def test_week_without_base_remains_critical(self):
+        draft = self.draft()
+        p = preview_publication(self.database, draft["id"], scope_kind="week", expected_revision=1, week_start="2026-10-26")
+        self.assertFalse(p["can_publish"])
+        self.assertIn("missing_base", [d["code"] for d in p["blockers"]])
+
+    def test_partial_republish_and_restore_do_not_modify_historical_week(self):
+        draft = self.draft([self.lesson(), self.lesson(id="bad", day=1, teacherId="unknown")])
+        first = self.publish(draft)
+        self.publish(draft, "week", week_start="2026-09-21")
+        historical = canonical.project_student(self.database, self.student["id"], "2026-09-21")
+        payload = copy.deepcopy(draft["payload"])
+        payload["lessons"][1]["teacherId"] = str(self.teacher["id"])
+        draft = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=payload)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-26")
+        self.assertEqual(len(canonical.project_student(self.database, self.student["id"], "2026-10-26")["items"]), 2)
+        self.assertEqual(canonical.project_student(self.database, self.student["id"], "2026-09-21"), historical)
+        p = preview_restore(self.database, first["publication_id"], expected_head_revision=2)
+        self.assertTrue(p["can_restore"])
+        restore_publication(self.database, first["publication_id"], expected_head_revision=2, preview_token=p["preview_token"], confirmed=True)
+        self.assertEqual(canonical.project_student(self.database, self.student["id"], "2026-09-21"), historical)
+
+    def test_split_store_preview_is_read_only_and_confirm_cannot_reuse_token(self):
+        draft = self.draft()
+        # Independent adapter object models the approved source/local draft split.
+        p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1, draft_database=copy.copy(self.database))
+        self.assertTrue(p["read_only"])
+        self.assertFalse(p["publication_available"])
+        with self.assertRaises(PublicationConflict):
+            publish_publication(self.database, draft["id"], scope_kind="template", expected_revision=1, preview_token=p["preview_token"], confirmed=True)
+
+    def test_split_store_route_allows_only_preview_and_requires_school_admin(self):
+        from backend.handlers.constructor_publication_api import create_constructor_publication_router
+        from fastapi import HTTPException
+        store = Database(Path(self.temp.name) / "draft-only.db")
+        store.initialize()
+        draft = create_experiment(store, name="Local read-only preview", source="import", payload=self.draft()["payload"])
+        def require_admin(token):
+            if token != "synthetic-admin":
+                raise HTTPException(401, "School admin session required")
+            return 1
+        app = FastAPI()
+        app.include_router(create_constructor_publication_router(lambda: (self.database, store), require_admin))
+        client = TestClient(app)
+        path = f"/api/admin/schedule/constructor/{draft['id']}/publication/"
+        body = {"scope_kind":"template", "expected_revision":1}
+        headers = {"X-School-Admin-Session":"synthetic-admin"}
+        with patch.dict(os.environ, {"MY_ISLAND_CONSOLIDATED_SCHEDULE":"1"}):
+            self.assertEqual(client.post(path+"preview", json=body).status_code, 401)
+            response = client.post(path+"preview", json=body, headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            preview = response.json()
+            self.assertTrue(preview["read_only"])
+            self.assertFalse(preview["publication_available"])
+            self.assertEqual(client.post(path+"publish", json={**body,"preview_token":preview["preview_token"],"confirmed":True}, headers=headers).status_code, 409)
+        self.assertIsNone(canonical.canonical_version(self.database))
+        self.assertEqual(get_experiment(store, draft["id"])["revision"], 1)
+
+    def test_group_semantics_change_invalidates_preview(self):
+        draft = self.draft()
+        p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        with self.database.connection() as connection:
+            connection.execute("UPDATE groups SET semantic_dimension='changed' WHERE id=?", (self.group["id"],))
+        with self.assertRaises(PublicationConflict):
+            publish_publication(self.database, draft["id"], scope_kind="template", expected_revision=1, preview_token=p["preview_token"], confirmed=True)
+
+    def test_projector_mismatch_defers_safe_unit_before_writing(self):
+        draft = self.draft([self.lesson(), self.lesson(id="other", day=1)])
+        original = canonical._project_student_block
+        def corrupt(database, context, student, block, day):
+            if block["weekday"] == 0:
+                return {"state":"ACTIVITY", "activity":"Unconfirmed", "teacher_ids":[]}, []
+            return original(database, context, student, block, day)
+        with patch.object(canonical, "_project_student_block", side_effect=corrupt):
+            p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertTrue(p["can_publish"])
+        self.assertEqual(p["summary"]["ready_lessons"], 1)
+        self.assertEqual(p["deferred"][0]["lesson_id"], "l1")
+        self.assertIn("projection_mismatch", [d["code"] for d in p["diagnostics"]])
 
     def test_source_import_refresh_cannot_replace_manual_heads(self):
         draft = self.draft()
@@ -265,7 +416,7 @@ class ConstructorPublicationTests(unittest.TestCase):
             connection.execute("DROP TABLE schedule_publication_heads")
         self.assertIsNone(canonical.canonical_version(self.database))
 
-    def test_deferred_week_preserves_base_and_saved_draft(self):
+    def test_deferred_week_excludes_block_without_implicit_base_fallback(self):
         base = self.draft()
         self.publish(base)
         draft = create_experiment(self.database, name="Weekly", source="canonical")
@@ -276,7 +427,8 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertTrue(p["can_publish"], p["blockers"])
         self.assertEqual(len(p["deferred"]), 1)
         self.publish(draft, "week", week_start="2026-10-19")
-        self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")["items"][0]["activity"], "Math")
+        self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")["items"], [])
+        self.assertEqual(p["deferred"][0]["action"], "excluded")
         self.assertTrue(get_experiment(self.database, draft["id"])["payload"]["lessons"][0]["deferred"])
 
     def test_protected_unchanged_allowed_but_edit_or_missing_base_block_blocked(self):
@@ -293,11 +445,13 @@ class ConstructorPublicationTests(unittest.TestCase):
         p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
         self.assertIn("protected", [b["code"] for b in p["blockers"]])
 
-    def test_conflicting_students_and_teacher_blocked(self):
+    def test_conflicting_students_and_teacher_defer_both_sides(self):
         draft = self.draft([self.lesson(), self.lesson(id="conflict", subject="Different")])
         p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
-        self.assertIn("student_overlap", [b["code"] for b in p["blockers"]])
-        self.assertIn("teacher_overlap", [b["code"] for b in p["blockers"]])
+        self.assertIn("student_overlap", [b["code"] for b in p["diagnostics"]])
+        self.assertIn("teacher_overlap", [b["code"] for b in p["diagnostics"]])
+        self.assertEqual(len(p["deferred"]), 2)
+        self.assertTrue(p["can_publish"])
 
     def test_lunch_and_no_lesson_keep_scope_and_details(self):
         draft = self.draft([self.lesson(specialMark="lunch", subject="Обед", teacherId="", description="Long lunch"),

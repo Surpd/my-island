@@ -1,11 +1,29 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Info, LoaderCircle, RefreshCw } from 'lucide-react';
-import { journalKey, journalValue, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, studentSubjectIndicator, type StudentJournalItem } from './student-journal-view';
+import { journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
 import './student-journals.css';
 
 export type RoleJournalsApi = <T>(path: string, options?: RequestInit) => Promise<T>;
+
+export function StudentGradesPeek({ api }: { api: RoleJournalsApi }) {
+  const [items, setItems] = useState<StudentJournalItem[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void api<{ items?: StudentJournalItem[] }>('/api/student/journals').then(result => {
+      if (active) { setItems(Array.isArray(result?.items) ? result.items : []); setFailed(false); }
+    }).catch(() => { if (active) { setItems([]); setFailed(true); } });
+    return () => { active = false; };
+  }, [api]);
+  const recent = recentResultsAcrossSubjects((items || []).filter(item => item.source.period_status === 'current'), 3);
+  return <div className="student-grades-peek" aria-label="Последние оценки">
+    {items === null ? <span className="student-grades-peek__quiet">Загружаем последние оценки…</span> : failed ? <span className="student-grades-peek__quiet">Не удалось загрузить оценки</span> : recent.length ? recent.map(({ item, assessment, result }) => <div key={`${journalKey(item)}:${assessment.id}`}>
+      <span>{item.source.subject}</span><strong>{studentResultDisplay(result, assessment.max_score).value}</strong>
+    </div>) : <span className="student-grades-peek__quiet">Пока нет опубликованных оценок</span>}
+  </div>;
+}
 
 type TeacherJournalSource = {
   source_id: string | number;
@@ -130,16 +148,23 @@ function journalError(error: unknown, fallback: string): string {
   return fallback;
 }
 
-export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
+export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDetail, onBackFromDetail, onSaveScroll, initialScrollTop = 0 }: { api: RoleJournalsApi; selectedKey?: string | null; onOpenDetail?: (key: string, scrollTop: number) => void; onBackFromDetail?: () => void; onSaveScroll?: (scrollTop: number) => void; initialScrollTop?: number }) {
   const [items, setItems] = useState<StudentJournalItem[] | null>(null);
   const [mappingState, setMappingState] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState('current');
   const [reload, setReload] = useState(0);
-  const [selectedKey, setSelectedKey] = useState('');
+  const [localSelectedKey, setLocalSelectedKey] = useState('');
+  const isControlled = controlledKey !== undefined;
+  const selectedKey = isControlled ? controlledKey || '' : localSelectedKey;
+  const setSelectedKey = (key: string) => {
+    if (!isControlled) { setLocalSelectedKey(key); return; }
+    if (!key && selectedKey) onBackFromDetail?.();
+  };
   const sectionRef = useRef<HTMLElement>(null);
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
   const listScrollTop = useRef(0);
+  const previousDetailKey = useRef('');
 
   useEffect(() => {
     let active = true;
@@ -175,26 +200,63 @@ export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
     return [item.student.group_marker !== 'all' ? `Группа ${item.student.group_marker}` : '', sameGroup ? item.source.sheet_title || item.source.spreadsheet_title : ''].filter(Boolean).join(' · ');
   };
   const selected = visibleItems.find(item => journalKey(item) === selectedKey);
+  const scrollContainer = useCallback(() => sectionRef.current?.closest<HTMLElement>('.sheet-full'), []);
+  useEffect(() => {
+    const previousKey = previousDetailKey.current;
+    previousDetailKey.current = selectedKey;
+    if (!isControlled || !previousKey || selectedKey) return;
+    requestAnimationFrame(() => {
+      scrollContainer()?.scrollTo({ top: listScrollTop.current });
+      Array.from(sectionRef.current?.querySelectorAll<HTMLButtonElement>('.student-subject-row') || [])
+        .find(button => button.dataset.journalKey === previousKey)?.focus({ preventScroll: true });
+    });
+  }, [selectedKey, isControlled, scrollContainer]);
+  useEffect(() => {
+    if (!selectedKey && initialScrollTop > 0) scrollContainer()?.scrollTo({ top: initialScrollTop });
+  }, [initialScrollTop, items, selectedKey, scrollContainer]);
   const archivedAvailable = Boolean(items?.some(item => item.source?.period_status === 'archived'));
   const unassignedAvailable = Boolean(items?.some(item => item.source?.period_status === 'unassigned'));
-  const scrollContainer = () => sectionRef.current?.closest<HTMLElement>('.sheet-full');
   const openJournal = (item: StudentJournalItem) => {
     listScrollTop.current = scrollContainer()?.scrollTop || 0;
-    setSelectedKey(journalKey(item));
+    onSaveScroll?.(listScrollTop.current);
+    if (isControlled) onOpenDetail?.(journalKey(item), listScrollTop.current);
+    else window.history.pushState({ ...window.history.state, campusJournalDetail: true }, '', window.location.href);
+    if (!isControlled) setLocalSelectedKey(journalKey(item));
     requestAnimationFrame(() => {
       scrollContainer()?.scrollTo({ top: 0 });
       detailHeadingRef.current?.focus({ preventScroll: true });
     });
   };
   const backToSubjects = () => {
-    const previousKey = selectedKey;
-    setSelectedKey('');
-    requestAnimationFrame(() => {
-      scrollContainer()?.scrollTo({ top: listScrollTop.current });
-      Array.from(sectionRef.current?.querySelectorAll<HTMLButtonElement>('.student-subject-row') || [])
-        .find(button => button.dataset.journalKey === previousKey)?.focus({ preventScroll: true });
-    });
+    if (isControlled) { onBackFromDetail?.(); return; }
+    if (window.history.state?.campusJournalDetail) window.history.back();
+    else setSelectedKey('');
   };
+  useEffect(() => {
+    const restoreSubjects = () => {
+      const previousKey = selectedKey;
+      setLocalSelectedKey('');
+      requestAnimationFrame(() => {
+        scrollContainer()?.scrollTo({ top: listScrollTop.current });
+        Array.from(sectionRef.current?.querySelectorAll<HTMLButtonElement>('.student-subject-row') || [])
+          .find(button => button.dataset.journalKey === previousKey)?.focus({ preventScroll: true });
+      });
+    };
+    if (isControlled) return;
+    const onBackRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ handled: boolean }>).detail;
+      if (selectedKey) { detail.handled = true; window.history.back(); }
+    };
+    const onPopState = () => {
+      if (selectedKey && !window.history.state?.campusJournalDetail) restoreSubjects();
+    };
+    document.addEventListener('my-island:back-request', onBackRequest);
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      document.removeEventListener('my-island:back-request', onBackRequest);
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, [selectedKey, scrollContainer, isControlled, onBackFromDetail, onOpenDetail]);
   const changePeriod = (next: string) => {
     setView(next); setSelectedKey(''); listScrollTop.current = 0;
     scrollContainer()?.scrollTo({ top: 0 });
@@ -202,8 +264,9 @@ export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
 
   const emptyView = ['current', 'archived', 'all'].includes(view) ? view as JournalView : 'all';
   const detailSummaries = selected?.summaries.filter(summary => journalValue(summary.numeric_value ?? summary.text_value)) || [];
-  const highlights = detailSummaries.filter(summary => ['average_grade', 'term_grade', 'final_grade'].includes(summary.summary_type));
+  const highlights = detailSummaries.filter(summary => ['term_grade', 'final_grade'].includes(summary.summary_type));
   const otherSummaries = detailSummaries.filter(summary => !highlights.includes(summary));
+  const summaryLabel = (summary: StudentJournalItem['summaries'][number]) => summary.summary_type === 'average_grade' ? `Показатель источника («${summary.label}»)` : summary.label;
   return <section ref={sectionRef} className="student-journals" aria-labelledby="student-journals-title">
     {!selected ? <header className="student-journals-heading">
       <h2 id="student-journals-title">Оценки</h2>
@@ -212,6 +275,7 @@ export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
         {[...periods].filter(([key]) => !(currentPeriods.size === 1 && currentPeriods.has(key))).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </select>
     </header> : null}
+    {!selected && visibleItems.length ? <div className="student-subject-columns" aria-hidden="true"><span>Предмет</span><span>Последние результаты</span><span /></div> : null}
     {error ? <p className="sync-summary sync-summary--empty" role="alert">{error} <button className="panel-refresh" onClick={() => { setSelectedKey(''); setReload(value => value + 1); }}><RefreshCw size={15} /> Повторить</button></p> : null}
     {items === null && !error ? <output className="loading-state"><LoaderCircle size={17} className="spin" /> Загружаем результаты</output> : null}
     {items !== null && !error ? <>
@@ -235,17 +299,18 @@ export function StudentRoleJournals({ api }: { api: RoleJournalsApi }) {
         })}</ol>
         {!studentJournalRows(selected).length ? <p className="sync-summary sync-summary--empty">Работы пока не опубликованы.</p> : null}
         <details className="student-journal-more"><summary>Показатели и сведения о журнале</summary>
-          {otherSummaries.length ? <dl className="student-journal-summaries">{otherSummaries.map(summary => <div key={`${summary.summary_type}:${summary.label}`}><dt>{summary.label}</dt><dd>{typeof summary.numeric_value === 'number' ? journalValue(summary.numeric_value) : summaryText(summary)}</dd></div>)}</dl> : null}
+          {otherSummaries.length ? <dl className="student-journal-summaries">{otherSummaries.map(summary => <div key={`${summary.summary_type}:${summary.label}`}><dt>{summaryLabel(summary)}</dt><dd>{typeof summary.numeric_value === 'number' ? journalValue(summary.numeric_value) : summaryText(summary)}</dd></div>)}</dl> : null}
           <p>{selected.source.sheet_title}</p>{selected.source.last_synced_at ? <p>Обновлено {formatDate(selected.source.last_synced_at)}</p> : null}
         </details>
       </div> : <div className="student-subject-list" aria-label="Предметы и результаты">{[...periodGroups].map(([key, groupItems]) => <div className="student-subject-group" key={key}>
         {periodGroups.size > 1 || view === 'all' || view === 'archived' ? <h3>{periods.get(key)}</h3> : null}
         {groupItems.map(item => {
-          const indicator = studentSubjectIndicator(item);
           const context = disambiguation(item);
-          return <button type="button" className="student-subject-row" key={journalKey(item)} data-journal-key={journalKey(item)} aria-label={`Открыть журнал: ${item.source.subject}`} aria-describedby={`student-indicator-${journalKey(item)}`} onClick={() => openJournal(item)}>
+          const results = recentStudentResults(item).slice(0, 3);
+          const statuses = recentStudentStatuses(item);
+          return <button type="button" className="student-subject-row" key={journalKey(item)} data-journal-key={journalKey(item)} aria-label={`Открыть журнал: ${item.source.subject}`} onClick={() => openJournal(item)}>
             <span className="student-subject-copy"><strong title={item.source.subject}>{item.source.subject}</strong>{context ? <small>{context}</small> : null}</span>
-            <span id={`student-indicator-${journalKey(item)}`} className={`student-subject-indicator is-${indicator.kind}`} title={indicator.note}><b>{indicator.value}</b>{indicator.kind === 'average' ? <small>Средняя</small> : null}</span>
+            <span className="student-subject-results" aria-label={results.length ? 'Последние оценки' : 'Нет оценок'}>{results.length ? results.map(({ assessment, result }) => { const presentation = studentResultDisplay(result, assessment.max_score); return <b className={`is-${presentation.kind}`} key={assessment.id}>{presentation.value}</b>; }) : <span>—</span>}{statuses.length ? <small className="student-subject-status">{statuses.map(({ status }) => status).join(' · ')}</small> : null}</span>
             <ChevronRight size={17} aria-hidden="true" />
           </button>;
         })}

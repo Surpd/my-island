@@ -135,9 +135,7 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
 
     await page.getByLabel('Дата').fill(FIXTURE_SUNDAY);
     await expect(frame.getByLabel('Дата расписания')).toHaveValue(FIXTURE_SUNDAY);
-    const expand = frame.getByRole('button', { name: 'Развернуть раздел', exact: true });
-    await expect(expand).toBeVisible();
-    await expand.click();
+    await expect(frame.getByRole('button', { name: 'Свернуть раздел', exact: true })).toBeVisible();
     await expect(frame.locator('strong:visible').filter({ hasText: /^Занятий нет$/ }).first()).toBeVisible();
 
     await page.getByLabel('Режим').selectOption('teacher');

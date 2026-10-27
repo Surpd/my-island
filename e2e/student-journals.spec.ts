@@ -66,11 +66,84 @@ async function installStudentApi(page: Page, journals: unknown, scheduleState = 
 }
 
 async function openGrades(page: Page) {
-  await page.goto('/?role=student&date=2026-10-26&screen=grades');
+  await page.goto('/?role=student&date=2026-10-26');
+  await page.locator('.scene-hotspot.hotspot--grades').click();
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Оценки', level: 2 })).toBeVisible();
   await expect(page.getByLabel('Период')).toBeVisible();
 }
+
+test('grades building opens a stable peek and browser back unwinds detail before the island', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installStudentApi(page, { items: [journal('source-current', 'current', 2, '11А'), journal('source-history', 'current', 2, '11Б', 'История', 5)] });
+  await page.goto('/?role=student&date=2026-10-26');
+  await expect(page.locator('.today-sheet')).toHaveCount(0); // the island starts closed
+  await page.locator('.scene-hotspot.hotspot--grades').click();
+  await expect(page.locator('.student-grades-peek')).toContainText('Математика');
+  await expect(page.getByRole('button', { name: 'Все оценки' })).toBeVisible();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-partial/);
+  await expect(page.locator('.sheet-full')).toHaveCSS('display', 'none');
+  await page.getByRole('button', { name: 'Все оценки' }).click();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+  const row = page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true }).first();
+  await row.click();
+  await expect(page.locator('.student-journal-detail')).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('.student-journal-detail')).toHaveCount(0);
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+  await page.goBack();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-partial/);
+  await page.goBack();
+  await expect(page.locator('.student-journal-sheet')).toHaveCount(0);
+  await expect(page.locator('.scene-hotspot.hotspot--grades')).toBeVisible();
+});
+
+test('student reload preserves grade detail and data refresh preserves the expanded table for the same identity', async ({ page }) => {
+  await installStudentApi(page, { items: [journal('source-current', 'current', 2, '11А')] });
+  await openGrades(page);
+  await page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true }).click();
+  await expect(page.locator('.student-journal-detail')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.student-journal-detail')).toBeVisible();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+  await page.getByRole('button', { name: 'К предметам', exact: true }).click();
+  await page.getByRole('button', { name: 'Обновить данные' }).click();
+  await expect(page.locator('.student-subject-row')).toHaveCount(1);
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+});
+
+test('sheet drag is limited to its handle and content scrolling does not collapse it', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installStudentApi(page, { items: [journal('source-current', 'current', 2, '11А')] });
+  await page.goto('/?role=student&date=2026-10-26&screen=grades');
+  const handle = page.locator('.student-journal-sheet .sheet-grabber');
+  const bounds = await handle.boundingBox();
+  expect(bounds).toBeTruthy();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2 - 100, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+  await page.locator('.sheet-full').evaluate(element => element.scrollTo({ top: 100 }));
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+  await page.getByRole('button', { name: 'Свернуть раздел' }).click();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-partial/);
+  await page.getByRole('button', { name: 'Развернуть раздел' }).click();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-full/);
+});
+
+test('Today is an explicit campus level with a date, lessons, and a route to grades', async ({ page }) => {
+  await installLessonApi(page, 'student');
+  await page.goto('/?role=student&date=2026-10-26');
+  await expect(page.locator('.today-sheet')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Сегодня', exact: true }).click();
+  await expect(page.locator('.today-sheet')).toHaveClass(/is-partial/);
+  await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
+  await expect(page.locator('.today-expanded-date')).toBeVisible();
+  await expect(page.locator('.today-expanded')).toContainText('Синтетическая математика');
+  await page.getByRole('button', { name: 'Все оценки' }).click();
+  await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-partial/);
+});
 
 async function installLessonApi(page: Page, role: 'student' | 'teacher') {
   const lesson = {
@@ -113,7 +186,7 @@ async function installLessonApi(page: Page, role: 'student' | 'teacher') {
   });
 }
 
-test('student journals keep sources and periods separate and show chronological original results', async ({ page }) => {
+test('student journals show a compact results table and preserve chronological detail', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 });
   await installStudentApi(page, {
     items: [
@@ -134,12 +207,11 @@ test('student journals keep sources and periods separate and show chronological 
   const compactRowBox = await officialRow.boundingBox();
   expect(compactRowBox).toBeTruthy();
   expect(compactRowBox!.height).toBeLessThanOrEqual(100);
-  await expect(officialRow.locator('.student-subject-indicator')).toHaveCount(1);
-  await expect(officialRow.locator('.student-subject-indicator')).toContainText(/4[,.]6/);
-  await expect(officialRow).not.toContainText('15/20');
-  await expect(officialRow).not.toContainText('Не был');
-  await expect(officialRow).not.toContainText('0');
-  await expect(mathCards.nth(1).locator('.student-subject-indicator')).toHaveText('5');
+  await expect(officialRow.locator('.student-subject-results')).toContainText('15/20');
+  await expect(officialRow.locator('.student-subject-status')).toContainText('Не был');
+  await expect(officialRow.locator('.student-subject-results')).toContainText('0');
+  await expect(officialRow.locator('.student-subject-results')).not.toContainText('4,6');
+  await expect(mathCards.nth(1).locator('.student-subject-results')).toHaveText('5');
   await expect(mathCards.first()).toContainText('11A');
   await expect(mathCards.nth(1)).toContainText('11Б');
   await expect(page.getByRole('button', { name: `Открыть журнал: ${LONG_SUBJECT}`, exact: true })).toBeVisible();
@@ -147,8 +219,9 @@ test('student journals keep sources and periods separate and show chronological 
   expect(longTitleBox).toBeTruthy();
   expect(longTitleBox!.height).toBeGreaterThan(20);
   expect(longTitleBox!.height).toBeLessThanOrEqual(52);
-  await expect(page.getByRole('button', { name: 'Открыть журнал: Физика', exact: true }).locator('.student-subject-indicator')).toHaveText('0');
-  await expect(page.getByRole('button', { name: 'Открыть журнал: Химия', exact: true }).locator('.student-subject-indicator')).toHaveText('Не был');
+  await expect(page.getByRole('button', { name: 'Открыть журнал: Физика', exact: true }).locator('.student-subject-results')).toHaveText('0');
+  await expect(page.getByRole('button', { name: 'Открыть журнал: Химия', exact: true }).locator('.student-subject-results')).toContainText('—');
+  await expect(page.getByRole('button', { name: 'Открыть журнал: Химия', exact: true }).locator('.student-subject-status')).toHaveText('Не был');
   for (const title of ['Последняя контрольная', 'Ещё не опубликовано', 'Работа 11A']) {
     await expect(page.getByText(title, { exact: true })).toHaveCount(0);
   }
@@ -161,7 +234,8 @@ test('student journals keep sources and periods separate and show chronological 
   await expect(detail.getByText(/15\s*\/\s*20/).first()).toBeVisible(); // points remain points, never become a grade average of 5
   await expect(detail.getByText('0', { exact: true })).toBeVisible(); // a real zero is not treated as missing
   await expect(detail.getByText('Не был', { exact: true })).toBeVisible();
-  await expect(detail.getByText('Официальная оценка')).toBeVisible();
+  await detail.getByText('Показатели и сведения о журнале').click();
+  await expect(detail.getByText('Показатель источника («Официальная оценка»)')).toBeVisible();
   await expect(detail.getByText(/вес\s+—|максимум\s+—/i)).toHaveCount(0);
   const detailText = await detail.innerText();
   expect(detailText.indexOf('Ещё не опубликовано')).toBeLessThan(detailText.indexOf('Последняя контрольная'));
@@ -200,7 +274,7 @@ test('student journals keep sources and periods separate and show chronological 
   await period.selectOption('archived');
   await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(1);
   await expect(page.getByText('Последняя контрольная')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true }).locator('.student-subject-indicator')).toHaveText('5');
+  await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true }).locator('.student-subject-results')).toHaveText('5');
   await expect(page.getByRole('heading', { name: /^I триместр.*2026/, level: 3 })).toBeVisible();
   const termOption = (await page.locator('select[aria-label="Период"] option').allTextContents()).find(label => /^I триместр(?:\s|·|$)/.test(label));
   expect(termOption).toBeTruthy();
@@ -247,20 +321,56 @@ test('missing mapping is explained and unpublished schedule warning stays out of
   await expect(page.locator('.campus-schedule-notice:visible')).toHaveCount(0);
 });
 
+test('schedule notice can be dismissed for its week and does not cover grades', async ({ page }) => {
+  await installStudentApi(page, { items: [] }, 'not_published');
+  await page.goto('/?role=student&date=2026-10-26&screen=schedule');
+  const notice = page.locator('.campus-schedule-notice:visible').first();
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Закрыть предупреждение о расписании' }).click();
+  await expect(page.locator('.campus-schedule-notice:visible')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.campus-schedule-notice:visible')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
+  await expect(page.locator('.context-sheet .sheet-full .empty-state').getByText('Неделя не опубликована')).toBeVisible();
+  await page.goto('/?role=student&date=2026-11-02&screen=schedule');
+  await expect(page.locator('.campus-schedule-notice:visible').first()).toBeVisible();
+  await page.goto('/?role=student&date=2026-11-02&screen=grades');
+  await expect(page.locator('.campus-schedule-notice:visible')).toHaveCount(0);
+});
+
+test('canonical schedule week without a materialized publication is labeled unpublished', async ({ page }) => {
+  await installStudentApi(page, { items: [] }, 'canonical_not_materialized');
+  await page.goto('/?role=student&date=2026-10-26&screen=schedule');
+  await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
+  const emptyWeek = page.locator('.context-sheet .sheet-full .empty-state');
+  await expect(emptyWeek).toContainText('Неделя не опубликована');
+  await expect(emptyWeek).toContainText('школа ещё не опубликовала расписание');
+});
+
 test('student displays seconds-bearing synthetic lesson times as HH:MM in Today and the full schedule', async ({ page }) => {
   await installLessonApi(page, 'student');
   await page.goto('/?role=student&date=2026-10-26');
-  const todayCard = page.locator('.today-card--primary');
-  await expect(todayCard).toBeVisible();
-  await expect(todayCard).toContainText('09:05 · ближайший урок');
-  await expect(todayCard).toContainText('Синтетическая математика');
-  await expect(todayCard).not.toContainText('09:05:00');
-
+  await expect(page.locator('.today-sheet')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Сегодня', exact: true }).click();
+  await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
+  await expect(page.locator('.today-expanded .lesson-card time')).toHaveText('09:05');
+  await page.getByRole('button', { name: 'Назад', exact: true }).click();
+  await page.getByRole('button', { name: 'К острову', exact: true }).click();
   await page.getByRole('button', { name: 'Расписание', exact: true }).first().click();
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
   const fullScheduleTime = page.locator('.student-schedule-lesson time');
   await expect(fullScheduleTime).toHaveText('09:05');
   await expect(page.getByText('09:05:00', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Подробности урока: Синтетическая математика' }).click();
+  await expect(page.getByRole('heading', { name: 'Синтетическая математика', level: 2 })).toBeVisible();
+  await expect(page.locator('.student-lesson-detail')).toContainText('Педагог E2E');
+  await expect(page.locator('.student-lesson-detail')).toContainText('Кабинет');
+  await page.getByRole('button', { name: 'Назад к расписанию' }).click();
+  await expect(page.locator('.student-schedule-lesson time')).toHaveText('09:05');
+  await page.getByLabel('Дата расписания').fill('2026-11-02');
+  await expect(page.locator('.student-lesson-detail')).toHaveCount(0);
+  await expect(page.locator('.spatial-sheet.is-full')).toBeVisible();
+  await expect(page.locator('.student-schedule-lesson')).toHaveCount(0);
 });
 
 test('teacher displays seconds-bearing synthetic lesson times as HH:MM in Today and the full schedule', async ({ page }) => {

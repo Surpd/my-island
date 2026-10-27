@@ -137,8 +137,11 @@ class AdminPreviewRoutesTests(unittest.TestCase):
         target, preview = self.start_preview("student")
         with self.database.connection() as connection:
             self.database.execute(connection, "UPDATE student_preview_sessions SET expires_at='2000-01-01 00:00:00' WHERE id=?", (preview["id"],))
-        response = self.client.get("/api/student/journals", headers={"X-Dev-Auth": f"browser:{self.token}", "X-Preview-Id": preview["id"]})
-        self.assertEqual(response.status_code, 403)
+        from unittest.mock import patch
+        with patch.object(self.database, "get_student_identity", side_effect=AssertionError("Expired preview must not query an empty UUID")):
+            for path in ("/api/student/profile", "/api/student/journals"):
+                response = self.client.get(path, headers={"X-Dev-Auth": f"browser:{self.token}", "X-Preview-Id": preview["id"]})
+                self.assertEqual(response.status_code, 403)
 
     def test_accountless_student_preview_returns_only_that_students_journal_result(self):
         student, preview = self.start_preview("student")

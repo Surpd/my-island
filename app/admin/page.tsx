@@ -553,6 +553,7 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   if (path.startsWith('/admin/sources/')) return <Sources id={path.split('/').pop()} navigate={navigate} />;
   if (path === '/admin/sources') return <Sources navigate={navigate} />;
   if (path === '/admin/reconciliation' || path.startsWith('/admin/reconciliation/')) return <Reconciliation />;
+  if (path === '/admin/schedule/published') return <MobilePublishedSchedule api={api} initialWeekStart={routeQuery().get('week_start') || undefined} />;
   if (path === '/admin/schedule/constructor') return <ResponsiveSchedule />;
   if (path === '/admin/schedule') return <ResponsiveSchedule />;
   if (path === '/admin/journals') return <AdminJournals api={api} apiOrigin={API_BASE} />;

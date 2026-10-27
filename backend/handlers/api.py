@@ -653,8 +653,13 @@ def create_router(database: Database) -> APIRouter:
             if not actor or not database.user_has_role(actor["id"], "admin"):
                 raise HTTPException(status_code=403, detail="Admin role required for student preview")
             preview = database.get_active_student_preview(preview_id, actor["id"])
+            if not preview:
+                raise HTTPException(status_code=403, detail="Student preview is invalid or expired")
             legacy_target = database.get_user_by_id(preview["target_user_id"]) if preview and not preview["target_identity_id"] else None
-            target = database.get_student_identity(preview["target_identity_id"] if preview and preview["target_identity_id"] else (legacy_target["identity_id"] if legacy_target else ""))
+            identity_id = preview["target_identity_id"] or (legacy_target["identity_id"] if legacy_target else None)
+            if not identity_id:
+                raise HTTPException(status_code=403, detail="Student preview has no confirmed identity")
+            target = database.get_student_identity(identity_id)
             canonical = database.get_identity(target["identity_id"]) if target and target["identity_id"] else None
             if not target or not canonical or canonical["status"] != "active" or target["kind"] != "student":
                 raise HTTPException(status_code=403, detail="Student preview is invalid or expired")

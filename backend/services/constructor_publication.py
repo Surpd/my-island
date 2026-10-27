@@ -115,8 +115,8 @@ def _directory_fingerprint(database: Any) -> str:
     with database.connection() as connection:
         data = {table: [dict(row) for row in database.execute(connection, query).fetchall()]
                 for table, query in {
-                    "identities": "SELECT id,kind,status,class_name FROM identities ORDER BY id",
-                    "groups": "SELECT id,name,group_type,canonical FROM groups ORDER BY id",
+                    "identities": "SELECT id,kind,status,class_name,display_name FROM identities ORDER BY id",
+                    "groups": "SELECT * FROM groups ORDER BY id",
                     "memberships": "SELECT * FROM memberships ORDER BY id",
                     "overrides": "SELECT * FROM membership_overrides ORDER BY id",
                 }.items()}
@@ -132,6 +132,75 @@ def _change_items(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[d
             if key not in before or key not in after or _semantic(before[key]) != _semantic(after[key])]
 
 
+_ISSUE_MESSAGES = {
+    "review_required": "Занятие требует проверки",
+    "audience_unresolved": "Состав участников не подтверждён или изменился",
+    "unknown_teacher": "Указанный преподаватель отсутствует или неактивен",
+    "student_overlap": "У одних учеников одновременно несколько занятий",
+    "teacher_overlap": "Преподаватель одновременно назначен на несколько занятий",
+    "unsupported_partial_cohort": "Нельзя безопасно определить оставшуюся часть параллели",
+    "missing_runtime_grade": "Не определена параллель участников",
+    "empty_activity": "Не указано название занятия",
+    "unknown_class": "Класс не подтверждён в школьном справочнике",
+    "missing_special_scope": "Не определена аудитория школьного события",
+    "duplicate_lesson_id": "Повторяется идентификатор записи: структура неоднозначна",
+    "missing_lesson_id": "У записи отсутствует стабильный идентификатор",
+    "missing_origin_block": "Исходный canonical-блок отсутствует в выбранной базе",
+    "invalid_slot": "Неверный день или интервал времени",
+    "protected": "Изменение защищённого занятия требует отдельного разрешения",
+    "protected_base": "Нельзя изменить или исключить защищённый canonical-блок",
+    "stale_base": "Базовая версия изменилась: обновите черновик перед публикацией",
+    "missing_base": "Перед публикацией недели нужен опубликованный базовый шаблон",
+    "projection_mismatch": "Canonical-проекция не совпадает с подтверждённым составом занятия",
+}
+
+
+def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: Mapping[str, Any],
+                           reference: date) -> set[str]:
+    """Use the real projector in memory, before any immutable artifact is written.
+
+    In particular a removed partition must never widen a remaining audience.
+    This does not materialize a week or copy directory rows to a second store.
+    """
+    if not blocks:
+        return set()
+    with database.connection() as connection:
+        def rows(query):
+            return [dict(r) for r in database.execute(connection, query).fetchall()]
+        students = {str(r["id"]): r for r in rows("SELECT id,display_name,class_name,status FROM identities WHERE kind='student' AND status='active'")}
+        groups = {str(r["id"]): r for r in rows("SELECT * FROM groups WHERE canonical IS TRUE")}
+        memberships = rows("""SELECT m.*,i.status AS identity_status,i.kind AS identity_kind,g.canonical AS group_canonical
+            FROM memberships m JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id""")
+        exclusions = rows("SELECT * FROM membership_overrides WHERE active IS TRUE AND action='exclude'")
+    candidates = {key: {**b, "block_key": key, "start_time": b["slot"]["start"], "end_time": b["slot"]["end"],
+                        "patch": {"assignments": b["assignments"]}} for key, b in blocks.items()}
+    context = canonical.StudentProjectionContext({}, students, groups, memberships, exclusions, list(candidates.values()))
+    mismatches = set()
+    for key, block in blocks.items():
+        day = (reference + timedelta(days=block["weekday"])).isoformat()
+        candidate = candidates[key]
+        for sid, student in students.items():
+            if canonical._grade(student.get("class_name")) not in str(block.get("grade_scope") or "").split(","):
+                continue
+            expected = [a for a in block["assignments"] if sid in set(str(x) for x in
+                (audience.get(a["metadata"]["constructor_lesson_id"]) or {}).get("student_ids") or [])]
+            # Lunch is intentionally absent from constructor occupancy. Its
+            # explicitly confirmed grid cohort still receives the lunch marker.
+            membership_groups = canonical._student_memberships(context, sid, day)
+            expected += [a for a in block["assignments"] if a["metadata"].get("special_mark") == "lunch"
+                         and canonical._other_assignment_occupies_slot(context, student, membership_groups, a, str(block["grade_scope"]))]
+            projected, _ = canonical._project_student_block(database, context, student, candidate, day)
+            expected_activities = [a for a in expected if a["activity"] != "NO_LESSON"]
+            if projected["state"] == "ACTIVITY":
+                matches = [a for a in expected_activities if a["activity"] == projected.get("activity")
+                           and set(a["teacher_ids"]) == set(str(t) for t in projected.get("teacher_ids") or [])]
+                if not matches:
+                    mismatches.add(key)
+            elif projected["state"] == "UNRESOLVED" or expected_activities:
+                mismatches.add(key)
+    return mismatches
+
+
 def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] | None,
              scope_kind: str, reference_week: str | None = None) -> tuple[dict[str, Any], list, list]:
     blockers: list[dict[str, Any]] = []
@@ -139,11 +208,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     lessons = payload.get("lessons") or []
     if not isinstance(lessons, list):
         raise ValueError("lessons must be a list")
+    if any(not isinstance(lesson, Mapping) for lesson in lessons):
+        raise ValueError("Each lesson must be an object")
     # Older canonical-to-constructor copies omit newer descriptive/activity
     # fields. Recover their persisted meaning for this adapter without editing
     # the saved draft or weakening explicit fields authored by the user.
     payload = deepcopy(dict(payload))
-    lessons = payload["lessons"]
+    lessons = payload["lessons"] = lessons
     for lesson in lessons:
         origin_metadata = canonical._assignment_metadata(((lesson.get("canonical") or {}).get("assignment") or {}).get("metadata") or {})
         for name, value in (origin_metadata.get("constructor_details") or {}).items():
@@ -182,33 +253,30 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     blocks: dict[str, Any] = {}
     ids: set[str] = set()
     occupancy: list[dict[str, Any]] = []
+    lesson_keys: dict[str, str] = {}
+    contexts: dict[str, dict[str, Any]] = {}
+    origin_keys: dict[str, str] = {}
     for index, raw in enumerate(lessons):
         lesson = dict(raw)
         lesson_id = str(lesson.get("id") or index)
         def block(code: str, message: str) -> None:
             blockers.append({"code": code, "lesson_id": lesson_id, "message": message})
+        if not lesson.get("id"):
+            block("missing_lesson_id", "Stable lesson id required")
         if lesson_id in ids:
             block("duplicate_lesson_id", "Duplicate lesson id")
         ids.add(lesson_id)
         origin = lesson.get("canonical") or {}
         origin_key = str(origin.get("block_key") or "")
+        origin_keys[lesson_id] = origin_key
         origin_block = (base or {}).get("blocks", {}).get(origin_key)
+        if origin_key and not origin_block:
+            block("missing_origin_block", "Canonical origin block missing")
         needs_review = any(lesson.get(k) for k in ("review_required", "needsClarification", "importError", "unresolved"))
         if lesson.get("deferred"):
-            if scope_kind != "week" or not needs_review or not origin_block:
-                block("invalid_deferred", "Only unresolved weekly changes with a known base can be deferred")
-                continue
-            # Preserve the entire original block rather than accidentally
-            # deleting the deferred assignment. Other edits in this block are
-            # rejected below: no partial ambiguous parallel publication.
-            if origin_key in blocks and not blocks[origin_key].get("_deferred"):
-                block("deferred_parallel_conflict", "Cannot publish another edit in a deferred parallel block")
-            blocks[origin_key] = deepcopy(origin_block)
-            blocks[origin_key]["_deferred"] = True
-            deferred.append({"lesson_id": lesson_id, "reason": "Unresolved change retained in draft; base block preserved"})
-            continue
+            block("explicit_deferred", "Запись явно отложена администратором")
         if needs_review:
-            block("review_required", "Resolve this lesson before publication")
+            block("review_required", str(lesson.get("clarificationReason") or "Занятие требует проверки"))
         result = audience.get(lesson_id) or {}
         if result.get("status") != "ok" or result.get("needs_recalculation"):
             block("audience_unresolved", str(result.get("reason") or "Audience requires confirmation or recalculation"))
@@ -227,6 +295,8 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teacher_ids = sorted({str(x) for x in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
         if set(teacher_ids) - teachers.keys():
             block("unknown_teacher", "An assigned teacher is missing or inactive")
+        if not teacher_ids and not special and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
+            block("missing_teacher", "Преподаватель занятия не подтверждён")
         if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
@@ -288,6 +358,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         original_slot = original.get("slot") or {}
         same_slot = (original.get("weekday"), _canonical_time(original.get("start_time") or original_slot.get("start")), _canonical_time(original.get("end_time") or original_slot.get("end")), str(original.get("grade_scope") or "")) == (day, start, end, grade)
         key = origin_key if same_slot else "constructor-" + _hash([day, start, end, grade])[:24]
+        lesson_keys[lesson_id] = key
+        contexts[lesson_id] = {"day": day, "start": start, "end": end, "subject": subject or "Обед",
+            "teachers": [teachers[t] for t in teacher_ids if t in teachers],
+            "groups": [str(groups[g]["name"]) for g in (group_ids or class_ids or display_class_ids) if g in groups]}
+        if not str(lesson.get("room") or "").strip():
+            blockers.append({"code": "missing_room", "lesson_id": lesson_id,
+                             "message": "Кабинет не указан", "severity": "info"})
         role = "explicit_no_lesson" if special == "no_lesson" else "residual" if kind in {"available_slot", "legacy_remaining"} else "primary"
         preserved_metadata = deepcopy(canonical._assignment_metadata((origin.get("assignment") or {}).get("metadata") or {}))
         for duplicate in ("id", "block_id", "ordinal", "assignment_kind", "audience_kind",
@@ -319,32 +396,88 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 block("protected", "Protected lesson requires separate approval before publishing a replacement")
         target = blocks.setdefault(key, {"weekday": day, "slot": {"start": start, "end": end},
             "grade_scope": grade, "status": "resolved", "mode": "SINGLE", "assignments": []})
-        if target.get("_deferred"):
-            block("deferred_parallel_conflict", "Cannot publish another edit in a deferred parallel block")
-        else:
-            target["assignments"].append(assignment)
-            if len(target["assignments"]) > 1:
-                target["mode"] = "PARALLEL"
-    for item in blocks.values():
-        item.pop("_deferred", None)
+        target["assignments"].append(assignment)
+        if len(target["assignments"]) > 1:
+            target["mode"] = "PARALLEL"
     for index, left in enumerate(occupancy):
         for right in occupancy[index + 1:]:
             if (left["day"] != right["day"] or left["interval"][0] >= right["interval"][1]
-                    or right["interval"][0] >= left["interval"][1] or left["subject"] == right["subject"]):
+                    or right["interval"][0] >= left["interval"][1]):
+                continue
+            # Canonical permits several audience rows of one joint activity in
+            # the same block. A matching subject alone across slots is not proof.
+            if (left["subject"] == right["subject"] and lesson_keys.get(left["id"]) == lesson_keys.get(right["id"])):
                 continue
             if left["students"] & right["students"]:
-                blockers.append({"code": "student_overlap", "lesson_id": right["id"],
+                blockers.append({"code": "student_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
                                  "message": f"Conflicting student audience overlaps lesson {left['id']}"})
             if left["teachers"] & right["teachers"]:
-                blockers.append({"code": "teacher_overlap", "lesson_id": right["id"],
+                blockers.append({"code": "teacher_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
                                  "message": f"Teacher is assigned to simultaneous different activities ({left['id']})"})
+    # Defer complete destination blocks and all pieces of a moved origin block.
+    # Both sides of a collision are excluded; ordering never picks a winner.
+    critical_codes = {"duplicate_lesson_id", "missing_lesson_id", "missing_origin_block", "invalid_slot", "protected", "protected_base"}
+    excluded: set[str] = set()
+    for issue in blockers:
+        issue.setdefault("severity", "critical" if issue["code"] in critical_codes else "conflict")
+        lid = issue.get("lesson_id")
+        issue["context"] = contexts.get(lid, {})
+        issue["block_key"] = lesson_keys.get(lid)
+        if issue["severity"] == "conflict":
+            excluded.update(lesson_keys[i] for i in issue.get("related_lesson_ids", [lid]) if i in lesson_keys)
+    changed = True
+    while changed:
+        changed = False
+        excluded_origins = {origin_keys[lid] for lid, key in lesson_keys.items() if key in excluded and origin_keys[lid]}
+        for lid, key in lesson_keys.items():
+            if origin_keys[lid] in excluded_origins and key not in excluded:
+                excluded.add(key)
+                changed = True
+        # A missing cohort cannot safely identify a smaller parallel unit.
+        unknown_slots = {(blocks[k]["weekday"], blocks[k]["slot"]["start"], blocks[k]["slot"]["end"])
+                         for k in excluded if not blocks[k].get("grade_scope")}
+        for key, value in blocks.items():
+            if (value["weekday"], value["slot"]["start"], value["slot"]["end"]) in unknown_slots and key not in excluded:
+                excluded.add(key)
+                changed = True
+    for lid, key in sorted(lesson_keys.items()):
+        if key in excluded:
+            deferred.append({"lesson_id": lid, "block_key": key, "action": "excluded", "context": contexts[lid],
+                "reason": "Весь связанный блок исключён из публикации; исходная запись остаётся в черновике"})
+    for issue in blockers:
+        issue["action"] = "excluded" if issue.get("block_key") in excluded else "blocked" if issue["severity"] == "critical" else "published"
+    blocks = {key: value for key, value in blocks.items() if key not in excluded}
+    invalid_projections: set[str] = set()
+    while blocks:
+        invalid = _projection_mismatches(database, blocks, audience, reference)
+        if not invalid:
+            break
+        while True:
+            affected_origins = {origin_keys[lid] for lid, key in lesson_keys.items() if key in invalid and origin_keys[lid]}
+            expanded = invalid | {key for lid, key in lesson_keys.items() if origin_keys[lid] in affected_origins and key in blocks}
+            if expanded == invalid:
+                break
+            invalid = expanded
+        invalid_projections.update(invalid)
+        blocks = {key: value for key, value in blocks.items() if key not in invalid}
+    for lid, key in sorted(lesson_keys.items()):
+        if key in invalid_projections:
+            blockers.append({"code": "projection_mismatch", "severity": "conflict", "lesson_id": lid,
+                             "block_key": key, "context": contexts[lid], "action": "excluded"})
+            deferred.append({"lesson_id": lid, "block_key": key, "context": contexts[lid], "action": "excluded",
+                             "reason": "Весь блок исключён: проверка canonical-проекции не пройдена"})
+    blocks = {key: value for key, value in blocks.items() if key not in invalid_projections}
     # Never infer permission to remove a protected canonical block from its
     # absence in the saved constructor payload.
     for key, old in (base or {}).get("blocks", {}).items():
         if (old.get("status") == "protected" or (old.get("evidence") or {}).get("protected")
                 or any((a.get("metadata") or {}).get("protected") for a in old.get("assignments") or [])):
             if key not in blocks or _semantic(old) != _semantic(blocks[key]):
-                blockers.append({"code": "protected_base", "message": f"Protected block {key} cannot be changed"})
+                blockers.append({"code": "protected_base", "severity": "critical", "block_key": key,
+                    "context": {"day": old.get("weekday"), "start": _canonical_time(old.get("start_time") or (old.get("slot") or {}).get("start")),
+                        "end": _canonical_time(old.get("end_time") or (old.get("slot") or {}).get("end")),
+                        "subject": ", ".join(str(a.get("activity") or "") for a in old.get("assignments") or [])},
+                    "action": "blocked", "message": f"Protected block {key} cannot be changed"})
     return blocks, blockers, deferred
 
 
@@ -365,9 +498,10 @@ def _artifact_blocks(blocks: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
-                        expected_revision: int, week_start: str | None = None) -> dict[str, Any]:
+                        expected_revision: int, week_start: str | None = None,
+                        draft_database: Any = None) -> dict[str, Any]:
     scope_key = _scope(scope_kind, week_start)
-    draft = get_experiment(database, draft_id)
+    draft = get_experiment(draft_database or database, draft_id)
     if int(draft["revision"]) != int(expected_revision):
         raise PublicationConflict("Draft revision changed; reload before publication")
     version = canonical.canonical_version(database)
@@ -375,12 +509,15 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
     base = canonical.read_canonical_template(database, base_id) if base_id else None
     head = canonical.publication_head(database, scope_key)
     effective = canonical._effective_week(database, None, week_start) if scope_kind == "week" else None
-    blocks, blockers, deferred = _compile(database, draft["payload"], base, scope_kind,
+    blocks, diagnostics, deferred = _compile(database, draft["payload"], base, scope_kind,
                                          week_start if scope_kind == "week" else None)
     if version and base_id != version["version_id"]:
-        blockers.append({"code": "stale_base", "message": "Canonical template changed; rebase the saved draft before publishing"})
+        diagnostics.append({"code": "stale_base", "severity": "critical"})
     if scope_kind == "week" and not base:
-        blockers.append({"code": "missing_base", "message": "Publish a canonical template before a week"})
+        diagnostics.append({"code": "missing_base", "severity": "critical"})
+    for issue in diagnostics:
+        issue["message"] = issue.get("message") if issue["code"] == "review_required" else _ISSUE_MESSAGES.get(issue["code"], issue.get("message", "Требуется проверка"))
+    blockers = [issue for issue in diagnostics if issue["severity"] == "critical"]
     before = (base or {}).get("blocks") or {}
     if scope_kind == "week" and effective:
         before = {row["block_key"]: {**row, "assignments": canonical._assignments(database, row.get("canonical_block_id"), row.get("patch") or {})}
@@ -388,14 +525,24 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
     diff = {"added": len(blocks.keys() - before.keys()), "removed": len(before.keys() - blocks.keys()),
             "changed": sum(_semantic(before[k]) != _semantic(blocks[k]) for k in blocks.keys() & before.keys()),
             "before_blocks": len(before), "after_blocks": len(blocks)}
+    unchanged = {k for k in blocks.keys() & before.keys() if _semantic(before[k]) == _semantic(blocks[k])}
+    summary = {"ready_lessons": sum(len(b.get("assignments") or []) for b in blocks.values()),
+               "deferred_lessons": len(deferred), "deferred_blocks": len({item["block_key"] for item in deferred}),
+               "unchanged_lessons": sum(len(blocks[k].get("assignments") or []) for k in unchanged),
+               "replaced_lessons": sum(len(before[k].get("assignments") or []) for k in blocks.keys() & before.keys() - unchanged),
+               **{f"{severity}_count": sum(d["severity"] == severity for d in diagnostics) for severity in ("info", "conflict", "critical")}}
     result = {"draft_id": draft_id, "draft_revision": draft["revision"], "scope_kind": scope_kind,
               "scope_key": scope_key, "week_start": week_start if scope_kind == "week" else None,
               "base_version_id": base_id or None, "effective_week_id": (effective or {}).get("effective_week_id"),
               "head_revision": (head or {}).get("revision", 0), "previous_published_id": (head or {}).get("published_id"),
               "payload_fingerprint": _hash(draft["payload"]), "directory_fingerprint": _directory_fingerprint(database),
               "can_publish": not blockers, "blockers": blockers, "deferred": deferred, "diff": diff,
+              "diagnostics": diagnostics, "summary": summary,
+              "source_kind": "template" if scope_kind == "template" else "authored_week" if draft["payload"].get("week_start") == week_start else "template_week",
               "change_items": _change_items(before, blocks),
               "source_policy": "manual_head_protected_source_refresh_requires_explicit_review"}
+    result["read_only"] = bool(getattr(database, "read_only", False)) or (draft_database is not None and draft_database is not database)
+    result["publication_available"] = not result["read_only"]
     result["preview_token"] = _hash({**result, "blocks": blocks})
     return result
 
@@ -418,8 +565,10 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
         canonical.import_canonical_artifact(database, {"version_id": version_id,
             "parent_version_id": preview["base_version_id"], "schema_version": "canonical-v2",
             "source_snapshot": {"id": publication_id, "fingerprint": preview["payload_fingerprint"]},
-            "summary": {"constructor_publication_id": publication_id}, "blocks": blocks},
-            status="authoritative", approved_at=now)
+            "summary": {"constructor_publication_id": publication_id,
+                        "publication_summary": preview.get("summary"),
+                        "deferred_lesson_ids": [item["lesson_id"] for item in preview.get("deferred", [])]}, "blocks": blocks},
+            status="approved_with_exceptions" if preview.get("deferred") else "authoritative", approved_at=now)
         published_id = version_id
     else:
         version_id = preview["base_version_id"]
@@ -457,20 +606,29 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
             now, json.dumps(metadata, ensure_ascii=False, default=str)))
     return {"status": "published", "publication_id": publication_id, "scope_kind": preview["scope_kind"],
             "published_id": published_id, "previous_published_id": preview["previous_published_id"],
-            "runtime_readback": readback_result, "deferred": preview["deferred"]}
+            "runtime_readback": readback_result, "deferred": preview["deferred"],
+            "summary": preview.get("summary"), "version_id": version_id, "created_at": now,
+            "week_start": preview.get("week_start"), "scope_key": preview["scope_key"]}
 
 
 @contextmanager
 def _transaction(database: Any):
+    if getattr(database, "read_only", False):
+        raise ValueError("Publication is unavailable for a read-only school preview")
     if database.autocommit:
         raise ValueError("Publication requires a transactional database connection")
-    with database.connection() as connection:
-        if database.database_url:
-            database.execute(connection, "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
-            database.execute(connection, "SELECT pg_advisory_xact_lock(719817523)")
-        else:
-            database.execute(connection, "BEGIN IMMEDIATE")
-        yield _TransactionDatabase(database, connection)
+    try:
+        with database.connection() as connection:
+            if database.database_url:
+                database.execute(connection, "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                database.execute(connection, "SELECT pg_advisory_xact_lock(719817523)")
+            else:
+                database.execute(connection, "BEGIN IMMEDIATE")
+            yield _TransactionDatabase(database, connection)
+    except Exception as error:
+        if getattr(error, "sqlstate", None) in {"40001", "40P01"}:
+            raise PublicationConflict("Concurrent school data changed; review a fresh preview") from error
+        raise
 
 
 def publish_publication(database: Any, draft_id: str, *, scope_kind: str, expected_revision: int,
@@ -537,6 +695,11 @@ def list_publications(database: Any, draft_id: str | None = None) -> dict[str, A
         metadata = json.loads(item.pop("metadata"))
         item["runtime_readback"] = metadata["runtime_readback"]
         item["restored_from"] = metadata.get("restored_from")
+        item["diagnostics"] = metadata.get("preview", {}).get("diagnostics", [])
+        item["deferred"] = [{**entry, "action": entry.get("action") or (
+            "preserved_base" if entry.get("reason") == "Unresolved change retained in draft; base block preserved"
+            else "unknown")} for entry in metadata.get("preview", {}).get("deferred", [])]
+        item["summary"] = metadata.get("preview", {}).get("summary")
         result.append(item)
     return {"items": result, "heads": heads}
 

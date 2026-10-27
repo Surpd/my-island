@@ -46,13 +46,15 @@ def create_constructor_publication_router(
     """
     router = APIRouter(prefix="/api/admin/schedule/constructor")
 
-    def admin(token: str | None) -> tuple[Any, Any]:
+    def admin(token: str | None, *, preview_only: bool = False) -> tuple[Any, Any]:
         if os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") != "1":
             raise HTTPException(404, "Constructor publication is disabled")
         actor = require_school_admin(token)
         source, drafts = resolve_stores()
         same = source is drafts or (not source.database_url and not drafts.database_url
                                     and str(source.path) == str(drafts.path))
+        if preview_only:
+            return source, None if same else drafts
         if not same:
             raise HTTPException(409, "Publication requires one approved transactional school database; split source/draft stores are read-only")
         if isinstance(actor, tuple):
@@ -79,8 +81,8 @@ def create_constructor_publication_router(
 
     @router.post("/{draft_id}/publication/preview")
     def preview(draft_id: str, body: PreviewBody, x_school_admin_session: str | None = Header(default=None)):
-        database, _ = admin(x_school_admin_session)
-        return call(preview_publication, database, draft_id, **body.model_dump())
+        database, draft_database = admin(x_school_admin_session, preview_only=True)
+        return call(preview_publication, database, draft_id, draft_database=draft_database, **body.model_dump())
 
     @router.post("/{draft_id}/publication/publish")
     def publish(draft_id: str, body: PublishBody, x_school_admin_session: str | None = Header(default=None)):
@@ -89,7 +91,7 @@ def create_constructor_publication_router(
 
     @router.get("/{draft_id}/publications")
     def history(draft_id: str, x_school_admin_session: str | None = Header(default=None)):
-        database, _ = admin(x_school_admin_session)
+        database, _ = admin(x_school_admin_session, preview_only=True)
         return call(list_publications, database, draft_id)
 
     @router.post("/publication/restore")

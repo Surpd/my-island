@@ -740,10 +740,29 @@
 .constructor-publication-fields input,.constructor-publication-fields select { min-height:40px;border:1px solid #dce0eb;border-radius:10px;padding:8px;background:white;color:#202339; }
 .constructor-publication-diff { display:flex;gap:10px;flex-wrap:wrap; }
 .constructor-publication-diff span { padding:8px 12px;background:#fff3b8;border-radius:9px;font-weight:700; }
+.constructor-publication-source { color:#626b82;font-size:13px; }
+.constructor-publication-readonly { padding:10px 12px;border-left:3px solid #7181a4;background:#f4f6fb;border-radius:5px;color:#414b63; }
+.constructor-publication-summary { display:flex;flex-wrap:wrap;gap:8px;margin:12px 0; }
+.constructor-publication-summary span { padding:8px 10px;background:#f3f5f9;border-radius:9px; }
+.constructor-publication-summary b { font-size:16px;margin-right:4px; }
+.constructor-publication-filters { display:flex;flex-wrap:wrap;gap:8px;margin:10px 0; }
+.constructor-publication-filters button { border:1px solid #dce0eb;border-radius:999px;padding:7px 11px;background:white;color:#30374b;font:inherit;cursor:pointer; }
+.constructor-publication-filters button[aria-pressed="true"] { background:#283862;color:white;border-color:#283862; }
+.constructor-publication-filters button span { margin-left:4px;opacity:.8; }
+.constructor-publication-diagnostics,.constructor-publication-deferred ul { list-style:none;padding:0;margin:0; }
+.constructor-publication-diagnostics li,.constructor-publication-deferred li { padding:11px 12px;margin:8px 0;border:1px solid #e0e4ed;border-radius:9px;background:#fff; }
+.constructor-publication-diagnostics li.is-critical { border-color:#edb7b7;background:#fff6f6; }
+.constructor-publication-diagnostics li.is-conflict { border-color:#f0d39b;background:#fffaf0; }
+.constructor-publication-diagnostics li p,.constructor-publication-deferred li p { margin:4px 0; }
+.constructor-publication-diagnostics li small,.constructor-publication-deferred li small { display:block;color:#666e81; }
+.constructor-publication-links { display:flex;flex-wrap:wrap;gap:8px;margin:12px 0; }
+.constructor-publication-links button,.constructor-publication-links a { border:1px solid #dce0eb;border-radius:8px;padding:8px 10px;background:white;color:#30374b;font:inherit;text-decoration:none;cursor:pointer; }
+.constructor-publication-history-summary { font-size:13px;color:#626b82; }
+.constructor-publication-panel details details { margin:8px 0; }
 .constructor-publication-panel code,.constructor-publication-panel small { overflow-wrap:anywhere; }
 .constructor-publication-confirm { display:flex;align-items:flex-start;gap:10px;margin:18px 0; }
 .constructor-publication-confirm input { width:20px;height:20px;flex:none; }
-.constructor-publication-message { padding:12px;background:#eef5ff;border-radius:10px;overflow-wrap:anywhere; }
+.constructor-publication-message { display:block;position:static;padding:12px;background:#eef5ff;border-radius:10px;overflow-wrap:anywhere; }
 .constructor-publication-panel article { border-top:1px solid #e4e7ee;padding:12px 0; }
 .constructor-publication-panel footer { position:sticky;bottom:0;background:white;display:flex;gap:12px;justify-content:flex-end;padding:16px 0 0; }
 @media(max-width:600px){.constructor-publication-panel { width:calc(100vw - 20px);max-height:calc(100dvh - 20px);padding:16px; }.constructor-publication-panel footer button { flex:1;white-space:normal; }}
@@ -758,6 +777,7 @@
 .campus-shell .constructor-color-actions { display:flex;flex-wrap:wrap;gap:8px;margin:14px 0; }
 .campus-shell .constructor-publication-panel :is(button:disabled,input:disabled) {opacity:.55;cursor:default;}
 .campus-shell .constructor-publication-panel .constructor-publication-confirm {margin:18px 0;}
+.campus-shell .constructor-publication-panel .constructor-publication-filters button[aria-pressed="true"] {background:var(--cp-ink,#283862);color:white;}
 @media(max-width:600px){.campus-shell .constructor-publication-panel,.campus-shell .constructor-color-panel {max-height:calc(100dvh - 20px);width:calc(100vw - 20px);} }
 
 @media(max-width:900px){ .campus-shell .constructor-ux .constructor-actions .constructor-publication-trigger {display:none;} }
