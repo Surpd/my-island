@@ -1,0 +1,1348 @@
+[
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "P11",
+      "subject": "Физика",
+      "classes": [
+        "10"
+      ],
+      "day": 0,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "S11",
+      "subject": "Физика",
+      "classes": [
+        "11"
+      ],
+      "day": 0,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "Q11",
+      "subject": "История",
+      "classes": [
+        "10"
+      ],
+      "day": 0,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "U11",
+      "subject": "История",
+      "classes": [
+        "11"
+      ],
+      "day": 0,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "Q36",
+      "subject": "Физика",
+      "classes": [
+        "10"
+      ],
+      "day": 2,
+      "start": "16:20",
+      "end": "17:05",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "S36",
+      "subject": "Физика",
+      "classes": [
+        "11"
+      ],
+      "day": 2,
+      "start": "16:20",
+      "end": "17:05",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "P41",
+      "subject": "История искусства",
+      "classes": [
+        "10"
+      ],
+      "day": 3,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "S41",
+      "subject": "История искусства",
+      "classes": [
+        "11"
+      ],
+      "day": 3,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "P42",
+      "subject": "История искусства",
+      "classes": [
+        "10"
+      ],
+      "day": 3,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "S42",
+      "subject": "История искусства",
+      "classes": [
+        "11"
+      ],
+      "day": 3,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "M56",
+      "subject": "Пластика",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N56",
+      "subject": "Пластика",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "classes"
+    },
+    "shared_students": 14,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "joint_activity",
+    "left": {
+      "source_ref": "L57",
+      "subject": "География",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 4,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "M57",
+      "subject": "География",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "classes"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M4",
+      "subject": "Обществознание",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 0,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "N4",
+      "subject": "Физика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 0,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M7",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 0,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "N7",
+      "subject": "Химия",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 0,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "joint_activity_unconfirmed",
+    "left": {
+      "source_ref": "L8",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 0,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "N8",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 0,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S11",
+      "subject": "Физика",
+      "classes": [
+        "11"
+      ],
+      "day": 0,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "U11",
+      "subject": "История",
+      "classes": [
+        "11"
+      ],
+      "day": 0,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L16",
+      "subject": "Английский",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 1,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "M16",
+      "subject": "Русский язык",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 1,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "classes"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L17",
+      "subject": "История искусства",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 1,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N17",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 1,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P18",
+      "subject": "Математика",
+      "classes": [
+        "10"
+      ],
+      "day": 1,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T18",
+      "subject": "Матпроф",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 1,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S18",
+      "subject": "Математика",
+      "classes": [
+        "11"
+      ],
+      "day": 1,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T18",
+      "subject": "Матпроф",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 1,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 7,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S19",
+      "subject": "Литература",
+      "classes": [
+        "11"
+      ],
+      "day": 1,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "T19",
+      "subject": "Матпроф",
+      "classes": [
+        "11"
+      ],
+      "day": 1,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "classes"
+    },
+    "shared_students": 5,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P28",
+      "subject": "Математика",
+      "classes": [
+        "10"
+      ],
+      "day": 2,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T28",
+      "subject": "Матпроф",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 2,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L29",
+      "subject": "Английский",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 2,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "M29",
+      "subject": "Русский язык",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 2,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P29",
+      "subject": "Математика",
+      "classes": [
+        "10"
+      ],
+      "day": 2,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T29",
+      "subject": "Матпроф",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 2,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L30",
+      "subject": "Русский язык",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 2,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "M30",
+      "subject": "Английский",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 2,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L30",
+      "subject": "Русский язык",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 2,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N30",
+      "subject": "Английский",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 2,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 5,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S30",
+      "subject": "География",
+      "classes": [
+        "11"
+      ],
+      "day": 2,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T30",
+      "subject": "Обществознание",
+      "classes": [
+        "11"
+      ],
+      "day": 2,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 8,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P36",
+      "subject": "Химия",
+      "classes": [
+        "10"
+      ],
+      "day": 2,
+      "start": "16:20",
+      "end": "17:05",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "Q36",
+      "subject": "Физика",
+      "classes": [
+        "10"
+      ],
+      "day": 2,
+      "start": "16:20",
+      "end": "17:05",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M40",
+      "subject": "Естествознание",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N40",
+      "subject": "Информатика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L41",
+      "subject": "Литература",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "M41",
+      "subject": "Естествознание",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M41",
+      "subject": "Естествознание",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N41",
+      "subject": "Информатика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "G44",
+      "subject": "Творчество",
+      "classes": [
+        "7-Б"
+      ],
+      "day": 3,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "H44",
+      "subject": "Творчество",
+      "classes": [
+        "7-Б"
+      ],
+      "day": 3,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "classes"
+    },
+    "shared_students": 12,
+    "shared_teachers": 0,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S45",
+      "subject": "Русский язык",
+      "classes": [
+        "11"
+      ],
+      "day": 3,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T45",
+      "subject": "Информатика",
+      "classes": [
+        "11"
+      ],
+      "day": 3,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "B46",
+      "subject": "Творчество",
+      "classes": [
+        "5"
+      ],
+      "day": 3,
+      "start": "14:35",
+      "end": "15:20",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "C46",
+      "subject": "Творчество",
+      "classes": [
+        "5"
+      ],
+      "day": 3,
+      "start": "14:35",
+      "end": "15:20",
+      "assignment_type": "classes"
+    },
+    "shared_students": 7,
+    "shared_teachers": 0,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S46",
+      "subject": "Русский язык",
+      "classes": [
+        "11"
+      ],
+      "day": 3,
+      "start": "14:35",
+      "end": "15:20",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T46",
+      "subject": "Информатика",
+      "classes": [
+        "11"
+      ],
+      "day": 3,
+      "start": "14:35",
+      "end": "15:20",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M47",
+      "subject": "Обществознание",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "N47",
+      "subject": "Физика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 3,
+      "start": "15:30",
+      "end": "16:15",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M52",
+      "subject": "Обществознание",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "N52",
+      "subject": "Физика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "09:00",
+      "end": "09:45",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "joint_activity_unconfirmed",
+    "left": {
+      "source_ref": "G53",
+      "subject": "Английский",
+      "classes": [
+        "7-А",
+        "7-Б",
+        "8"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "Q53",
+      "subject": "Английский",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P53",
+      "subject": "Физика",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "Q53",
+      "subject": "Английский",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 4,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "joint_activity_unconfirmed",
+    "left": {
+      "source_ref": "P53",
+      "subject": "Физика",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "S53",
+      "subject": "Физика",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "Q53",
+      "subject": "Английский",
+      "classes": [
+        "10",
+        "11"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "S53",
+      "subject": "Физика",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "09:55",
+      "end": "10:40",
+      "assignment_type": "groups"
+    },
+    "shared_students": 2,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "joint_activity_unconfirmed",
+    "left": {
+      "source_ref": "L54",
+      "subject": "Русский язык",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 4,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "Q54",
+      "subject": "Русский язык",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P54",
+      "subject": "Математика",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "Q54",
+      "subject": "Русский язык",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "10:55",
+      "end": "11:40",
+      "assignment_type": "classes"
+    },
+    "shared_students": 10,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "joint_activity_unconfirmed",
+    "left": {
+      "source_ref": "F55",
+      "subject": "Компьютерная графика",
+      "classes": [
+        "7-А"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "I55",
+      "subject": "Компьютерная графика",
+      "classes": [
+        "8"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "classes"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L55",
+      "subject": "Пластика",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "M55",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "shared_students": 8,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M55",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "N55",
+      "subject": "География",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "classes"
+    },
+    "shared_students": 5,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "P55",
+      "subject": "Биология",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "Q55",
+      "subject": "Химия",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "shared_students": 1,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S55",
+      "subject": "Обществознание",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T55",
+      "subject": "Литература",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "11:50",
+      "end": "12:35",
+      "assignment_type": "groups"
+    },
+    "shared_students": 5,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "S56",
+      "subject": "Русский язык",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "T56",
+      "subject": "Матпроф практикум",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "12:45",
+      "end": "13:30",
+      "assignment_type": "classes"
+    },
+    "shared_students": 13,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "L57",
+      "subject": "География",
+      "classes": [
+        "9-Ан"
+      ],
+      "day": 4,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N57",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "groups"
+    },
+    "shared_students": 3,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "student_overlap",
+    "left": {
+      "source_ref": "M57",
+      "subject": "География",
+      "classes": [
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "classes"
+    },
+    "right": {
+      "source_ref": "N57",
+      "subject": "Математика",
+      "classes": [
+        "9-Ан",
+        "9-Д"
+      ],
+      "day": 4,
+      "start": "13:40",
+      "end": "14:25",
+      "assignment_type": "groups"
+    },
+    "shared_students": 9,
+    "shared_teachers": 0,
+    "same_activity_text": false
+  },
+  {
+    "code": "joint_activity_unconfirmed",
+    "left": {
+      "source_ref": "P58",
+      "subject": "Информатика",
+      "classes": [
+        "10"
+      ],
+      "day": 4,
+      "start": "14:35",
+      "end": "15:20",
+      "assignment_type": "groups"
+    },
+    "right": {
+      "source_ref": "S58",
+      "subject": "Информатика",
+      "classes": [
+        "11"
+      ],
+      "day": 4,
+      "start": "14:35",
+      "end": "15:20",
+      "assignment_type": "groups"
+    },
+    "shared_students": 0,
+    "shared_teachers": 1,
+    "same_activity_text": true
+  }
+]

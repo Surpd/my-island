@@ -25,6 +25,7 @@ from backend.services.constructor_publication import (
     preview_restore,
     publish_publication,
     restore_publication,
+    _TransactionDatabase, _compile, _persist,
 )
 from backend.services.schedule_experiments import create_experiment, save_experiment
 
@@ -126,6 +127,29 @@ class PartialPublicationPostgresTests(unittest.TestCase):
             confirmed=True, **kwargs)
 
     def test_partial_preview_publish_cas_history_projection_and_rollback(self):
+        # Persist the new explicit/joint contract in PostgreSQL JSONB, verify
+        # both runtime projections, then roll back this entire sub-scenario.
+        joint_class = self.database.create_group(f"11A Joint {self.suffix}", "class", base_class_name="11A")
+        joint_student = self.database.create_identity("student", f"PG Joint {self.suffix}", "11A")
+        self.database.create_membership(joint_class["id"], joint_student["id"], "student", "admin_override", self.suffix)
+        joint = self.draft([self.lesson("joint-9", subject="Joint"),
+                            self.lesson("joint-11", group=joint_class, subject="Joint")])
+        with self.database.connection() as connection:
+            with connection.transaction(force_rollback=True):
+                bound = _TransactionDatabase(self.database, connection)
+                joint_preview = preview_publication(bound, joint["id"], scope_kind="template", expected_revision=1)
+                blocks,_,_ = _compile(bound, joint["payload"], None, "template", "2026-10-19")
+                _persist(bound, joint_preview, blocks, None)
+                weekly_preview = preview_publication(bound, joint["id"], scope_kind="week", expected_revision=1, week_start="2026-10-19")
+                _persist(bound, weekly_preview, blocks, None)
+                teacher = canonical.project_teacher(bound, self.teacher["id"], "2026-10-19")
+                self.assertEqual(len(teacher["items"]), 1)
+                self.assertEqual(teacher["issues"], [])
+                self.assertEqual(set(teacher["items"][0]["audience_group_ids"]), {str(self.class9["id"]),str(joint_class["id"])})
+                for student in (self.student,joint_student):
+                    projected = canonical.project_student(bound, student["id"], "2026-10-19")
+                    self.assertEqual([r["activity"] for r in projected["items"] if r["state"]=="ACTIVITY"], ["Joint"])
+                    self.assertEqual(projected["issues"], [])
         # First-template publication has no canonical base. A valid lesson can
         # publish while unknown-teacher and review-required units are excluded.
         first = self.draft([

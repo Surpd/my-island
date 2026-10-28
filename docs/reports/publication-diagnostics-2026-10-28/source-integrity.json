@@ -1,0 +1,19 @@
+{
+  "source_project": "kmrcbewmxeqqxfauiwyy",
+  "read_only_transactions": true,
+  "checks": {
+    "canonical_schedule_versions": true,
+    "canonical_schedule_blocks": true,
+    "canonical_schedule_assignments": true,
+    "canonical_effective_weeks": true,
+    "canonical_effective_blocks": true,
+    "schedule_publication_heads": true,
+    "schedule_constructor_publications": true,
+    "authored_payload": true,
+    "draft_revision": true,
+    "directory_fingerprint": true
+  },
+  "all_source_rows_unchanged": true,
+  "student_full_names_in_report": false,
+  "writes": 0
+}

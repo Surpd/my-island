@@ -101,6 +101,8 @@ def _semantic(block: Mapping[str, Any]) -> dict[str, Any]:
                 "metadata": {"room": str((a.get("metadata") or {}).get("room") or ""),
                              "note": str((a.get("metadata") or {}).get("note") or ""),
                              "activity_type": (a.get("metadata") or {}).get("activity_type") or "lesson",
+                             "audience_coverage": (a.get("metadata") or {}).get("audience_coverage"),
+                             "joint_activity_id": (a.get("metadata") or {}).get("joint_activity_id"),
                              "special_mark": (a.get("metadata") or {}).get("special_mark"),
                              "constructor_details": {k: v for k, v in ((a.get("metadata") or {}).get("constructor_details") or {}).items()
                                                      if k != "audience_snapshot"},
@@ -133,6 +135,10 @@ def _change_items(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[d
 
 
 _ISSUE_MESSAGES = {
+    "teacher_assignment_unverified": "Нагрузка преподавателя не подтверждена отдельно; сохранено явно указанное назначение",
+    "lunch_scope_advisory": "Обед показан как информационная отметка указанного класса; состав отдельной группы не подтверждён",
+    "joint_activity": "Совместное занятие: совпадают предмет, преподаватели, точное время и кабинет; исходные аудитории сохранены",
+    "joint_activity_unconfirmed": "Возможно совместное занятие, но общий кабинет не подтверждён; нельзя автоматически объединить назначения преподавателя",
     "review_required": "Занятие требует проверки",
     "audience_unresolved": "Состав участников не подтверждён или изменился",
     "unknown_teacher": "Указанный преподаватель отсутствует или неактивен",
@@ -153,6 +159,16 @@ _ISSUE_MESSAGES = {
     "missing_base": "Перед публикацией недели нужен опубликованный базовый шаблон",
     "projection_mismatch": "Canonical-проекция не совпадает с подтверждённым составом занятия",
 }
+
+
+def _class_grade(group: Mapping[str, Any]) -> str | None:
+    """Resolve a class's scope by its canonical ID metadata, not a technical key."""
+    for name in ("base_class_name", "display_name", "name"):
+        grade = canonical._grade(str(group.get(name) or ""))
+        if grade:
+            return grade
+    technical = re.match(r"^grade(\d{1,2}):base:", str(group.get("name") or ""))
+    return technical.group(1) if technical else None
 
 
 def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: Mapping[str, Any],
@@ -179,6 +195,10 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
     for key, block in blocks.items():
         day = (reference + timedelta(days=block["weekday"])).isoformat()
         candidate = candidates[key]
+        expected_ids = {str(sid) for a in block["assignments"] for sid in
+                        (audience.get(a["metadata"]["constructor_lesson_id"]) or {}).get("student_ids") or []}
+        if any(sid not in students or canonical._grade(students[sid].get("class_name")) not in str(block.get("grade_scope") or "").split(",") for sid in expected_ids):
+            mismatches.add(key)  # A grade filter must never silently lose a confirmed pupil.
         for sid, student in students.items():
             if canonical._grade(student.get("class_name")) not in str(block.get("grade_scope") or "").split(","):
                 continue
@@ -187,8 +207,9 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
             # Lunch is intentionally absent from constructor occupancy. Its
             # explicitly confirmed grid cohort still receives the lunch marker.
             membership_groups = canonical._student_memberships(context, sid, day)
-            expected += [a for a in block["assignments"] if a["metadata"].get("special_mark") == "lunch"
-                         and canonical._other_assignment_occupies_slot(context, student, membership_groups, a, str(block["grade_scope"]))]
+            expected += [a for index, a in enumerate(block["assignments"]) if a["metadata"].get("special_mark") == "lunch"
+                         and canonical._other_assignment_occupies_slot(context, student, membership_groups, a, str(block["grade_scope"]))
+                         and not canonical._student_busy_in_slot(database, context, student, membership_groups, candidate, index, exact_intervals=True, include_available_slot=True)]
             projected, _ = canonical._project_student_block(database, context, student, candidate, day)
             expected_activities = [a for a in expected if a["activity"] != "NO_LESSON"]
             if projected["state"] == "ACTIVITY":
@@ -214,7 +235,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     # fields. Recover their persisted meaning for this adapter without editing
     # the saved draft or weakening explicit fields authored by the user.
     payload = deepcopy(dict(payload))
-    lessons = payload["lessons"] = lessons
+    lessons = payload["lessons"]
     for lesson in lessons:
         origin_metadata = canonical._assignment_metadata(((lesson.get("canonical") or {}).get("assignment") or {}).get("metadata") or {})
         for name, value in (origin_metadata.get("constructor_details") or {}).items():
@@ -247,7 +268,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teachers = {str(r["id"]): str(r["display_name"]) for r in database.execute(connection,
             "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()}
         groups = {str(r["id"]): dict(r) for r in database.execute(connection,
-            "SELECT id,name,group_type,base_class_name FROM groups WHERE canonical IS TRUE").fetchall()}
+            "SELECT id,name,display_name,group_type,base_class_name FROM groups WHERE canonical IS TRUE").fetchall()}
         students = {str(r["id"]): str(r["class_name"] or "") for r in database.execute(connection,
             "SELECT id,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
     blocks: dict[str, Any] = {}
@@ -275,8 +296,6 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         needs_review = any(lesson.get(k) for k in ("review_required", "needsClarification", "importError", "unresolved"))
         if lesson.get("deferred"):
             block("explicit_deferred", "Запись явно отложена администратором")
-        if needs_review:
-            block("review_required", str(lesson.get("clarificationReason") or "Занятие требует проверки"))
         result = audience.get(lesson_id) or {}
         if result.get("status") != "ok" or result.get("needs_recalculation"):
             block("audience_unresolved", str(result.get("reason") or "Audience requires confirmation or recalculation"))
@@ -293,23 +312,38 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if not subject and special not in {"lunch", "no_lesson"}:
             block("empty_activity", "Activity name is required")
         teacher_ids = sorted({str(x) for x in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
+        review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
+        display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
+        if needs_review:
+            # Imported staffing checks do not make an explicit student audience
+            # ambiguous. Keep the diagnostic without inventing any teacher.
+            if review_reason == "Не подтверждён преподаватель" and not teacher_ids:
+                pass  # The missing_teacher diagnostic below records this once.
+            elif (review_reason == "Нет подтверждённого назначения преподавателя группе"
+                  and teacher_ids and not set(teacher_ids) - teachers.keys()):
+                blockers.append({"code": "teacher_assignment_unverified", "lesson_id": lesson_id, "severity": "info"})
+            elif (special == "lunch" and review_reason == "Уточните охват обеда: класс или отдельная группа"
+                  and display_classes and all(str(g) in groups and groups[str(g)]["group_type"] == "class" for g in display_classes)):
+                blockers.append({"code": "lunch_scope_advisory", "lesson_id": lesson_id, "severity": "info"})
+            else:
+                block("review_required", review_reason)
         if set(teacher_ids) - teachers.keys():
             block("unknown_teacher", "An assigned teacher is missing or inactive")
         if not teacher_ids and not special and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
-            block("missing_teacher", "Преподаватель занятия не подтверждён")
+            blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
+                             "message": "Преподаватель занятия не подтверждён", "severity": "info"})
         if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
-                              "subject": subject})
+                              "subject": subject, "room": str(lesson.get("room") or "").strip()})
         rule = _lesson_audience(lesson)
         grade = str(rule.get("grade") or lesson.get("grade_scope") or "")
         class_ids = rule.get("class_ids") or []
         display_class_ids = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
         if not grade:
-            grades = {m.group(1) for g in class_ids or display_class_ids if g in groups
-                      for m in [re.match(r"\s*(\d+)", str(groups[g]["name"]))] if m}
-            if len(grades) == 1:
-                grade = grades.pop()
+            grades = {_class_grade(groups[g]) for g in class_ids or display_class_ids if g in groups}
+            grades.discard(None)
+            grade = ",".join(sorted(grades, key=int))
         if not grade:
             grades = {m.group(1) for sid in result.get("student_ids") or []
                       for m in [re.match(r"\s*(\d+)", students.get(str(sid), ""))] if m}
@@ -331,7 +365,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             if len(class_ids) == 1:
                 audience_rule["class_group_id"] = class_ids[0]
             elif len(class_ids) > 1:
-                matching = {g for g, r in groups.items() if r["group_type"] == "class" and re.match(r"\s*" + re.escape(grade) + r"(?!\d)", str(r["name"]))}
+                matching = {g for g, r in groups.items() if r["group_type"] == "class" and _class_grade(r) == grade}
                 if set(class_ids) != matching:
                     block("unsupported_partial_cohort", "Remaining audience spans only part of a parallel; confirm an explicit participant list")
         elif kind == "students":
@@ -357,18 +391,25 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         original = origin_block or {}
         original_slot = original.get("slot") or {}
         same_slot = (original.get("weekday"), _canonical_time(original.get("start_time") or original_slot.get("start")), _canonical_time(original.get("end_time") or original_slot.get("end")), str(original.get("grade_scope") or "")) == (day, start, end, grade)
-        key = origin_key if same_slot else "constructor-" + _hash([day, start, end, grade])[:24]
+        # Newly authored rows have no canonical origin. Distinct administrative
+        # class scopes in the same parallel are separate units, not one enormous
+        # block. Shared origins remain atomic; real audience/teacher collisions
+        # and residual projection dependencies are still checked across units.
+        class_scope = sorted({str(g) for g in class_ids or display_class_ids
+                              if str(g) in groups and groups[str(g)]["group_type"] == "class"})
+        key = origin_key if same_slot else "constructor-" + _hash([day, start, end, grade, class_scope])[:24]
         lesson_keys[lesson_id] = key
-        contexts[lesson_id] = {"day": day, "start": start, "end": end, "subject": subject or "Обед",
+        contexts[lesson_id] = {"day": day, "start": start, "end": end, "subject": subject or "Обед", "grade_scope": grade,
+            "class_ids": display_class_ids, "assignment_kind": kind or special or "unspecified",
             "teachers": [teachers[t] for t in teacher_ids if t in teachers],
             "groups": [str(groups[g]["name"]) for g in (group_ids or class_ids or display_class_ids) if g in groups]}
         if not str(lesson.get("room") or "").strip():
             blockers.append({"code": "missing_room", "lesson_id": lesson_id,
                              "message": "Кабинет не указан", "severity": "info"})
-        role = "explicit_no_lesson" if special == "no_lesson" else "residual" if kind in {"available_slot", "legacy_remaining"} else "primary"
+        role = "explicit_no_lesson" if special == "no_lesson" else "residual" if special == "lunch" or kind in {"available_slot", "legacy_remaining"} else "primary"
         preserved_metadata = deepcopy(canonical._assignment_metadata((origin.get("assignment") or {}).get("metadata") or {}))
         for duplicate in ("id", "block_id", "ordinal", "assignment_kind", "audience_kind",
-                          "canonical_group_ids", "teacher_ids", "audience", "source_cells"):
+                          "canonical_group_ids", "teacher_ids", "audience", "source_cells", "joint_activity_id"):
             preserved_metadata.pop(duplicate, None)
         # Retain authored descriptive/activity fields separately from audience
         # rules; no UI preference or teacher-color field enters lesson payloads.
@@ -383,6 +424,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                       "metadata": {**preserved_metadata, "constructor_details": constructor_details,
                                    "room": str(lesson.get("room") or ""), "note": str(lesson.get("note") or ""),
                                    "audience_rule": audience_rule, "manual_override": True,
+                                   "audience_coverage": "explicit",
                                    "teachers": [teachers[t] for t in teacher_ids if t in teachers],
                                    "constructor_lesson_id": lesson_id,
                                    "activity_type": lesson.get("activityType") or "lesson",
@@ -399,20 +441,49 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         target["assignments"].append(assignment)
         if len(target["assignments"]) > 1:
             target["mode"] = "PARALLEL"
+    joint_rows: dict[str, list[str]] = {}
+    for row in occupancy:
+        if row["teachers"] and row["room"]:
+            joint_id = _hash([row["day"],row["interval"],row["subject"],sorted(row["teachers"]),row["room"]])
+            joint_rows.setdefault(joint_id, []).append(row["id"])
+    joint_by_lesson = {lid: joint for joint,lids in joint_rows.items() if len(lids)>1 for lid in lids}
+    for joint,lids in joint_rows.items():
+        if len(lids)>1:
+            blockers.append({"code":"joint_activity","severity":"info","lesson_id":lids[0],"related_lesson_ids":lids})
+    for value in blocks.values():
+        for assignment in value["assignments"]:
+            lid = assignment["metadata"]["constructor_lesson_id"]
+            if lid in joint_by_lesson:
+                assignment["metadata"]["joint_activity_id"] = joint_by_lesson[lid]
+    def connected_units(keys: set[str]) -> set[str]:
+        while True:
+            origins = {origin_keys[lid] for lid,key in lesson_keys.items() if key in keys and origin_keys[lid]}
+            joints = {joint_by_lesson[lid] for lid,key in lesson_keys.items() if key in keys and lid in joint_by_lesson}
+            expanded = keys | {key for lid,key in lesson_keys.items() if origin_keys[lid] in origins or joint_by_lesson.get(lid) in joints}
+            if expanded == keys:
+                return keys
+            keys = expanded
     for index, left in enumerate(occupancy):
         for right in occupancy[index + 1:]:
             if (left["day"] != right["day"] or left["interval"][0] >= right["interval"][1]
                     or right["interval"][0] >= left["interval"][1]):
                 continue
-            # Canonical permits several audience rows of one joint activity in
-            # the same block. A matching subject alone across slots is not proof.
-            if (left["subject"] == right["subject"] and lesson_keys.get(left["id"]) == lesson_keys.get(right["id"])):
+            # Duplicate source cells may omit the teacher/room on one copy.
+            # Only compatible copies of the exact same roster are equivalent;
+            # equal subject text alone must not hide two teachers or rooms.
+            if (left["subject"] == right["subject"] and lesson_keys.get(left["id"]) == lesson_keys.get(right["id"])
+                    and left["students"] == right["students"]
+                    and (not left["teachers"] or not right["teachers"] or left["teachers"] == right["teachers"])
+                    and (not left["room"] or not right["room"] or left["room"] == right["room"])):
+                continue
+            if left["id"] in joint_by_lesson and joint_by_lesson.get(left["id"]) == joint_by_lesson.get(right["id"]):
                 continue
             if left["students"] & right["students"]:
                 blockers.append({"code": "student_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
                                  "message": f"Conflicting student audience overlaps lesson {left['id']}"})
             if left["teachers"] & right["teachers"]:
-                blockers.append({"code": "teacher_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
+                code = "joint_activity_unconfirmed" if left["subject"] == right["subject"] and left["interval"] == right["interval"] and left["teachers"] == right["teachers"] and (not left["room"] or not right["room"]) else "teacher_overlap"
+                blockers.append({"code": code, "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
                                  "message": f"Teacher is assigned to simultaneous different activities ({left['id']})"})
     # Defer complete destination blocks and all pieces of a moved origin block.
     # Both sides of a collision are excluded; ordering never picks a winner.
@@ -428,11 +499,10 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     changed = True
     while changed:
         changed = False
-        excluded_origins = {origin_keys[lid] for lid, key in lesson_keys.items() if key in excluded and origin_keys[lid]}
-        for lid, key in lesson_keys.items():
-            if origin_keys[lid] in excluded_origins and key not in excluded:
-                excluded.add(key)
-                changed = True
+        connected = connected_units(excluded)
+        if connected != excluded:
+            excluded = connected
+            changed = True
         # A missing cohort cannot safely identify a smaller parallel unit.
         unknown_slots = {(blocks[k]["weekday"], blocks[k]["slot"]["start"], blocks[k]["slot"]["end"])
                          for k in excluded if not blocks[k].get("grade_scope")}
@@ -442,7 +512,17 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 changed = True
     for lid, key in sorted(lesson_keys.items()):
         if key in excluded:
+            connected_keys = connected_units({key})
+            causes = [issue for issue in blockers if issue["severity"]=="conflict" and
+                      any(lesson_keys.get(i) in connected_keys for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]))]
+            if not causes:
+                slot = (blocks[key]["weekday"],blocks[key]["slot"]["start"],blocks[key]["slot"]["end"])
+                unknown_keys = {k for k in excluded if not blocks[k].get("grade_scope") and
+                                (blocks[k]["weekday"],blocks[k]["slot"]["start"],blocks[k]["slot"]["end"])==slot}
+                causes = [issue for issue in blockers if issue["severity"]=="conflict" and issue.get("block_key") in unknown_keys]
             deferred.append({"lesson_id": lid, "block_key": key, "action": "excluded", "context": contexts[lid],
+                "cause_codes": sorted({i["code"] for i in causes}),
+                "cause_lesson_ids": sorted({i for issue in causes for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]) if i}),
                 "reason": "Весь связанный блок исключён из публикации; исходная запись остаётся в черновике"})
     for issue in blockers:
         issue["action"] = "excluded" if issue.get("block_key") in excluded else "blocked" if issue["severity"] == "critical" else "published"
@@ -452,12 +532,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         invalid = _projection_mismatches(database, blocks, audience, reference)
         if not invalid:
             break
-        while True:
-            affected_origins = {origin_keys[lid] for lid, key in lesson_keys.items() if key in invalid and origin_keys[lid]}
-            expanded = invalid | {key for lid, key in lesson_keys.items() if origin_keys[lid] in affected_origins and key in blocks}
-            if expanded == invalid:
-                break
-            invalid = expanded
+        invalid = connected_units(invalid) & blocks.keys()
         invalid_projections.update(invalid)
         blocks = {key: value for key, value in blocks.items() if key not in invalid}
     for lid, key in sorted(lesson_keys.items()):
@@ -465,6 +540,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             blockers.append({"code": "projection_mismatch", "severity": "conflict", "lesson_id": lid,
                              "block_key": key, "context": contexts[lid], "action": "excluded"})
             deferred.append({"lesson_id": lid, "block_key": key, "context": contexts[lid], "action": "excluded",
+                             "cause_codes":["projection_mismatch"], "cause_lesson_ids":[lid],
                              "reason": "Весь блок исключён: проверка canonical-проекции не пройдена"})
     blocks = {key: value for key, value in blocks.items() if key not in invalid_projections}
     # Never infer permission to remove a protected canonical block from its

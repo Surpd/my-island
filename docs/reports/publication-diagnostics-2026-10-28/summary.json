@@ -1,0 +1,547 @@
+{
+  "date": "2026-10-28",
+  "source_commit": "1305cc7",
+  "source_revision": 45,
+  "source_lessons": 386,
+  "source_payload_sha256": "12f22d13cf5b67b3c80a134ffce1e09be4d18537b231c05589ac79bdcbdd9fbe",
+  "source_distribution": {
+    "classes": {
+      "10": 56,
+      "11": 60,
+      "5": 43,
+      "6": 43,
+      "7-А": 56,
+      "7-Б": 56,
+      "8": 49,
+      "9-Ан": 64,
+      "9-Д": 66
+    },
+    "days": {
+      "0": 79,
+      "1": 77,
+      "2": 84,
+      "3": 77,
+      "4": 69
+    },
+    "assignment_types": {
+      "available_slot": 2,
+      "classes": 197,
+      "groups": 107,
+      "lunch": 49,
+      "unresolved": 31
+    }
+  },
+  "week_start": "2026-10-26",
+  "week_end": "2026-11-01",
+  "source_kind": "template_week",
+  "days_legend": {
+    "0": "Monday",
+    "1": "Tuesday",
+    "2": "Wednesday",
+    "3": "Thursday",
+    "4": "Friday"
+  },
+  "before": {
+    "ready_lessons": 51,
+    "ready_blocks": 47,
+    "deferred_lessons": 335,
+    "deferred_blocks": 225,
+    "conflict_diagnostics": 279,
+    "info_diagnostics": 109,
+    "critical_diagnostics": 0,
+    "direct_conflict_lessons": 232,
+    "collateral_deferred_lessons": 103,
+    "codes": {
+      "audience_unresolved": {
+        "severity": "conflict",
+        "diagnostics": 57,
+        "unique_lessons": 57,
+        "unique_blocks": 49,
+        "classes": {
+          "5": 5,
+          "6": 32,
+          "7-А": 18,
+          "7-Б": 18,
+          "8": 7,
+          "9-Ан": 1,
+          "9-Д": 2
+        },
+        "days": {
+          "0": 9,
+          "1": 9,
+          "2": 18,
+          "3": 7,
+          "4": 14
+        },
+        "assignment_types": {
+          "classes": 26,
+          "unresolved": 31
+        }
+      },
+      "missing_room": {
+        "severity": "info",
+        "diagnostics": 109,
+        "unique_lessons": 109,
+        "unique_blocks": 80,
+        "classes": {
+          "10": 13,
+          "11": 15,
+          "5": 11,
+          "6": 13,
+          "7-А": 12,
+          "7-Б": 14,
+          "8": 16,
+          "9-Ан": 16,
+          "9-Д": 20
+        },
+        "days": {
+          "0": 12,
+          "1": 11,
+          "2": 12,
+          "3": 24,
+          "4": 50
+        },
+        "assignment_types": {
+          "classes": 27,
+          "groups": 22,
+          "lunch": 49,
+          "unresolved": 11
+        }
+      },
+      "missing_teacher": {
+        "severity": "conflict",
+        "diagnostics": 30,
+        "unique_lessons": 30,
+        "unique_blocks": 28,
+        "classes": {
+          "10": 1,
+          "11": 6,
+          "5": 2,
+          "6": 1,
+          "7-А": 10,
+          "7-Б": 9,
+          "8": 8,
+          "9-Ан": 4,
+          "9-Д": 3
+        },
+        "days": {
+          "0": 4,
+          "1": 6,
+          "2": 3,
+          "3": 5,
+          "4": 12
+        },
+        "assignment_types": {
+          "classes": 15,
+          "groups": 7,
+          "unresolved": 8
+        }
+      },
+      "projection_mismatch": {
+        "severity": "conflict",
+        "diagnostics": 2,
+        "unique_lessons": 2,
+        "unique_blocks": 1,
+        "classes": {
+          "7-А": 2,
+          "7-Б": 2,
+          "8": 2
+        },
+        "days": {
+          "0": 2
+        },
+        "assignment_types": {
+          "groups": 2
+        }
+      },
+      "review_required": {
+        "severity": "conflict",
+        "diagnostics": 148,
+        "unique_lessons": 148,
+        "unique_blocks": 110,
+        "classes": {
+          "10": 8,
+          "11": 16,
+          "5": 12,
+          "6": 15,
+          "7-А": 45,
+          "7-Б": 45,
+          "8": 16,
+          "9-Ан": 12,
+          "9-Д": 17
+        },
+        "days": {
+          "0": 27,
+          "1": 29,
+          "2": 34,
+          "3": 32,
+          "4": 26
+        },
+        "assignment_types": {
+          "classes": 59,
+          "groups": 9,
+          "lunch": 49,
+          "unresolved": 31
+        }
+      },
+      "student_overlap": {
+        "severity": "conflict",
+        "diagnostics": 32,
+        "unique_lessons": 58,
+        "unique_blocks": 32,
+        "classes": {
+          "10": 14,
+          "11": 20,
+          "9-Ан": 22,
+          "9-Д": 24
+        },
+        "days": {
+          "0": 6,
+          "1": 9,
+          "2": 13,
+          "3": 11,
+          "4": 19
+        },
+        "assignment_types": {
+          "classes": 23,
+          "groups": 35
+        }
+      },
+      "teacher_overlap": {
+        "severity": "conflict",
+        "diagnostics": 10,
+        "unique_lessons": 20,
+        "unique_blocks": 18,
+        "classes": {
+          "10": 9,
+          "11": 8,
+          "7-А": 2,
+          "7-Б": 1,
+          "8": 2,
+          "9-Ан": 1
+        },
+        "days": {
+          "0": 4,
+          "2": 2,
+          "3": 4,
+          "4": 10
+        },
+        "assignment_types": {
+          "classes": 8,
+          "groups": 12
+        }
+      }
+    }
+  },
+  "after": {
+    "ready_lessons": 249,
+    "ready_blocks": 220,
+    "deferred_lessons": 137,
+    "deferred_blocks": 103,
+    "conflict_diagnostics": 128,
+    "info_diagnostics": 241,
+    "critical_diagnostics": 0,
+    "direct_conflict_lessons": 127,
+    "collateral_deferred_lessons": 10,
+    "codes": {
+      "audience_unresolved": {
+        "severity": "conflict",
+        "diagnostics": 57,
+        "unique_lessons": 57,
+        "unique_blocks": 50,
+        "classes": {
+          "5": 5,
+          "6": 32,
+          "7-А": 18,
+          "7-Б": 18,
+          "8": 7,
+          "9-Ан": 1,
+          "9-Д": 2
+        },
+        "days": {
+          "0": 9,
+          "1": 9,
+          "2": 18,
+          "3": 7,
+          "4": 14
+        },
+        "assignment_types": {
+          "classes": 26,
+          "unresolved": 31
+        }
+      },
+      "joint_activity": {
+        "severity": "info",
+        "diagnostics": 7,
+        "unique_lessons": 14,
+        "unique_blocks": 11,
+        "classes": {
+          "10": 5,
+          "11": 5,
+          "9-Ан": 1,
+          "9-Д": 3
+        },
+        "days": {
+          "0": 4,
+          "2": 2,
+          "3": 4,
+          "4": 4
+        },
+        "assignment_types": {
+          "classes": 8,
+          "groups": 6
+        }
+      },
+      "joint_activity_unconfirmed": {
+        "severity": "conflict",
+        "diagnostics": 6,
+        "unique_lessons": 12,
+        "unique_blocks": 12,
+        "classes": {
+          "10": 4,
+          "11": 3,
+          "7-А": 2,
+          "7-Б": 1,
+          "8": 2,
+          "9-Ан": 3,
+          "9-Д": 1
+        },
+        "days": {
+          "0": 2,
+          "4": 10
+        },
+        "assignment_types": {
+          "classes": 4,
+          "groups": 8
+        }
+      },
+      "lunch_scope_advisory": {
+        "severity": "info",
+        "diagnostics": 49,
+        "unique_lessons": 49,
+        "unique_blocks": 43,
+        "classes": {
+          "10": 5,
+          "11": 8,
+          "5": 5,
+          "6": 5,
+          "7-А": 2,
+          "7-Б": 4,
+          "8": 4,
+          "9-Ан": 6,
+          "9-Д": 10
+        },
+        "days": {
+          "0": 10,
+          "1": 10,
+          "2": 12,
+          "3": 12,
+          "4": 5
+        },
+        "assignment_types": {
+          "lunch": 49
+        }
+      },
+      "missing_room": {
+        "severity": "info",
+        "diagnostics": 109,
+        "unique_lessons": 109,
+        "unique_blocks": 93,
+        "classes": {
+          "10": 13,
+          "11": 15,
+          "5": 11,
+          "6": 13,
+          "7-А": 12,
+          "7-Б": 14,
+          "8": 16,
+          "9-Ан": 16,
+          "9-Д": 20
+        },
+        "days": {
+          "0": 12,
+          "1": 11,
+          "2": 12,
+          "3": 24,
+          "4": 50
+        },
+        "assignment_types": {
+          "classes": 27,
+          "groups": 22,
+          "lunch": 49,
+          "unresolved": 11
+        }
+      },
+      "missing_teacher": {
+        "severity": "info",
+        "diagnostics": 30,
+        "unique_lessons": 30,
+        "unique_blocks": 28,
+        "classes": {
+          "10": 1,
+          "11": 6,
+          "5": 2,
+          "6": 1,
+          "7-А": 10,
+          "7-Б": 9,
+          "8": 8,
+          "9-Ан": 4,
+          "9-Д": 3
+        },
+        "days": {
+          "0": 4,
+          "1": 6,
+          "2": 3,
+          "3": 5,
+          "4": 12
+        },
+        "assignment_types": {
+          "classes": 15,
+          "groups": 7,
+          "unresolved": 8
+        }
+      },
+      "review_required": {
+        "severity": "conflict",
+        "diagnostics": 31,
+        "unique_lessons": 31,
+        "unique_blocks": 24,
+        "classes": {
+          "5": 5,
+          "6": 6,
+          "7-А": 18,
+          "7-Б": 18,
+          "8": 7,
+          "9-Ан": 1,
+          "9-Д": 2
+        },
+        "days": {
+          "0": 5,
+          "1": 3,
+          "2": 12,
+          "3": 1,
+          "4": 10
+        },
+        "assignment_types": {
+          "unresolved": 31
+        }
+      },
+      "student_overlap": {
+        "severity": "conflict",
+        "diagnostics": 34,
+        "unique_lessons": 62,
+        "unique_blocks": 44,
+        "classes": {
+          "10": 14,
+          "11": 20,
+          "5": 2,
+          "7-Б": 2,
+          "9-Ан": 22,
+          "9-Д": 24
+        },
+        "days": {
+          "0": 6,
+          "1": 9,
+          "2": 13,
+          "3": 15,
+          "4": 19
+        },
+        "assignment_types": {
+          "classes": 27,
+          "groups": 35
+        }
+      },
+      "teacher_assignment_unverified": {
+        "severity": "info",
+        "diagnostics": 46,
+        "unique_lessons": 46,
+        "unique_blocks": 46,
+        "classes": {
+          "10": 2,
+          "11": 2,
+          "5": 1,
+          "6": 3,
+          "7-А": 17,
+          "7-Б": 18,
+          "8": 1,
+          "9-Ан": 1,
+          "9-Д": 2
+        },
+        "days": {
+          "0": 8,
+          "1": 11,
+          "2": 8,
+          "3": 14,
+          "4": 5
+        },
+        "assignment_types": {
+          "classes": 44,
+          "groups": 2
+        }
+      }
+    }
+  },
+  "restored_unique_lessons": 198,
+  "newly_deferred_old_ready": [],
+  "dry_runs": {
+    "template": {
+      "can_publish": true,
+      "read_only": true,
+      "publication_available": false,
+      "summary": {
+        "ready_lessons": 249,
+        "deferred_lessons": 137,
+        "deferred_blocks": 103,
+        "unchanged_lessons": 0,
+        "replaced_lessons": 0,
+        "info_count": 241,
+        "conflict_count": 128,
+        "critical_count": 0
+      },
+      "diff": {
+        "added": 220,
+        "removed": 246,
+        "changed": 0,
+        "before_blocks": 246,
+        "after_blocks": 220
+      },
+      "source_kind": "template"
+    },
+    "week": {
+      "can_publish": true,
+      "read_only": true,
+      "publication_available": false,
+      "summary": {
+        "ready_lessons": 249,
+        "deferred_lessons": 137,
+        "deferred_blocks": 103,
+        "unchanged_lessons": 0,
+        "replaced_lessons": 0,
+        "info_count": 241,
+        "conflict_count": 128,
+        "critical_count": 0
+      },
+      "diff": {
+        "added": 220,
+        "removed": 246,
+        "changed": 0,
+        "before_blocks": 246,
+        "after_blocks": 220
+      },
+      "source_kind": "template_week"
+    }
+  },
+  "invariants": {
+    "payload_unchanged": true,
+    "all_386_accounted_for": true,
+    "production_writes": 0
+  },
+  "baseline_verdicts": {
+    "teacher_overlap_diagnostics": 10,
+    "confirmed_same_room_joint_pairs": 5,
+    "unconfirmed_joint_pairs": 5,
+    "false_projection_diagnostics": 2,
+    "student_overlap_pairs_with_shared_teacher": 0,
+    "activity_catalog_ids_in_source": 0
+  }
+}

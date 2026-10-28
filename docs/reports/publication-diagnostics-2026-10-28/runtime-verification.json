@@ -1,0 +1,33 @@
+{
+  "candidate_week": "2026-10-26",
+  "candidate_student_identities": 115,
+  "candidate_student_activity_cells": 2541,
+  "candidate_teacher_identities": 24,
+  "candidate_teacher_activity_cells": 185,
+  "unexpected_assignments": 0,
+  "missing_expected_assignments": 0,
+  "student_unresolved_issues": 0,
+  "teacher_unresolved_issues": 0,
+  "global_student_matrix_matches": true,
+  "historical_projections": [
+    {
+      "week_start": "2026-09-07",
+      "students_checked": 115,
+      "teachers_checked": 24,
+      "unchanged": true
+    },
+    {
+      "week_start": "2026-09-14",
+      "students_checked": 115,
+      "teachers_checked": 24,
+      "unchanged": true
+    },
+    {
+      "week_start": "2026-09-21",
+      "students_checked": 115,
+      "teachers_checked": 24,
+      "unchanged": true
+    }
+  ],
+  "writes": 0
+}

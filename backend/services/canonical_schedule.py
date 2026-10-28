@@ -1305,6 +1305,7 @@ def _other_assignment_occupies_slot(
 def _student_busy_in_slot(
     database: Database, context: StudentProjectionContext, student: Mapping[str, Any],
     membership_groups: set[str], block: Mapping[str, Any], assignment_index: int,
+    *, exact_intervals: bool = False, include_available_slot: bool = False,
 ) -> bool:
     bell_starts = ("09:00", "09:55", "10:55", "11:50", "12:45", "13:40", "14:35", "15:30", "16:25")
 
@@ -1317,8 +1318,21 @@ def _student_busy_in_slot(
             return -1
 
     target_period = period(block.get("start_time"))
+    def minutes(value: Any) -> int | None:
+        try:
+            hour, minute = (int(part) for part in str(value or "").split(":")[:2])
+            return hour * 60 + minute
+        except (TypeError, ValueError):
+            return None
+    target_start, target_end = minutes(block.get("start_time")), minutes(block.get("end_time"))
     for other_block in context.blocks:
-        if other_block.get("weekday") != block.get("weekday") or target_period < 0 or period(other_block.get("start_time")) != target_period:
+        if other_block.get("weekday") != block.get("weekday"):
+            continue
+        if exact_intervals:
+            other_start, other_end = minutes(other_block.get("start_time")), minutes(other_block.get("end_time"))
+            if None not in (target_start, target_end, other_start, other_end) and not (target_start < other_end and other_start < target_end):
+                continue
+        elif target_period < 0 or period(other_block.get("start_time")) != target_period:
             continue
         if other_block.get("change_kind") == "cancelled":
             continue
@@ -1326,6 +1340,17 @@ def _student_busy_in_slot(
         for other_index, other_assignment in enumerate(_assignments(database, other_block.get("canonical_block_id"), patch)):
             if other_block.get("block_key") == block.get("block_key") and other_index == assignment_index:
                 continue
+            other_metadata = _assignment_metadata(other_assignment.get("metadata") or {})
+            if other_metadata.get("audience_coverage") == "explicit" and other_metadata.get("special_mark") == "lunch":
+                continue  # A fallback lunch marker never consumes an available-slot audience.
+            other_rule = _assignment_audience_rule(other_assignment)
+            if include_available_slot and other_rule.get("kind") == "available_slot":
+                class_id = str(other_rule.get("class_group_id") or "")
+                if (_grade(student.get("class_name")) == str(other_rule.get("grade") or other_block.get("grade_scope") or "")
+                        and (not class_id or class_id in membership_groups)
+                        and str(student["id"]) not in {str(i) for i in other_rule.get("exclude_student_ids") or []}
+                        and not _student_busy_in_slot(database, context, student, membership_groups, other_block, other_index, exact_intervals=exact_intervals)):
+                    return True
             if _other_assignment_occupies_slot(context, student, membership_groups, other_assignment, str(other_block.get("grade_scope") or "")):
                 return True
     return False
@@ -1386,8 +1411,15 @@ def _project_student_block(
             explicit_match = bool(not grade or _grade(student.get("class_name")) == grade) and in_class_context and not bool(membership_groups.intersection(partition_ids))
         elif audience_kind == "available_slot":
             grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
-            explicit_match = bool(grade and _grade(student.get("class_name")) == grade) and in_class_context and not _student_busy_in_slot(database, context, student, membership_groups, block, index)
+            explicit_match = bool(grade and _grade(student.get("class_name")) == grade) and in_class_context and not _student_busy_in_slot(database, context, student, membership_groups, block, index,
+                exact_intervals=(assignment.get("metadata") or {}).get("audience_coverage") == "explicit")
         if not in_class_context and audience_kind not in {"students"}:
+            matched_group_ids = []
+            explicit_match = False
+        metadata = _assignment_metadata(assignment.get("metadata") or {})
+        if (metadata.get("audience_coverage") == "explicit" and metadata.get("special_mark") == "lunch"
+                and (matched_group_ids or explicit_match)
+                and _student_busy_in_slot(database, context, student, membership_groups, block, index, exact_intervals=True, include_available_slot=True)):
             matched_group_ids = []
             explicit_match = False
         dimensions = []
@@ -1459,6 +1491,11 @@ def _project_student_block(
     partition_groups: defaultdict[str, set[str]] = defaultdict(set)
     partition_evidence: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for assignment in assignments:
+        if _assignment_metadata(assignment.get("metadata") or {}).get("audience_coverage") == "explicit":
+            # Selecting canonical groups is not a declaration that those groups
+            # partition every pupil in the block's parallel. Historical artifacts
+            # retain their legacy coverage contract unless explicitly reauthored.
+            continue
         for group_id in _assignment_group_ids(assignment):
             group = context.groups.get(group_id)
             if not group or not bool(group.get("canonical")):
@@ -1539,7 +1576,9 @@ def _project_student_block(
                 issues.append(issue)
                 result = {"state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]], "provenance": provenance}
             else:
-                selected = sorted(best, key=lambda claim: (claim["activity"], claim["assignment_id"]))[0]
+                selected = sorted(best, key=lambda claim: (
+                    int(not bool(claim["assignment"].get("teacher_ids"))) if _assignment_metadata(claim["assignment"].get("metadata") or {}).get("audience_coverage")=="explicit" else 0,
+                    claim["activity"], claim["assignment_id"]))[0]
         if selected is not None:
             assignment = selected["assignment"]
             metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
@@ -1549,6 +1588,8 @@ def _project_student_block(
                 "room": metadata.get("room", ""),
                 "provenance": {**provenance, "source_cells": selected["source_cells"]},
             }
+            if metadata.get("audience_coverage") == "explicit" and metadata.get("joint_activity_id"):
+                result["provenance"]["joint_activity_id"] = metadata["joint_activity_id"]
         elif result is None:
             non_no_lesson = [claim for claim in residual_claims if claim["activity"] and claim["activity"] != _NO_LESSON]
             residual_activities = {claim["activity"] for claim in non_no_lesson}
@@ -1591,6 +1632,7 @@ def project_student(
     if not student or student.get("status") != "active":
         return {"identity_id": student_id, "week_start": week_start, "status": "student_not_found", "items": [], "issues": []}
     items, issues = [], []
+    seen_joint_activities: set[tuple[str,str,str,str]] = set()
     start = date.fromisoformat(week_start)
     for block in context.blocks:
         grade = str(block.get("grade_scope") or "")
@@ -1601,6 +1643,12 @@ def project_student(
         day = (start + timedelta(days=int(block["weekday"]))).isoformat()
         state, block_issues = _project_student_block(database, context, student, block, day)
         issues.extend(block_issues)
+        joint_id = (state.get("provenance") or {}).get("joint_activity_id")
+        if state["state"] == "ACTIVITY" and joint_id:
+            joint_key = (day,str(block.get("start_time")),str(block.get("end_time")),str(joint_id))
+            if joint_key in seen_joint_activities:
+                continue
+            seen_joint_activities.add(joint_key)
         items.append({"block_key": block["block_key"], "date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **state})
     return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
 
@@ -1660,6 +1708,7 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
     items, issues = [], []
     occupied: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     seen_assignments: set[tuple[str, str, str, str, tuple[str, ...]]] = set()
+    joint_items: dict[tuple[str,str,str,str], dict[str, Any]] = {}
     for block in _block_rows(database, effective["effective_week_id"]):
         if block.get("weekday") is None:
             continue
@@ -1681,6 +1730,17 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
                     "grade_scope": block.get("grade_scope"), "teacher_ids": teacher_ids,
                     "teacher_names": metadata.get("teachers") or [], "room": metadata.get("room", ""),
                     "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
+            joint_id = metadata.get("joint_activity_id") if metadata.get("audience_coverage") == "explicit" else None
+            if joint_id:
+                joint_key = (day,str(block.get("start_time")),str(block.get("end_time")),str(joint_id))
+                previous = joint_items.get(joint_key)
+                if previous is not None:
+                    previous["audience_group_ids"] = sorted(set(previous["audience_group_ids"]) | set(group_ids))
+                    previous["audiences"] = [groups.get(g,g) for g in previous["audience_group_ids"]]
+                    grades = {g for value in (previous["grade_scope"],item["grade_scope"]) for g in str(value or "").split(",") if g}
+                    previous["grade_scope"] = ",".join(sorted(grades,key=int))
+                    continue
+                joint_items[joint_key] = item
             key = (day, str(block.get("start_time") or ""))
             occupied[key].append(item)
             items.append(item)
