@@ -37,6 +37,7 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await page.goto('/admin/schedule/constructor?role=admin');
   await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
   const name = `Manual draft ${Date.now()}`;
+  await page.locator('.constructor-draft-menu summary').click();
   await page.getByRole('textbox', { name: 'Название черновика' }).fill(name);
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(String(klass!.id));
@@ -47,14 +48,14 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await picker.getByRole('button', { name: /Учебные группы/ }).click();
   await picker.getByRole('checkbox', { name: /^Английский язык · группа 6\b/u }).check();
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
-  const subject = page.locator('.constructor-inspector label').filter({ hasText: 'Предмет' }).locator('input');
+  const subject = page.locator('.constructor-inspector').getByRole('combobox', { name: 'Предмет', exact: true });
   await subject.fill('Английский язык · сохранено');
   await expect(page.getByText('Есть несохранённые изменения', { exact: true })).toBeVisible();
   await page.waitForTimeout(1600);
   expect(await page.evaluate(() => (window as Window & { __scheduleSaveProbe?: { attempts: number } }).__scheduleSaveProbe?.attempts)).toBe(0);
 
   await page.getByRole('button', { name: 'Сохранить черновик' }).click();
-  await expect(page.getByText('Сохранено', { exact: true })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible({ timeout: 5000 });
   expect(await page.evaluate(() => (window as Window & { __scheduleSaveProbe?: { attempts: number } }).__scheduleSaveProbe?.attempts)).toBe(1);
   const drafts = await page.request.get(`${API}/api/admin/schedule/experiments`, { headers: ADMIN });
   expect(drafts.ok()).toBeTruthy();
@@ -64,7 +65,7 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await page.reload();
   await page.getByRole('button', { name: new RegExp(name) }).click();
   await page.locator('.constructor-card').first().click();
-  await expect(page.locator('.constructor-inspector label').filter({ hasText: 'Предмет' }).locator('input')).toHaveValue('Английский язык · сохранено');
+  await expect(page.locator('.constructor-inspector').getByRole('combobox', { name: 'Предмет', exact: true })).toHaveValue('Английский язык · сохранено');
 });
 
 test('constructor: create, edit, copy range, cut, undo, conflict, save and reopen without publication', async ({
@@ -158,7 +159,9 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await page.keyboard.press('Control+v');
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-card.error')).toHaveCount(2);
-  await page.locator('.constructor-issue-count').click();
+  await page.getByRole('button', { name: 'Закрыть список проблем' }).click();
+  await cells.first().click();
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Control+z');
   await expect(page.locator('.constructor-card')).toHaveCount(2);
   await page.keyboard.press('Control+y');
@@ -200,7 +203,7 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
     .getByRole('button', { name: /Сохранить/ })
     .first()
     .click();
-  await expect(page.getByText('Сохранено', { exact: true })).toBeVisible();
+  await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await page.reload();
   await page
     .getByRole('button', { name: /Новый шаблон/ })
@@ -251,7 +254,7 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+v');
   await page.locator('.constructor-issue-count').click();
-  await expect(page.locator('.constructor-conflict-panel')).toContainText('Проблемы расписания');
+  await expect(page.locator('.constructor-conflict-panel')).toContainText('Центр решений расписания');
   await page.getByRole('combobox', { name: 'Тип проблемы' }).selectOption('student');
   const studentConflict = page.locator('.constructor-conflict-list article').filter({ hasText: 'назначено одновременно' }).first();
   await expect(studentConflict).toBeVisible();
@@ -276,7 +279,7 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await expect(page.locator('.constructor-inspector')).toBeVisible();
 
   await page.getByRole('button', { name: /Сохранить/ }).first().click();
-  await expect(page.getByText('Сохранено', { exact: true })).toBeVisible();
+  await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: /Копия действующего расписания/ }).first().click();
   await page.getByRole('group', { name: 'Режим просмотра' }).getByRole('button', { name: 'Неделя' }).click();
@@ -302,7 +305,8 @@ test('constructor: empty source and experimental draft management preserve canon
   await page.getByRole('button', { name: /На основе действующего расписания/ }).click();
   await expect(page.locator('.constructor-status')).toContainText('Копия создана: перенесено');
   await expect(page.locator('.constructor-card').first()).toBeVisible();
-  await expect(page.locator('.constructor-issue-count')).toContainText('Диагностика');
+  await expect(page.locator('.constructor-issue-count')).toContainText('Проверка');
+  await page.locator('.constructor-draft-menu summary').click();
   await page.getByRole('button', { name: 'Все черновики' }).click();
   const original = page.locator('.constructor-draft').filter({ hasText: 'Копия действующего расписания' }).first();
   await expect(original).toContainText('Источник: canonical');
@@ -312,6 +316,7 @@ test('constructor: empty source and experimental draft management preserve canon
   await expect(page.locator('.constructor-draft').filter({ hasText: renamedTitle })).toBeVisible();
   const renamed = page.locator('.constructor-draft').filter({ hasText: renamedTitle });
   await renamed.locator('.constructor-draft-open').click();
+  await page.locator('.constructor-draft-menu summary').click();
   await page.getByRole('button', { name: 'Все черновики' }).click();
   const reopened = page.locator('.constructor-draft').filter({ has: page.getByText(renamedTitle, { exact: true }) });
   await reopened.getByRole('button', { name: 'Дублировать' }).click();
@@ -402,19 +407,20 @@ test('constructor: overlapping memberships identify a student conflict', async (
   );
 });
 
-test('existing schedule editor keeps keyboard focus after clicking a grid cell', async ({
+test('constructor grid keeps keyboard focus after clicking a cell', async ({
   page,
 }) => {
-  await page.goto('/admin/schedule?role=admin');
-  await expect(page.locator('.schedule-studio')).toBeVisible();
-  await page.locator('.studio-week-cell').first().click();
+  await page.goto('/admin/schedule/constructor?role=admin');
+  await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
+  const firstCell = page.locator('[data-cell]').first();
+  await firstCell.click();
+  await expect(page.getByRole('textbox', { name: 'Быстрый ввод урока в ячейке' })).toBeFocused();
+  await page.keyboard.press('Escape');
   await expect
     .poll(() =>
-      page.evaluate(() =>
-        document.activeElement?.classList.contains('schedule-studio'),
-      ),
+      page.evaluate(() => document.activeElement?.getAttribute('data-cell')),
     )
-    .toBe(true);
+    .toBe(await firstCell.getAttribute('data-cell'));
 });
 
 test('constructor: drag resize spans the week and persists; double click restores auto width', async ({ page }) => {
@@ -434,6 +440,7 @@ test('constructor: drag resize spans the week and persists; double click restore
   await page.getByRole('group', { name: 'Режим просмотра' }).getByRole('button', { name: 'Неделя' }).click();
   await expect.poll(async () => (await column.boundingBox())!.width).toBeCloseTo(width, 0);
   await page.getByRole('button', { name: 'Открыть панель' }).click();
+  await page.locator('.constructor-view-menu summary').click();
   await page.getByRole('combobox', { name: 'Масштаб' }).selectOption('120');
   await handle.scrollIntoViewIfNeeded();
   const scaled = (await column.boundingBox())!.width;

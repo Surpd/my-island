@@ -1,0 +1,194 @@
+{
+  "affected_lessons": 26,
+  "unique_added_students": 1,
+  "unique_removed_students": 0,
+  "added_student_classes": [
+    "6"
+  ],
+  "all_added_active_students": true,
+  "records": [
+    {
+      "source_ref": "D5",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D8",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D9",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D10",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D16",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D17",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D18",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D20",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D21",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D24",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D30",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D32",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D33",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D34",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D35",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D36",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D41",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D42",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D44",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D45",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D46",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D47",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D52",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D53",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D56",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    },
+    {
+      "source_ref": "D57",
+      "confirmed_count": 16,
+      "current_rule_count": 17,
+      "added_count": 1,
+      "removed_count": 0
+    }
+  ],
+  "automatic_roster_expansion": false
+}

@@ -530,6 +530,7 @@ function System({ navigate }: { navigate: (href: string) => void }) {
 
 function ResponsiveSchedule() {
   const [mobile, setMobile] = useState<boolean | null>(null);
+  const [editor, setEditor] = useState(() => routeQuery().get('editor') === '1');
   useEffect(() => {
     const media = window.matchMedia('(max-width: 740px)');
     const update = () => setMobile(media.matches); update();
@@ -537,7 +538,17 @@ function ResponsiveSchedule() {
     return () => media.removeEventListener('change', update);
   }, []);
   if (mobile === null) return <Loading />;
-  return mobile ? <MobilePublishedSchedule api={api} /> : <ScheduleConstructor api={api} />;
+  return (
+    <div className={mobile ? 'admin-stack responsive-schedule responsive-schedule--mobile' : 'responsive-schedule'}>
+      <button hidden={!mobile} className="admin-button admin-button--quiet" onClick={() => setEditor((value) => !value)}>
+        {editor ? 'Просмотр опубликованного расписания' : 'Открыть редактор и разбор проблем'}
+      </button>
+      <div hidden={mobile && !editor}>
+        <ScheduleConstructor api={api} />
+      </div>
+      {mobile && !editor ? <MobilePublishedSchedule api={api} /> : null}
+    </div>
+  );
 }
 
 function AppContent({ path, navigate }: { path: string; navigate: (href: string) => void }) {
@@ -553,6 +564,7 @@ function AppContent({ path, navigate }: { path: string; navigate: (href: string)
   if (path.startsWith('/admin/sources/')) return <Sources id={path.split('/').pop()} navigate={navigate} />;
   if (path === '/admin/sources') return <Sources navigate={navigate} />;
   if (path === '/admin/reconciliation' || path.startsWith('/admin/reconciliation/')) return <Reconciliation />;
+  if (path === '/admin/schedule/published') return <MobilePublishedSchedule api={api} initialWeekStart={routeQuery().get('week_start') || undefined} />;
   if (path === '/admin/schedule/constructor') return <ResponsiveSchedule />;
   if (path === '/admin/schedule') return <ResponsiveSchedule />;
   if (path === '/admin/journals') return <AdminJournals api={api} apiOrigin={API_BASE} />;

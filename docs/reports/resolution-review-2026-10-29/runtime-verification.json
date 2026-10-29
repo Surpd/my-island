@@ -1,0 +1,42 @@
+{
+  "week_start": "2026-10-26",
+  "published_source_records": 386,
+  "saved_safe_blocks": 220,
+  "saved_safe_assignments": 249,
+  "student_identities_checked": 115,
+  "student_activity_signatures_expected": 2541,
+  "student_activity_signatures_actual": 2541,
+  "student_activity_matrix_matches": true,
+  "teacher_identities_checked": 24,
+  "teacher_activity_signatures_expected": 185,
+  "teacher_activity_signatures_actual": 185,
+  "teacher_activity_matrix_matches": true,
+  "student_unresolved_markers": 601,
+  "teacher_unresolved_markers": 109,
+  "student_marker_owner_interval_checks": 80,
+  "teacher_marker_owner_interval_checks": 119,
+  "unknown_audience_source_rows": 31,
+  "unknown_audience_rows_in_safe_assignments": 0,
+  "historical_projection_compatibility": [
+    {
+      "week_start": "2026-09-07",
+      "student_identities": 115,
+      "teacher_identities": 24,
+      "unchanged": true
+    },
+    {
+      "week_start": "2026-09-14",
+      "student_identities": 115,
+      "teacher_identities": 24,
+      "unchanged": true
+    },
+    {
+      "week_start": "2026-09-21",
+      "student_identities": 115,
+      "teacher_identities": 24,
+      "unchanged": true
+    }
+  ],
+  "pii_or_identity_ids_in_output": false,
+  "external_or_input_writes": 0
+}

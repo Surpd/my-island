@@ -1,0 +1,86 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentResultText, studentSummaryPreview, studentSubjectIndicator, studentPeriodKey, studentResultDisplay } from './student-journal-view.ts';
+
+function journal(overrides = {}) {
+  return { source: { source_id: 'math-I', subject: 'Математика', term_number: 1, period_status: 'current' },
+    student: { journal_student_id: 'roster-A', group_marker: 'A' },
+    assessments: [
+      { id: 4, title: 'Без результата', assessed_on: '2026-09-24', group_marker: 'A' },
+      { id: 3, title: 'Баллы', assessed_on: '2026-09-23', group_marker: 'A', max_score: 20 },
+      { id: 0, title: 'Другая группа', assessed_on: '2026-09-20', group_marker: 'B' },
+      { id: 2, title: 'Статус', assessed_on: '2026-09-22', group_marker: 'A' },
+      { id: 1, title: 'Ноль', assessed_on: '2026-09-21', group_marker: 'all' },
+    ], results: [{ assessment_id: 0, numeric_score: 99 }, { assessment_id: 1, numeric_score: 0 },
+      { assessment_id: 2, numeric_score: null, status: 'Не был' }, { assessment_id: 3, numeric_score: 15 }], summaries: [], ...overrides };
+}
+
+test('details are chronological and contain only the pupil subgroup and shared assessments', () => {
+  assert.deepEqual(studentJournalRows(journal()).map(r => r.assessment.id), [1, 2, 3, 4]);
+});
+test('compact list keeps the latest three actual results, including zero and special status', () => {
+  assert.deepEqual(recentStudentResults(journal()).map(r => r.assessment.id), [3, 1]);
+  assert.equal(studentResultText(recentStudentResults(journal())[0].result, 20), '15 / 20');
+  assert.equal(studentResultText({ numeric_score: 0 }), '0');
+  assert.equal(studentResultText({ numeric_score: null, status: 'Не был' }), 'Не был');
+  assert.equal(studentResultText({ numeric_score: 3, status: 'Пересдача' }), '3 · Пересдача');
+  assert.equal(studentResultText({ numeric_score: 3, status: 'graded' }, 10), '3 / 10');
+  assert.equal(studentResultText({ numeric_score: null, status: 'graded' }), '');
+});
+test('campus peek picks the latest results from distinct subjects', () => {
+  const math = journal();
+  const english = journal({ source: { ...math.source, source_id: 'english', subject: 'Английский' }, assessments: [{ id: 8, title: 'Тест', assessed_on: '2026-09-25', group_marker: 'A' }], results: [{ assessment_id: 8, numeric_score: 4 }] });
+  const history = journal({ source: { ...math.source, source_id: 'history', subject: 'История' }, assessments: [{ id: 9, title: 'Ответ', assessed_on: '2026-09-26', group_marker: 'A' }], results: [{ assessment_id: 9, numeric_score: 5 }] });
+  const rows = recentResultsAcrossSubjects([math, english, history]);
+  assert.deepEqual(rows.map(row => row.item.source.subject), ['История', 'Английский', 'Математика']);
+});
+test('missing scores and formula errors never become zero or pollute recent results', () => {
+  for (const value of [undefined, null, '', '#DIV/0!', NaN, {}, []]) assert.equal(journalValue(value), '');
+  assert.equal(studentResultText(undefined), '');
+  assert.equal(studentResultText({ numeric_score: null, status: null }), '');
+  assert.equal(studentResultText({ numeric_score: 15 }, 0), '15');
+});
+test('only confirmed source summaries can be used as a compact attainment indicator', () => {
+  assert.deepEqual(studentSummaryPreview(journal()), []); // scores 0 and 15 are never averaged
+  const summaries = [{ summary_type: 'average_grade', label: 'Средняя оценка', numeric_value: 4.6 },
+    { summary_type: 'points', label: 'Баллы', numeric_value: 15 },
+    { summary_type: 'term_grade', label: 'Итог', numeric_value: null, text_value: '#N/A' }];
+  assert.deepEqual(studentSummaryPreview(journal({ summaries })), []);
+  assert.equal(journalValue(4.6), '4,6');
+});
+test('independent source rosters remain distinct even when subject names coincide', () => {
+  assert.notEqual(journalKey(journal()), journalKey(journal({ source: { source_id: 'math-II', subject: 'Математика', term_number: 2, period_status: 'archived' } })));
+  assert.notEqual(journalKey(journal()), journalKey(journal({ student: { journal_student_id: 'roster-B', group_marker: 'B' } })));
+});
+
+test('subject row chooses exactly one indicator without averaging arbitrary points', () => {
+  assert.equal(studentSubjectIndicator(journal()).value, '15/20');
+  assert.equal(studentSubjectIndicator(journal()).kind, 'points');
+  const summaries = [{ summary_type: 'average_grade', label: 'Официальная средняя', numeric_value: 4.6 }];
+  assert.equal(studentSubjectIndicator(journal({ summaries })).value, '15/20');
+  assert.equal(studentSubjectIndicator(journal({ summaries })).kind, 'points');
+  assert.equal(studentSubjectIndicator(journal({ results: [] })).kind, 'empty');
+  assert.notEqual(studentPeriodKey(journal()), studentPeriodKey(journal({ source: { source_id: 'next', term_number: 2, period_status: 'current' } })));
+});
+test('most recent work comes first but undated work is not falsely presented as newest', () => {
+  const item = journal();
+  item.assessments.push({ id: 5, title: 'Без даты', group_marker: 'A' });
+  assert.deepEqual(studentJournalRows(item, true).map(row => row.assessment.id), [4, 3, 2, 1, 5]);
+});
+test('numeric zero, ordinary marks, points and special statuses remain distinct', () => {
+  assert.equal(studentResultDisplay({ numeric_score: 0 }).value, '0');
+  assert.equal(studentResultDisplay({ numeric_score: 5 }).kind, 'grade');
+  assert.equal(studentResultDisplay({ numeric_score: 15 }, 20).value, '15/20');
+  assert.equal(studentResultDisplay({ numeric_score: null, status: 'Не был' }).kind, 'status');
+  assert.equal(studentResultDisplay(undefined).kind, 'empty');
+});
+test('compact statuses keep recognized attendance and outcomes, never arbitrary source text', () => {
+  const item = journal({ assessments: [
+    { id: 'attendance', title: 'Посещение', assessed_on: '2026-09-26', group_marker: 'A' },
+    { id: 'source-text', title: 'Сведения', assessed_on: '2026-09-25', group_marker: 'A' },
+  ], results: [
+    { assessment_id: 'attendance', numeric_score: null, status: 'Не был' },
+    { assessment_id: 'source-text', numeric_score: null, status: 'Иванов Иван Иванович' },
+  ] });
+  assert.deepEqual(recentStudentStatuses(item).map(row => row.status), ['Не был']);
+});

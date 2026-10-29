@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { campusLessons, campusStudentDays } from '../components/campus-schedule';
-import { CampusRoleSwitch, CampusPeriod, dateISO, periodFor, useCampusScreen, type CampusRole } from '../components/campus-controls';
+import { formatLessonTime, formatLessonTimeRange } from '../components/lesson-time';
+import { CampusRoleSwitch, CampusPeriod, dateISO, periodFor, useCampusScreen, useTelegramBack, type CampusRole } from '../components/campus-controls';
+import { campusNavigationForContext, campusNavigationFromHistory, campusNavigationReducer, initialCampusNavigation, type CampusBuilding, type CampusNavigationAction, type CampusNavigationState } from '../components/campus-navigation';
 const ModernAdmin = dynamic(() => import('./admin/page'), { ssr: false });
-const studentScreens = ['schedule', 'homework', 'grades', 'information', 'profile'] as const;
 const teacherScreens = ['schedule', 'groups', 'information', 'homeroom', 'profile'] as const;
 import {
   BarChart3,
@@ -44,6 +45,7 @@ import { IslandIcon, IslandMark, type IslandIconName } from './island-icons';
 import { useTelegramLayout } from './telegram-layout';
 import { useSceneMotion } from './scene-motion';
 import {
+  StudentGradesPeek,
   StudentRoleJournals,
   TeacherRoleJournals,
   type RoleJournalsApi,
@@ -87,6 +89,9 @@ type Lesson = {
   exam_track?: string | null;
   lesson_type?: string | null;
   delivery_mode?: string | null;
+  activity_format?: string | null;
+  physical_presence?: boolean;
+  responsible_teacher?: string | null;
   source_coordinate?: string | null;
 };
 type StudentDayBlock = {
@@ -104,6 +109,8 @@ type StudentScheduleItem = {
   room?: string | null;
   teacher?: string | null;
   group_context?: string[] | string | null;
+  activity_format?: string | null;
+  responsible_teacher?: string | null;
   no_lesson?: { reason?: 'before_first_lesson' | 'break' | 'end_of_day' };
   conflict?: { state: string; label: string; alternatives: Array<{ title: string; teacher?: string | null; room?: string | null }> };
   special_event?: { kind: string; title: string; metadata?: Record<string, unknown> };
@@ -118,6 +125,8 @@ type StudentScheduleProjection = {
   days: StudentScheduleDay[];
   items: Lesson[];
   day_blocks: StudentDayBlock[];
+  identity_id?: string;
+  start_day?: string;
 };
 type Homework = {
   external_coursework_id: string;
@@ -163,7 +172,7 @@ type Group = {
   }>;
 };
 type Profile = {
-  user: { display_name: string; class_name?: string | null };
+  user: { id?: string | number; identity_id?: string | number; display_name: string; class_name?: string | null };
   groups: Group[];
 };
 type Session = {
@@ -185,6 +194,7 @@ type ApiData = {
   };
   schedule: Lesson[];
   scheduleProjection: StudentScheduleProjection;
+  scheduleState: string;
   scheduleDayBlocks: StudentDayBlock[];
   homework: Homework[];
   profile: Profile;
@@ -447,19 +457,29 @@ function EmptyState({
   );
 }
 function LessonRow({ lesson }: { lesson: Lesson }) {
+  const independentPractice = lesson.activity_format === 'independent_practice';
   return (
     <div className="lesson-card">
-      <time>{lesson.start_time}</time>
+      <time>{formatLessonTime(lesson.start_time) || 'Время не указано'}</time>
       <div className="lesson-card__body">
         <strong>{lesson.subject}</strong>
         <span>
-          {[lesson.audience, lesson.room, lesson.teacher]
+          {independentPractice
+            ? [
+                lesson.audience,
+                lesson.room,
+                lesson.responsible_teacher
+                  ? `Ответственный за задание: ${lesson.responsible_teacher}`
+                  : 'Самостоятельная практика',
+                lesson.physical_presence === false ? 'Вы не ведёте это занятие' : '',
+              ].filter(Boolean).join(' · ')
+            : [lesson.audience, lesson.room, lesson.teacher]
             .filter(Boolean)
             .join(' · ') || 'Детали уточняются'}
         </span>
         {scopeMarker(lesson) && <small>{scopeMarker(lesson)}</small>}
       </div>
-      {lesson.lesson_type && lesson.lesson_type !== 'lesson' && (
+      {independentPractice ? <span className="soft-badge">Самостоятельная практика</span> : lesson.lesson_type && lesson.lesson_type !== 'lesson' && (
         <span className="soft-badge">Особое</span>
       )}
     </div>
@@ -500,16 +520,19 @@ function PanelShell({
 function Topbar({
   name,
   onProfile,
+  onToday,
   right,
 }: {
   name: string;
   onProfile: () => void;
+  onToday?: () => void;
   right?: React.ReactNode;
 }) {
   return (
     <header className="scene-topbar">
       <div className="topbar-actions">
         {right}
+        {onToday ? <button type="button" className="today-open-button" onClick={onToday}><CalendarDays size={16} />Сегодня</button> : null}
         <button className="profile-button" aria-label="Открыть профиль" onClick={onProfile}>
           <span className="profile-avatar">{name.slice(0, 1)}</span>
           <span className="profile-name">{name.split(' ')[0]}</span>
@@ -529,22 +552,31 @@ function scheduleStartingDay(days: StudentScheduleDay[]) {
   return relevant[0] || days.map((day) => day.date).sort()[0] || today;
 }
 
-function ScheduleItemRow({ item }: { item: StudentScheduleItem }) {
+function scheduleDetailKey(item: StudentScheduleItem, index: number) { return `lesson:${item.date}:${item.slot.start}:${item.state}:${index}`; }
+
+function ScheduleItemRow({ item, index, onOpen }: { item: StudentScheduleItem; index: number; onOpen?: (key: string) => void }) {
   if (item.state === 'special_event') {
-    return <article className="student-schedule-event"><span className="student-schedule-event__mark">✦</span><div><small>Событие</small><strong>{item.special_event?.title}</strong><span>{[item.slot.start, item.slot.end].filter(Boolean).join('–')} {item.room ? `· ${item.room}` : ''}</span></div></article>;
+    const content = <><span className="student-schedule-event__mark" aria-hidden="true">✦</span><div><small>Событие</small><strong>{item.special_event?.title}</strong><span>{formatLessonTimeRange(item.slot.start, item.slot.end)} {item.room ? `· ${item.room}` : ''}</span></div></>;
+    return onOpen ? <button type="button" className="student-schedule-event student-schedule-lesson--button" onClick={() => onOpen(scheduleDetailKey(item, index))} aria-label={`Подробности события: ${item.special_event?.title}`}>{content}</button> : <article className="student-schedule-event">{content}</article>;
   }
   if (item.state === 'conflict') {
     const title = item.conflict?.alternatives.map((alternative) => alternative.title).join(' / ') || 'Расписание уточняется';
-    return <article className="student-schedule-conflict"><span className="student-schedule-conflict__mark">?</span><div><small>Уточняется</small><strong>{title}</strong><span>{item.slot.start}{item.slot.end ? `–${item.slot.end}` : ''}</span></div></article>;
+    const content = <><span className="student-schedule-conflict__mark" aria-hidden="true">?</span><div><small>Уточняется</small><strong>{title}</strong><span>{formatLessonTimeRange(item.slot.start, item.slot.end)}</span></div></>;
+    return onOpen ? <button type="button" className="student-schedule-conflict student-schedule-lesson--button" onClick={() => onOpen(scheduleDetailKey(item, index))} aria-label={`Подробности занятия: ${title}`}>{content}</button> : <article className="student-schedule-conflict">{content}</article>;
   }
   if (item.state !== 'lesson') return null;
   const context = Array.isArray(item.group_context) ? item.group_context.join(' · ') : item.group_context;
-  return <article className="student-schedule-lesson"><time>{item.slot.start}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{[item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span></div></article>;
+  const independentPractice = item.activity_format === 'independent_practice';
+  const row = <><time>{formatLessonTime(item.slot.start) || 'Время не указано'}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{independentPractice ? [item.room, item.responsible_teacher ? `Ответственный за задание: ${item.responsible_teacher}` : 'Самостоятельная практика'].filter(Boolean).join(' · ') : [item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span>{independentPractice ? <small>Самостоятельная практика</small> : null}</div></>;
+  return onOpen ? <button type="button" className="student-schedule-lesson student-schedule-lesson--button" aria-label={`Подробности урока: ${item.canonical_title || 'Занятие'}`} onClick={() => onOpen(scheduleDetailKey(item, index))}>{row}</button> : <article className="student-schedule-lesson">{row}</article>;
 }
 
-function StudentSchedulePanel({ projection, initialDay }: { projection: StudentScheduleProjection; initialDay?: string }) {
+function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expanded', detailKey, onOpenLesson, onSaveScroll, onBack, scheduleState, initialScrollTop = 0 }: { projection: StudentScheduleProjection; initialDay?: string; navigationLevel?: 'peek' | 'expanded' | 'detail'; detailKey?: string | null; onOpenLesson?: (key: string, scrollTop: number) => void; onSaveScroll?: (scrollTop: number) => void; onBack?: () => void; scheduleState?: string; initialScrollTop?: number }) {
   const initial = initialDay || scheduleStartingDay(projection.days);
   const [selectedDay, setSelectedDay] = useState(initial);
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+  const attachScroll = useCallback((element: HTMLDivElement | null) => setScrollElement(element?.closest<HTMLElement>('.sheet-full') || null), []);
+  useEffect(() => { if (scrollElement && initialScrollTop > 0) scrollElement.scrollTo({ top: initialScrollTop }); }, [scrollElement, initialScrollTop]);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
   const days = Array.from({ length: 7 }, (_, index) =>
     isoDate(addDays(monday, index)),
@@ -552,8 +584,17 @@ function StudentSchedulePanel({ projection, initialDay }: { projection: StudentS
   const day = projection.days.find((item) => item.date === selectedDay);
   const visibleItems = day?.items.filter((item) => item.state !== 'no_lesson' || item.no_lesson?.reason === 'break') || [];
   const hasLessons = day?.items.some((item) => item.state === 'lesson' || item.state === 'conflict' || item.state === 'special_event');
+  const unavailable = /unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked|disabled/.test(scheduleState || '');
+  const emptyTitle = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Неделя не опубликована' : unavailable ? 'Расписание недоступно' : 'Занятий нет';
+  const emptyDetail = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Для этой недели школа ещё не опубликовала расписание.' : unavailable ? 'Обновите расписание позже или проверьте выбранную неделю.' : 'Учебный день уже закончился или занятий не запланировано.';
+  const selectedDetail = projection.days.flatMap(item => item.items.map((entry, index) => ({ entry, index }))).find(({ entry, index }) => scheduleDetailKey(entry, index) === detailKey)?.entry;
+  if (navigationLevel === 'detail' && selectedDetail) {
+    const context = Array.isArray(selectedDetail.group_context) ? selectedDetail.group_context.join(' · ') : selectedDetail.group_context;
+    const title = selectedDetail.state === 'special_event' ? selectedDetail.special_event?.title || 'Событие' : selectedDetail.state === 'conflict' ? selectedDetail.conflict?.alternatives.map(item => item.title).join(' / ') || 'Занятие уточняется' : selectedDetail.canonical_title || 'Занятие';
+    return <div className="section-panel student-lesson-detail"><button type="button" className="student-journal-back" aria-label="Назад к расписанию" onClick={onBack}><ChevronLeft size={23} aria-hidden="true" /></button><p className="eyebrow">Подробности занятия</p><h2>{title}</h2><dl><div><dt>Дата</dt><dd>{formatDate(selectedDetail.date, true)}</dd></div><div><dt>Время</dt><dd>{formatLessonTimeRange(selectedDetail.slot.start, selectedDetail.slot.end)}</dd></div>{selectedDetail.activity_format === 'independent_practice' ? <div><dt>Формат</dt><dd>Самостоятельная практика</dd></div> : null}{selectedDetail.activity_format === 'independent_practice' && selectedDetail.responsible_teacher ? <div><dt>Ответственный за задание</dt><dd>{selectedDetail.responsible_teacher}</dd></div> : selectedDetail.teacher ? <div><dt>Преподаватель</dt><dd>{selectedDetail.teacher}</dd></div> : null}{selectedDetail.room ? <div><dt>Кабинет</dt><dd>{selectedDetail.room}</dd></div> : null}{context ? <div><dt>Группа</dt><dd>{context}</dd></div> : null}{selectedDetail.special_event?.metadata ? <div><dt>Сведения</dt><dd>{Object.values(selectedDetail.special_event.metadata).filter(value => typeof value === 'string' || typeof value === 'number').join(' · ')}</dd></div> : null}</dl></div>;
+  }
   return (
-    <div className="section-panel">
+    <div className="section-panel" ref={attachScroll}>
       <div className="panel-intro">
         <span className="panel-icon">
           <CalendarDays size={21} />
@@ -565,10 +606,13 @@ function StudentSchedulePanel({ projection, initialDay }: { projection: StudentS
         </div>
       </div>
       <div className="day-picker">
-        {days.map((day) => (
+        {days.map((day) => {
+          const lessonCount = projection.days.find(item => item.date === day)?.items.filter(item => ['lesson', 'conflict', 'special_event'].includes(item.state)).length || 0;
+          return (
           <button
             key={day}
             className={day === selectedDay ? 'is-active' : ''}
+            aria-pressed={day === selectedDay}
             onClick={() => setSelectedDay(day)}
           >
             <small>
@@ -577,8 +621,9 @@ function StudentSchedulePanel({ projection, initialDay }: { projection: StudentS
               )}
             </small>
             <strong>{day.slice(8)}</strong>
+            <em>{lessonCount ? lessonCount : '—'}</em>
           </button>
-        ))}
+        );})}
       </div>
       <div className="panel-date">
         <strong>{formatDate(selectedDay, true)}</strong>
@@ -586,13 +631,13 @@ function StudentSchedulePanel({ projection, initialDay }: { projection: StudentS
       </div>
       {day?.special?.kind === 'sdep' ? <div className="student-schedule-sdep"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : hasLessons ? (
         <div className="student-schedule-stack">
-          {visibleItems.map((item, index) => item.state === 'no_lesson' ? <div className="student-schedule-gap" key={`${item.date}-${item.slot.start}-${index}`}><span />Перерыв</div> : <ScheduleItemRow item={item} key={`${item.date}-${item.slot.start}-${item.state}-${index}`} />)}
+          {visibleItems.map((item) => { const index = day?.items.indexOf(item) ?? 0; return item.state === 'no_lesson' ? <div className="student-schedule-gap" key={`${item.date}-${item.slot.start}-${index}`}><span />Перерыв</div> : <ScheduleItemRow item={item} index={index} onOpen={key => { const scrollTop = document.querySelector<HTMLElement>('.sheet-full')?.scrollTop || 0; onSaveScroll?.(scrollTop); onOpenLesson?.(key, scrollTop); }} key={`${item.date}-${item.slot.start}-${item.state}-${index}`} />;})}
         </div>
-      ) : (
+      ) : unavailable ? <EmptyState icon={CalendarDays} title={emptyTitle} detail={emptyDetail} /> : (
         <EmptyState
           icon={CalendarDays}
-          title="Занятий нет"
-          detail="Учебный день уже закончился или занятий не запланировано."
+          title={emptyTitle}
+          detail={emptyDetail}
         />
       )}
     </div>
@@ -608,24 +653,30 @@ function SchedulePanel({ schedule, dayBlocks = [], initialDay }: { schedule: Les
   return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{dayBlocks.some((block) => block.lesson_date === selectedDay) ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." />}</div>;
 }
 
-function ScheduleFocusPeek({ projection, referenceDay }: { projection: StudentScheduleProjection; referenceDay?: string }) {
+function ScheduleFocusPeek({ projection, referenceDay, scheduleState }: { projection: StudentScheduleProjection; referenceDay?: string; scheduleState?: string }) {
   const selected = referenceDay || isoDate(new Date());
   const today = projection.days.find((day) => day.date === selected);
   const items = today?.items.filter((item) => item.state !== 'no_lesson').sort((a, b) => a.slot.start.localeCompare(b.slot.start)) || [];
   const now = new Date();
   const minutes = selected === isoDate(now) ? now.getHours() * 60 + now.getMinutes() : -1;
   const next = items.find((item) => {
-    const [hours, mins] = item.slot.start.split(':').map(Number);
+    const formatted = formatLessonTime(item.slot.start);
+    if (!formatted) return false;
+    const [hours, mins] = formatted.split(':').map(Number);
     return hours * 60 + mins >= minutes;
   });
   const current = items.find((item) => {
-    const [hours, mins] = item.slot.start.split(':').map(Number);
-    const [endHours, endMins] = (item.slot.end || item.slot.start).split(':').map(Number);
+    const startTime = formatLessonTime(item.slot.start);
+    const endTime = formatLessonTime(item.slot.end) || startTime;
+    if (!startTime || !endTime) return false;
+    const [hours, mins] = startTime.split(':').map(Number);
+    const [endHours, endMins] = endTime.split(':').map(Number);
     return hours * 60 + mins <= minutes && endHours * 60 + endMins > minutes;
   });
   const anchor = current || next;
-  const remaining = items.filter((item) => !anchor || item.slot.start >= anchor.slot.start).slice(0, 3);
-  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || 'Учебный день закончен'}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${anchor.slot.start}${anchor.slot.end ? `–${anchor.slot.end}` : ''}${anchor.room ? ` · ${anchor.room}` : ''}` : 'На сегодня всё'}</span></div></div>{remaining.length > 1 && <div className="schedule-focus-peek__queue">{remaining.slice(0, 3).map((item, index) => <span key={`${item.slot.start}-${index}`}><b>{item.slot.start}</b>{item.state === 'conflict' ? 'Уточняется' : item.state === 'special_event' ? item.special_event?.title : item.canonical_title}</span>)}</div>}</div>;
+  const unavailable = /unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked|disabled/.test(scheduleState || '');
+  const status = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Неделя не опубликована' : unavailable ? 'Расписание недоступно' : 'Учебный день закончен';
+  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || status}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${formatLessonTimeRange(anchor.slot.start, anchor.slot.end)}${anchor.activity_format === 'independent_practice' ? ' · Самостоятельная практика' : anchor.room ? ` · ${anchor.room}` : ''}` : unavailable ? 'Проверьте выбранную неделю' : 'На сегодня всё'}</span></div></div></div>;
 }
 function HomeworkPanel({ homework }: { homework: Homework[] }) {
   return (
@@ -786,8 +837,8 @@ function ProfilePanel({
     </div>
   );
 }
-function GradesPanel({ api }: { api: RoleJournalsApi }) {
-  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon panel-icon--violet"><BarChart3 size={21} /></span><div><h2>Оценки</h2><p>Работы и результаты школьных журналов.</p></div></div><StudentRoleJournals api={api} /></div>;
+function GradesPanel({ api, ...journalProps }: { api: RoleJournalsApi; selectedKey?: string | null; onOpenDetail?: (key: string, scrollTop: number) => void; onBackFromDetail?: () => void; onSaveScroll?: (scrollTop: number) => void; initialScrollTop?: number }) {
+  return <div className="section-panel"><StudentRoleJournals api={api} {...journalProps} /></div>;
 }
 
 type SceneHotspot = {
@@ -807,6 +858,9 @@ function SpatialSheet({
   peek,
   full,
   className = '',
+  controlledStage,
+  onExpand,
+  onCollapse,
 }: {
   title: string;
   kicker: string;
@@ -814,43 +868,59 @@ function SpatialSheet({
   peek: React.ReactNode;
   full: React.ReactNode;
   className?: string;
+  controlledStage?: 'peek' | 'expanded' | 'detail';
+  onExpand?: () => void;
+  onCollapse?: () => void;
 }) {
-  const [stage, setStage] = useState<'partial' | 'full'>('partial');
+  const [localStage, setLocalStage] = useState<'peek' | 'expanded'>('peek');
+  const stage = controlledStage === 'detail' ? 'expanded' : controlledStage || localStage;
   const [drag, setDrag] = useState(0);
   const startY = useRef<number | null>(null);
-  const moved = useRef(false);
   const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
     startY.current = event.clientY;
-    moved.current = false;
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
   const onPointerMove = (event: React.PointerEvent<HTMLElement>) => {
     if (startY.current === null) return;
     const delta = event.clientY - startY.current;
-    moved.current = Math.abs(delta) > 6;
     setDrag(Math.max(-320, Math.min(260, delta)));
   };
   const onPointerUp = (event: React.PointerEvent<HTMLElement>) => {
     if (startY.current === null) return;
     const delta = event.clientY - startY.current;
-    if (delta < -52) setStage('full');
-    else if (delta > 52) setStage('partial');
-    else if (!moved.current)
-      setStage((value) => (value === 'partial' ? 'full' : 'partial'));
+    if (delta < -52) expand();
+    else if (delta > 52) collapse();
     setDrag(0);
     startY.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    window.setTimeout(() => {
-      moved.current = false;
-    }, 0);
   };
-  const offset = stage === 'full' ? '0px' : 'calc(100% - 182px)';
+  const expand = () => {
+    if (stage === 'expanded') return;
+    if (controlledStage) { onExpand?.(); return; }
+    setLocalStage('expanded');
+  };
+  const collapse = () => {
+    if (controlledStage) { onCollapse?.(); return; }
+    setLocalStage('peek');
+  };
+  useEffect(() => {
+    const requestExpand = () => {
+      if (stage === 'expanded') return;
+      if (controlledStage) { onExpand?.(); return; }
+      setLocalStage('expanded');
+    };
+    document.addEventListener('my-island:expand-sheet', requestExpand);
+    return () => {
+      document.removeEventListener('my-island:expand-sheet', requestExpand);
+    };
+  }, [stage, controlledStage, onExpand, onCollapse]);
+  const offset = stage === 'expanded' ? '0px' : 'calc(100% - 182px)';
   const sheetStyle = {
     '--sheet-offset': `calc(${offset} + ${drag}px)`,
   } as React.CSSProperties;
   return (
     <section
-      className={`spatial-sheet ${stage === 'full' ? 'is-full' : 'is-partial'} ${className}`}
+      className={`spatial-sheet ${stage === 'expanded' ? 'is-full' : 'is-partial'} ${className}`}
       style={sheetStyle}
     >
       <div
@@ -863,10 +933,11 @@ function SpatialSheet({
         <span className="sheet-grabber" aria-hidden="true" />
         <button
           className="sheet-heading"
-          aria-label={
-            stage === 'full' ? 'Свернуть раздел' : 'Развернуть раздел'
-          }
-          onClick={(event) => event.preventDefault()}
+          type="button"
+          aria-label={stage === 'expanded' ? 'Свернуть раздел' : 'Развернуть раздел'}
+          aria-expanded={stage === 'expanded'}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => { if (stage === 'expanded') collapse(); else expand(); }}
         >
           <IslandMark name={icon} size={28} />
           <span className="sheet-heading__copy">
@@ -882,22 +953,40 @@ function SpatialSheet({
   );
 }
 
+function ScheduleNotice({ message, onDismiss }: { message: string; onDismiss?: () => void }) {
+  return <aside className="campus-schedule-notice" aria-label="Предупреждение о расписании"><span>{message}</span>{onDismiss ? <button type="button" aria-label="Закрыть предупреждение о расписании" onClick={onDismiss}><X size={16} /></button> : null}</aside>;
+}
+
 function TodaySheet({
   lessons,
   dayBlock,
   homework = [],
   information = [],
   teacher = false,
+  scheduleWarning = '',
   referenceDay,
   onOpen,
+  onDismissWarning,
+  navigationLevel,
+  onExpand,
+  onCollapse,
+  gradesPreview,
+  scheduleState,
 }: {
   lessons: Lesson[];
   dayBlock?: StudentDayBlock | null;
   homework?: Homework[];
   information?: Information[];
   teacher?: boolean;
+  scheduleWarning?: string;
   referenceDay?: string;
   onOpen: (view: string) => void;
+  onDismissWarning?: () => void;
+  navigationLevel?: 'peek' | 'expanded' | 'detail';
+  onExpand?: () => void;
+  onCollapse?: () => void;
+  gradesPreview?: React.ReactNode;
+  scheduleState?: string;
 }) {
   const sorted = [...lessons].sort((a, b) =>
     a.start_time.localeCompare(b.start_time),
@@ -905,7 +994,9 @@ function TodaySheet({
   const next =
     sorted.find((lesson) => {
       if (referenceDay && referenceDay !== dateISO()) return true;
-      const [hours, minutes] = lesson.start_time.split(':').map(Number);
+      const formatted = formatLessonTime(lesson.start_time);
+      if (!formatted) return false;
+      const [hours, minutes] = formatted.split(':').map(Number);
       return (
         hours * 60 + minutes >=
         new Date().getHours() * 60 + new Date().getMinutes()
@@ -914,6 +1005,8 @@ function TodaySheet({
   const task = [...homework].sort((a, b) =>
     (a.due_at || '9999').localeCompare(b.due_at || '9999'),
   )[0];
+  const scheduleUnavailable = /unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked|disabled/.test(scheduleState || '');
+  const unavailableLabel = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Неделя не опубликована' : 'Расписание недоступно';
   const peek = (
     <div className={`today-peek-row ${!next ? 'is-quiet' : ''}`}>
       <button
@@ -923,15 +1016,15 @@ function TodaySheet({
         <IslandIcon name="schedule" size={20} />
         <span>
           <small>
-            {dayBlock
+            {scheduleWarning || scheduleUnavailable ? 'Расписание' : dayBlock
               ? 'Самостоятельная работа'
               : next
-              ? `${next.start_time} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
+              ? `${formatLessonTime(next.start_time) || 'Время не указано'} · ${teacher ? next.audience || 'группа' : 'ближайший урок'}`
               : 'Учебный день'}
           </small>
-          <strong>{dayBlock ? 'SDEP' : next?.subject || 'Сегодня без занятий'}</strong>
+          <strong>{scheduleWarning ? 'Неделя недоступна' : scheduleUnavailable ? unavailableLabel : dayBlock ? 'SDEP' : next?.subject || 'Сегодня без занятий'}</strong>
           <em>
-            {dayBlock
+            {scheduleWarning ? 'Откройте расписание для подробностей' : scheduleUnavailable ? 'Проверьте выбранную неделю' : dayBlock
               ? dayBlock.description
               : next
               ? [next.room, scopeMarker(next)].filter(Boolean).join(' · ') ||
@@ -959,7 +1052,10 @@ function TodaySheet({
   );
   const full = (
     <div className="today-expanded">
-      {dayBlock ? (
+      <div className="today-expanded-date"><strong>{formatDate(referenceDay || isoDate(new Date()), true)}</strong><span>Учебный день</span></div>
+      {scheduleWarning ? <ScheduleNotice message={scheduleWarning} onDismiss={onDismissWarning} /> : scheduleUnavailable ? (
+        <div className="today-empty-line"><IslandIcon name="schedule" size={18} /><span>{unavailableLabel}</span></div>
+      ) : dayBlock ? (
         <div className="today-sdep-line">
           <IslandIcon name="schedule" size={18} />
           <span><strong>SDEP</strong><small>Самостоятельная работа весь учебный день</small></span>
@@ -989,6 +1085,7 @@ function TodaySheet({
           <ChevronRight size={16} />
         </button>
       )}
+      {gradesPreview ? <section className="today-recent-grades"><header><strong>Последние оценки</strong><button type="button" onClick={() => onOpen('grades')}>Все оценки <ChevronRight size={16} /></button></header>{gradesPreview}</section> : null}
     </div>
   );
   return (
@@ -999,6 +1096,9 @@ function TodaySheet({
       peek={peek}
       full={full}
       className="today-sheet"
+      controlledStage={navigationLevel}
+      onExpand={onExpand}
+      onCollapse={onCollapse}
     />
   );
 }
@@ -1009,21 +1109,30 @@ function ContextualSheet({
   kicker,
   peek,
   children,
+  navigationLevel,
+  onExpand,
+  onCollapse,
 }: {
   title: string;
   icon: IslandIconName;
   kicker: string;
   peek: React.ReactNode;
   children: React.ReactNode;
+  navigationLevel?: 'peek' | 'expanded' | 'detail';
+  onExpand?: () => void;
+  onCollapse?: () => void;
 }) {
   return (
     <SpatialSheet
       title={title}
       kicker={kicker}
       icon={icon}
-      className="context-sheet"
+      className={`context-sheet${icon === 'grades' ? ' student-journal-sheet' : ''}`}
       peek={<div className="context-peek">{peek}</div>}
       full={children}
+      controlledStage={navigationLevel}
+      onExpand={onExpand}
+      onCollapse={onCollapse}
     />
   );
 }
@@ -1058,6 +1167,8 @@ function SceneFrame({
   selectedId,
   onSelect,
   onBack,
+  backLabel,
+  showBack,
   sheet,
   children,
 }: {
@@ -1066,6 +1177,8 @@ function SceneFrame({
   selectedId: string | null;
   onSelect: (id: string) => void;
   onBack: () => void;
+  backLabel?: string;
+  showBack?: boolean;
   sheet?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -1104,7 +1217,7 @@ function SceneFrame({
           </button>
         ))}
       </div>
-      {selected && (
+      {(showBack ?? Boolean(selected)) && (
         <button
           className="scene-focus-back"
           onClick={() => {
@@ -1116,7 +1229,7 @@ function SceneFrame({
           }}
         >
           <ChevronLeft size={18} />{' '}
-          {variant === 'student' ? 'К острову' : 'К кампусу'}
+          {backLabel || (variant === 'student' ? 'К острову' : 'К кампусу')}
         </button>
       )}
       {sheet}
@@ -1124,22 +1237,112 @@ function SceneFrame({
   );
 }
 
+function studentNavigationFromUrl(identityKey: string): CampusNavigationState {
+  if (typeof window === 'undefined') return initialCampusNavigation;
+  const storedIdentity = window.history.state?.campusIdentity;
+  if (typeof storedIdentity === 'string' && storedIdentity !== identityKey) return initialCampusNavigation;
+  if (storedIdentity === identityKey && window.history.state?.campusNavigation) return campusNavigationFromHistory(window.history.state.campusNavigation);
+  const screen = new URLSearchParams(window.location.search).get('screen') as CampusBuilding | null;
+  return screen && ['today', 'schedule', 'homework', 'grades', 'information', 'profile'].includes(screen)
+    ? { ...initialCampusNavigation, building: screen, level: 'peek', scopeId: `link:${screen}` }
+    : initialCampusNavigation;
+}
+
+function useStudentCampusNavigation(identityKey: string, scheduleContext: string) {
+  const [navigation, dispatch] = useReducer(campusNavigationReducer, identityKey, studentNavigationFromUrl);
+  const previousIdentity = useRef(identityKey);
+  const apply = useCallback((action: CampusNavigationAction, replace = false) => {
+    let next = campusNavigationReducer(navigation, action);
+    if (next === navigation) return;
+    const url = new URL(window.location.href);
+    if (next.building) url.searchParams.set('screen', next.building);
+    else url.searchParams.delete('screen');
+    let shouldReplace = replace;
+    if (action.type === 'open-building') {
+      const switchingFromBuilding = navigation.building !== null;
+      next = { ...next, scopeId: `${Date.now()}-${Math.random().toString(36).slice(2)}`, historyDepth: switchingFromBuilding ? 0 : 1 };
+      shouldReplace = switchingFromBuilding;
+    } else if (action.type === 'reset') {
+      next = { ...next, scopeId: `${Date.now()}-${Math.random().toString(36).slice(2)}`, historyDepth: 0 };
+      shouldReplace = true;
+    }
+    const state = { ...window.history.state, campusIdentity: identityKey, campusNavigation: next };
+    if (shouldReplace) window.history.replaceState(state, '', `${url.pathname}${url.search}${url.hash}`);
+    else window.history.pushState(state, '', `${url.pathname}${url.search}${url.hash}`);
+    dispatch({ type: 'restore', state: next });
+  }, [identityKey, navigation]);
+  useEffect(() => {
+    const safe = campusNavigationForContext(navigation, scheduleContext);
+    if (safe !== navigation) apply({ type: 'restore', state: safe }, true);
+  }, [apply, navigation, scheduleContext]);
+  useEffect(() => {
+    if (previousIdentity.current === identityKey) return;
+    previousIdentity.current = identityKey;
+    apply({ type: 'reset' });
+  }, [identityKey, apply]);
+  useEffect(() => {
+    const state = { ...window.history.state, campusIdentity: identityKey, campusNavigation: navigation };
+    window.history.replaceState(state, '', window.location.href);
+    const restore = () => {
+      const sameIdentity = window.history.state?.campusIdentity === identityKey;
+      const candidate = sameIdentity && window.history.state?.campusNavigation
+        ? campusNavigationFromHistory(window.history.state.campusNavigation)
+        : studentNavigationFromUrl(identityKey);
+      const restored = candidate.scopeId !== navigation.scopeId
+        ? { ...initialCampusNavigation, scopeId: navigation.scopeId }
+        : campusNavigationForContext(candidate, scheduleContext);
+      if (candidate.scopeId !== navigation.scopeId) {
+        const url = new URL(window.location.href); url.searchParams.delete('screen');
+        window.history.replaceState({ ...window.history.state, campusIdentity: identityKey, campusNavigation: restored }, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+      dispatch({ type: 'restore', state: restored });
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, [identityKey, navigation, scheduleContext]);
+  const goBack = useCallback(() => {
+    if (navigation.historyDepth > 0) window.history.back();
+    else if (navigation.level === 'detail') apply({ type: 'close-detail' }, true);
+    else apply({ type: 'close' }, true);
+  }, [apply, navigation.historyDepth, navigation.level]);
+  useTelegramBack(navigation.level !== 'closed', goBack);
+  return { navigation, apply, goBack };
+}
+
 function StudentApp({
   data,
+  identityKey,
   onReload,
   roleControl,
   day,
   onDayChange,
+  scheduleWarning,
+  scheduleWarningSource,
 }: {
   data: ApiData;
+  identityKey: string;
   onReload: () => void;
   roleControl?: React.ReactNode;
   day: string;
   onDayChange: (day: string) => void;
+  scheduleWarning: string;
+  scheduleWarningSource: string;
 }) {
-  const [view, setView] = useCampusScreen<NonNullable<StudentView>>(studentScreens);
-  const open = (next: StudentView) => setView(next);
-  const selectedId = view && view !== 'profile' ? view : null;
+  const { navigation, apply, goBack } = useStudentCampusNavigation(identityKey, periodFor(day).start);
+  const scheduleWeek = periodFor(day).start;
+  const previousScheduleWeek = useRef(scheduleWeek);
+  useEffect(() => {
+    if (previousScheduleWeek.current === scheduleWeek) return;
+    previousScheduleWeek.current = scheduleWeek;
+    if (navigation.building === 'schedule' && navigation.level === 'detail') apply({ type: 'close-detail' }, true);
+  }, [scheduleWeek, navigation.building, navigation.level, apply]);
+  const warningKey = scheduleWarning ? `campus-schedule-warning:${identityKey}:${periodFor(day).start}:${scheduleWarningSource}:${scheduleWarning}` : '';
+  const [dismissedWarning, setDismissedWarning] = useState('');
+  const wasDismissed = Boolean(warningKey && (dismissedWarning === warningKey || (typeof window !== 'undefined' && window.sessionStorage.getItem(warningKey) === 'dismissed')));
+  const visibleScheduleWarning = warningKey && !wasDismissed ? scheduleWarning : '';
+  const dismissScheduleWarning = () => { if (!warningKey) return; window.sessionStorage.setItem(warningKey, 'dismissed'); setDismissedWarning(warningKey); };
+  const open = (next: StudentView | 'today') => { if (next) apply({ type: 'open-building', building: next as CampusBuilding }); };
+  const selectedId = navigation.building && !['profile', 'today'].includes(navigation.building) ? navigation.building : null;
   const name = data.profile.user.display_name;
   const studentLocations: SceneHotspot[] = islandLocations.map((location) => ({
     ...location,
@@ -1151,8 +1354,8 @@ function StudentApp({
   const latestInfo = data.today.announcements[0];
   const hasScheduleProjection = Array.isArray(data.scheduleProjection.days);
   const contextualPeek =
-    selectedId === 'schedule' ? (
-      hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} referenceDay={day} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : 'Ближайших занятий нет'} />
+      selectedId === 'schedule' ? (
+      visibleScheduleWarning ? <ScheduleNotice message={visibleScheduleWarning} onDismiss={dismissScheduleWarning} /> : hasScheduleProjection ? <ScheduleFocusPeek projection={data.scheduleProjection} referenceDay={day} scheduleState={data.scheduleState} /> : <SheetSummary icon="schedule" label="Расписание" value={data.schedule.length ? `${data.schedule.length} занятий` : ['not_published', 'canonical_not_materialized'].includes(data.scheduleState || '') ? 'Неделя не опубликована' : 'Ближайших занятий нет'} />
     ) : selectedId === 'homework' ? (
       <SheetSummary
         icon="homework"
@@ -1167,6 +1370,8 @@ function StudentApp({
         value={latestInfo?.title || 'Новых сообщений нет'}
         detail={latestInfo?.author_name}
       />
+    ) : selectedId === 'grades' ? (
+      <div className="grades-peek-content"><StudentGradesPeek api={api} /><button type="button" className="grades-peek-action" onClick={() => document.dispatchEvent(new Event('my-island:expand-sheet'))}>Все оценки <ChevronRight size={16} aria-hidden="true" /></button></div>
     ) : (
       <SheetSummary
         icon="grades"
@@ -1180,19 +1385,22 @@ function StudentApp({
         islandLocations.find((item) => item.id === selectedId)?.label ||
         'Остров'
       }
-      icon={selectedId}
+      icon={selectedId as IslandIconName}
       kicker="Место на острове"
       peek={contextualPeek}
+      navigationLevel={navigation.level === 'closed' ? 'peek' : navigation.level}
+      onExpand={() => apply({ type: 'expand' })}
+      onCollapse={goBack}
     >
       {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        hasScheduleProjection ? <StudentSchedulePanel key={day} projection={data.scheduleProjection} initialDay={day} /> : <SchedulePanel key={day} schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} initialDay={day} />
+        <>{visibleScheduleWarning ? <ScheduleNotice message={visibleScheduleWarning} onDismiss={dismissScheduleWarning} /> : null}{hasScheduleProjection ? <StudentSchedulePanel key={day} projection={data.scheduleProjection} initialDay={day} navigationLevel={navigation.level === 'closed' ? 'peek' : navigation.level} detailKey={navigation.detailKey} onOpenLesson={(detailKey, scrollTop) => apply({ type: 'open-detail', detailKey, detailContext: periodFor(day).start, scrollTop })} onSaveScroll={scrollTop => apply({ type: 'save-scroll', scrollTop }, true)} onBack={goBack} scheduleState={data.scheduleState} initialScrollTop={navigation.scrollTop} /> : <SchedulePanel key={day} schedule={data.schedule} dayBlocks={data.scheduleDayBlocks} initialDay={day} />}</>
       ) : selectedId === 'homework' ? (
         <HomeworkPanel homework={data.homework} />
       ) : selectedId === 'information' ? (
         <InfoPanel items={data.today.announcements} />
       ) : (
-        <GradesPanel api={api} />
+        <GradesPanel api={api} selectedKey={navigation.detailKey} onOpenDetail={(key, scrollTop) => apply({ type: 'open-detail', detailKey: key, scrollTop })} onBackFromDetail={goBack} onSaveScroll={(scrollTop) => apply({ type: 'save-scroll', scrollTop }, true)} initialScrollTop={navigation.scrollTop} />
       )}
       <button className="panel-refresh" onClick={onReload}>
         <RefreshCw size={15} /> Обновить данные
@@ -1206,27 +1414,36 @@ function StudentApp({
         locations={studentLocations}
         selectedId={selectedId}
         onSelect={(id) => open(id as StudentView)}
-        onBack={() => setView(null)}
+        onBack={goBack}
+        backLabel={navigation.level === 'peek' ? 'К острову' : 'Назад'}
+        showBack={Boolean(selectedId) || (navigation.building === 'today' && navigation.level !== 'closed')}
         sheet={
-          contextual || (
+          navigation.building === 'today' && navigation.level !== 'closed' ? (
             <TodaySheet
               referenceDay={day}
+              scheduleWarning={visibleScheduleWarning}
               lessons={data.today.schedule}
               dayBlock={data.today.day_block}
               homework={data.today.homework}
               information={data.today.announcements}
               onOpen={(next) => open(next as StudentView)}
+              onDismissWarning={dismissScheduleWarning}
+              navigationLevel={navigation.level}
+              onExpand={() => apply({ type: 'expand' })}
+              onCollapse={goBack}
+              gradesPreview={<StudentGradesPeek api={api} />}
+              scheduleState={data.scheduleState}
             />
-          )
+          ) : contextual
         }
       >
-        <Topbar name={name} onProfile={() => open('profile')} right={roleControl} />
+        <Topbar name={name} onProfile={() => open('profile')} onToday={() => open('today')} right={roleControl} />
       </SceneFrame>
-      {view === 'profile' && (
+      {navigation.building === 'profile' && (
         <PanelShell
           title="Профиль"
           backLabel="Остров"
-          onClose={() => setView(null)}
+          onClose={goBack}
         >
           <ProfilePanel profile={data.profile} roleLabel="ученик" />
           <button className="panel-refresh" onClick={onReload}>
@@ -1507,6 +1724,7 @@ function TeacherApp({
   roleControl,
   day,
   onDayChange,
+  scheduleWarning,
 }: {
   data: TeacherData;
   onLogout: () => void;
@@ -1515,6 +1733,7 @@ function TeacherApp({
   roleControl?: React.ReactNode;
   day: string;
   onDayChange: (day: string) => void;
+  scheduleWarning: string;
 }) {
   const [view, setView] = useCampusScreen<NonNullable<TeacherView>>(teacherScreens);
   const homeroom = data.groups.find((group) => group.is_homeroom);
@@ -1532,7 +1751,7 @@ function TeacherApp({
   const subjectGroups = data.groups.filter((group) => !group.is_homeroom);
   const teacherPeek =
     selectedId === 'schedule' ? (
-      <SheetSummary
+      scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : <SheetSummary
         icon="schedule"
         label={
           nextTeacherLesson
@@ -1541,7 +1760,7 @@ function TeacherApp({
         }
         value={
           nextTeacherLesson
-            ? `${nextTeacherLesson.start_time} · ${nextTeacherLesson.subject}`
+            ? `${formatLessonTime(nextTeacherLesson.start_time) || 'Время не указано'} · ${nextTeacherLesson.subject}${nextTeacherLesson.activity_format === 'independent_practice' ? ' · Самостоятельная практика' : ''}`
             : 'Ближайших занятий нет'
         }
         detail={nextTeacherLesson?.audience || undefined}
@@ -1588,7 +1807,7 @@ function TeacherApp({
     >
       {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        <SchedulePanel key={day} schedule={data.schedule} initialDay={day} />
+        scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : <SchedulePanel key={day} schedule={data.schedule} initialDay={day} />
       ) : selectedId === 'groups' ? (
         <TeacherGroups
           groups={data.groups.filter((group) => !group.is_homeroom)}
@@ -1622,6 +1841,7 @@ function TeacherApp({
           contextual || (
             <TodaySheet
               referenceDay={day}
+              scheduleWarning={view === 'profile' ? '' : scheduleWarning}
               lessons={data.today}
               information={data.information}
               teacher
@@ -3439,6 +3659,7 @@ export default function Home() {
   });
   const [reload, setReload] = useState(0);
   const [scheduleWarning, setScheduleWarning] = useState('');
+  const [scheduleWarningSource, setScheduleWarningSource] = useState('');
   const sequence = useRef(0);
   const chosenDay = config?.day || day;
   const actualRole = config?.role || session?.user.role || desiredRole;
@@ -3466,7 +3687,7 @@ export default function Home() {
     const version = ++sequence.current;
     const current = () => version === sequence.current;
     const load = async () => {
-      setState('loading'); setErrorMessage(''); setScheduleWarning('');
+      setState('loading'); setErrorMessage(''); setScheduleWarning(''); setScheduleWarningSource('');
       try {
         let role = desiredRole;
         if (config) {
@@ -3486,6 +3707,7 @@ export default function Home() {
         if (role === 'admin') { if (current()) setState('approved'); return; }
         const period = periodFor(chosenDay);
         let scheduleState = '';
+        let scheduleSource = '';
         if (role === 'student') {
           const [today, schedule, homework, profile] = await Promise.all([
             api<ApiData['today']>(`/api/student/today?day=${chosenDay}`),
@@ -3493,20 +3715,22 @@ export default function Home() {
             api<{ items: Homework[] }>('/api/student/homework'), api<Profile>('/api/student/profile'),
           ]);
           scheduleState = schedule.state || '';
-          if (current()) setData({ today: { ...today, schedule: campusLessons(today.schedule) }, schedule: campusLessons(schedule.items), scheduleProjection: { ...schedule, items: campusLessons(schedule.items), days: Array.isArray(schedule.days) ? schedule.days : campusStudentDays(schedule.items) }, scheduleDayBlocks: schedule.day_blocks || [], homework: homework.items, profile });
+          scheduleSource = [scheduleState, schedule.identity_id, schedule.start_day].filter(Boolean).join(':');
+          if (current()) setData({ today: { ...today, schedule: campusLessons(today.schedule) }, schedule: campusLessons(schedule.items), scheduleProjection: { ...schedule, items: campusLessons(schedule.items), days: Array.isArray(schedule.days) ? schedule.days : campusStudentDays(schedule.items) }, scheduleState, scheduleDayBlocks: schedule.day_blocks || [], homework: homework.items, profile });
         } else {
           const [home, schedule, courses, profile] = await Promise.all([
             api<{ schedule: Lesson[]; groups: Group[]; information: Information[] }>(`/api/teacher/home?day=${chosenDay}`),
-            api<{ items: Lesson[]; state?: string }>(`/api/teacher/schedule?start_day=${period.start}&end_day=${period.end}`),
+            api<{ items: Lesson[]; state?: string; identity_id?: string; start_day?: string }>(`/api/teacher/schedule?start_day=${period.start}&end_day=${period.end}`),
             api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'), api<Profile & { state: string }>('/api/teacher/profile'),
           ]);
           scheduleState = schedule.state || '';
+          scheduleSource = [scheduleState, schedule.identity_id, schedule.start_day].filter(Boolean).join(':');
           if (!profile.user) throw new ApiError('api_error', 'К роли преподавателя ещё не привязана школьная личность.', 403);
           if (current()) setTeacherData({ today: campusLessons(home.schedule), groups: home.groups, information: home.information, schedule: campusLessons(schedule.items), courses: courses.items, profile: profile.user ? profile : null });
         }
         if (!current()) return;
-        if (scheduleState === 'canonical_backend_disabled') setScheduleWarning('Источник расписания ещё не активирован. Это не подтверждение отсутствия занятий.');
-        else if (/unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked/.test(scheduleState)) setScheduleWarning('Опубликованное расписание за этот период недоступно. Проверьте выбранную неделю и настройки источника.');
+        if (scheduleState === 'canonical_backend_disabled') { setScheduleWarningSource(scheduleSource); setScheduleWarning('Источник расписания ещё не активирован. Это не подтверждение отсутствия занятий.'); }
+        else if (/unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked/.test(scheduleState)) { setScheduleWarningSource(scheduleSource); setScheduleWarning('Опубликованное расписание за этот период недоступно. Проверьте выбранную неделю и настройки источника.'); }
         setState('approved');
         if (embedded) window.parent.postMessage({ type: 'my-island:preview-loaded' }, window.location.origin);
       } catch (error) {
@@ -3527,7 +3751,7 @@ export default function Home() {
   };
   const changeDay = (value: string) => {
     if (embedded) { window.parent.postMessage({ type: 'my-island:preview-date', day: value }, window.location.origin); return; }
-    const url = new URL(window.location.href); url.searchParams.set('date', value); window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`); setDay(value);
+    const url = new URL(window.location.href); url.searchParams.set('date', value); window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`); setDay(value);
   };
   const roleControl = !embedded && session ? <CampusRoleSwitch roles={session.user.roles || [session.user.role]} value={actualRole} onChange={switchRole} /> : undefined;
   const refresh = () => setReload((value) => value + 1);
@@ -3548,8 +3772,7 @@ export default function Home() {
   }
   return <div className={embedded ? 'preview-runtime' : undefined}>
     {embedded ? <div className="preview-runtime-banner">Предпросмотр · {actualRole === 'teacher' ? teacherData?.profile?.user.display_name : data?.profile.user.display_name} · только чтение <button onClick={leave}>В админку</button></div> : null}
-    {scheduleWarning ? <output className="campus-source-warning">{scheduleWarning}</output> : null}
-    {actualRole === 'teacher' && teacherData ? <TeacherApp data={teacherData} onReload={refresh} onLogout={leave} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} /> : data ? <StudentApp data={data} onReload={refresh} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} /> : <PendingState state="api_error" onRetry={refresh} />}
+    {actualRole === 'teacher' && teacherData ? <TeacherApp data={teacherData} onReload={refresh} onLogout={leave} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} scheduleWarning={scheduleWarning} /> : data ? <StudentApp data={data} identityKey={String(config?.id || session?.user.identity_id || session?.user.id || data.profile.user.id || data.profile.user.display_name)} onReload={refresh} roleControl={roleControl} day={chosenDay} onDayChange={changeDay} scheduleWarning={scheduleWarning} scheduleWarningSource={scheduleWarningSource} /> : <PendingState state="api_error" onRetry={refresh} />}
   </div>;
 }
 

@@ -26,14 +26,18 @@ test('grade navigation and grade-wide teacher assignment use canonical groups', 
   await page.getByPlaceholder('Поиск по ФИО').fill('Тестовый преподаватель');
   await page.locator('.teacher-table tbody tr').filter({ hasText: 'Тестовый преподаватель' }).click();
   await page.getByRole('button', { name: 'Группы и назначения' }).click();
+  const matchingAssignments = page.locator('.teacher-assignment-list article').filter({
+    has: page.locator('strong', { hasText: 'Математика · 7 класс' }),
+  });
+  const existingMatchingAssignments = await matchingAssignments.count();
   await page.getByRole('button', { name: 'Добавить назначение' }).click();
   await expect(page.getByRole('combobox', { name: 'Предмет', exact: true })).toHaveValue('Математика');
   await page.getByLabel('Вся параллель').check();
   await page.getByRole('combobox', { name: 'Параллель', exact: true }).selectOption('7');
   await page.screenshot({ path: resolve(shots, 'new-grade-assignment-1920x1080.png'), fullPage: true });
   await page.getByRole('button', { name: 'Сохранить назначение' }).click();
-  await expect(page.locator('.teacher-assignment-list')).toContainText('Математика · 7 класс');
-  const assignment = page.locator('.teacher-assignment-list article').filter({ has: page.locator('strong', { hasText: 'Математика · 7 класс' }) });
+  await expect(matchingAssignments).toHaveCount(existingMatchingAssignments + 1);
+  const assignment = matchingAssignments.last();
   await assignment.getByRole('button', { name: 'Действия с назначением', exact: true }).click();
   await expect(assignment.getByRole('menuitem', { name: 'Изменить назначение', exact: true })).toBeVisible();
   await expect(assignment).toContainText('Активно');

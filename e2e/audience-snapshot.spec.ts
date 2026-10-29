@@ -120,7 +120,8 @@ test('available-slot roster stays factual until recalculation is confirmed, then
   await expect(participants.getByText('Сейчас по правилу получилось бы 2 учеников')).toBeVisible();
   page.once('dialog', (dialog) => dialog.accept());
   await participants.getByRole('button', { name: 'Пересчитать и подтвердить состав' }).click();
-  await expect(page.locator('.constructor-status')).toContainText('Черновик сохранён.');
+  await page.getByRole('button', { name: 'Сохранить черновик', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Сохранить черновик', exact: true })).toBeDisabled();
 
   const readSavedRoster = async () => {
     const response = await page.request.get(`${API}/api/admin/schedule/experiments/${draftId}`, { headers: ADMIN });

@@ -54,7 +54,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   const fitsViewport = await page.locator('.constructor-grid-wrap').evaluate((board) => board.scrollWidth <= board.clientWidth + 1);
   expect(fitsViewport).toBeTruthy();
   await page.locator('.constructor-issue-count').click();
-  await expect(page.locator('.constructor-conflict-panel').getByRole('heading', { name: /^Неполные данные · \d+/ })).toBeVisible();
+  await expect(page.locator('.constructor-conflict-panel').getByText(/Неизвестен состав групп или классов:/).first()).toBeVisible();
   await expect(page.locator('.constructor-unplaced')).toHaveCount(0);
   await page.getByRole('button', { name: 'Закрыть список проблем' }).click();
   await page.screenshot({ path: '.local-test/constructor-filled-week.png', fullPage: true });
@@ -75,6 +75,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await english.click();
   await page.keyboard.press('Control+c');
   await page.locator(`[data-cell="${3 * periods + 4}:1"]`).click();
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Control+v');
   await expect(page.locator(`[data-cell="${3 * periods + 4}:1"] .constructor-card`).filter({ hasText: 'Англ' })).toHaveCount(1);
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -87,6 +88,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   });
   expect(overlap).toBeFalsy();
   await page.screenshot({ path: '.local-test/constructor-1366-100.png' });
+  await page.locator('.constructor-view-menu summary').click();
   await page.getByRole('combobox', { name: 'Масштаб' }).selectOption('85');
   await page.screenshot({ path: '.local-test/constructor-1366-85.png' });
   await page.getByRole('button', { name: 'Уместить сетку по ширине' }).click();
@@ -102,17 +104,20 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
 test('form creates one mixed-class lesson and one multi-slot event that survive reopening', async ({ page }) => {
   const groupsResponse = await page.request.get('http://localhost:8011/api/admin/groups', { headers: { 'X-Dev-Auth': 'admin:1' } });
   const groups = (await groupsResponse.json()).items as { id: string; group_type: string; display_name: string; base_class_name?: string }[];
+  const teachersResponse = await page.request.get('http://localhost:8011/api/admin/people?kind=teacher', { headers: { 'X-Dev-Auth': 'admin:1' } });
+  const teachers = (await teachersResponse.json()).items as { id: string; display_name: string }[];
   const mixed = groups.find((item) => item.display_name === 'E2E Английский 5–6 · A');
-  expect(mixed).toBeTruthy();
+  const teacher = teachers[0];
+  expect(mixed && teacher).toBeTruthy();
   await page.goto('/admin/schedule/constructor?role=admin');
   await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
   await page.locator('[data-cell="0:0"]').click();
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Предмет нового занятия' }).fill('Английский язык');
+  await page.getByRole('combobox', { name: 'Название активности' }).fill('Английский язык');
   await page.locator('.constructor-create-form').getByRole('button', { name: /Учебные группы/ }).click();
   await page.locator('.constructor-create-form').locator(`input[type="checkbox"][value="${mixed!.id}"]`).check();
   await expect(page.locator('.constructor-create-form')).toContainText('Затронутые классы:');
-  await page.getByRole('combobox', { name: 'Преподаватель нового занятия' }).selectOption({ index: 1 });
+  await page.getByRole('combobox', { name: 'Преподаватель нового занятия' }).fill(teacher!.display_name);
   await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('17');
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
   const mixedId = await page.locator('[data-cell="0:0"] .constructor-card').getAttribute('data-lesson-id');
@@ -122,12 +127,11 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await expect(page.locator(`[data-cell="0:0"] [data-lesson-id="${mixedId}"]`)).toContainText('практика');
 
   await page.locator('[data-cell="4:2"]').click();
-  await page.getByRole('button', { name: 'Событие', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Название события' }).fill('Поездка в музей');
-  // The seventh-grade column contains several administrative classes, so
-  // selecting its cell deliberately does not choose a class on our behalf.
+  await page.getByRole('group', { name: 'Способ создания' }).getByRole('button', { name: 'Событие', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Название активности' }).fill('Поездка в музей');
+  // Preserve the event's multi-class audience instead of narrowing it to one class.
   await page.locator('.constructor-create-form').getByRole('checkbox', { name: '7 класс', exact: true }).check();
-  await page.locator('.constructor-create-form').getByRole('checkbox', { name: '8 класс' }).check();
+  await page.locator('.constructor-create-form').getByRole('checkbox', { name: '8 класс', exact: true }).check();
   await page.locator('.constructor-create-form label').filter({ hasText: 'Конец' }).locator('input').fill('14:25');
   await page.locator('.constructor-create-form label').filter({ hasText: 'Место' }).locator('input').fill('Музей');
   await page.locator('.constructor-create-form label').filter({ hasText: 'Формат' }).locator('select').selectOption('offsite');
@@ -137,7 +141,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   const eventId = await page.locator('[data-cell="4:2"] .constructor-card').getAttribute('data-lesson-id');
   for (const cell of ['4:2', '4:3', '5:2', '5:3']) await expect(page.locator(`[data-cell="${cell}"] [data-lesson-id="${eventId}"]`)).toHaveCount(1);
   await page.getByRole('button', { name: /Сохранить/ }).first().click();
-  await expect(page.getByText('Сохранено', { exact: true })).toBeVisible();
+  await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: /Новый шаблон/ }).first().click();
   await expect(page.locator(`[data-cell="0:0"] [data-lesson-id="${mixedId}"]`)).toHaveCount(1);

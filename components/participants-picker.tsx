@@ -144,6 +144,9 @@ export function ParticipantsPicker({
 
   const selectedIds = audience.kind === 'groups' ? unique(audience.group_ids) : audience.kind === 'students' ? unique(audience.student_ids) : unique(audience.class_ids);
   const selectedNames = audience.kind === 'groups' ? groupNames : audience.kind === 'students' ? studentNames : classNames;
+  const selectedClassIds = audience.kind === 'classes' && audience.grade
+    ? classes.filter((item) => gradeOf(item.name) === audience.grade).map((item) => item.id)
+    : selectedIds;
   const previewClasses = unique(preview?.class_ids).map((id) => classNames.get(id) || id);
   const statusLabel = preview?.status === 'ok' ? 'Состав определён' : preview?.status === 'ambiguous' ? 'Требует уточнения' : preview?.status === 'incomplete' ? 'Недостаточно данных' : preview?.status === 'error' ? 'Ошибка расчёта' : preview?.status || 'Состав рассчитывается';
   const contextGrade = gradeScope || (contextGrades.size === 1 ? [...contextGrades][0] : '');
@@ -154,7 +157,6 @@ export function ParticipantsPicker({
       : audience.kind === 'groups'
         ? selectedIds.length ? selectedIds.map((id) => groupNames.get(id) || id).join(', ') : 'Группы не выбраны'
         : selectedIds.length ? `${selectedIds.length} учеников` : 'Ученики не выбраны';
-  const classAudienceValue = audience.grade ? `grade:${audience.grade}` : audience.class_ids?.length === 1 ? audience.class_ids[0] : '';
 
   const chooseMode = (kind: AudienceRule['kind']) => {
     setQuery('');
@@ -194,14 +196,26 @@ export function ParticipantsPicker({
 
       {audience.kind === 'classes' ? (
         <div className={styles.source}>
-          <label htmlFor={`${fieldId}-class-scope`}>Кто занимается</label>
-          <select id={`${fieldId}-class-scope`} value={classAudienceValue} onChange={(event) => {
-            const selected = classOptions.find((item) => item.id === event.target.value);
-            onChange({ kind: 'classes', ...(selected?.grade ? { grade: selected.grade, class_ids: [] } : { class_ids: selected ? [selected.id] : [] }) });
-          }}>
-            <option value="">Выберите класс или параллель</option>
-            {classOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
+          <strong>Кто занимается</strong>
+          <fieldset className={styles.options} aria-label="Классы участников">
+            {classOptions.map((item) => {
+              const gradeClasses = item.grade ? classes.filter((entry) => gradeOf(entry.name) === item.grade).map((entry) => entry.id) : [];
+              const checked = item.grade
+                ? gradeClasses.length > 0 && gradeClasses.every((id) => selectedClassIds.includes(id))
+                : selectedClassIds.includes(item.id);
+              return <label className={styles.option} key={item.id}>
+                <input type="checkbox" checked={checked} onChange={() => {
+                  if (item.grade) {
+                    const keep = selectedClassIds.filter((id) => !gradeClasses.includes(id));
+                    onChange({ kind: 'classes', class_ids: checked ? keep : unique([...keep, ...gradeClasses]) });
+                    return;
+                  }
+                  onChange({ kind: 'classes', class_ids: toggle(selectedClassIds, item.id) });
+                }} />
+                <span><b>{item.label}</b></span>
+              </label>;
+            })}
+          </fieldset>
           <p aria-live="polite">Аудитория: {audienceCaption}</p>
         </div>
       ) : null}

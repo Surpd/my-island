@@ -1,0 +1,387 @@
+﻿source_ref,day,start,end,subject,classes,assignment_type,confirmed_students,current_rule_students,before,after,own_codes_before,own_codes_after,exclusion_causes_after,block_before,block_after
+B4,0,09:00,09:45,Классный час,5,classes,7,7,ready,ready,,,,constructor-ab0f2fdb41bb7350a90df8f5,constructor-405f5d542dfd19297316800c
+L4,0,09:00,09:45,Математика,9-Ан,groups,4,4,deferred,ready,,,,constructor-632cb47e379923c85e4633c5,constructor-7784ead1c1458db1adfe79c3
+M4,0,09:00,09:45,Обществознание,9-Ан | 9-Д,groups,14,14,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-632cb47e379923c85e4633c5,constructor-f2861507a2eef0da84f0ebf6
+N4,0,09:00,09:45,Физика,9-Ан | 9-Д,groups,6,6,deferred,deferred,missing_teacher | review_required | student_overlap,missing_teacher | student_overlap,student_overlap,constructor-632cb47e379923c85e4633c5,constructor-f2861507a2eef0da84f0ebf6
+P4,0,09:00,09:45,Литература,10,classes,10,10,ready,ready,,,,constructor-5c2c1577a6d74c2b2af4c77f,constructor-852724a51156df85098c7d76
+T4,0,09:00,09:45,Обществознание,11,groups,8,8,ready,ready,,,,constructor-3963ede741b479b330c7cba5,constructor-a9fbf54abf46513c04995151
+B5,0,09:55,10:40,Пластика,5,classes,7,7,deferred,ready,,,,constructor-b0c269e3c12caea65d4bb863,constructor-44acb01c6daf8cf732514041
+D5,0,09:55,10:40,География,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-d4b126efe6112276a68e2483,constructor-81af266602709c7f0fd4fd0f
+F5,0,09:55,10:40,Математика,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-5e488e76597aeed30fbc29a7,constructor-1d64f6efcd1c76c471165213
+G5,0,09:55,10:40,Русский язык,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-287c028c36395401a54a6b9e,constructor-c425562099e7543fd51850ee
+L5,0,09:55,10:40,Классный час,9-Ан,classes,15,15,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-1067cd2df65dec6dd904f400,constructor-c9fdb45441108a9646e96093
+M5,0,09:55,10:40,Литература,9-Д,classes,14,14,deferred,ready,,,,constructor-1067cd2df65dec6dd904f400,constructor-ea28c31e89f31ba0d3c3387b
+P5,0,09:55,10:40,Английский,10 | 11,groups,11,11,deferred,ready,,,,constructor-f0e06cc8a584967c8b2248b2,constructor-d48c6c882b0c094aa19bb34e
+Q5,0,09:55,10:40,Английский,10 | 11,groups,12,12,deferred,ready,,,,constructor-f0e06cc8a584967c8b2248b2,constructor-d48c6c882b0c094aa19bb34e
+B6,0,10:55,11:40,Английский,5 | 6,groups,11,11,deferred,ready,,,,constructor-6f255ae34deb1c20fa6fef7b,constructor-8f0228597cd9864ab0ce5f78
+D6,0,10:55,11:40,Английский,5 | 6,groups,12,12,deferred,ready,,,,constructor-6f255ae34deb1c20fa6fef7b,constructor-8f0228597cd9864ab0ce5f78
+F6,0,10:55,11:40,Физика,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-5cdca1dab2318a068eba6379,constructor-2b361361ef8f1ff138f05f69
+G6,0,10:55,11:40,Пластика,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-001063548887a5d3a3f0aa48,constructor-d8634bc293c1f5d49fb055cb
+I6,0,10:55,11:40,География,8,classes,13,13,deferred,ready,,,,constructor-deb2eab5086386529d279a95,constructor-aeac9b603cfd72b508993510
+L6,0,10:55,11:40,Литература,9-Ан,classes,15,15,deferred,ready,,,,constructor-6dfed49fc2122414040797d5,constructor-4f0ae1035f08d13aac21c7fa
+M6,0,10:55,11:40,Классный час,9-Д,classes,14,14,deferred,ready,review_required,teacher_assignment_unverified,,constructor-6dfed49fc2122414040797d5,constructor-98d1c47cd1cb0e5198d12e2c
+P6,0,10:55,11:40,Обществознание,10,classes,10,10,deferred,ready,,,,constructor-c4114be846fc88f1ec86a07b,constructor-7c0e0110b28c9bb136da7466
+S6,0,10:55,11:40,Литература,11,groups,8,8,deferred,ready,,,,constructor-076357aa7e3aba2ea660f487,constructor-4dde5ff6b20556c051e86acb
+T6,0,10:55,11:40,Литература,11,groups,5,5,deferred,ready,,,,constructor-076357aa7e3aba2ea660f487,constructor-4dde5ff6b20556c051e86acb
+B7,0,11:50,12:35,Обед,5,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-1fae2d1b922647f5bb2443f3,constructor-1699639d9ea80cc5b49ecd57
+D7,0,11:50,12:35,Обед,6,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-bbb5b8a483d9086deb306239,constructor-c21d761b51e9eee2c25acf29
+F7,0,11:50,12:35,Английский,7-А | 7-Б | 8,groups,10,10,deferred,ready,,,,constructor-f3038c76b2fe38d055295d14,constructor-c8648648f5f70b36d33b1779
+G7,0,11:50,12:35,Обед,7-Б,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-f7493ba263ca62efdd87e0bd,constructor-b74e0b5c4a7e1072b3d31490
+J7,0,11:50,12:35,Обед,8,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-f3038c76b2fe38d055295d14,constructor-0236d45289bdc6e84c6a98a2
+L7,0,11:50,12:35,Обед,9-Ан,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-132e9b3990c80e70341a31dd,constructor-9b74d0717b9d07f8c9be65f1
+M7,0,11:50,12:35,Математика,9-Ан | 9-Д,groups,13,13,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-132e9b3990c80e70341a31dd,constructor-ed651c845de61c38e2172a00
+N7,0,11:50,12:35,Химия,9-Ан | 9-Д,groups,6,6,deferred,deferred,review_required | student_overlap,student_overlap | teacher_assignment_unverified,student_overlap,constructor-132e9b3990c80e70341a31dd,constructor-ed651c845de61c38e2172a00
+P7,0,11:50,12:35,Русский язык,10,classes,10,10,deferred,ready,,,,constructor-483cb750dad8a976126b9250,constructor-644f2540d5a98683212c4a80
+S7,0,11:50,12:35,Обществознание,11,groups,5,5,deferred,ready,,,,constructor-bb51c424ff3764262ec80312,constructor-f04f6a76adcf30b41a92f934
+T7,0,11:50,12:35,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-bb51c424ff3764262ec80312,constructor-f04f6a76adcf30b41a92f934
+B8,0,12:45,13:30,Ист-иск,5,classes,7,7,ready,ready,,,,constructor-00ded86c4e30510b6eb5d179,constructor-28b60304f2d8034a4c6347a7
+D8,0,12:45,13:30,Пластика,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-7d0f72276c559076c19ca8ba,constructor-557f44c3e01749a17e985aca
+F8,0,12:45,13:30,Английский,7-А | 7-Б | 8,groups,13,13,deferred,ready,projection_mismatch,,,constructor-e742b68df8d39d08f1f0f91f,constructor-5168e6e478ee1c18c54603bc
+G8,0,12:45,13:30,Английский,7-А | 7-Б | 8,groups,12,12,deferred,ready,projection_mismatch,,,constructor-e742b68df8d39d08f1f0f91f,constructor-5168e6e478ee1c18c54603bc
+L8,0,12:45,13:30,Математика,9-Ан,groups,4,4,deferred,deferred,missing_room,joint_activity_unconfirmed | missing_room,joint_activity_unconfirmed,constructor-c62162848c6fa7bb1f8b3030,constructor-922e68251173332be6094905
+M8,0,12:45,13:30,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-c62162848c6fa7bb1f8b3030,constructor-1f2a6f5d1684b46a36c6d40a
+N8,0,12:45,13:30,Математика,9-Ан | 9-Д,groups,12,12,deferred,deferred,,joint_activity_unconfirmed,joint_activity_unconfirmed,constructor-c62162848c6fa7bb1f8b3030,constructor-0a82c7aa963e8f2ad33d9e7a
+P8,0,12:45,13:30,Классный час,10,classes,10,10,deferred,ready,review_required,teacher_assignment_unverified,,constructor-003ddf50f3e77384c3771ca5,constructor-6e3aa7a4b66b4c4a254b355f
+S8,0,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-17cfe5e15c2ecf6664b89f29,constructor-d67ba5cbe0327cec2f8d8077
+T8,0,12:45,13:30,Обществознание,11,groups,8,8,deferred,ready,,,,constructor-17cfe5e15c2ecf6664b89f29,constructor-d67ba5cbe0327cec2f8d8077
+B9,0,13:40,14:25,Лаб текста,5,classes,7,7,deferred,ready,,,,constructor-a88917914d0d532d3347a52c,constructor-b21d0fb0260463326c72d1c2
+D9,0,13:40,14:25,Ист-иск,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-e28d8e9b25d79cf0f66df29a,constructor-8cbba3c68f780372fa739a7d
+F9,0,13:40,14:25,Русский язык,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-79009f9e41f74b72de126b5a,constructor-5c90d83fa513bf91497437f1
+G9,0,13:40,14:25,Математика,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-790fdd09d68f4f8d69c0d5e2,constructor-24b23ff8e41dedb929a0d7d2
+I9,0,13:40,14:25,Пластика,8,classes,13,13,deferred,ready,,,,constructor-5d59c831c86bed5bd357004a,constructor-991795729fe1ef9e6c305afd
+L9,0,13:40,14:25,Русский язык,9-Ан | 9-Д,available_slot,8,8,deferred,ready,,,,constructor-b2e7b8aa285158f8cc8cde7c,constructor-4e4a1f5dd4eab7e287213307
+M9,0,13:40,14:25,Английский,9-Ан | 9-Д,groups,6,6,deferred,ready,,,,constructor-b2e7b8aa285158f8cc8cde7c,constructor-4e4a1f5dd4eab7e287213307
+N9,0,13:40,14:25,Английский,9-Ан | 9-Д,groups,15,15,deferred,ready,,,,constructor-b2e7b8aa285158f8cc8cde7c,constructor-4e4a1f5dd4eab7e287213307
+P9,0,13:40,14:25,Обед,10,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-18a35aa29c63c816b33aac3f,constructor-bf5bf9d5a80f5dc59c0d3db4
+Q9,0,13:40,14:25,Обед,10,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-18a35aa29c63c816b33aac3f,constructor-bf5bf9d5a80f5dc59c0d3db4
+S9,0,13:40,14:25,Русский язык,11,classes,13,13,deferred,ready,,,,constructor-f885c17a3fb2ab21b551e0d4,constructor-8c0550a42bb84064d58d0f53
+B10,0,14:35,15:20,Лаб текста,5,classes,7,7,deferred,ready,,,,constructor-da1b061dc66f55e493a5942e,constructor-ce50014309660602e6eea7d2
+D10,0,14:35,15:20,Классный час,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-3477afc1f0416d2e2ca29dfa,constructor-bbdcd902fdae8c7bdfded445
+F10,0,14:35,15:20,Пластика,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-4707dbeabf1b24d74baab59a,constructor-a6dda8a8cd1b6f7b8e8d62d0
+G10,0,14:35,15:20,Физика,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-378654b2e585470743d0406a,constructor-b6bcac3c6a97a42b8838c26b
+I10,0,14:35,15:20,История искусства,8,classes,13,13,deferred,ready,,,,constructor-60d50bbb917e167ab2da6c71,constructor-75a3272394bebe89f5968dc8
+M10,0,14:35,15:20,Русский язык,9-Ан | 9-Д,available_slot,21,21,deferred,ready,,,,constructor-8047b309629ed7f1a6a6f7ac,constructor-8471bfcb4b3eb586f4dd8aef
+P10,0,14:35,15:20,Информатика,10,groups,3,3,deferred,ready,,,,constructor-579e343b5bf3e5642bb51ea6,constructor-5febf40c9949dcd012f372fb
+S10,0,14:35,15:20,Русский язык,11,classes,13,13,deferred,ready,,,,constructor-3eb7b1274701d4823e432595,constructor-03a0b2ba3adf4961bd8221d7
+B11,0,15:30,16:15,⚪АНИМАЦИЯ,5,classes,7,7,ready,ready,,,,constructor-5e2c7218a18530290c646a07,constructor-f6f40c0fa0b62c6d1e8c6d55
+D11,0,15:30,16:15,Английский,6,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | review_required,audience_unresolved | missing_room | review_required,audience_unresolved | review_required,constructor-49453ffa5f982c674e8a9863,constructor-5b8fe54f369cb1d45b975655
+F11,0,15:30,16:15,⚪АЙКИДО,7-А,classes,12,12,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-c0736e9036dc10e2a3992a2a,constructor-0dbc31e619e80688e09fc237
+N11,0,15:30,16:15,Информатика,9-Ан | 9-Д,groups,7,7,ready,ready,,,,constructor-49127ead48f79f7b8a36bacd,constructor-0cce76e8934fdaeba7a857c3
+P11,0,15:30,16:15,Физика,10,groups,5,5,deferred,deferred,teacher_overlap,joint_activity,student_overlap,constructor-6c66c8effad41208daddf7eb,constructor-e5e1ffba6f27b76dd3be9c2a
+Q11,0,15:30,16:15,История,10,groups,1,1,deferred,deferred,teacher_overlap,joint_activity,student_overlap,constructor-6c66c8effad41208daddf7eb,constructor-e5e1ffba6f27b76dd3be9c2a
+R11,0,15:30,16:15,Литература,10,groups,1,1,deferred,deferred,review_required,teacher_assignment_unverified,student_overlap,constructor-6c66c8effad41208daddf7eb,constructor-e5e1ffba6f27b76dd3be9c2a
+S11,0,15:30,16:15,Физика,11,groups,3,3,deferred,deferred,student_overlap | teacher_overlap,joint_activity | student_overlap,student_overlap,constructor-8c1934e7bdae49b53201a969,constructor-edd4dc87a6142f56089ea82d
+T11,0,15:30,16:15,Литература,11,groups,5,5,deferred,deferred,,,student_overlap,constructor-8c1934e7bdae49b53201a969,constructor-edd4dc87a6142f56089ea82d
+U11,0,15:30,16:15,История,11,groups,2,2,deferred,deferred,student_overlap | teacher_overlap,joint_activity | student_overlap,student_overlap,constructor-8c1934e7bdae49b53201a969,constructor-edd4dc87a6142f56089ea82d
+F12,0,16:20,17:05,⚪АЙКИДО,7-А,classes,12,12,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-647c49387d296cabfe6a7ab3,constructor-2eb8f6b3e0d23d35b9e96b2a
+Q12,0,16:20,17:05,Обществознание,10,classes,10,10,ready,ready,,,,constructor-1c5f8f77ce2d434988db0e9b,constructor-179fb24b24e331f6619d50f2
+S12,0,16:20,17:05,Физика,11,groups,3,3,ready,ready,,,,constructor-7b8e91c0b14c30a5433eec3f,constructor-d2721eb84b6acb8353f74fec
+B16,1,09:00,09:45,Русский язык,5,classes,7,7,deferred,ready,,,,constructor-36f32786c4efa8a0e308f1dc,constructor-024a8d1654e655e615039757
+D16,1,09:00,09:45,Литература,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-26c318e86c5c709dc3192ace,constructor-61e968364fb38bf3d5bc9052
+F16,1,09:00,09:45,Классный час,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | missing_teacher | review_required,audience_unresolved | missing_teacher | review_required,audience_unresolved | review_required,constructor-861c8af8439d462744d1b250,constructor-179cb1565669e924cf8e4cb9
+L16,1,09:00,09:45,Английский,9-Ан | 9-Д,groups,8,8,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-f43303bc8dda20ff9215e342,constructor-bc3ad88921ad45e60db1daf3
+M16,1,09:00,09:45,Русский язык,9-Д,classes,14,14,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-f43303bc8dda20ff9215e342,constructor-3caeea7864d873526c89c1af
+P16,1,09:00,09:45,Биология,10,groups,2,2,deferred,ready,,,,constructor-88109457768fd62edeb25392,constructor-5e923e0fe33e9d16a84c85da
+S16,1,09:00,09:45,Классный час,11,classes,13,13,deferred,ready,,,,constructor-25a2a089ed43fc3a3bbe1572,constructor-af9ab6dddf24106b58de2956
+B17,1,09:55,10:40,Математика,5,classes,7,7,ready,ready,,,,constructor-2aba21c7f55bb62a079dab37,constructor-6bb6a274307211f927bb3478
+D17,1,09:55,10:40,Биология,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-aed6a0f71e766a4eec28cb95,constructor-8ede7eda8cb0ce458eb04c2f
+F17,1,09:55,10:40,Литература,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-8c45f497610ebc8dc116debb,constructor-98110a9c280af8b28484f9fc
+G17,1,09:55,10:40,История,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-8c45f497610ebc8dc116debb,constructor-058814af1daa43e056595f31
+I17,1,09:55,10:40,Химия,8,classes,13,13,ready,ready,,,,constructor-ac7032a2832d6b0bf3fabf44,constructor-e9afdbe0cfb6f7ba5c3b8ac8
+L17,1,09:55,10:40,История искусства,9-Ан,classes,15,15,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-194c5846681ae69e5713a63c,constructor-b4bedf61e85c680c76bb0781
+N17,1,09:55,10:40,Математика,9-Ан | 9-Д,groups,12,12,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-194c5846681ae69e5713a63c,constructor-d4189717157246149a55f99e
+P17,1,09:55,10:40,Английский,10 | 11,groups,11,11,deferred,ready,,,,constructor-f19be0fa06c3dff7f2d03e44,constructor-12b677917302268e5a1220bf
+Q17,1,09:55,10:40,Английский,10 | 11,groups,12,12,deferred,ready,,,,constructor-f19be0fa06c3dff7f2d03e44,constructor-12b677917302268e5a1220bf
+S17,1,09:55,10:40,Английский,10 | 11,groups,11,11,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-f19be0fa06c3dff7f2d03e44,constructor-12b677917302268e5a1220bf
+B18,1,10:55,11:40,Биология,5,classes,7,7,ready,ready,,,,constructor-2ff27ab0e98acf86e2c9270b,constructor-7056c825d5eac9b32face383
+D18,1,10:55,11:40,Русский язык,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-10b9ca6a585bf4daa08a0007,constructor-afbfbcc28ed9f262d631843f
+F18,1,10:55,11:40,Биология,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-4fd8a9f087f12ea3628e0522,constructor-4be962b8f4e51139743da46c
+G18,1,10:55,11:40,Литература,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-4fd8a9f087f12ea3628e0522,constructor-1ea0b1f8fcb7bc2793541276
+I18,1,10:55,11:40,Физика,8,classes,13,13,ready,ready,,,,constructor-64ea20bfb2a151aacaea13d9,constructor-3ee40aea261ee4ce156d1708
+L18,1,10:55,11:40,Русский язык,9-Ан | 9-Д,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-76c5aa846f7b2ebb4e84f8a7,constructor-0db230c252220f893fd91546
+N18,1,10:55,11:40,Английский,9-Ан | 9-Д,groups,15,15,deferred,deferred,,,audience_unresolved | review_required,constructor-76c5aa846f7b2ebb4e84f8a7,constructor-0db230c252220f893fd91546
+P18,1,10:55,11:40,Математика,10,classes,10,10,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-3ad8436acdf966026e584a60,constructor-f58213b93f2d02dd12ec4e92
+S18,1,10:55,11:40,Математика,11,classes,13,13,deferred,deferred,review_required | student_overlap,student_overlap | teacher_assignment_unverified,student_overlap,constructor-9d98c41a71e97715b68cffe0,constructor-0cf1b4c7e8f19459d97c04cb
+T18,1,10:55,11:40,Матпроф,10 | 11,groups,10,10,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-1228ba69b1ad59e4f32fc9cd,constructor-44b005cdcb15f92c3327cff1
+B19,1,11:50,12:35,Обед,5,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-4bf7e557bfad4d09e3f2f399,constructor-6b9ef35dea79cf375fb40ea6
+D19,1,11:50,12:35,Обед,6,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-acfdedf6d721bf8deefc3b6a,constructor-c14958c23a9f1a637c345b07
+F19,1,11:50,12:35,История,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-e9aba4628b8596cb756bdda7,constructor-0bdea053f94c11a7753212b7
+G19,1,11:50,12:35,Биология,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-e9aba4628b8596cb756bdda7,constructor-da849ae8ba4915491872df87
+I19,1,11:50,12:35,Литература,8,classes,13,13,ready,ready,,,,constructor-fb795201cbbde259f93fdd69,constructor-3baf5e2905b8df95e66f4795
+L19,1,11:50,12:35,Обед,9-Ан,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-5c1cc372e942751039ff3d41,constructor-b21ce11776cbf14f8b98fdf8
+M19,1,11:50,12:35,Математика,9-Ан | 9-Д,groups,13,13,deferred,ready,,,,constructor-5c1cc372e942751039ff3d41,constructor-b642b263167d3ee234d792ae
+N19,1,11:50,12:35,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-5c1cc372e942751039ff3d41,constructor-074b5a00a9d3ab3ec395786f
+P19,1,11:50,12:35,Математика,10,classes,10,10,ready,ready,,,,constructor-c4176b8343d82a462f305500,constructor-ad72f978c3b3e51f46dfc38b
+S19,1,11:50,12:35,Литература,11,groups,5,5,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-841211dab2c1e764f5bceded,constructor-94e5a484292a53a6f957dcb6
+T19,1,11:50,12:35,Матпроф,11,classes,13,13,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-841211dab2c1e764f5bceded,constructor-94e5a484292a53a6f957dcb6
+B20,1,12:45,13:30,Пластика,5,classes,7,7,deferred,ready,,,,constructor-225fc586f06f24d9bc586b7b,constructor-9079248d035d4590fa6184cf
+D20,1,12:45,13:30,Математика,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-923f78892613cd85a15630f5,constructor-70047f546c4699472a314fe8
+F20,1,12:45,13:30,Английский,7-А | 7-Б | 8,groups,13,13,deferred,ready,,,,constructor-15b0633f3e94b23e58034064,constructor-2cfc43c5e2b31644d08cb898
+G20,1,12:45,13:30,Обед,7-Б,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-4ea2e029fc8bca8df2846e9f,constructor-9e7c363d028e2355d19d459d
+I20,1,12:45,13:30,Английский,7-А | 7-Б | 8,groups,13,13,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-15b0633f3e94b23e58034064,constructor-2cfc43c5e2b31644d08cb898
+J20,1,12:45,13:30,Обед,8,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-15b0633f3e94b23e58034064,constructor-69de9e3c66dc894d412a43d7
+L20,1,12:45,13:30,Математика,9-Ан,groups,4,4,deferred,ready,,,,constructor-922d5d845eb2092180d0d9e3,constructor-69f2c8895c97e7251b197fd7
+M20,1,12:45,13:30,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-922d5d845eb2092180d0d9e3,constructor-55f4aa39785642512a7ee3fc
+N20,1,12:45,13:30,История искусства,9-Д,classes,14,14,deferred,ready,,,,constructor-922d5d845eb2092180d0d9e3,constructor-55f4aa39785642512a7ee3fc
+P20,1,12:45,13:30,Обед,10,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-b614f8597e166db510915606,constructor-437b8a7f65243db139860364
+S20,1,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-fbae7f1e263aa69ff1e1ea00,constructor-1790f9acd51d04c2bda4eeb3
+T20,1,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-fbae7f1e263aa69ff1e1ea00,constructor-1790f9acd51d04c2bda4eeb3
+B21,1,13:40,14:25,Музыка,5,classes,7,7,ready,ready,,,,constructor-2d7ae82b4b8d44575204bce3,constructor-77c0b4be68b799c24145a940
+D21,1,13:40,14:25,Пластика,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-807f89196e84674dbbd993bd,constructor-e4cd0c28abc9f93a2089512d
+F21,1,13:40,14:25,Английский,7-А | 7-Б | 8,groups,10,10,deferred,ready,,,,constructor-55227cfe7a438f9a6eac8a45,constructor-d0213440bc48a7e21456761a
+G21,1,13:40,14:25,Английский,7-А | 7-Б | 8,groups,12,12,deferred,ready,,,,constructor-55227cfe7a438f9a6eac8a45,constructor-d0213440bc48a7e21456761a
+I21,1,13:40,14:25,Английский,7-А | 7-Б | 8,groups,10,10,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-55227cfe7a438f9a6eac8a45,constructor-d0213440bc48a7e21456761a
+L21,1,13:40,14:25,История,9-Ан,classes,15,15,ready,ready,,,,constructor-40e3a0a27c7cd13ea03bf7cc,constructor-a211825189e046bffe242bdf
+M21,1,13:40,14:25,Литература,9-Д,classes,14,14,ready,ready,,,,constructor-40e3a0a27c7cd13ea03bf7cc,constructor-9aaef0b5c931ccd5217f699f
+P21,1,13:40,14:25,Русский язык,10,classes,10,10,ready,ready,,,,constructor-fb8f2eb968a53d2a7198692e,constructor-41977fb378e209351a819db7
+S21,1,13:40,14:25,Русский язык,11,classes,13,13,ready,ready,,,,constructor-6c32c45cb3cac38272b11efb,constructor-9ffc408008696055db1b580c
+B22,1,14:35,15:20,Английский,5 | 6,groups,11,11,deferred,ready,,,,constructor-f941270a866d745e7635b50a,constructor-fc33ff672b2d042b3a5370d3
+D22,1,14:35,15:20,Английский,5 | 6,groups,12,12,deferred,ready,,,,constructor-f941270a866d745e7635b50a,constructor-fc33ff672b2d042b3a5370d3
+F22,1,14:35,15:20,Пластика,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-14445cd1a28f6edbad5a2307,constructor-25c8fa3473ab1ae8d499eea6
+G22,1,14:35,15:20,Математика,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-49d5775beccb9692c5e2ac3a,constructor-89f6abbdb91dd9c6a93d9a50
+I22,1,14:35,15:20,Математика,8,classes,13,13,deferred,ready,,,,constructor-8f539c8a598266a173e16dd5,constructor-f0d1b3baa4da23b43bcc075c
+L22,1,14:35,15:20,Литература,9-Ан,classes,15,15,deferred,ready,,,,constructor-c3e75ff256e0b64542891695,constructor-44564f8649ad343617aacc4a
+M22,1,14:35,15:20,История,9-Д,classes,14,14,deferred,ready,,,,constructor-c3e75ff256e0b64542891695,constructor-4aa75a487fdc6d849aadea3c
+P22,1,14:35,15:20,Русский язык,10,classes,10,10,deferred,ready,,,,constructor-74f92bf1a0efcf6b019f8747,constructor-bb9d5f536e5c47451c6c039d
+S22,1,14:35,15:20,Литература,11,groups,8,8,deferred,ready,,,,constructor-13c10ec44ba34768f753464e,constructor-6d8a23c92f26adb8692966e8
+F23,1,15:30,16:15,Математика,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-a1e4c832d560f4aa9e5d237c,constructor-38673f05d927509341980587
+G23,1,15:30,16:15,Пластика,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-a1e4c832d560f4aa9e5d237c,constructor-9f3ba0b5464f79cda5c78f81
+I23,1,15:30,16:15,Биология,8,classes,13,13,ready,ready,,,,constructor-2128f42e57cc3c6bedbcf0bc,constructor-958d05046f2c2eb4ccc05413
+L23,1,15:30,16:15,репетиция 9 А,9-Ан,classes,15,15,deferred,ready,missing_room | missing_teacher | review_required,missing_room | missing_teacher,,constructor-9d7621177d26604c3ffafacc,constructor-4ad44a998792bd67df831df9
+P23,1,15:30,16:15,Литература,10,classes,10,10,ready,ready,,,,constructor-f84babdeea1c56dff74eb25e,constructor-ab84ea2cc3a9d1d8562492e9
+S23,1,15:30,16:15,Литература,11,classes,13,13,deferred,ready,review_required,teacher_assignment_unverified,,constructor-5d6824ab1927be0c8f2346a5,constructor-c1226e1fd875e6ad77f3f07d
+D24,1,16:20,17:05,⚪АТЕЛЬЕ,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-a523f7096aa3e09345f7622a,constructor-207e7fb12e005a1b58a897ab
+F24,1,16:20,17:05,⚪ИСПАНСКИЙ,7-А,classes,12,12,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-3d9f54c8df8a0e682633092b,constructor-c3fd5e618e752b7c3e7ed730
+P24,1,16:20,17:05,Химия,10,groups,3,3,ready,ready,,,,constructor-b81627d4e01e306b28c87186,constructor-4498cddbc4935e14d38b333d
+F28,2,09:00,09:45,Литература,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-ca3c439c9fe202c768ec8c37,constructor-a3f4a3d460f4aa33af80537a
+G28,2,09:00,09:45,История,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-ca3c439c9fe202c768ec8c37,constructor-0f6f09428464a435488b289f
+I28,2,09:00,09:45,История,8,classes,13,13,ready,ready,,,,constructor-21a215318938367d36000822,constructor-dff164fd7483e4bc477b0f90
+M28,2,09:00,09:45,Математика,9-Ан | 9-Д,groups,13,13,ready,ready,,,,constructor-f9b29aeb94c7d67a714ba367,constructor-dd271a23465834204706d962
+P28,2,09:00,09:45,Математика,10,classes,10,10,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-f3e6de3cfa05e0d7fb7e189a,constructor-f76b53eb5ce9abc049a2b3de
+S28,2,09:00,09:45,Литература,11,groups,5,5,ready,ready,,,,constructor-c08a03f55e099b5765f91168,constructor-2510538ba00aeb6ae900fe7a
+T28,2,09:00,09:45,Матпроф,10 | 11,groups,10,10,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-2300ea8215a4d1070844c312,constructor-80c45fe9628fbfc721bc1074
+F29,2,09:55,10:40,История,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-cd811e00dec1b1799a855776,constructor-33be9c5bd1b0352cd3cefcbc
+G29,2,09:55,10:40,Литература,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-cd811e00dec1b1799a855776,constructor-0366af0cddc574b5046bfc98
+I29,2,09:55,10:40,Химия,8,classes,13,13,deferred,ready,,,,constructor-1fe29177a6110561fc589cce,constructor-d79ae0dbdc28a5de6c2b7b15
+L29,2,09:55,10:40,Английский,9-Ан | 9-Д,groups,8,8,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-43fce990ead5189a4896ee9d,constructor-801e288051a0d5bc3cb37053
+M29,2,09:55,10:40,Русский язык,9-Д,classes,14,14,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-43fce990ead5189a4896ee9d,constructor-8a36a75f848521243ef62648
+P29,2,09:55,10:40,Математика,10,classes,10,10,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-12c9de5a5c683d2356c21224,constructor-5e57f738dea2758937028f03
+S29,2,09:55,10:40,Математика,11,groups,6,6,deferred,ready,,,,constructor-3b9866953871dcfff8993e88,constructor-cfdeb983811ff5b1f25b45bb
+T29,2,09:55,10:40,Матпроф,10 | 11,groups,10,10,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-963e85699d038ea126dff2db,constructor-42d859ea16a66da84956e916
+B30,2,10:55,11:40,Литература,5,classes,7,7,deferred,ready,,,,constructor-f3544116b8bd7aa8c5a09745,constructor-59db313dc7411da71ad29632
+D30,2,10:55,11:40,Математика,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-9371a185bd4852ac24298a22,constructor-af8f45afbd0bf94aa186ef9d
+F30,2,10:55,11:40,Биология,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-eadd4a5082fb0644fcc4d478,constructor-2f9606b38dfa77c2b01d0e52
+G30,2,10:55,11:40,Математика,7-А | 7-Б,groups,13,13,deferred,deferred,,,audience_unresolved | review_required,constructor-7e11200959021fe451d79e29,constructor-2f9606b38dfa77c2b01d0e52
+I30,2,10:55,11:40,Тренинг,8,classes,13,13,deferred,ready,,,,constructor-cebd63c2133f9568d314b6e2,constructor-7c559360d67289530f703b02
+L30,2,10:55,11:40,Русский язык,9-Ан,classes,15,15,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-d42aef773f31d8933c2c7d8c,constructor-8b0de431960a6665e305791c
+M30,2,10:55,11:40,Английский,9-Ан | 9-Д,groups,6,6,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-d42aef773f31d8933c2c7d8c,constructor-65f802c84e21a8b3bf71008e
+N30,2,10:55,11:40,Английский,9-Ан | 9-Д,groups,15,15,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-d42aef773f31d8933c2c7d8c,constructor-65f802c84e21a8b3bf71008e
+P30,2,10:55,11:40,География,10,classes,10,10,deferred,ready,,,,constructor-00492969029d4bdb4ef0f9fa,constructor-419c1279c07cf6419634ee54
+S30,2,10:55,11:40,География,11,classes,13,13,deferred,deferred,missing_teacher | review_required | student_overlap,missing_teacher | student_overlap,student_overlap,constructor-10842c64fdab7c9b607abce6,constructor-2c66546f3213460c7e211f6f
+T30,2,10:55,11:40,Обществознание,11,groups,8,8,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-10842c64fdab7c9b607abce6,constructor-2c66546f3213460c7e211f6f
+B31,2,11:50,12:35,Обед,5,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-ecb2a7399dc4af67535763f0,constructor-c5e9b5a30d138fb803e49f6c
+D31,2,11:50,12:35,Обед,6,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-b3d243a5af64ae20ce785530,constructor-783b5312b3ffd08e28e55284
+F31,2,11:50,12:35,Обед,7-А,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-65e49ab51f3df00c588d5606,constructor-433b7e9549fe754c4fe20a18
+G31,2,11:50,12:35,Обед,7-Б,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-65e49ab51f3df00c588d5606,constructor-1f6a3448d093c4656e094572
+I31,2,11:50,12:35,Математика,8,classes,13,13,deferred,ready,,,,constructor-8cf011113e921cf4883054c0,constructor-bc932896369ae539e28d593c
+L31,2,11:50,12:35,Обществознание,9-Ан,classes,15,15,deferred,ready,,,,constructor-0d55420e41b6fc17e4b7ceb7,constructor-75cf8b4474a09f7733c5a41e
+M31,2,11:50,12:35,Литература,9-Д,classes,14,14,deferred,ready,,,,constructor-0d55420e41b6fc17e4b7ceb7,constructor-ba872e108763700be9f6d8ee
+P31,2,11:50,12:35,Английский,10 | 11,groups,11,11,deferred,ready,,,,constructor-be793bbc7c990c4c71b5045a,constructor-c74c401ab3381fbeee634260
+Q31,2,11:50,12:35,Английский,10 | 11,groups,12,12,deferred,ready,,,,constructor-be793bbc7c990c4c71b5045a,constructor-c74c401ab3381fbeee634260
+B32,2,12:45,13:30,История,5,classes,7,7,ready,ready,,,,constructor-817d2a79233493b61c4ac3b7,constructor-0dc30fc2af93a6b2420cd41d
+D32,2,12:45,13:30,Русский язык,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-5795827e49ea61a63bd1785c,constructor-a3004d8f81717236c134d23c
+L32,2,12:45,13:30,Литература,9-Ан,classes,15,15,ready,ready,,,,constructor-aab3ad314f4f05a415234367,constructor-1910b81600ceb3ebe8666b23
+M32,2,12:45,13:30,Обществознание,9-Д,classes,14,14,ready,ready,,,,constructor-aab3ad314f4f05a415234367,constructor-09740478ac4f8e07816622c4
+P32,2,12:45,13:30,Обед,10,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-a402c24a65e236e94342d9e5,constructor-3898088fe967be08932b8b70
+S32,2,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-c8b3f6c71c6ccd144538797d,constructor-85817dab494caf28eed1b8bb
+T32,2,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-c8b3f6c71c6ccd144538797d,constructor-85817dab494caf28eed1b8bb
+B33,2,13:40,14:25,Математика,5,classes,7,7,deferred,ready,,,,constructor-76c73407ec959c614b6bd165,constructor-e6a8edf67b32e71e856aab0e
+D33,2,13:40,14:25,Литература,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-bc58f195fa1cf875155d7f58,constructor-e89c483dc67fc3ba5fd1ae0b
+F33,2,13:40,14:25,Математика,7-А | 7-Б,groups,11,11,deferred,deferred,,,audience_unresolved | review_required,constructor-efd712be9e0e718180364662,constructor-15f69a56622d191bc9a47006
+G33,2,13:40,14:25,Биология,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-3ca6493f6fd95dc0a4d209f8,constructor-15f69a56622d191bc9a47006
+I33,2,13:40,14:25,Обед,8,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-8710e3e0191514978df78b2f,constructor-aacc9fa228cc5e864831ca0d
+L33,2,13:40,14:25,Обед,9-Ан,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-d5012d3801d83b97ba4072e9,constructor-e436c34f08613a631e24e4c0
+M33,2,13:40,14:25,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-d5012d3801d83b97ba4072e9,constructor-0bc6a5ce04175954e502b88f
+N33,2,13:40,14:25,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-d5012d3801d83b97ba4072e9,constructor-0bc6a5ce04175954e502b88f
+P33,2,13:40,14:25,Литература,10,classes,10,10,deferred,ready,,,,constructor-bb33261f6287e53687cfdb1c,constructor-dcec27d493967e976b6bf9dc
+S33,2,13:40,14:25,Русский язык,11,classes,13,13,deferred,ready,,,,constructor-744c0a3586da3c766eb6ffb9,constructor-f83dc98b3e84aa0b44b6f4c1
+B34,2,14:35,15:20,Математика,5,classes,7,7,deferred,ready,,,,constructor-b030f6d1c9779d2048cc51c8,constructor-a69a3d8a53ec199db62bc342
+D34,2,14:35,15:20,Музыка,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-e5327809758b4513d2bb9e3c,constructor-1cbe488b1d4c96ee3af836a4
+F34,2,14:35,15:20,Физика,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-63ee1838e09e27855d3822f9,constructor-0080a6490379d1eb9b9d1887
+G34,2,14:35,15:20,Русский язык,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-39740c063bcb76c32e00b8c0,constructor-75ac0f1a50bd3c13ae9bf10e
+I34,2,14:35,15:20,Русский язык,8,classes,13,13,deferred,ready,,,,constructor-90ff0865be4ab7e39e3cd662,constructor-2c74052c8f2ce442317c9ee7
+L34,2,14:35,15:20,Литература,9-Ан | 9-Д,groups,5,5,deferred,ready,,,,constructor-77f3fa1d78056e45f6f8ff8c,constructor-2f0ae265ae37fa8d72926b58
+M34,2,14:35,15:20,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-77f3fa1d78056e45f6f8ff8c,constructor-86cb747c7741104e41ae3389
+N34,2,14:35,15:20,Математика,9-Ан | 9-Д,groups,12,12,deferred,ready,,,,constructor-77f3fa1d78056e45f6f8ff8c,constructor-2f0ae265ae37fa8d72926b58
+P34,2,14:35,15:20,Естествознание,10,classes,10,10,deferred,ready,,,,constructor-942c90a5fdccb4d00e155f9d,constructor-ef7794e5f8d5aaafc6e18e06
+S34,2,14:35,15:20,История,11,classes,13,13,deferred,ready,,,,constructor-079564b7dbe420a39e976ece,constructor-4f8c882c8d4acf23e6ee270d
+D35,2,15:30,16:15,История,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-c68188ec1813fc7856d57b2f,constructor-e4956fac353e2a087acd8f02
+F35,2,15:30,16:15,Русский язык,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-1af7abed3ba2ae12d6de5072,constructor-612d28e3b4852d43f54c3853
+G35,2,15:30,16:15,Физика,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-32723638840411efca778c82,constructor-5e47ce9029505112d559e614
+I35,2,15:30,16:15,Русский язык,8,classes,13,13,deferred,ready,,,,constructor-d44a07743196838049602249,constructor-72c0c1d4911e357ddf3b3930
+L35,2,15:30,16:15,Литература,9-Ан | 9-Д,groups,5,5,deferred,ready,,,,constructor-a5f16122519beac53654c873,constructor-0266a3b0ba72293409a0b283
+N35,2,15:30,16:15,Математика,9-Ан | 9-Д,groups,12,12,deferred,ready,,,,constructor-a5f16122519beac53654c873,constructor-0266a3b0ba72293409a0b283
+P35,2,15:30,16:15,Естествознание,10,classes,10,10,deferred,ready,,,,constructor-1fefec7c9e1c7db1a3c82f2d,constructor-19c194a7e7ed8090fe262e6e
+S35,2,15:30,16:15,История,11,classes,13,13,deferred,ready,,,,constructor-465465e753e0cecfbb4cdfaa,constructor-bc3420fbb678cdb852821ddd
+B36,2,16:20,17:05,⚪АЙКИДО,5,classes,7,7,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-58a9d14aba84512f86a74e85,constructor-1ca3547b165430c2c25b6753
+D36,2,16:20,17:05,⚪ГЕЙМ-ДИЗАЙН,6,classes,16,17,deferred,deferred,audience_unresolved | review_required,audience_unresolved | teacher_assignment_unverified,audience_unresolved,constructor-9bb2cfcca9d2e0c96a411abc,constructor-b0830697bbadcf8f8478e468
+G36,2,16:20,17:05,⚪ВОКАЛ,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-02b3e6f2c685913552bf5fb3,constructor-7d52eeb72d564520cfb5da46
+P36,2,16:20,17:05,Химия,10,groups,3,3,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-4f39c2ff705334d9af6267c7,constructor-3c43cbb74db17795de14e2b8
+Q36,2,16:20,17:05,Физика,10,groups,5,5,deferred,deferred,student_overlap | teacher_overlap,joint_activity | student_overlap,student_overlap,constructor-4f39c2ff705334d9af6267c7,constructor-3c43cbb74db17795de14e2b8
+S36,2,16:20,17:05,Физика,11,groups,3,3,deferred,deferred,teacher_overlap,joint_activity,student_overlap,constructor-a7039c327e87a2eb9c72ec9e,constructor-a2c2fa9846b2f38b2ca175b8
+B40,3,09:00,09:45,Литература,5,classes,7,7,ready,ready,,,,constructor-fe2efa7c8330a4a3e6933dd5,constructor-32d1c4b7cdfefbfa26c5e5e1
+F40,3,09:00,09:45,Русский язык,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-31bac75d73905e635724d475,constructor-6e371816237e144df17bf714
+G40,3,09:00,09:45,История искусства,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-31bac75d73905e635724d475,constructor-f6884482bbedf636ade29aa3
+I40,3,09:00,09:45,Лаборатория,8,classes,13,13,ready,ready,,,,constructor-c44fd77cea127144d001501f,constructor-026a193f248f01c0c434e0db
+M40,3,09:00,09:45,Естествознание,9-Д,classes,14,14,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-e617b036dffcb63909aaf0c3,constructor-68cbbaaab29e9a3115b8fdcb
+N40,3,09:00,09:45,Информатика,9-Ан | 9-Д,groups,7,7,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-e617b036dffcb63909aaf0c3,constructor-e4ca0a43282b1153f3096b3a
+P40,3,09:00,09:45,Биология,10,groups,2,2,ready,ready,,,,constructor-ff0d35eb933c38d7c9648110,constructor-0f3f14eb04c816303cb02a94
+Q40,3,09:00,09:45,Обществознание,10,groups,3,3,ready,ready,,,,constructor-ff0d35eb933c38d7c9648110,constructor-0f3f14eb04c816303cb02a94
+B41,3,09:55,10:40,Биология,5,classes,7,7,ready,ready,,,,constructor-bd09622bca67f8379d069925,constructor-50dddebf99aa472e088036f0
+D41,3,09:55,10:40,Лаборатория,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-7d9e6a2edeaf973c0ef78599,constructor-9f247935f63d19c6a17abcde
+F41,3,09:55,10:40,История искусства,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-d698255374c64af1c123691b,constructor-3d1b9b8ce888b65638300338
+G41,3,09:55,10:40,География,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-d698255374c64af1c123691b,constructor-a99c547b986145983bfb1844
+I41,3,09:55,10:40,Лаборатория,8,classes,13,13,ready,ready,,,,constructor-41002d40dd700e12978e33e5,constructor-b82e44310d966e73feb6e56c
+L41,3,09:55,10:40,Литература,9-Ан | 9-Д,groups,5,5,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-3077aa90bfe82e0f1b70b75c,constructor-772dd69a1309a9ecd33bfc62
+M41,3,09:55,10:40,Естествознание,9-Д,classes,14,14,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-3077aa90bfe82e0f1b70b75c,constructor-06eddf802bb1131bdbc5d407
+N41,3,09:55,10:40,Информатика,9-Ан | 9-Д,groups,7,7,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-3077aa90bfe82e0f1b70b75c,constructor-772dd69a1309a9ecd33bfc62
+P41,3,09:55,10:40,История искусства,10,classes,10,10,deferred,ready,teacher_overlap,joint_activity,,constructor-85164661e17ed65967d8506e,constructor-15b34a1d88c53bc524f3fad1
+S41,3,09:55,10:40,История искусства,11,classes,13,13,deferred,ready,teacher_overlap,joint_activity,,constructor-5591bf7806b69d7d6197b648,constructor-071b14f31820d102307d3c2f
+B42,3,10:55,11:40,Русский язык,5,classes,7,7,ready,ready,,,,constructor-fb03d1b5de9458897f6bb10f,constructor-fe7b6be9ad1d4b83820812fd
+D42,3,10:55,11:40,Биология,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-cf0cee2c0b161f8e5960fd03,constructor-d09b8dcf64582b88ad9ffe59
+F42,3,10:55,11:40,География,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-fce11797360155f2aeb5dc6f,constructor-d826f90d079f439eb06cc1e4
+G42,3,10:55,11:40,Русский язык,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-fce11797360155f2aeb5dc6f,constructor-fffca5fd4954edf4126a42c0
+I42,3,10:55,11:40,История,8,classes,13,13,ready,ready,,,,constructor-79e37e18ff17ee35a9cd4125,constructor-28bdb9c329558f5d27542d93
+L42,3,10:55,11:40,Информатика,9-Ан | 9-Д,groups,9,9,ready,ready,missing_room,missing_room,,constructor-94232cfb5d8cc9304de149ef,constructor-938762678493ed516051084b
+P42,3,10:55,11:40,История искусства,10,classes,10,10,deferred,ready,teacher_overlap,joint_activity,,constructor-8cc20da27177834d63c787fd,constructor-f9f17a622b4ccceaf7fc1f46
+S42,3,10:55,11:40,История искусства,11,classes,13,13,deferred,ready,teacher_overlap,joint_activity,,constructor-6e5c0a49a680aacc7a843998,constructor-a98436e8a3b938c2e2f09607
+B43,3,11:50,12:35,Репетиция,5,classes,7,7,deferred,ready,,,,constructor-113fc8d9a943b0724f79d754,constructor-bec19d4c179aeaaa77a31530
+D43,3,11:50,12:35,Обед,6,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-ef95518b16bbb2a1623532ff,constructor-19b96db5e2efed0552df3709
+F43,3,11:50,12:35,Обед,7-А,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-361a6cdbe0bfda2fd151110e,constructor-77aaed1c0751eeabbf4ec967
+G43,3,11:50,12:35,Обед,7-Б,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-361a6cdbe0bfda2fd151110e,constructor-4de25c71b7728a186c040c9c
+I43,3,11:50,12:35,Классный час,8,classes,13,13,deferred,ready,,,,constructor-ae299b96ba5a8c28c82fd053,constructor-432960b36a5633f7b9359621
+L43,3,11:50,12:35,Естествознание,9-Ан,classes,15,15,deferred,ready,missing_room,missing_room,,constructor-d5750be2d7b19432313c9004,constructor-48e1588322e8ec67efb6aae8
+P43,3,11:50,12:35,Математика,10,classes,10,10,deferred,ready,,,,constructor-8f11d10ae0447e36405f9d22,constructor-0f5333f7352d462ad981a16f
+S43,3,11:50,12:35,Русский язык,11,classes,13,13,deferred,ready,,,,constructor-c031b72b8a6917b564569dce,constructor-a3e3fb4f4fa9de4d8370ab47
+B44,3,12:45,13:30,Обед,5,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-0854928bcc87926ec2d23fb0,constructor-63a97d65e457f8cc1dd74c76
+D44,3,12:45,13:30,Репетиция,6,classes,16,17,deferred,deferred,audience_unresolved,audience_unresolved,audience_unresolved,constructor-928eafbe7e4d32920d88484a,constructor-8130334a29b7ccc94a0ca23f
+F44,3,12:45,13:30,Творчество,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-e4d84c92baa82da455c30807,constructor-a24606d7109e3792c1aed949
+G44,3,12:45,13:30,Творчество,7-Б,classes,12,12,deferred,deferred,review_required,student_overlap | teacher_assignment_unverified,student_overlap,constructor-e4d84c92baa82da455c30807,constructor-97a4ae8f7c759aae99ab57bf
+H44,3,12:45,13:30,Творчество,7-Б,classes,12,12,deferred,deferred,missing_teacher | review_required,missing_teacher | student_overlap,student_overlap,constructor-e4d84c92baa82da455c30807,constructor-97a4ae8f7c759aae99ab57bf
+I44,3,12:45,13:30,Математика,8,classes,13,13,ready,ready,,,,constructor-fde3faf79e299db352580e92,constructor-f830f6be60ce4f40a4512a2a
+L44,3,12:45,13:30,Естествознание,9-Ан,classes,15,15,ready,ready,missing_room,missing_room,,constructor-8d6022389afb95f1a426577b,constructor-06f90dd6c031640efba67d11
+P44,3,12:45,13:30,Обед,10,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-999a42ae33f3c0ed9f65a962,constructor-b9cd5f719466f82693f9259e
+S44,3,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-9346c598f3846836e572eef6,constructor-93705cbedf36fc07e91cbff8
+T44,3,12:45,13:30,Обед,11,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-9346c598f3846836e572eef6,constructor-93705cbedf36fc07e91cbff8
+B45,3,13:40,14:25,География,5,classes,7,7,ready,ready,,,,constructor-291a9e39aa3e6792f38acf07,constructor-8960e8940ceb9ae37c9ec9ce
+D45,3,13:40,14:25,Математика,6,classes,16,17,deferred,deferred,audience_unresolved | missing_room,audience_unresolved | missing_room,audience_unresolved,constructor-04940361d22dce5e2e6a295d,constructor-d7879e2f80f8660ddff8679f
+F45,3,13:40,14:25,Репетиция 7-А,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-23aa7def3254f7a3133e9629,constructor-d8bbfcb9df5d96c419a6fbe7
+G45,3,13:40,14:25,Литература,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-23aa7def3254f7a3133e9629,constructor-e8c7054445575a976ad6986e
+I45,3,13:40,14:25,Обед,8,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-23a6daf0ddbcab4c1cbff49b,constructor-61a861fd4405fcea6a9afb6a
+L45,3,13:40,14:25,Обед,9-Ан,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-7797cfef2de7bbe8483afceb,constructor-f6cf96ace1570e1325b1693f
+M45,3,13:40,14:25,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-7797cfef2de7bbe8483afceb,constructor-a2bbc995a5e82bf2cc6e97ca
+N45,3,13:40,14:25,Английский,9-Ан | 9-Д,groups,15,15,deferred,ready,missing_room,missing_room,,constructor-7797cfef2de7bbe8483afceb,constructor-7fb8bd9fa53fb1b0e001fe79
+P45,3,13:40,14:25,История,10,classes,10,10,ready,ready,,,,constructor-e3bac93d3758f71aead00054,constructor-6849206ad0e6535e029f7cce
+S45,3,13:40,14:25,Русский язык,11,classes,13,13,deferred,deferred,missing_teacher | review_required | student_overlap,missing_teacher | student_overlap,student_overlap,constructor-abc669e8baffd425b7175569,constructor-3e8acc240d64cb52624c407a
+T45,3,13:40,14:25,Информатика,11,groups,3,3,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-abc669e8baffd425b7175569,constructor-3e8acc240d64cb52624c407a
+B46,3,14:35,15:20,Творчество,5,classes,7,7,deferred,deferred,,student_overlap,student_overlap,constructor-0275ba5a77b921e073329a38,constructor-d9dfc227e08e998a61f79df0
+C46,3,14:35,15:20,Творчество,5,classes,7,7,deferred,deferred,review_required,student_overlap | teacher_assignment_unverified,student_overlap,constructor-0275ba5a77b921e073329a38,constructor-d9dfc227e08e998a61f79df0
+D46,3,14:35,15:20,Творчество,6,classes,16,17,deferred,deferred,audience_unresolved | missing_teacher | review_required,audience_unresolved | missing_teacher,audience_unresolved,constructor-11d5b9dad69e3de5d9a11bc5,constructor-c02ad94d7280d2aadabd0c26
+F46,3,14:35,15:20,Литература,7-А,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-edc44497f4a6af15a366f254,constructor-1ac4138d7f786e1b3b927087
+G46,3,14:35,15:20,Репетиция 7-Б,7-Б,classes,12,12,deferred,ready,review_required,teacher_assignment_unverified,,constructor-edc44497f4a6af15a366f254,constructor-d3fbe46e8de72ff3e3d0b337
+I46,3,14:35,15:20,Математика,8,classes,13,13,ready,ready,,,,constructor-73ac97b3ff51f01a121cb2dd,constructor-2bbf5e126cf27fedb104a155
+L46,3,14:35,15:20,Обед,9-Ан,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-2c80ff9295adddef3d6a53c1,constructor-c91158bbcc3f05125685451a
+M46,3,14:35,15:20,Математика,9-Ан | 9-Д,groups,13,13,deferred,ready,missing_room,missing_room,,constructor-2c80ff9295adddef3d6a53c1,constructor-c0caa0411528b1d3e15e999c
+N46,3,14:35,15:20,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-2c80ff9295adddef3d6a53c1,constructor-e3945fbaa62b4782a537f008
+P46,3,14:35,15:20,История,10,classes,10,10,ready,ready,,,,constructor-7e5a8321d7feeb8b4b10c8ba,constructor-57010fa39a9be35876289539
+S46,3,14:35,15:20,Русский язык,11,classes,13,13,deferred,deferred,missing_teacher | review_required | student_overlap,missing_teacher | student_overlap,student_overlap,constructor-a2fff1841a2de353dce49f31,constructor-5264dd934ac7c8329247987a
+T46,3,14:35,15:20,Информатика,11,groups,3,3,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-a2fff1841a2de353dce49f31,constructor-5264dd934ac7c8329247987a
+B47,3,15:30,16:15,⚪АКАДЕМИЧЕСКИЙ РИСУНОК,5,classes,7,7,ready,ready,,,,constructor-f6ca2559bcf4d5e644201e38,constructor-75ec730503fdc7218fc3c976
+D47,3,15:30,16:15,⚪ЯПОНСКИЕ ШАХМАТЫ,6,classes,16,17,deferred,deferred,audience_unresolved | review_required,audience_unresolved | teacher_assignment_unverified,audience_unresolved,constructor-04732cfd28f51bf0b1458218,constructor-32a5590f7e5b2721471a53f9
+F47,3,15:30,16:15,⚪ИСПАНСКИЙ,7-А,classes,12,12,deferred,ready,missing_teacher | review_required,missing_teacher,,constructor-ed814d57e903bf7a293e1ba1,constructor-349803ffd4ca2caaa42c0661
+L47,3,15:30,16:15,Математика,9-Ан,groups,4,4,deferred,ready,,,,constructor-810139378a5431a5a64459bf,constructor-dff1eddb9f1775c79ac91c0c
+M47,3,15:30,16:15,Обществознание,9-Ан | 9-Д,groups,14,14,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-810139378a5431a5a64459bf,constructor-9accab624c83e48ca27fb2b9
+N47,3,15:30,16:15,Физика,9-Ан | 9-Д,groups,6,6,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-810139378a5431a5a64459bf,constructor-9accab624c83e48ca27fb2b9
+Q47,3,15:30,16:15,Информатика,10,groups,3,3,ready,ready,,,,constructor-758fa023db435a2df9488a64,constructor-2e9aa5bbaa96bff956a33efa
+T47,3,15:30,16:15,Матпроф,11,classes,13,13,ready,ready,,,,constructor-b3f91189e2bf86643c1d5c05,constructor-9dd3bc96c9fcf88e8057d6bf
+M48,3,16:20,17:05,География,9-Д,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | review_required,audience_unresolved | missing_room | review_required,audience_unresolved | review_required,constructor-fbd112f4a67d8ec72c2863e4,constructor-18b3ebeee91b42417684cc8b
+N48,3,16:20,17:05,Физика,9-Ан | 9-Д,groups,6,6,deferred,ready,,,,constructor-fbd112f4a67d8ec72c2863e4,constructor-d305e993a549b4a439a5d0ec
+B52,4,09:00,09:45,Математика,5,classes,7,7,ready,ready,missing_room,missing_room,,constructor-7d9f6e923a31b70300c96897,constructor-6dd40346c5ebf3ca491a4db9
+C52,4,09:00,11:40,Лаборатория · Прошлое · Настоящее,5,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | review_required,constructor-3352ddcdf1b159159100f99e,constructor-6c1b294810bf7f87ff876400
+D52,4,09:00,09:45,Русский язык,6,classes,16,17,deferred,deferred,audience_unresolved | missing_room,audience_unresolved | missing_room,audience_unresolved,constructor-78adf7e8945be718f05ced71,constructor-07694a96a319297b1cf4eef5
+F52,4,09:00,09:45,Английский,7-А | 7-Б | 8,groups,10,10,deferred,ready,missing_room,missing_room,,constructor-e124c7b46dd5db9c55cc6787,constructor-c5654b0854a5fc931a6eb06b
+I52,4,09:00,09:45,Английский,7-А | 7-Б | 8,groups,10,10,deferred,ready,missing_room | missing_teacher | review_required,missing_room | missing_teacher,,constructor-e124c7b46dd5db9c55cc6787,constructor-c5654b0854a5fc931a6eb06b
+M52,4,09:00,09:45,Обществознание,9-Ан | 9-Д,groups,14,14,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-7be187b2ca123d195e633b72,constructor-e7fc20068758a6edb8231beb
+N52,4,09:00,09:45,Физика,9-Ан | 9-Д,groups,6,6,deferred,deferred,missing_teacher | review_required | student_overlap,missing_teacher | student_overlap,student_overlap,constructor-7be187b2ca123d195e633b72,constructor-e7fc20068758a6edb8231beb
+B53,4,09:55,10:40,Русский язык,5,classes,7,7,ready,ready,missing_room,missing_room,,constructor-3efbd55f8bcdd3d0d20d00dc,constructor-4f39d753234caf76d0fd5977
+D53,4,09:55,10:40,Введение в физику,6,classes,16,17,deferred,deferred,audience_unresolved | missing_room | review_required,audience_unresolved | missing_room | teacher_assignment_unverified,audience_unresolved,constructor-890ed60d4fd746103f436f81,constructor-40c693b28706dcfd02d0a5a3
+F53,4,09:55,10:40,Английский,7-А | 7-Б | 8,groups,13,13,deferred,deferred,missing_room,missing_room,joint_activity_unconfirmed,constructor-8190bd96098153d2ae44639d,constructor-fb7c34e638d6d371be1a3876
+G53,4,09:55,10:40,Английский,7-А | 7-Б | 8,groups,12,12,deferred,deferred,missing_room | teacher_overlap,joint_activity_unconfirmed | missing_room,joint_activity_unconfirmed,constructor-8190bd96098153d2ae44639d,constructor-fb7c34e638d6d371be1a3876
+I53,4,09:55,10:40,Английский,7-А | 7-Б | 8,groups,13,13,deferred,deferred,missing_room | missing_teacher | review_required,missing_room | missing_teacher,joint_activity_unconfirmed,constructor-8190bd96098153d2ae44639d,constructor-fb7c34e638d6d371be1a3876
+L53,4,09:55,10:40,История,9-Ан,classes,15,15,ready,ready,,,,constructor-8cd2762ad9b2e5b296470488,constructor-b34159e8aae5ec4f2c5c556a
+M53,4,09:55,10:40,Русский язык,9-Д,classes,14,14,ready,ready,,,,constructor-8cd2762ad9b2e5b296470488,constructor-f4f948c0e05db2f6e042d1ef
+P53,4,09:55,10:40,Физика,10,groups,5,5,deferred,deferred,missing_room | student_overlap | teacher_overlap,joint_activity_unconfirmed | missing_room | student_overlap,joint_activity_unconfirmed | student_overlap,constructor-e83ca097035593d26e057975,constructor-bfafc3240dce66a8645552dd
+Q53,4,09:55,10:40,Английский,10 | 11,groups,12,12,deferred,deferred,missing_room | student_overlap | teacher_overlap,joint_activity_unconfirmed | missing_room | student_overlap,joint_activity_unconfirmed | student_overlap,constructor-65b12d6f04e6160cb78b7521,constructor-7529992c58cb73ef51cdfac9
+S53,4,09:55,10:40,Физика,11,groups,3,3,deferred,deferred,missing_room | student_overlap | teacher_overlap,joint_activity_unconfirmed | missing_room | student_overlap,joint_activity_unconfirmed | student_overlap,constructor-c0d7eca82a179556f9442826,constructor-946dd2e645d8aadf05051ab6
+B54,4,10:55,11:40,Английский,5 | 6,groups,11,11,deferred,ready,missing_room,missing_room,,constructor-62507a447deef1dff08bd192,constructor-1d48ffff3ee71025e2c529aa
+D54,4,10:55,11:40,Английский,5 | 6,groups,12,12,deferred,ready,missing_room,missing_room,,constructor-62507a447deef1dff08bd192,constructor-1d48ffff3ee71025e2c529aa
+F54,4,10:55,11:40,Программирование,7-А,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | review_required,audience_unresolved | missing_room | review_required,audience_unresolved | review_required,constructor-d0a8fc9244e5c51b3943c1f6,constructor-d3572dcb19daba8a1c0e819a
+G54,4,10:55,11:40,ШУМ · Медиамастерская · группа 1,7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | review_required,constructor-d0a8fc9244e5c51b3943c1f6,constructor-0a33479505cbe722e8fbe7ca
+I54,4,10:55,11:40,Программирование,8,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | review_required,constructor-bdc43ef50b7ace312e185548,constructor-55adc83ecb183c571dc17fbe
+J54,4,10:55,11:40,ШУМ · Медиамастерская · группа 1,8,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | review_required,constructor-bdc43ef50b7ace312e185548,constructor-55adc83ecb183c571dc17fbe
+L54,4,10:55,11:40,Русский язык,9-Ан,classes,15,15,deferred,deferred,teacher_overlap,joint_activity_unconfirmed,joint_activity_unconfirmed,constructor-f6c54de13dc824d6f296f57b,constructor-310d8cc9de22b62aa904a82f
+M54,4,10:55,11:40,История,9-Д,classes,14,14,deferred,ready,,,,constructor-f6c54de13dc824d6f296f57b,constructor-481db60b16e54aa173c14cd9
+P54,4,10:55,11:40,Математика,10,classes,10,10,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,joint_activity_unconfirmed | student_overlap,constructor-d423f4b9880eb4adf6d2fc61,constructor-afb1478052eb06a94e4369aa
+Q54,4,10:55,11:40,Русский язык,10,classes,10,10,deferred,deferred,missing_room | student_overlap | teacher_overlap,joint_activity_unconfirmed | missing_room | student_overlap,joint_activity_unconfirmed | student_overlap,constructor-d423f4b9880eb4adf6d2fc61,constructor-afb1478052eb06a94e4369aa
+S54,4,10:55,11:40,Пластика,11,classes,13,13,deferred,ready,,,,constructor-f82a7b88e1a60f407d3fbd8b,constructor-ad69edb80081f8e3bd88e77e
+B55,4,11:50,12:35,Обед,5,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-54a618eb07f8e6b4232033e4,constructor-74c21031c5d5b48638223143
+D55,4,11:50,12:35,Обед,6,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-66ce979f58f578f702ec60a2,constructor-8c61ac1163c7c667370e06fb
+F55,4,11:50,12:35,Компьютерная графика,7-А,classes,12,12,deferred,deferred,missing_room | review_required | teacher_overlap,joint_activity_unconfirmed | missing_room | teacher_assignment_unverified,joint_activity_unconfirmed,constructor-c6ffb11bcc53eb57b01f9f3d,constructor-8bd958dd3a2455561b565f92
+G55,4,11:50,12:35,ШУМ · Медиамастерская · группа 2,7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | review_required,constructor-dc89c0021291da11de37d731,constructor-3fc75f7053eda2be4583e7ab
+I55,4,11:50,12:35,Компьютерная графика,8,classes,13,13,deferred,deferred,missing_room | review_required | teacher_overlap,joint_activity_unconfirmed | missing_room | teacher_assignment_unverified,audience_unresolved | joint_activity_unconfirmed | review_required,constructor-f912d1a3544d1069c9120cdc,constructor-1cda731d56e621990f5832c7
+J55,4,11:50,12:35,ШУМ · Медиамастерская · группа 2,8,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | missing_room | missing_teacher | review_required,audience_unresolved | joint_activity_unconfirmed | review_required,constructor-f912d1a3544d1069c9120cdc,constructor-1cda731d56e621990f5832c7
+L55,4,11:50,12:35,Пластика,9-Ан,classes,15,15,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-d372eca8c8930711b7945023,constructor-d71539688dc38da1a3391978
+M55,4,11:50,12:35,Математика,9-Ан | 9-Д,groups,13,13,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-d372eca8c8930711b7945023,constructor-eb3ca3c99f7db6c8f2e4b67b
+N55,4,11:50,12:35,География,9-Д,classes,14,14,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-d372eca8c8930711b7945023,constructor-ffbd64c6ef1847033f0c6c0d
+P55,4,11:50,12:35,Биология,10,groups,2,2,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-5f549accfb62a26d984e2dd4,constructor-7b9399cfb2d30fd981dbbc35
+Q55,4,11:50,12:35,Химия,10,groups,3,3,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-5f549accfb62a26d984e2dd4,constructor-7b9399cfb2d30fd981dbbc35
+S55,4,11:50,12:35,Обществознание,11,classes,13,13,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-b8d11754eb8764eeefca7d33,constructor-120956d4c576d3cd52a97470
+T55,4,11:50,12:35,Литература,11,groups,5,5,deferred,deferred,missing_room | student_overlap,missing_room | student_overlap,student_overlap,constructor-b8d11754eb8764eeefca7d33,constructor-120956d4c576d3cd52a97470
+B56,4,12:45,13:30,История,5,classes,7,7,deferred,ready,missing_room,missing_room,,constructor-3f15f65eab98408800e514a3,constructor-e31ed0221c44102fcd4014db
+D56,4,12:45,13:30,История,6,classes,16,17,deferred,deferred,audience_unresolved | missing_room,audience_unresolved | missing_room,audience_unresolved,constructor-c04a0b05f779ae30ea48f6d8,constructor-777d4fd7e0cc2bb7a750486a
+F56,4,12:45,13:30,Математика,7-А,classes,12,12,deferred,ready,missing_room | review_required,missing_room | teacher_assignment_unverified,,constructor-655606cfefba0bfb1f25b003,constructor-b8d11fa067d62e54deb629a5
+G56,4,12:45,13:30,Русский язык,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | review_required,audience_unresolved | missing_room | review_required,audience_unresolved | review_required,constructor-52b3f83e88c3484ca83062b4,constructor-4a13ce8fa30e294f79054908
+I56,4,12:45,13:30,Математика,8,classes,13,13,deferred,ready,missing_room,missing_room,,constructor-a2485522a9414b1580bad0a9,constructor-84b6a682e77cab7d761423d1
+L56,4,12:45,13:30,Математика,9-Ан,groups,4,4,deferred,ready,,,,constructor-3c3220af10ea3fe5e3f83ecc,constructor-f4606732ada386af8f6aae66
+M56,4,12:45,13:30,Пластика,9-Д,classes,14,14,deferred,ready,,joint_activity,,constructor-3c3220af10ea3fe5e3f83ecc,constructor-68a0e0cf382996d98f583166
+N56,4,12:45,13:30,Пластика,9-Д,classes,14,14,deferred,ready,,joint_activity,,constructor-3c3220af10ea3fe5e3f83ecc,constructor-68a0e0cf382996d98f583166
+P56,4,12:45,13:30,Обществознание,10,classes,10,10,deferred,ready,missing_room,missing_room,,constructor-435bb2bfb5ee010668cda5e4,constructor-45b5ffb0f8e6fe593b4c7fdc
+S56,4,12:45,13:30,Русский язык,11,classes,13,13,deferred,deferred,missing_room | missing_teacher | review_required | student_overlap,missing_room | missing_teacher | student_overlap,student_overlap,constructor-67fa308d4584587aeb7f74fb,constructor-92cda1880e327b4babd25175
+T56,4,12:45,13:30,Матпроф практикум,11,classes,13,13,deferred,deferred,missing_room | missing_teacher | review_required | student_overlap,missing_room | missing_teacher | student_overlap,student_overlap,constructor-67fa308d4584587aeb7f74fb,constructor-92cda1880e327b4babd25175
+D57,4,13:40,14:25,Математика,6,classes,16,17,deferred,deferred,audience_unresolved | missing_room,audience_unresolved | missing_room,audience_unresolved,constructor-d07165cecd68a05fc4daac40,constructor-79996aa20fa68e4c6aa452f7
+F57,4,13:40,14:25,Русский язык,7-А | 7-Б,unresolved,0,0,deferred,deferred,audience_unresolved | missing_room | review_required,audience_unresolved | missing_room | review_required,audience_unresolved | review_required,constructor-63b8f69b740ef84dc28fd87b,constructor-08e43ef64a16ebd6f4ef0b1d
+G57,4,13:40,14:25,Математика,7-Б,classes,12,12,deferred,ready,missing_room | review_required,missing_room | teacher_assignment_unverified,,constructor-4d85b558c01f89221f90e0ef,constructor-7ef58f11e1d9dd0902b72ec4
+I57,4,13:40,14:25,Русский язык,8,classes,13,13,deferred,ready,missing_room,missing_room,,constructor-f86bf67f681b44627b1c1bd2,constructor-e8a9e089149d28a9a0147d52
+L57,4,13:40,14:25,География,9-Ан,classes,15,15,deferred,deferred,student_overlap,joint_activity | student_overlap,student_overlap,constructor-14de08177449135ddbdfa0d8,constructor-7a38c56620b82a49095ab84d
+M57,4,13:40,14:25,География,9-Д,classes,14,14,deferred,deferred,student_overlap,joint_activity | student_overlap,student_overlap,constructor-14de08177449135ddbdfa0d8,constructor-aa9a4169115fbe97fe950a3c
+N57,4,13:40,14:25,Математика,9-Ан | 9-Д,groups,12,12,deferred,deferred,student_overlap,student_overlap,student_overlap,constructor-14de08177449135ddbdfa0d8,constructor-dc0ac47f41df18cb78dc327a
+P57,4,13:40,14:25,Пластика,10,classes,10,10,deferred,ready,,,,constructor-59f6695add8436afa0beec5a,constructor-b398e807d4154d72e60ba7df
+I58,4,14:35,15:20,Физика,8,classes,13,13,ready,ready,missing_room,missing_room,,constructor-053b95df056c982f597eef19,constructor-617a4bae67cb970d429eb55b
+L58,4,14:35,15:20,Обед,9-Ан,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-11f450eaf2d3363ac8ae3787,constructor-bdf02d5d70bede14ddeea6a4
+M58,4,14:35,15:20,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-11f450eaf2d3363ac8ae3787,constructor-5aefa3cfb8c3d350eeebad79
+N58,4,14:35,15:20,Обед,9-Д,lunch,0,0,deferred,ready,missing_room | review_required,lunch_scope_advisory | missing_room,,constructor-11f450eaf2d3363ac8ae3787,constructor-5aefa3cfb8c3d350eeebad79
+P58,4,14:35,15:20,Информатика,10,groups,3,3,deferred,deferred,missing_room | teacher_overlap,joint_activity_unconfirmed | missing_room,joint_activity_unconfirmed,constructor-2f6637c0f5fa645e276336f4,constructor-099bdc2ff6d760f23d0d8eb0
+S58,4,14:35,15:20,Информатика,11,groups,3,3,deferred,deferred,missing_room | teacher_overlap,joint_activity_unconfirmed | missing_room,joint_activity_unconfirmed,constructor-23525266da2a33eede1d19b2,constructor-888f4278ca3ede96d72d86cb
+D59,4,15:30,16:15,Программирование,6 | 7-А,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-695d9e21ac5d4b3c61ee1d9e,constructor-2ec6d63c41d803bbc55299c1
+L59,4,15:30,16:15,География,9-Ан,groups,4,4,deferred,ready,,,,constructor-458c100345e169b20d09543c,constructor-c7107c7bbde4790cc2ef3c4b
+M59,4,15:30,16:15,репетиция 9 Д,9-Д,classes,14,14,deferred,ready,missing_room | missing_teacher | review_required,missing_room | missing_teacher,,constructor-458c100345e169b20d09543c,constructor-2ad88bd24fb9f83cfb79809c
+B29:direction:1,2,09:55,10:40,Cambridge Flyers,5 | 6,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-ed027e462c357bde4b2b4fb9,constructor-4d1dcec14485334c2485a8d3
+B29:direction:2,2,09:55,10:40,Логикон,5 | 6,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-ed027e462c357bde4b2b4fb9,constructor-4d1dcec14485334c2485a8d3
+B29:direction:3,2,09:55,10:40,Лингвистический детектив,5 | 6,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-ed027e462c357bde4b2b4fb9,constructor-4d1dcec14485334c2485a8d3
+B29:direction:4,2,09:55,10:40,Юннаты XXI,5 | 6,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-ed027e462c357bde4b2b4fb9,constructor-4d1dcec14485334c2485a8d3
+F32:direction:1,2,12:45,13:30,English Through Cinema,7-А | 7-Б | 8,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-96b99770e1b7929d15daf29b,constructor-8ced14c0d3a73800b236a703
+F32:direction:2,2,12:45,13:30,Шальная наука,7-А | 7-Б | 8,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-96b99770e1b7929d15daf29b,constructor-8ced14c0d3a73800b236a703
+F32:direction:3,2,12:45,13:30,Логикон,7-А | 7-Б | 8,unresolved,0,0,deferred,deferred,audience_unresolved | missing_teacher | review_required,audience_unresolved | missing_teacher | review_required,audience_unresolved | review_required,constructor-96b99770e1b7929d15daf29b,constructor-8ced14c0d3a73800b236a703
+F32:direction:4,2,12:45,13:30,Кухня кино. Озвучка,7-А | 7-Б | 8,unresolved,0,0,deferred,deferred,audience_unresolved | review_required,audience_unresolved | review_required,audience_unresolved | review_required,constructor-96b99770e1b7929d15daf29b,constructor-8ced14c0d3a73800b236a703
+L10,0,14:35,15:20,Английский,9-Ан | 9-Д,groups,8,8,deferred,ready,,,,constructor-8047b309629ed7f1a6a6f7ac,constructor-8471bfcb4b3eb586f4dd8aef
+I5,0,09:55,10:40,Русский язык,8,classes,13,13,deferred,ready,,,,constructor-10cdf6c4fc918149f1685c94,constructor-ded8d2b6b320562407bbf9e1
