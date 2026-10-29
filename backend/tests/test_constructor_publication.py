@@ -22,6 +22,29 @@ from backend.handlers.api import create_router
 
 
 class ConstructorPublicationTests(unittest.TestCase):
+    def test_all_386_source_records_survive_publication_and_restore_without_assignment(self):
+        from backend.services.constructor_publication import get_published_source
+        lessons=[self.lesson(id=f"unknown-{i}", audience={"kind":"groups","group_ids":[f"unknown-{i}"]}) for i in range(386)]
+        draft=self.draft(lessons)
+        p=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
+        self.assertEqual(p["summary"]["source_lessons"],386)
+        self.assertEqual(p["summary"]["campus_lessons"],0)
+        self.assertEqual(p["summary"]["admin_only_lessons"],386)
+        self.assertTrue(p["can_publish"])
+        result=self.publish(draft)
+        archive=get_published_source(self.database,result["publication_id"])["published_source"]
+        self.assertEqual(archive["payload"],draft["payload"])
+        self.assertEqual(len(archive["records"]),386)
+        self.assertEqual({r["status"] for r in archive["records"]},{"unresolved"})
+        self.assertEqual(canonical.read_canonical_template(self.database)["blocks"],{})
+        with self.database.connection() as connection:
+            connection.execute("UPDATE schedule_experiment_drafts SET payload='{}' WHERE id=?",(draft["id"],))
+        self.assertEqual(get_published_source(self.database,result["publication_id"])["published_source"],archive)
+        head=canonical.publication_head(self.database,"template")
+        restore=preview_restore(self.database,result["publication_id"],expected_head_revision=head["revision"])
+        restored=restore_publication(self.database,result["publication_id"],expected_head_revision=head["revision"],preview_token=restore["preview_token"],confirmed=True)
+        self.assertEqual(get_published_source(self.database,restored["publication_id"])["published_source"],archive)
+
     def test_native_postgres_time_values_compare_like_minute_strings(self):
         from datetime import time
         from backend.services.constructor_publication import _semantic, _artifact_blocks

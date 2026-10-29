@@ -573,6 +573,20 @@ def _artifact_blocks(blocks: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _published_source(payload: Mapping[str, Any], diagnostics: list, deferred: list) -> dict[str, Any]:
+    """Archive authored truth separately from safe runtime assignments."""
+    unresolved = {item["lesson_id"] for item in deferred}
+    records = []
+    for index,lesson in enumerate(payload.get("lessons") or []):
+        lid = str(lesson.get("id") or index)
+        issues = [issue for issue in diagnostics if lid in (issue.get("related_lesson_ids") or [issue.get("lesson_id")])]
+        records.append({"lesson_id": lid, "status": "unresolved" if lid in unresolved else "resolved_with_remarks" if issues else "resolved",
+                        "diagnostic_codes": sorted({issue["code"] for issue in issues}),
+                        "related_lesson_ids": sorted({str(i) for issue in issues for i in issue.get("related_lesson_ids", []) if str(i)!=lid})})
+    return {"schema_version": "published-source-v1", "payload_fingerprint": _hash(payload),
+            "payload": deepcopy(dict(payload)), "records": records}
+
+
 def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
                         expected_revision: int, week_start: str | None = None,
                         draft_database: Any = None) -> dict[str, Any]:
@@ -607,13 +621,18 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
                "unchanged_lessons": sum(len(blocks[k].get("assignments") or []) for k in unchanged),
                "replaced_lessons": sum(len(before[k].get("assignments") or []) for k in blocks.keys() & before.keys() - unchanged),
                **{f"{severity}_count": sum(d["severity"] == severity for d in diagnostics) for severity in ("info", "conflict", "critical")}}
+    published_source = _published_source(draft["payload"], diagnostics, deferred)
+    summary.update(source_lessons=len(published_source["records"]), resolved_lessons=summary["ready_lessons"],
+                   unresolved_lessons=len(deferred), campus_lessons=summary["ready_lessons"], admin_only_lessons=len(deferred),
+                   with_remarks_lessons=sum(r["status"]=="resolved_with_remarks" for r in published_source["records"]),
+                   acknowledged_exceptions=0)
     result = {"draft_id": draft_id, "draft_revision": draft["revision"], "scope_kind": scope_kind,
               "scope_key": scope_key, "week_start": week_start if scope_kind == "week" else None,
               "base_version_id": base_id or None, "effective_week_id": (effective or {}).get("effective_week_id"),
               "head_revision": (head or {}).get("revision", 0), "previous_published_id": (head or {}).get("published_id"),
               "payload_fingerprint": _hash(draft["payload"]), "directory_fingerprint": _directory_fingerprint(database),
               "can_publish": not blockers, "blockers": blockers, "deferred": deferred, "diff": diff,
-              "diagnostics": diagnostics, "summary": summary,
+              "diagnostics": diagnostics, "summary": summary, "published_source": published_source,
               "source_kind": "template" if scope_kind == "template" else "authored_week" if draft["payload"].get("week_start") == week_start else "template_week",
               "change_items": _change_items(before, blocks),
               "source_policy": "manual_head_protected_source_refresh_requires_explicit_review"}
@@ -670,8 +689,10 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
         raise RuntimeError("Canonical runtime readback failed; transaction rolled back")
     readback_result = {"version_id": version_id,
         "effective_week_id": published_id if preview["scope_kind"] == "week" else None,
-        "block_count": len(actual), "assignment_count": sum(len(b.get("assignments") or []) for b in actual.values()), "verified": True}
+        "block_count": len(actual), "assignment_count": sum(len(b.get("assignments") or []) for b in actual.values()), "verified": True,
+        "source_verified": bool(preview.get("published_source")), "source_record_count": len((preview.get("published_source") or {}).get("records") or [])}
     metadata = {"preview": preview, "blocks": blocks, "runtime_readback": readback_result,
+                "published_source": preview.get("published_source"),
                 "restored_from": restored_from}
     with database.connection() as connection:
         database.execute(connection, """INSERT INTO schedule_constructor_publications
@@ -680,6 +701,13 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
             preview["scope_kind"], preview["scope_key"], preview["base_version_id"], preview["previous_published_id"],
             published_id, version_id, preview["payload_fingerprint"], str(actor) if actor is not None else None,
             now, json.dumps(metadata, ensure_ascii=False, default=str)))
+        saved = database.execute(connection, "SELECT metadata FROM schedule_constructor_publications WHERE id=?", (publication_id,)).fetchone()
+        archived = json.loads(saved["metadata"]).get("published_source")
+        if archived != preview.get("published_source"):
+            raise RuntimeError("Published source readback failed; transaction rolled back")
+        if archived and (_hash(archived["payload"]) != archived["payload_fingerprint"] or
+                         len(archived["records"]) != len(archived["payload"].get("lessons") or [])):
+            raise RuntimeError("Published source integrity failed; transaction rolled back")
     return {"status": "published", "publication_id": publication_id, "scope_kind": preview["scope_kind"],
             "published_id": published_id, "previous_published_id": preview["previous_published_id"],
             "runtime_readback": readback_result, "deferred": preview["deferred"],
@@ -776,8 +804,19 @@ def list_publications(database: Any, draft_id: str | None = None) -> dict[str, A
             "preserved_base" if entry.get("reason") == "Unresolved change retained in draft; base block preserved"
             else "unknown")} for entry in metadata.get("preview", {}).get("deferred", [])]
         item["summary"] = metadata.get("preview", {}).get("summary")
+        item["published_source_available"] = bool(metadata.get("published_source"))
         result.append(item)
     return {"items": result, "heads": heads}
+
+
+def get_published_source(database: Any, publication_id: str) -> dict[str, Any]:
+    """Admin service: legacy history is explicitly unavailable, never reconstructed."""
+    with database.connection() as connection:
+        row = database.execute(connection, "SELECT metadata FROM schedule_constructor_publications WHERE id=?", (publication_id,)).fetchone()
+    if not row:
+        raise ValueError("Publication not found")
+    source = json.loads(row["metadata"]).get("published_source")
+    return {"publication_id": publication_id, "available": bool(source), "published_source": source}
 
 
 def preview_restore(database: Any, publication_id: str, *, expected_head_revision: int) -> dict[str, Any]:
