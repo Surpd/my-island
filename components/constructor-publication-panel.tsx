@@ -5,6 +5,7 @@ import {X} from 'lucide-react';
 import Link from 'next/link';
 
 type Api = <T>(path:string, init?:RequestInit)=>Promise<T>;
+type ApiError = Error & {status?:number};
 type SemanticBlock = {weekday:number;start:string;end:string;grade:string;assignments:{activity:string;teachers:string[];groups:string[];metadata?:{room?:string}}[]};
 type LessonContext = {day?:string|number;start?:string;end?:string;subject?:string;teachers?:string[];groups?:string[]};
 type Diagnostic = {severity:'info'|'conflict'|'critical';code:string;message:string;lesson_id?:string;block_key?:string;context?:LessonContext;action?:string};
@@ -47,13 +48,19 @@ export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onCl
   const [confirmed,setConfirmed] = useState(false);
   const [busy,setBusy] = useState(false);
   const [message,setMessage] = useState('');
+  const [sessionExpired,setSessionExpired] = useState(false);
   const [published,setPublished] = useState(false);
   const [filter,setFilter] = useState<Filter>('all');
   const [restore,setRestore] = useState<{publication:Publication; expected_head_revision:number; preview:{preview_token:string;can_restore:boolean;blockers:{message:string}[];diff:Preview['diff']}}|null>(null);
   const [restoreConfirmed,setRestoreConfirmed] = useState(false);
   const prefix = `/api/admin/schedule/constructor/${encodeURIComponent(draftId)}`;
+  const showError = (error:unknown) => {
+    const apiError=error as ApiError;
+    setMessage(apiError instanceof Error ? apiError.message : 'Не удалось выполнить запрос.');
+    setSessionExpired(apiError.status===401);
+  };
   const loadHistory = () => api<History>(`${prefix}/publications`).then(setHistory);
-  useEffect(()=>{let active=true; void api<History>(`${prefix}/publications`).then(value=>{if(active)setHistory(value);}).catch(error=>{if(active)setMessage((error as Error).message);}); return()=>{active=false;};},[api,prefix]);
+  useEffect(()=>{let active=true; void api<History>(`${prefix}/publications`).then(value=>{if(active){setHistory(value);setSessionExpired(false);}}).catch(error=>{if(active){const apiError=error as ApiError;setMessage(apiError instanceof Error?apiError.message:'Не удалось выполнить запрос.');setSessionExpired(apiError.status===401);}}); return()=>{active=false;};},[api,prefix]);
   const publishedQuery = new URLSearchParams(scope==='week'&&week ? {week_start:week} : {});
   if (typeof window!=='undefined' && new URLSearchParams(window.location.search).get('role')==='admin') publishedQuery.set('role','admin');
   const publishedHref = `/admin/schedule/published${publishedQuery.size ? `?${publishedQuery}` : ''}`;
@@ -67,13 +74,13 @@ export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onCl
   const counts={info:diagnostics.filter(item=>item.severity==='info').length,conflict:diagnostics.filter(item=>item.severity==='conflict').length,critical:diagnostics.filter(item=>item.severity==='critical').length,deferred:activePreview?.deferred.length||0};
   const visibleDiagnostics=diagnostics.filter(item=>filter==='all'||filter==='remarks'&&item.severity==='info'||filter==='conflict'&&item.severity==='conflict'||filter==='critical'&&item.severity==='critical');
   const review = async()=>{
-    setBusy(true);setMessage('');setPreview(null);setPreviewTarget(null);setConfirmed(false);setFilter('all');
+    setBusy(true);setMessage('');setSessionExpired(false);setPreview(null);setPreviewTarget(null);setConfirmed(false);setFilter('all');
     try {const result=await api<Preview>(`${prefix}/publication/preview`,{method:'POST',body:JSON.stringify(body)});setPreview(result);setPreviewTarget({draftId,revision,scope,week});}
-    catch(error){setMessage((error as Error).message);}finally{setBusy(false);}
+    catch(error){showError(error);}finally{setBusy(false);}
   };
   const publish = async()=>{
     if(!activePreview || !confirmed || activePreview.publication_available===false)return;
-    setBusy(true);setMessage('');
+    setBusy(true);setMessage('');setSessionExpired(false);
     try {
       const result = await api<{published_id:string;scope_key?:string;version_id?:string;week_start?:string;created_at?:string;summary?:Partial<Summary>;runtime_readback:{verified:boolean;block_count:number;assignment_count:number}}>(`${prefix}/publication/publish`,{method:'POST',body:JSON.stringify({...body,preview_token:activePreview.preview_token,confirmed:true})});
       const publishedWhen=result.created_at?new Date(result.created_at).toLocaleString('ru-RU'):'сейчас';
@@ -83,24 +90,24 @@ export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onCl
       const totals=resultSummary.source_lessons!==undefined?` Все ${resultSummary.source_lessons} исходных записей сохранены. В Campus доступны ${resultSummary.campus_lessons??resultSummary.ready_lessons}; ${resultSummary.admin_only_lessons??resultSummary.deferred_lessons} ожидают административного рассмотрения.`:` ${resultSummary.ready_lessons} готово, ${resultSummary.deferred_lessons} отложено, ${resultSummary.deferred_blocks} блоков отложено.`;
       setMessage(`Опубликовано${where} (${publishedWhen}). Версия: ${version}.${scope==='week'&&result.version_id ? ` Шаблон: ${result.version_id}.` : ''}${totals} ${result.runtime_readback.verified ? 'Чтение расписания подтверждено' : 'Чтение расписания пока не подтверждено'}: ${result.runtime_readback.block_count} блоков, ${result.runtime_readback.assignment_count} назначений.`);
       setPublished(true);setPreview(null);setConfirmed(false);await loadHistory();await onPublished();
-    } catch(error){setMessage((error as Error).message);setPreview(null);setConfirmed(false);}finally{setBusy(false);}
+    } catch(error){showError(error);setPreview(null);setConfirmed(false);}finally{setBusy(false);}
   };
   const reviewRestore = async(publication:Publication)=>{
     const head = history.heads?.[publication.scope_key];
     if(!head)return;
-    setBusy(true);setMessage('');setRestore(null);setRestoreConfirmed(false);setPreview(null);
+    setBusy(true);setMessage('');setSessionExpired(false);setRestore(null);setRestoreConfirmed(false);setPreview(null);
     try {
       const result = await api<{preview_token:string;can_restore:boolean;blockers:{message:string}[];diff:Preview['diff']}>('/api/admin/schedule/constructor/publication/restore/preview',{method:'POST',body:JSON.stringify({publication_id:publication.id,expected_head_revision:head.revision})});
       setRestore({publication,expected_head_revision:head.revision,preview:result});
-    }catch(error){setMessage((error as Error).message);}finally{setBusy(false);}
+    }catch(error){showError(error);}finally{setBusy(false);}
   };
   const confirmRestore = async()=>{
     if(!restore || !restoreConfirmed)return;
-    setBusy(true);
+    setBusy(true);setMessage('');setSessionExpired(false);
     try {
       const result = await api<{published_id:string;runtime_readback:{verified:boolean}}>('/api/admin/schedule/constructor/publication/restore',{method:'POST',body:JSON.stringify({publication_id:restore.publication.id,expected_head_revision:restore.expected_head_revision,preview_token:restore.preview.preview_token,confirmed:true})});
       setMessage(`Создана новая восстановленная версия расписания. Чтение: ${result.runtime_readback.verified?'подтверждено':'не подтверждено'}. Для дальнейшей работы откройте конструктор.`);setRestore(null);setRestoreConfirmed(false);await loadHistory();await onPublished();
-    }catch(error){setMessage((error as Error).message);setRestore(null);}finally{setBusy(false);}
+    }catch(error){showError(error);setRestore(null);}finally{setBusy(false);}
   };
   const filterButtons: [Filter,string,number][]=[['all','Все',diagnostics.length+counts.deferred],['remarks','Замечания',counts.info],['conflict','Конфликты',counts.conflict],['critical','Критичные',counts.critical],['deferred','Отложенные',counts.deferred]];
   const filteredDeferred=filter==='all'||filter==='deferred'?activePreview?.deferred||[]:[];
@@ -126,6 +133,7 @@ export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onCl
       <nav className="constructor-publication-links" aria-label="Быстрые переходы"><button type="button" onClick={onClose}>Вернуться к черновику</button><button type="button" onClick={()=>setFilter(counts.critical?'critical':counts.conflict?'conflict':'deferred')}>Показать проблемы</button><Link href={publishedHref} onClick={onClose}>Открыть опубликованное расписание</Link></nav>
     </section> : null}
     {message ? <output className="constructor-publication-message">{message}</output> : null}
+    {sessionExpired ? <section role="alert" className="constructor-publication-session-help"><p>Перепроверьте текущий вход. Если admin-сессия ещё действует, страница откроется без нового кода; форма входа появится только если срок сессии действительно истёк.</p><button type="button" className="admin-button" disabled={busy} onClick={()=>window.location.reload()}>Перепроверить вход</button></section> : null}
     {published ? <nav className="constructor-publication-links" aria-label="После публикации"><Link href={publishedHref} onClick={onClose}>Открыть опубликованное расписание</Link><button type="button" onClick={onClose}>К оставшимся записям черновика</button></nav> : null}
     {restore ? <section aria-label="Проверка восстановления"><h3>Восстановление отдельной новой версией</h3><p>Версия от {new Date(restore.publication.created_at).toLocaleString('ru-RU')}. Добавить: {restore.preview.diff.added}; изменить: {restore.preview.diff.changed}; удалить: {restore.preview.diff.removed}.</p>{restore.preview.blockers.map((item,index)=><p key={index} role="alert">{item.message}</p>)}<label className="constructor-publication-confirm"><input type="checkbox" checked={restoreConfirmed} onChange={event=>setRestoreConfirmed(event.target.checked)}/>Подтверждаю замену текущей публикации новой восстановленной версией.</label><button disabled={busy||!restore.preview.can_restore||!restoreConfirmed} onClick={()=>void confirmRestore()}>Подтвердить восстановление</button><button disabled={busy} onClick={()=>setRestore(null)}>Отмена</button></section> : null}
     <details><summary>Журнал публикаций этого черновика ({history.items.length})</summary>{!history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><details><summary>Сведения о проверке</summary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnostic.message}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</details><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</details>

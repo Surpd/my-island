@@ -120,7 +120,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (typeof window !== 'undefined') {
     const schoolSession = window.sessionStorage.getItem('my_island_school_admin_session');
     const browserSession = window.sessionStorage.getItem('my_island_admin_session');
-    const schoolAdminSession = schoolSession || browserSession;
+    // Constructor publication is authenticated against the primary admin
+    // session. A stale school-directory token must not shadow a still-valid
+    // browser session for these consolidated schedule endpoints.
+    const schoolAdminSession = path.startsWith('/api/admin/schedule/constructor')
+      ? browserSession || schoolSession
+      : schoolSession || browserSession;
     if (schoolAdminSession) headers.set('X-School-Admin-Session', schoolAdminSession);
     // The API's auth resolver accepts browser sessions through the existing
     // X-Dev-Auth transport using the explicit browser: prefix. Keeping the
@@ -158,6 +163,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ? 'Сессия администратора не передалась в браузер. Получите новый код и войдите снова.'
       : raw === 'Admin browser session is invalid or expired'
         ? 'Сессия администратора истекла. Получите новый код и войдите снова.'
+        : raw === 'School administrator session is invalid or expired'
+          ? 'Доступ к расписанию не подтвердился. Перепроверьте текущий вход: новый код потребуется только если истекла и сессия администратора.'
         : raw.startsWith('Request failed:')
           ? `Не удалось выполнить запрос (${response.status}).`
           : raw;
