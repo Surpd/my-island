@@ -254,7 +254,7 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+v');
   await page.locator('.constructor-issue-count').click();
-  await expect(page.locator('.constructor-conflict-panel')).toContainText('Проблемы расписания');
+  await expect(page.locator('.constructor-conflict-panel')).toContainText('Центр решений расписания');
   await page.getByRole('combobox', { name: 'Тип проблемы' }).selectOption('student');
   const studentConflict = page.locator('.constructor-conflict-list article').filter({ hasText: 'назначено одновременно' }).first();
   await expect(studentConflict).toBeVisible();

@@ -54,7 +54,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   const fitsViewport = await page.locator('.constructor-grid-wrap').evaluate((board) => board.scrollWidth <= board.clientWidth + 1);
   expect(fitsViewport).toBeTruthy();
   await page.locator('.constructor-issue-count').click();
-  await expect(page.locator('.constructor-conflict-panel').getByRole('heading', { name: /^Неполные данные · \d+/ })).toBeVisible();
+  await expect(page.locator('.constructor-conflict-panel').getByText(/Неизвестен состав групп или классов:/).first()).toBeVisible();
   await expect(page.locator('.constructor-unplaced')).toHaveCount(0);
   await page.getByRole('button', { name: 'Закрыть список проблем' }).click();
   await page.screenshot({ path: '.local-test/constructor-filled-week.png', fullPage: true });
@@ -129,10 +129,9 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.locator('[data-cell="4:2"]').click();
   await page.getByRole('group', { name: 'Способ создания' }).getByRole('button', { name: 'Событие', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Поездка в музей');
-  // Preserve the original two-parallel requirement. The current single-select
-  // class picker cannot represent this union; do not narrow this regression to 7 only.
+  // Preserve the event's multi-class audience instead of narrowing it to one class.
   await page.locator('.constructor-create-form').getByRole('checkbox', { name: '7 класс', exact: true }).check();
-  await page.locator('.constructor-create-form').getByRole('checkbox', { name: '8 класс' }).check();
+  await page.locator('.constructor-create-form').getByRole('checkbox', { name: '8 класс', exact: true }).check();
   await page.locator('.constructor-create-form label').filter({ hasText: 'Конец' }).locator('input').fill('14:25');
   await page.locator('.constructor-create-form label').filter({ hasText: 'Место' }).locator('input').fill('Музей');
   await page.locator('.constructor-create-form label').filter({ hasText: 'Формат' }).locator('select').selectOption('offsite');

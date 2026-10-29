@@ -14,6 +14,7 @@ const execFileAsync = promisify(execFile);
 const ownedServerEnv = {
   ...process.env,
   MY_ISLAND_TEST_PROFILE: 'e2e',
+  MY_ISLAND_CONSOLIDATED_SCHEDULE: '1',
   MY_ISLAND_TEST_FRONTEND_PORT: String(frontendPort),
   MY_ISLAND_TEST_API_PORT: String(apiPort),
 };

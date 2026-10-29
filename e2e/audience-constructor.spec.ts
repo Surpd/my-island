@@ -35,7 +35,7 @@ test('one subject and teacher work with seventh-grade split and administrative c
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
   await expect(page.locator('.constructor-inspector').getByRole('heading', { name: 'Литература' })).toBeVisible();
   await picker.getByRole('button', { name: 'Весь класс или параллель' }).click();
-  await picker.getByRole('combobox', { name: 'Кто занимается' }).selectOption(String(klass!.id));
+  await picker.getByRole('checkbox', { name: '7-А', exact: true }).check();
   await expect(page.locator('.constructor-inspector').getByRole('combobox', { name: 'Предмет', exact: true })).toHaveValue('Литература');
   await expect(page.locator('.constructor-inspector label').filter({ hasText: 'Преподаватель' }).locator('select')).toHaveValue(String(teacher!.id));
   await page.getByRole('button', { name: /Сохранить/ }).first().click();
