@@ -89,6 +89,9 @@ type Lesson = {
   exam_track?: string | null;
   lesson_type?: string | null;
   delivery_mode?: string | null;
+  activity_format?: string | null;
+  physical_presence?: boolean;
+  responsible_teacher?: string | null;
   source_coordinate?: string | null;
 };
 type StudentDayBlock = {
@@ -106,6 +109,8 @@ type StudentScheduleItem = {
   room?: string | null;
   teacher?: string | null;
   group_context?: string[] | string | null;
+  activity_format?: string | null;
+  responsible_teacher?: string | null;
   no_lesson?: { reason?: 'before_first_lesson' | 'break' | 'end_of_day' };
   conflict?: { state: string; label: string; alternatives: Array<{ title: string; teacher?: string | null; room?: string | null }> };
   special_event?: { kind: string; title: string; metadata?: Record<string, unknown> };
@@ -452,19 +457,29 @@ function EmptyState({
   );
 }
 function LessonRow({ lesson }: { lesson: Lesson }) {
+  const independentPractice = lesson.activity_format === 'independent_practice';
   return (
     <div className="lesson-card">
       <time>{formatLessonTime(lesson.start_time) || 'Время не указано'}</time>
       <div className="lesson-card__body">
         <strong>{lesson.subject}</strong>
         <span>
-          {[lesson.audience, lesson.room, lesson.teacher]
+          {independentPractice
+            ? [
+                lesson.audience,
+                lesson.room,
+                lesson.responsible_teacher
+                  ? `Ответственный за задание: ${lesson.responsible_teacher}`
+                  : 'Самостоятельная практика',
+                lesson.physical_presence === false ? 'Вы не ведёте это занятие' : '',
+              ].filter(Boolean).join(' · ')
+            : [lesson.audience, lesson.room, lesson.teacher]
             .filter(Boolean)
             .join(' · ') || 'Детали уточняются'}
         </span>
         {scopeMarker(lesson) && <small>{scopeMarker(lesson)}</small>}
       </div>
-      {lesson.lesson_type && lesson.lesson_type !== 'lesson' && (
+      {independentPractice ? <span className="soft-badge">Самостоятельная практика</span> : lesson.lesson_type && lesson.lesson_type !== 'lesson' && (
         <span className="soft-badge">Особое</span>
       )}
     </div>
@@ -551,7 +566,8 @@ function ScheduleItemRow({ item, index, onOpen }: { item: StudentScheduleItem; i
   }
   if (item.state !== 'lesson') return null;
   const context = Array.isArray(item.group_context) ? item.group_context.join(' · ') : item.group_context;
-  const row = <><time>{formatLessonTime(item.slot.start) || 'Время не указано'}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{[item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span></div></>;
+  const independentPractice = item.activity_format === 'independent_practice';
+  const row = <><time>{formatLessonTime(item.slot.start) || 'Время не указано'}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{independentPractice ? [item.room, item.responsible_teacher ? `Ответственный за задание: ${item.responsible_teacher}` : 'Самостоятельная практика'].filter(Boolean).join(' · ') : [item.room, item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span>{independentPractice ? <small>Самостоятельная практика</small> : null}</div></>;
   return onOpen ? <button type="button" className="student-schedule-lesson student-schedule-lesson--button" aria-label={`Подробности урока: ${item.canonical_title || 'Занятие'}`} onClick={() => onOpen(scheduleDetailKey(item, index))}>{row}</button> : <article className="student-schedule-lesson">{row}</article>;
 }
 
@@ -575,7 +591,7 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
   if (navigationLevel === 'detail' && selectedDetail) {
     const context = Array.isArray(selectedDetail.group_context) ? selectedDetail.group_context.join(' · ') : selectedDetail.group_context;
     const title = selectedDetail.state === 'special_event' ? selectedDetail.special_event?.title || 'Событие' : selectedDetail.state === 'conflict' ? selectedDetail.conflict?.alternatives.map(item => item.title).join(' / ') || 'Занятие уточняется' : selectedDetail.canonical_title || 'Занятие';
-    return <div className="section-panel student-lesson-detail"><button type="button" className="student-journal-back" aria-label="Назад к расписанию" onClick={onBack}><ChevronLeft size={23} aria-hidden="true" /></button><p className="eyebrow">Подробности занятия</p><h2>{title}</h2><dl><div><dt>Дата</dt><dd>{formatDate(selectedDetail.date, true)}</dd></div><div><dt>Время</dt><dd>{formatLessonTimeRange(selectedDetail.slot.start, selectedDetail.slot.end)}</dd></div>{selectedDetail.teacher ? <div><dt>Преподаватель</dt><dd>{selectedDetail.teacher}</dd></div> : null}{selectedDetail.room ? <div><dt>Кабинет</dt><dd>{selectedDetail.room}</dd></div> : null}{context ? <div><dt>Группа</dt><dd>{context}</dd></div> : null}{selectedDetail.special_event?.metadata ? <div><dt>Сведения</dt><dd>{Object.values(selectedDetail.special_event.metadata).filter(value => typeof value === 'string' || typeof value === 'number').join(' · ')}</dd></div> : null}</dl></div>;
+    return <div className="section-panel student-lesson-detail"><button type="button" className="student-journal-back" aria-label="Назад к расписанию" onClick={onBack}><ChevronLeft size={23} aria-hidden="true" /></button><p className="eyebrow">Подробности занятия</p><h2>{title}</h2><dl><div><dt>Дата</dt><dd>{formatDate(selectedDetail.date, true)}</dd></div><div><dt>Время</dt><dd>{formatLessonTimeRange(selectedDetail.slot.start, selectedDetail.slot.end)}</dd></div>{selectedDetail.activity_format === 'independent_practice' ? <div><dt>Формат</dt><dd>Самостоятельная практика</dd></div> : null}{selectedDetail.activity_format === 'independent_practice' && selectedDetail.responsible_teacher ? <div><dt>Ответственный за задание</dt><dd>{selectedDetail.responsible_teacher}</dd></div> : selectedDetail.teacher ? <div><dt>Преподаватель</dt><dd>{selectedDetail.teacher}</dd></div> : null}{selectedDetail.room ? <div><dt>Кабинет</dt><dd>{selectedDetail.room}</dd></div> : null}{context ? <div><dt>Группа</dt><dd>{context}</dd></div> : null}{selectedDetail.special_event?.metadata ? <div><dt>Сведения</dt><dd>{Object.values(selectedDetail.special_event.metadata).filter(value => typeof value === 'string' || typeof value === 'number').join(' · ')}</dd></div> : null}</dl></div>;
   }
   return (
     <div className="section-panel" ref={attachScroll}>
@@ -660,7 +676,7 @@ function ScheduleFocusPeek({ projection, referenceDay, scheduleState }: { projec
   const anchor = current || next;
   const unavailable = /unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked|disabled/.test(scheduleState || '');
   const status = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Неделя не опубликована' : unavailable ? 'Расписание недоступно' : 'Учебный день закончен';
-  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || status}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${formatLessonTimeRange(anchor.slot.start, anchor.slot.end)}${anchor.room ? ` · ${anchor.room}` : ''}` : unavailable ? 'Проверьте выбранную неделю' : 'На сегодня всё'}</span></div></div></div>;
+  return <div className="schedule-focus-peek"><div className="schedule-focus-peek__lead"><span className="schedule-focus-peek__icon"><CalendarDays size={18} /></span><div><small>{today?.special?.kind === 'sdep' ? 'Сегодня' : current ? 'Сейчас' : next ? 'Ближайшее' : 'Сегодня'}</small><strong>{today?.special?.kind === 'sdep' ? 'SDEP' : anchor?.state === 'special_event' ? anchor.special_event?.title : anchor?.state === 'conflict' ? anchor.conflict?.alternatives.map((item) => item.title).join(' / ') : anchor?.canonical_title || status}</strong><span>{today?.special?.kind === 'sdep' ? 'Самостоятельная работа весь день' : anchor ? `${formatLessonTimeRange(anchor.slot.start, anchor.slot.end)}${anchor.activity_format === 'independent_practice' ? ' · Самостоятельная практика' : anchor.room ? ` · ${anchor.room}` : ''}` : unavailable ? 'Проверьте выбранную неделю' : 'На сегодня всё'}</span></div></div></div>;
 }
 function HomeworkPanel({ homework }: { homework: Homework[] }) {
   return (
@@ -1744,7 +1760,7 @@ function TeacherApp({
         }
         value={
           nextTeacherLesson
-            ? `${formatLessonTime(nextTeacherLesson.start_time) || 'Время не указано'} · ${nextTeacherLesson.subject}`
+            ? `${formatLessonTime(nextTeacherLesson.start_time) || 'Время не указано'} · ${nextTeacherLesson.subject}${nextTeacherLesson.activity_format === 'independent_practice' ? ' · Самостоятельная практика' : ''}`
             : 'Ближайших занятий нет'
         }
         detail={nextTeacherLesson?.audience || undefined}

@@ -130,7 +130,7 @@ test('publication preview filters remarks and shows readable lesson context and 
   await expect(dialog.locator('.constructor-publication-diagnostics li')).toHaveCount(1);
   await dialog.getByRole('button', { name: /Отложенные/ }).click();
   await expect(dialog.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
-  await expect(dialog.getByText('Занятие будет исключено из этой публикации.')).toBeVisible();
+  await expect(dialog.getByText('Назначение исключено из Campus этой исторической версии.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toBeDisabled();
 });
 

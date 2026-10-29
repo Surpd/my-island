@@ -32,6 +32,7 @@ import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
+import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
@@ -199,7 +200,7 @@ type Issue = {
   type: 'teacher' | 'room' | 'audience' | 'data';
   message: string;
   related?: string;
-  category: 'conflict' | 'review' | 'incomplete' | 'import';
+  category: 'conflict' | 'review' | 'incomplete' | 'import' | 'critical';
 };
 
 const DAYS = [
@@ -382,9 +383,9 @@ function issuesFor(
       result.push({ lessonId: lesson.id, severity: 'warning', type: 'audience', category: 'import', message: 'Не определена группа английского урока в canonical-назначении.' });
     if (audienceNeedsReview(lesson, audience)) add(lesson.id, 'warning', 'Состав учеников отличается от сохранённого или текущие данные требуют проверки. Сохранённый состав не заменён.', undefined, 'review');
     if (!payload.days.includes(lesson.day) || !payload.slots[lesson.period])
-      add(lesson.id, 'error', 'День или время занятия не входят в шаблон.', undefined, lesson.canonical ? 'import' : 'incomplete');
+      add(lesson.id, 'error', 'День или время занятия не входят в шаблон.', undefined, 'critical');
     if (lesson.kind === 'event' && (!lesson.start || !lesson.end || minutes(lesson.end) <= minutes(lesson.start)))
-      add(lesson.id, 'error', 'У события некорректный временной диапазон.');
+      add(lesson.id, 'error', 'У события некорректный временной диапазон.', undefined, 'critical');
     if (!isSpecialMark(lesson) && !lesson.subject.trim()) add(lesson.id, 'error', lesson.kind === 'event' ? 'Не указано название события.' : 'Не указан предмет.');
     if (audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
       result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: audience.reason || 'Невозможно точно определить участников.' });
@@ -440,6 +441,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [consolidatedSchedule, setConsolidatedSchedule] = useState(false);
   const [publicationOpen, setPublicationOpen] = useState(false);
+  const [resolutionIssue, setResolutionIssue] = useState<Issue|null>(null);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [schoolDrafts, setSchoolDrafts] = useState<DraftSummary[]>([]);
   const [schoolWeekIndex, setSchoolWeekIndex] = useState<SchoolWeekIndex>({});
@@ -1872,6 +1874,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     });
     return problems.map((message) => ({ index, message }));
   });
+  const [resolutionRevision,setResolutionRevision]=useState<number|null>(null);
+  const [resolutionStates,setResolutionStates] = useState<Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>>({});
+  useEffect(()=>{let active=true;if(!conflictsOpen||dirty||!draft)return;void api<{exceptions:Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>}>(`/api/admin/schedule/constructor/${encodeURIComponent(draft.id)}/resolution/preview`,{method:'POST',body:JSON.stringify({expected_revision:draft.revision,lesson_ids:draft.payload.lessons.map(l=>l.id)})}).then(result=>{if(active){setResolutionStates(result.exceptions||{});setResolutionRevision(draft.revision);}}).catch(()=>{if(active)setResolutionStates({});});return()=>{active=false;};},[api,conflictsOpen,dirty,draft?.id,draft?.revision]);
+  const workflowFor=(item:Issue)=>{const receipts=dirty||resolutionRevision!==draft?.revision?[]:[...(resolutionStates[item.lessonId]||[]),...(item.related?resolutionStates[item.related]||[]:[])];const targets=[item.lessonId,...(item.related?[item.related]:[])];const coversIssue=(receipt:{lesson_ids?:string[]})=>targets.every(id=>receipt.lesson_ids?.includes(id));if(item.category==='critical')return 'critical';if(receipts.some(r=>r.type==='defer'&&coversIssue(r)))return 'deferred';if(receipts.some(r=>r.type==='joint'&&item.category==='conflict'&&coversIssue(r)))return 'acknowledged';if(receipts.some(r=>r.type==='independent_practice'&&item.type==='teacher'&&targets.some(id=>r.lesson_ids?.includes(id))))return 'acknowledged';if(receipts.some(r=>r.type==='confirm_roster'&&item.category==='review'&&item.type==='audience'&&r.lesson_ids?.includes(item.lessonId)))return 'acknowledged';return item.type==='room'||item.type!=='audience'&&item.category==='incomplete'?'quick':'decision';};
   const filteredIssues = issues.filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
   const conflictIssues = issues.filter((item) => item.category === 'conflict');
   const conflictLessons = new Set(conflictIssues.flatMap((item) => [item.lessonId, ...(item.related ? [item.related] : [])]));
@@ -1963,6 +1969,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           ) : null}
         </div>
       </header>
+      {resolutionIssue && draft ? <ConstructorResolutionPanel api={api} draftId={draft.id} revision={draft.revision} lessons={draft.payload.lessons} slots={draft.payload.slots} issue={resolutionIssue} teacherNames={Object.fromEntries(teachers.map(t=>[t.id,t.name]))} groupNames={Object.fromEntries(groups.map(g=>[g.id,g.name]))} studentNames={Object.fromEntries(students.map(s=>[s.id,s.name]))} dirty={dirty} onClose={()=>setResolutionIssue(null)} onNavigate={id=>{openReviewLesson(id);setResolutionIssue(null);setConflictsOpen(false);}} onUpdated={async(value)=>{const updated=value as Draft|undefined;if(updated?.payload){setHistory(items=>[...items.slice(-49),draft.payload]);setFuture([]);revision.current=updated.revision;baseDraftRef.current=updated;setDraft(updated);setDirty(false);changeVersion.current++;}else{await open(draft.id);}await refreshDrafts();}} /> : null}
       {publicationOpen && draft ? <ConstructorPublicationPanel api={api} draftId={draft.id} revision={draft.revision} weekStart={draft.payload.week_start} teacherNames={Object.fromEntries(teachers.map(item => [item.id,item.name]))} groupNames={Object.fromEntries(groups.map(item => [item.id,item.name]))} onClose={() => setPublicationOpen(false)} onPublished={async () => { await refreshDrafts(); await open(draft.id); }} /> : null}
       {!draft ? workspaceTabs : null}
       {status ? (
@@ -2275,24 +2282,25 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           </div>
           {conflictsOpen ? (
             <section className="constructor-conflict-panel">
-              <header><strong>Проблемы расписания</strong><button onClick={() => setConflictsOpen(false)} aria-label="Закрыть список проблем"><X size={15} /></button></header>
+              <header><strong>Центр решений расписания</strong><button onClick={() => setConflictsOpen(false)} aria-label="Закрыть список проблем"><X size={15} /></button></header>
+              {!dirty&&resolutionRevision===draft?.revision&&Object.keys(resolutionStates).length?<details className="constructor-acknowledged-history"><summary>Подтверждённые решения и отложенные записи</summary>{[...new Map(Object.entries(resolutionStates).flatMap(([lid,items])=>items.filter(r=>r.type!=='room').map(r=>[r.id,{...r,lessonId:lid}] as const))).values()].map(r=><article key={r.id}><strong>{r.type==='joint'?'Совместное занятие':r.type==='independent_practice'?'Самостоятельная практика':r.type==='defer'?'Отложенное решение':'Подтверждение участников'}</strong><p>{r.reason}</p><button onClick={()=>setResolutionIssue({lessonId:r.lessonId,related:(r as {lesson_ids?:string[]}).lesson_ids?.find(id=>id!==r.lessonId),type:r.type==='joint'||r.type==='independent_practice'?'teacher':'audience',category:'review',severity:'warning',message:r.reason})}>Рассмотреть или отменить</button></article>)}</details>:null}
               <div className="constructor-conflict-filters">
                 <select aria-label="Важность проблемы" value={issueSeverity} onChange={(event) => setIssueSeverity(event.target.value)}><option value="all">Все уровни</option><option value="error">Ошибки</option><option value="warning">Предупреждения</option></select>
                 <select aria-label="Тип проблемы" value={issueType} onChange={(event) => setIssueType(event.target.value)}><option value="all">Все типы</option><option value="teacher">Преподаватель</option><option value="room">Кабинет</option><option value="student">Группа или ученик</option><option value="data">Данные занятия</option></select>
               </div>
-              {(['conflict', 'review', 'incomplete', 'import'] as const).map((category) => {
-                const categoryIssues = filteredIssues.filter((item) => item.category === category);
+              {(['quick', 'decision', 'acknowledged', 'deferred', 'critical'] as const).map((category) => {
+                const categoryIssues = filteredIssues.filter((item) => workflowFor(item) === category);
                 if (!categoryIssues.length) return null;
-                const title = category === 'conflict' ? 'Конфликты расписания' : category === 'review' ? 'Проверка состава учеников' : category === 'incomplete' ? 'Неполные данные' : 'Ошибки импорта и сопоставления';
+                const title = category === 'quick' ? 'Исправляемые быстро' : category === 'decision' ? 'Требуют решения администратора' : category === 'acknowledged' ? 'Подтверждённые исключения' : category === 'deferred' ? 'Отложенные решения' : 'Критические технические проблемы';
                 const affected = new Set(categoryIssues.map((item) => item.lessonId));
                 const pairs = new Set(categoryIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
-                const count = category === 'conflict' ? `${affected.size} занятий · ${pairs.size} парных совпадений` : `${affected.size} занятий`;
+                const count = category === 'decision' ? `${affected.size} занятий · ${pairs.size} парных совпадений` : `${affected.size} занятий`;
                 return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
                   const lesson = payload.lessons.find((entry) => entry.id === item.lessonId);
                   const targetGroup = groups.find((entry) => entry.id === lesson?.groupId);
                   const dayName = lesson ? DAYS[lesson.day] || 'День не определён' : 'Занятие не найдено';
                   const startTime = lesson ? payload.slots[lesson.period]?.start || 'Время не определено' : '';
-                  return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{item.message}</small><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || id).join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button onClick={() => { if (!lesson) return; setDay(lesson.day); setViewMode('day'); setClassFilter(''); setPanelMode('lesson'); setPanelOpen(true); const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((id) => entry.classIds.includes(id))); if (col >= 0) { setAnchor({row: lesson.period, col}); setFocus({row: lesson.period, col}); } setSelectedId(lesson.id); setConflictsOpen(false); }}>Показать в расписании</button></article>;
+                  return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><button className="constructor-issue-open" onClick={()=>setResolutionIssue(item)}>Разобрать проблему</button><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{item.message}</small><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || id).join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button onClick={() => { if (!lesson) return; setDay(lesson.day); setViewMode('day'); setClassFilter(''); setPanelMode('lesson'); setPanelOpen(true); const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((id) => entry.classIds.includes(id))); if (col >= 0) { setAnchor({row: lesson.period, col}); setFocus({row: lesson.period, col}); } setSelectedId(lesson.id); setConflictsOpen(false); }}>Показать в расписании</button></article>;
                 })}</div></section>;
               })}
             </section>

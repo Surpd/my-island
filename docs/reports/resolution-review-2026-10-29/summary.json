@@ -1,0 +1,97 @@
+{
+  "audit_date": "2026-10-29",
+  "source": {
+    "source_commit": "1305cc7",
+    "revision": 45,
+    "lessons": 386,
+    "payload_fingerprint": "12f22d13cf5b67b3c80a134ffce1e09be4d18537b231c05589ac79bdcbdd9fbe",
+    "week_start": "2026-10-26",
+    "week_end": "2026-11-01"
+  },
+  "preview": {
+    "template_read_only": true,
+    "week_read_only": true,
+    "publication_available": false,
+    "week_source_kind": "template_week",
+    "source_records": 386,
+    "statuses": {
+      "resolved": 131,
+      "resolved_with_remarks": 118,
+      "unresolved": 137
+    },
+    "resolved_projection_records": 249,
+    "unresolved_records": 137,
+    "diagnostics": {
+      "conflict_count": 128,
+      "info_count": 241,
+      "critical_count": 0
+    }
+  },
+  "historical_baseline": {
+    "old_safe": 249,
+    "old_unresolved": 137,
+    "new_safe": 249,
+    "new_unresolved": 137
+  },
+  "categories": {
+    "unknown_audience_source_rows": 31,
+    "unresolved_records": 137,
+    "grade6_roster_review_records": 26,
+    "grade6_confirmed_count": 16,
+    "grade6_current_rule_count": 17,
+    "grade6_bulk_confirm_preview_safe": true,
+    "overlap_pair_diagnostics_from_prior_evidence": {
+      "joint_activity": 7,
+      "joint_activity_unconfirmed": 6,
+      "student_overlap": 34
+    },
+    "possible_joint_reviews": 6,
+    "same_room_joint_candidates": 5,
+    "possible_joint_pairs_unconfirmed": 5,
+    "room_candidate_count": 21,
+    "exact_interval_overlapping_room_examples": 78,
+    "room_options_checked_for_overlaps": 78,
+    "overlap_cases_with_schedule_free_known_room": 78,
+    "room_availability_limit": "schedule_only"
+  },
+  "immutable_source_check": {
+    "local_publication_created": true,
+    "source_readback_matches_preview": true,
+    "runtime_readback_verified": true,
+    "mutated_payload_fails_persist_integrity_predicate": true,
+    "published_source_api_revalidates_post_write_mutation": true,
+    "local_artifacts_only": true
+  },
+  "historical_projection_compatibility": [
+    {
+      "week_start": "2026-09-07",
+      "students_checked": 115,
+      "teachers_checked": 24,
+      "unchanged": true
+    },
+    {
+      "week_start": "2026-09-14",
+      "students_checked": 115,
+      "teachers_checked": 24,
+      "unchanged": true
+    },
+    {
+      "week_start": "2026-09-21",
+      "students_checked": 115,
+      "teachers_checked": 24,
+      "unchanged": true
+    }
+  ],
+  "sanitized_ui_fixture": {
+    "path": ".local-test/resolution-audit/ui-fixture.json",
+    "lessons": 386,
+    "students": 0,
+    "teacher_aliases": 24
+  },
+  "integrity": {
+    "payload_unchanged": true,
+    "input_source_json_unchanged": true,
+    "input_sqlite_snapshot_unchanged": true,
+    "production_or_external_writes": 0
+  }
+}

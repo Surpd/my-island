@@ -145,7 +145,24 @@ test('Today is an explicit campus level with a date, lessons, and a route to gra
   await expect(page.locator('.student-journal-sheet')).toHaveClass(/is-partial/);
 });
 
-async function installLessonApi(page: Page, role: 'student' | 'teacher') {
+test('independent practice is distinct in Student and Teacher Campus', async ({ page }) => {
+  await installLessonApi(page, 'student', true);
+  await page.goto('/?role=student&date=2026-10-26');
+  await page.locator('.scene-hotspot.hotspot--schedule').click();
+  const studentSchedule = page.locator('.student-schedule-stack');
+  await expect(studentSchedule).toContainText('Самостоятельная практика');
+  await expect(studentSchedule).toContainText('Ответственный за задание: Педагог E2E');
+  await expect(studentSchedule).not.toContainText('Педагог E2E · каб. 12');
+
+  await page.unroute('**/api/**');
+  await installLessonApi(page, 'teacher', true);
+  await page.goto('/?role=teacher&date=2026-10-26');
+  await page.locator('.scene-hotspot.hotspot--schedule').click();
+  await expect(page.locator('.lesson-stack .lesson-card')).toContainText('Самостоятельная практика');
+  await expect(page.locator('.lesson-stack .lesson-card')).toContainText('Вы не ведёте это занятие');
+});
+
+async function installLessonApi(page: Page, role: 'student' | 'teacher', independentPractice = false) {
   const lesson = {
     lesson_date: '2026-10-26',
     start_time: '09:05:00',
@@ -155,6 +172,14 @@ async function installLessonApi(page: Page, role: 'student' | 'teacher') {
     room: '12',
     audience: '7 класс',
     lesson_type: 'lesson',
+    ...(independentPractice
+      ? {
+          activity_format: 'independent_practice',
+          physical_presence: false,
+          responsible_teachers: ['Педагог E2E'],
+          teacher_names: ['Педагог E2E'],
+        }
+      : {}),
   };
   const lessons = [lesson];
   await page.route('**/api/**', async (route) => {
