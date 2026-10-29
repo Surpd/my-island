@@ -690,7 +690,7 @@ def _draft_actor_id(database: Database, actor_user_id: Any) -> Any:
 
 
 def create_experiment(database: Database, *, name: str, source: str, payload: Mapping[str, Any] | None = None,
-                      actor_user_id: Any = None, _base_version_id: str | None = None) -> dict[str, Any]:
+                      actor_user_id: Any = None, _base_version_id: str | None = None, _trusted_resolution_history: bool = False) -> dict[str, Any]:
     normalized_name = str(name or "").strip()
     if not normalized_name:
         raise ValueError("name is required")
@@ -721,6 +721,8 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     now = datetime.now(timezone.utc).isoformat()
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
+    if not _trusted_resolution_history:
+        for lesson in clean_payload['lessons']:lesson.pop('resolution_history',None)
     provenance = clean_payload.get("school_source")
     provenance = provenance if isinstance(provenance, Mapping) else {}
     if provenance.get("role") == "primary_school_template" and not provenance.get("primary_draft_id"):
@@ -858,7 +860,7 @@ def create_experiment_week(database: Database, experiment_id: str, *, week_start
             snapshot["fingerprint"] = _audience_fingerprint(copied, payload)
     return create_experiment(database, name=f"Неделя {start.isoformat()} · {source['name']}",
                              source="import", payload=payload, actor_user_id=actor_user_id,
-                             _base_version_id=source.get("base_version_id"))
+                             _base_version_id=source.get("base_version_id"), _trusted_resolution_history=True)
 
 
 def delete_experiment(database: Database, experiment_id: str) -> None:
@@ -868,7 +870,7 @@ def delete_experiment(database: Database, experiment_id: str) -> None:
         raise ExperimentNotFound(experiment_id)
 
 
-def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None) -> dict[str, Any]:
+def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, _trusted_resolution_history: bool = False) -> dict[str, Any]:
     clean = _clean_payload(payload)
     clean["lessons"] = validate_activity_lessons(clean["lessons"], list_activities(database, include_archived=True))
     normalized_name = str(name or "").strip() if name is not None else None
@@ -887,6 +889,11 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
+        if not _trusted_resolution_history:
+            lesson.pop('resolution_history',None)
+            if previous.get('resolution_history'):
+                from copy import deepcopy
+                lesson['resolution_history']=deepcopy(previous['resolution_history'])
         if lesson.get("activityType") == "club":
             # Preserve historical snapshots, but they are excluded from club
             # occupancy and must not be recalculated as student audiences.

@@ -20,6 +20,7 @@ from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import (
     get_experiment, experiment_audience_preview, _lesson_audience, _lesson_interval, _audience_fingerprint, _canonical_time,
 )
+from backend.services.constructor_resolution import validated_exceptions
 
 
 PUBLICATION_SCHEMA = (
@@ -103,6 +104,8 @@ def _semantic(block: Mapping[str, Any]) -> dict[str, Any]:
                              "activity_type": (a.get("metadata") or {}).get("activity_type") or "lesson",
                              "audience_coverage": (a.get("metadata") or {}).get("audience_coverage"),
                              "joint_activity_id": (a.get("metadata") or {}).get("joint_activity_id"),
+                             "activity_format": (a.get("metadata") or {}).get("activity_format"),
+                             "responsible_teacher_ids": sorted(str(i) for i in (a.get("metadata") or {}).get("responsible_teacher_ids") or []),
                              "special_mark": (a.get("metadata") or {}).get("special_mark"),
                              "constructor_details": {k: v for k, v in ((a.get("metadata") or {}).get("constructor_details") or {}).items()
                                                      if k != "audience_snapshot"},
@@ -294,7 +297,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if origin_key and not origin_block:
             block("missing_origin_block", "Canonical origin block missing")
         needs_review = any(lesson.get(k) for k in ("review_required", "needsClarification", "importError", "unresolved"))
-        if lesson.get("deferred"):
+        exceptions = validated_exceptions(payload.get("lessons") or [], lesson, scope=reference_week or payload.get("week_start") or "template", slots=payload.get("slots") or [])
+        practice = any(e["type"]=="independent_practice" for e in exceptions)
+        if lesson.get("deferred") or any(e["type"]=="defer" for e in exceptions):
             block("explicit_deferred", "Запись явно отложена администратором")
         result = audience.get(lesson_id) or {}
         if result.get("status") != "ok" or result.get("needs_recalculation"):
@@ -312,6 +317,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if not subject and special not in {"lunch", "no_lesson"}:
             block("empty_activity", "Activity name is required")
         teacher_ids = sorted({str(x) for x in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
+        responsible_teacher_ids = teacher_ids[:]
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
         display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
         if needs_review:
@@ -329,9 +335,11 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 block("review_required", review_reason)
         if set(teacher_ids) - teachers.keys():
             block("unknown_teacher", "An assigned teacher is missing or inactive")
-        if not teacher_ids and not special and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
+        if not teacher_ids and not special and not practice and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
             blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
                              "message": "Преподаватель занятия не подтверждён", "severity": "info"})
+        if practice:
+            teacher_ids = []
         if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
@@ -428,6 +436,8 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                                    "teachers": [teachers[t] for t in teacher_ids if t in teachers],
                                    "constructor_lesson_id": lesson_id,
                                    "activity_type": lesson.get("activityType") or "lesson",
+                                   **({"activity_format":"independent_practice", "responsible_teacher_ids":responsible_teacher_ids,
+                                       "responsible_teachers":[teachers[t] for t in responsible_teacher_ids if t in teachers]} if practice else {}),
                                    "special_mark": special}}
         if lesson.get("protected"):
             original_assignment = origin.get("assignment") or {}
@@ -573,14 +583,34 @@ def _artifact_blocks(blocks: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _published_source(payload: Mapping[str, Any], diagnostics: list, deferred: list) -> dict[str, Any]:
+def _published_source(database: Any, payload: Mapping[str, Any], diagnostics: list, deferred: list, reference_week: str | None = None) -> dict[str, Any]:
     """Archive authored truth separately from safe runtime assignments."""
     unresolved = {item["lesson_id"] for item in deferred}
+    reference=date.fromisoformat(str(reference_week or payload.get("week_start") or payload.get("reference_date") or date.today())[:10])
+    reference-=timedelta(days=reference.weekday())
+    audiences={day:experiment_audience_preview(database,{**payload,"reference_date":(reference+timedelta(days=day)).isoformat()})["lessons"] for day in {int(l.get("day",l.get("weekday",-1))) for l in payload.get("lessons") or [] if str(l.get("day",l.get("weekday",-1))).isdigit()}}
+    with database.connection() as connection:
+        teachers={str(r["id"]) for r in database.execute(connection,"SELECT id FROM identities WHERE kind='teacher' AND status='active'").fetchall()}
     records = []
     for index,lesson in enumerate(payload.get("lessons") or []):
         lid = str(lesson.get("id") or index)
         issues = [issue for issue in diagnostics if lid in (issue.get("related_lesson_ids") or [issue.get("lesson_id")])]
-        records.append({"lesson_id": lid, "status": "unresolved" if lid in unresolved else "resolved_with_remarks" if issues else "resolved",
+        exceptions=validated_exceptions(payload.get("lessons") or [],lesson,scope=reference_week or payload.get("week_start") or "template",slots=payload.get("slots") or [])
+        acknowledgements=[e for e in exceptions if e["type"] in {"joint","independent_practice"}]
+        interval=_lesson_interval(lesson,payload.get("slots") or [])
+        raw_day=lesson.get("day",lesson.get("weekday",-1))
+        result=(audiences.get(int(raw_day) if str(raw_day).isdigit() else -1,{}) or {}).get(lid,{})
+        reliable=result.get("status")=="ok" and not result.get("needs_recalculation")
+        assigned_teachers=sorted(({str(t) for t in lesson.get("teacherIds") or []}|({str(lesson["teacherId"])} if lesson.get("teacherId") else set()))&teachers)
+        practice=any(e["type"]=="independent_practice" for e in acknowledgements)
+        records.append({"lesson_id": lid, "status": "unresolved" if lid in unresolved else "acknowledged_exception" if acknowledgements else "resolved_with_remarks" if issues else "resolved",
+                        "day":lesson.get("day",lesson.get("weekday")),
+                        "start":f"{interval[0]//60:02d}:{interval[0]%60:02d}" if interval else None,
+                        "end":f"{interval[1]//60:02d}:{interval[1]%60:02d}" if interval else None,
+                        "known_student_ids":result.get("student_ids",[]) if reliable else [],
+                        "known_teacher_ids":[] if practice else assigned_teachers,
+                        "responsible_teacher_ids":assigned_teachers if practice else [],
+                        "acknowledged_exceptions":deepcopy(acknowledgements),
                         "diagnostic_codes": sorted({issue["code"] for issue in issues}),
                         "related_lesson_ids": sorted({str(i) for issue in issues for i in issue.get("related_lesson_ids", []) if str(i)!=lid})})
     return {"schema_version": "published-source-v1", "payload_fingerprint": _hash(payload),
@@ -601,6 +631,11 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
     effective = canonical._effective_week(database, None, week_start) if scope_kind == "week" else None
     blocks, diagnostics, deferred = _compile(database, draft["payload"], base, scope_kind,
                                          week_start if scope_kind == "week" else None)
+    for entry in deferred:
+        entry["action"]="retained_unresolved"
+        entry["reason"]="Связанный блок будет сохранён в опубликованном исходнике как нерешённый; безопасные назначения ожидают уточнения"
+    for issue in diagnostics:
+        if issue.get("action")=="excluded":issue["action"]="retained_unresolved"
     if version and base_id != version["version_id"]:
         diagnostics.append({"code": "stale_base", "severity": "critical"})
     if scope_kind == "week" and not base:
@@ -621,11 +656,13 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
                "unchanged_lessons": sum(len(blocks[k].get("assignments") or []) for k in unchanged),
                "replaced_lessons": sum(len(before[k].get("assignments") or []) for k in blocks.keys() & before.keys() - unchanged),
                **{f"{severity}_count": sum(d["severity"] == severity for d in diagnostics) for severity in ("info", "conflict", "critical")}}
-    published_source = _published_source(draft["payload"], diagnostics, deferred)
+    published_source = _published_source(database,draft["payload"], diagnostics, deferred,week_start if scope_kind=="week" else None)
     summary.update(source_lessons=len(published_source["records"]), resolved_lessons=summary["ready_lessons"],
                    unresolved_lessons=len(deferred), campus_lessons=summary["ready_lessons"], admin_only_lessons=len(deferred),
                    with_remarks_lessons=sum(r["status"]=="resolved_with_remarks" for r in published_source["records"]),
-                   acknowledged_exceptions=0)
+                   confirmed_lessons=sum(r["status"]=="resolved" for r in published_source["records"]),
+                   acknowledged_exception_lessons=sum(r["status"]=="acknowledged_exception" for r in published_source["records"]),
+                   acknowledged_exceptions=len({e["id"] for r in published_source["records"] for e in r["acknowledged_exceptions"]}))
     result = {"draft_id": draft_id, "draft_revision": draft["revision"], "scope_kind": scope_kind,
               "scope_key": scope_key, "week_start": week_start if scope_kind == "week" else None,
               "base_version_id": base_id or None, "effective_week_id": (effective or {}).get("effective_week_id"),
@@ -812,11 +849,33 @@ def list_publications(database: Any, draft_id: str | None = None) -> dict[str, A
 def get_published_source(database: Any, publication_id: str) -> dict[str, Any]:
     """Admin service: legacy history is explicitly unavailable, never reconstructed."""
     with database.connection() as connection:
-        row = database.execute(connection, "SELECT metadata FROM schedule_constructor_publications WHERE id=?", (publication_id,)).fetchone()
+        row = database.execute(connection, "SELECT metadata,payload_fingerprint FROM schedule_constructor_publications WHERE id=?", (publication_id,)).fetchone()
     if not row:
         raise ValueError("Publication not found")
-    source = json.loads(row["metadata"]).get("published_source")
+    source = _checked_published_source(json.loads(row["metadata"]), row["payload_fingerprint"])
     return {"publication_id": publication_id, "available": bool(source), "published_source": source}
+
+
+def _checked_published_source(metadata: Mapping[str, Any], payload_fingerprint: str) -> dict | None:
+    """Fail closed on damaged new archives; preserve archive-free legacy history."""
+    source = metadata.get("published_source")
+    preview_source = (metadata.get("preview") or {}).get("published_source")
+    if source is None and preview_source is None:
+        return None
+    valid = isinstance(source, dict) and source == preview_source
+    if valid:
+        payload = source.get("payload")
+        records = source.get("records")
+        valid = isinstance(payload, dict) and isinstance(records, list)
+    if valid:
+        lesson_ids = [str(lesson.get("id") or index) for index, lesson in enumerate(payload.get("lessons") or [])]
+        record_ids = [str(record.get("lesson_id")) for record in records]
+        valid = (_hash(payload) == source.get("payload_fingerprint") == payload_fingerprint
+                 and len(lesson_ids) == len(set(lesson_ids))
+                 and sorted(lesson_ids) == sorted(record_ids))
+    if not valid:
+        raise ValueError("Нарушена целостность опубликованного источника. Восстановление заблокировано.")
+    return source
 
 
 def preview_restore(database: Any, publication_id: str, *, expected_head_revision: int) -> dict[str, Any]:
@@ -836,6 +895,11 @@ def preview_restore(database: Any, publication_id: str, *, expected_head_revisio
         current = {b["block_key"]: {**b, "assignments": canonical._assignments(database, b.get("canonical_block_id"), b.get("patch") or {})}
                    for b in canonical._block_rows(database, head["published_id"]) if b.get("change_kind") != "cancelled"}
     blockers = []
+    try:
+        archived_source = _checked_published_source(metadata, item["payload_fingerprint"])
+    except ValueError as error:
+        archived_source = None
+        blockers.append({"code": "published_source_integrity", "severity": "critical", "message": str(error)})
     with database.connection() as connection:
         teachers = {str(r["id"]) for r in database.execute(connection,
             "SELECT id FROM identities WHERE kind='teacher' AND status='active'").fetchall()}
@@ -846,7 +910,8 @@ def preview_restore(database: Any, publication_id: str, *, expected_head_revisio
     for key, b in target.items():
         for a in b.get("assignments") or []:
             rule = (a.get("metadata") or {}).get("audience_rule") or {}
-            if set(str(i) for i in a.get("teacher_ids") or []) - teachers:
+            responsible = (a.get("metadata") or {}).get("responsible_teacher_ids") or []
+            if (set(str(i) for i in a.get("teacher_ids") or []) | set(str(i) for i in responsible)) - teachers:
                 blockers.append({"code": "unknown_teacher", "message": f"Historical teacher missing/inactive in {key}"})
             if set(str(i) for i in a.get("canonical_group_ids") or []) - groups:
                 blockers.append({"code": "unknown_group", "message": f"Historical group missing/noncanonical in {key}"})
@@ -883,6 +948,7 @@ def preview_restore(database: Any, publication_id: str, *, expected_head_revisio
               "scope_key": item["scope_key"], "current_published_id": head["published_id"],
               "target_published_id": item["published_id"], "expected_head_revision": head["revision"],
               "directory_fingerprint": _directory_fingerprint(database),
+              "target_source_fingerprint": _hash(archived_source) if archived_source else None,
               "can_restore": not blockers, "blockers": blockers,
               "change_items": _change_items(current, target),
               "diff": {"added": len(target.keys() - current.keys()), "removed": len(current.keys() - target.keys()),

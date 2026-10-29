@@ -15,6 +15,7 @@ from uuid import uuid4
 from unittest.mock import patch
 
 import psycopg
+from psycopg import sql
 
 from backend.database import Database
 from backend.services import canonical_schedule as canonical
@@ -70,12 +71,20 @@ class PartialPublicationPostgresTests(unittest.TestCase):
                     raise RuntimeError(f"PostgreSQL schema fixture is missing public.{table}")
             # This fixture must be schema-only. Never add publication test data to
             # a previously used fixture, let alone a school database.
-            for table in ("canonical_schedule_versions", "schedule_experiment_drafts",
-                          "schedule_publication_heads", "schedule_constructor_publications"):
-                count = cls.database.execute(connection,
-                    f"SELECT count(*) AS n FROM public.{table}").fetchone()["n"]
+            cls.fixture_tables = [row["tablename"] for row in cls.database.execute(connection,
+                "SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall()]
+            for table in cls.fixture_tables:
+                count = connection.execute(
+                    sql.SQL("SELECT count(*) AS n FROM public.{}").format(sql.Identifier(table))).fetchone()["n"]
                 if count:
                     raise RuntimeError(f"Refusing non-empty PostgreSQL fixture: public.{table}")
+
+    def tearDown(self):
+        # The class guard proved this exact loopback database was schema-only.
+        # Remove only synthetic rows produced by this test, keeping each case isolated.
+        with psycopg.connect(_database_url()) as connection:
+            connection.execute(sql.SQL("TRUNCATE TABLE {} RESTART IDENTITY CASCADE").format(
+                sql.SQL(",").join(sql.Identifier("public", table) for table in self.fixture_tables)))
 
     def setUp(self):
         self.suffix = uuid4().hex[:10]
@@ -126,6 +135,48 @@ class PartialPublicationPostgresTests(unittest.TestCase):
             expected_revision=draft["revision"], preview_token=preview["preview_token"],
             confirmed=True, **kwargs)
 
+    def test_all_386_unresolved_sources_remain_immutable_in_postgres(self):
+        from backend.services.constructor_publication import get_published_source
+
+        draft = self.draft([
+            self.lesson(f"unresolved-{index}", subject="Unresolved source", audience={"kind": "groups", "group_ids": [f"unknown-{index}"]})
+            for index in range(386)
+        ])
+        preview = self.preview(draft)
+        self.assertEqual(preview["summary"]["source_lessons"], 386)
+        self.assertEqual(preview["summary"]["campus_lessons"], 0)
+        self.assertEqual(preview["summary"]["admin_only_lessons"], 386)
+        self.assertTrue(preview["can_publish"], preview["blockers"])
+        published = self.confirm(draft, preview)
+        archive = get_published_source(self.database, published["publication_id"])["published_source"]
+        self.assertEqual(archive["payload"], draft["payload"])
+        self.assertEqual(len(archive["records"]), 386)
+        self.assertEqual({row["status"] for row in archive["records"]}, {"unresolved"})
+        draft["revision"] = published["draft_revision"]
+        week = self.confirm(draft, self.preview(draft, "week", week_start="2026-11-02"),
+                            "week", week_start="2026-11-02")
+        week_archive = get_published_source(self.database, week["publication_id"])["published_source"]
+        self.assertEqual(len(week_archive["records"]), 386)
+        self.assertEqual(canonical.project_student(self.database, self.student["id"], "2026-11-02")["items"], [])
+        teacher = canonical.project_teacher(self.database, self.teacher["id"], "2026-11-02")
+        self.assertEqual(len(teacher["items"]), 1)
+        self.assertEqual(teacher["items"][0]["state"], "UNRESOLVED")
+        self.assertIsNone(teacher["items"][0]["activity"])
+        self.assertEqual(len(teacher["items"][0]["provenance"]["unresolved_record_ids"]), 386)
+
+        # Editing the mutable draft cannot change either published JSONB source.
+        changed = copy.deepcopy(draft["payload"])
+        changed["lessons"][0]["subject"] = "Changed only in draft"
+        save_experiment(self.database, draft["id"], expected_revision=week["draft_revision"], payload=changed)
+        self.assertEqual(get_published_source(self.database, published["publication_id"])["published_source"], archive)
+        self.assertEqual(get_published_source(self.database, week["publication_id"])["published_source"], week_archive)
+        head = canonical.publication_head(self.database, "template")
+        restore = preview_restore(self.database, published["publication_id"], expected_head_revision=head["revision"])
+        restored = restore_publication(self.database, published["publication_id"],
+            expected_head_revision=head["revision"], preview_token=restore["preview_token"], confirmed=True)
+        self.assertEqual(get_published_source(self.database, restored["publication_id"])["published_source"], archive)
+        self.assertEqual(get_published_source(self.database, week["publication_id"])["published_source"], week_archive)
+
     def test_partial_preview_publish_cas_history_projection_and_rollback(self):
         # Persist the new explicit/joint contract in PostgreSQL JSONB, verify
         # both runtime projections, then roll back this entire sub-scenario.
@@ -164,8 +215,8 @@ class PartialPublicationPostgresTests(unittest.TestCase):
         issues = {item["code"]: item for item in first_preview["diagnostics"]}
         self.assertEqual(issues["missing_room"]["severity"], "info")
         self.assertEqual(issues["unknown_teacher"]["severity"], "conflict")
-        self.assertEqual(issues["unknown_teacher"]["action"], "excluded")
-        self.assertEqual(issues["review_required"]["action"], "excluded")
+        self.assertEqual(issues["unknown_teacher"]["action"], "retained_unresolved")
+        self.assertEqual(issues["review_required"]["action"], "retained_unresolved")
         self.assertEqual(first_preview["summary"]["ready_lessons"], 1)
         self.assertEqual({item["lesson_id"] for item in first_preview["deferred"]},
                          {"unknown-teacher", "needs-review"})
@@ -200,7 +251,12 @@ class PartialPublicationPostgresTests(unittest.TestCase):
         self.assertTrue(week_preview["can_publish"], week_preview["blockers"])
         self.confirm(week, week_preview, "week", week_start="2026-10-19")
         projection = canonical.project_student(self.database, self.student["id"], "2026-10-19")
-        self.assertEqual([item["activity"] for item in projection["items"]], ["week-safe"])
+        self.assertEqual([item["activity"] for item in projection["items"] if item["state"] == "ACTIVITY"], ["week-safe"])
+        unresolved = [item for item in projection["items"] if item["state"] == "UNRESOLVED"]
+        self.assertEqual(len(unresolved), 2)
+        self.assertTrue(all(item["activity"] is None for item in unresolved))
+        self.assertEqual({item["start_time"] for item in unresolved}, {"10:00", "11:00"})
+        self.assertNotIn("known_student_ids", str(projection))
 
         # Information-only preview remains publishable, and publishing a new
         # template never mutates the prior immutable artifact.

@@ -1590,6 +1590,10 @@ def _project_student_block(
             }
             if metadata.get("audience_coverage") == "explicit" and metadata.get("joint_activity_id"):
                 result["provenance"]["joint_activity_id"] = metadata["joint_activity_id"]
+            if metadata.get('activity_format')=='independent_practice':
+                result['activity_format']='independent_practice'
+                result['responsible_teacher_ids']=metadata.get('responsible_teacher_ids') or []
+                result['responsible_teachers']=metadata.get('responsible_teachers') or []
         elif result is None:
             non_no_lesson = [claim for claim in residual_claims if claim["activity"] and claim["activity"] != _NO_LESSON]
             residual_activities = {claim["activity"] for claim in non_no_lesson}
@@ -1614,6 +1618,38 @@ def _project_student_block(
         issues.append(issue)
         result = {**result, "state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]]}
     return result, issues
+
+
+def _published_unresolved_items(database: Database, effective: Mapping[str, Any], identity_id: str, week_start: str, kind: str) -> list[dict[str, Any]]:
+    """Own-identity conflict markers from the exact immutable publication only."""
+    with database.connection() as connection:
+        query=("SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schedule_constructor_publications'" if database.database_url else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_constructor_publications'")
+        if not database.execute(connection,query).fetchone():return []
+        row=database.execute(connection,"SELECT id,metadata,payload_fingerprint FROM schedule_constructor_publications WHERE published_id=? ORDER BY created_at DESC LIMIT 1",(effective.get('effective_week_id'),)).fetchone()
+        # A template archive applies only to an unmodified materialized default
+        # week. Never overlay it onto an independently edited historical week.
+        if not row:
+            patched=database.execute(connection,"SELECT 1 FROM canonical_effective_blocks WHERE effective_week_id=? AND change_kind NOT IN ('unchanged','base') LIMIT 1",(effective.get('effective_week_id'),)).fetchone()
+            if not patched:
+                row=database.execute(connection,"SELECT id,metadata,payload_fingerprint FROM schedule_constructor_publications WHERE published_id=? AND scope_kind='template' ORDER BY created_at DESC LIMIT 1",(effective.get('version_id'),)).fetchone()
+    if not row:return []
+    metadata=row['metadata'] if isinstance(row['metadata'],Mapping) else json.loads(row['metadata'])
+    from backend.services.constructor_publication import _checked_published_source
+    try:
+        source = _checked_published_source(metadata, row['payload_fingerprint'])
+    except ValueError:
+        # A damaged archive cannot establish ownership of a conflict marker.
+        return []
+    records=(source or {}).get('records') or []
+    grouped={}
+    for record in records:
+        if record.get('status')!='unresolved' or identity_id not in {str(i) for i in record.get('known_student_ids' if kind=='student' else 'known_teacher_ids') or []}:continue
+        if record.get('day') not in range(7) or not record.get('start') or not record.get('end'):continue
+        key=(record['day'],record['start'],record['end'])
+        entry=grouped.setdefault(key,{'date':(date.fromisoformat(week_start)+timedelta(days=key[0])).isoformat(),'weekday':key[0],'start_time':key[1],'end_time':key[2], 'state':'UNRESOLVED','activity':None,'reason':'Занятие ожидает уточнения администратора','issue_codes':[],'provenance':{'publication_id':row['id'],'unresolved_record_ids':[]}})
+        entry['issue_codes']=sorted(set(entry['issue_codes'])|set(record.get('diagnostic_codes') or []))
+        entry['provenance']['unresolved_record_ids'].append(record['lesson_id'])
+    return list(grouped.values())
 
 
 def project_student(
@@ -1650,6 +1686,11 @@ def project_student(
                 continue
             seen_joint_activities.add(joint_key)
         items.append({"block_key": block["block_key"], "date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **state})
+    unresolved=_published_unresolved_items(database,effective,student_id,week_start,'student')
+    if unresolved:
+        intervals={(i['date'],i['start_time'],i['end_time']) for i in unresolved}
+        items=[i for i in items if not (i['state']=='NO_LESSON' and (i['date'],i['start_time'],i['end_time']) in intervals)]
+        items.extend(unresolved)
     return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
 
 
@@ -1715,7 +1756,9 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
         day = (start + timedelta(days=int(block["weekday"]))).isoformat()
         for assignment in _assignments(database, block.get("canonical_block_id"), block.get("patch") or {}):
             teacher_ids = [str(value) for value in assignment.get("teacher_ids") or []]
-            if teacher_id not in teacher_ids:
+            metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+            responsible_ids=[str(value) for value in metadata.get('responsible_teacher_ids') or []] if metadata.get('activity_format')=='independent_practice' else []
+            if teacher_id not in teacher_ids and teacher_id not in responsible_ids:
                 continue
             group_ids = [str(value) for value in assignment.get("canonical_group_ids") or []]
             signature = (day, str(block.get("start_time") or ""), teacher_id,
@@ -1730,6 +1773,11 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
                     "grade_scope": block.get("grade_scope"), "teacher_ids": teacher_ids,
                     "teacher_names": metadata.get("teachers") or [], "room": metadata.get("room", ""),
                     "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
+            if responsible_ids:
+                item['activity_format']='independent_practice'
+                item['responsible_teacher_ids']=responsible_ids
+                item['responsible_teachers']=metadata.get('responsible_teachers') or []
+                item['physical_presence']=teacher_id in teacher_ids
             joint_id = metadata.get("joint_activity_id") if metadata.get("audience_coverage") == "explicit" else None
             if joint_id:
                 joint_key = (day,str(block.get("start_time")),str(block.get("end_time")),str(joint_id))
@@ -1742,11 +1790,13 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
                     continue
                 joint_items[joint_key] = item
             key = (day, str(block.get("start_time") or ""))
-            occupied[key].append(item)
+            if teacher_id in teacher_ids:
+                occupied[key].append(item)
             items.append(item)
     for key, values in occupied.items():
         if len(values) > 1:
             issues.append({"date": key[0], "start_time": key[1], "reason": "teacher has simultaneous canonical assignments", "items": values})
+    items.extend(_published_unresolved_items(database,effective,teacher_id,week_start,'teacher'))
     return {"identity_id": teacher_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
 
 

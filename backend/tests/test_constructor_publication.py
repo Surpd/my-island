@@ -22,6 +22,35 @@ from backend.handlers.api import create_router
 
 
 class ConstructorPublicationTests(unittest.TestCase):
+    def test_damaged_archive_cannot_create_a_runtime_conflict_owner(self):
+        draft = self.draft([self.lesson(review_required=True)])
+        self.publish(draft)
+        week = self.publish(draft, "week", week_start="2026-10-19")
+        outsider = self.database.create_identity("student", "Unassigned synthetic student", "9A")
+        with self.database.connection() as connection:
+            row = connection.execute("SELECT metadata FROM schedule_constructor_publications WHERE id=?", (week["publication_id"],)).fetchone()
+            metadata = json.loads(row["metadata"])
+            metadata["published_source"]["records"][0]["known_student_ids"].append(str(outsider["id"]))
+            connection.execute("UPDATE schedule_constructor_publications SET metadata=? WHERE id=?", (json.dumps(metadata), week["publication_id"]))
+        self.assertEqual(canonical.project_student(self.database, outsider["id"], "2026-10-19")["items"], [])
+
+    def test_damaged_source_is_not_returned_or_restored(self):
+        from backend.services.constructor_publication import get_published_source
+        draft = self.draft()
+        published = self.publish(draft)
+        archive = get_published_source(self.database, published["publication_id"])["published_source"]
+        with self.database.connection() as connection:
+            row = connection.execute("SELECT metadata FROM schedule_constructor_publications WHERE id=?", (published["publication_id"],)).fetchone()
+            metadata = json.loads(row["metadata"])
+            metadata["published_source"]["payload"]["lessons"][0]["subject"] = "Damaged archive"
+            connection.execute("UPDATE schedule_constructor_publications SET metadata=? WHERE id=?", (json.dumps(metadata), published["publication_id"]))
+        with self.assertRaises(ValueError):
+            get_published_source(self.database, published["publication_id"])
+        restore = preview_restore(self.database, published["publication_id"], expected_head_revision=1)
+        self.assertFalse(restore["can_restore"])
+        self.assertIn("published_source_integrity", {item["code"] for item in restore["blockers"]})
+        self.assertEqual(len(archive["records"]), 1)
+
     def test_all_386_source_records_survive_publication_and_restore_without_assignment(self):
         from backend.services.constructor_publication import get_published_source
         lessons=[self.lesson(id=f"unknown-{i}", audience={"kind":"groups","group_ids":[f"unknown-{i}"]}) for i in range(386)]
@@ -219,7 +248,7 @@ class ConstructorPublicationTests(unittest.TestCase):
             p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
             self.assertTrue(p["can_publish"])
             self.assertEqual(p["summary"]["ready_lessons"], 0)
-            self.assertEqual(p["deferred"][0]["action"], "excluded")
+            self.assertEqual(p["deferred"][0]["action"], "retained_unresolved")
             self.assertTrue(p["diagnostics"])
 
     def test_technical_class_key_keeps_parallel_scope_and_unresolved_other_grade_does_not_block(self):
@@ -487,7 +516,8 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(get_experiment(self.database, draft["id"])["payload"], original)
         for identity in (self.student, self.other_student):
             rows = canonical.project_student(self.database, identity["id"], "2026-10-26")["items"]
-            self.assertEqual([r["activity"] for r in rows], ["Math"])
+            self.assertEqual([r["activity"] for r in rows if r["state"] == "ACTIVITY"], ["Math"])
+            self.assertTrue(all(r["state"] == "UNRESOLVED" or r["activity"] == "Math" for r in rows))
         self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-26")["items"][0]["activity"], "Math")
 
     def test_bad_parallel_member_does_not_expand_remaining_audience(self):
@@ -583,6 +613,34 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertIsNone(canonical.canonical_version(self.database))
         self.assertEqual(get_experiment(store, draft["id"])["revision"], 1)
 
+    def test_resolution_routes_require_admin_and_use_server_actor(self):
+        from backend.handlers.constructor_publication_api import create_constructor_publication_router
+        from fastapi import HTTPException
+        draft=self.draft()
+        def require_admin(token):
+            if token!="synthetic-admin":raise HTTPException(401,"School admin session required")
+            return {"id":"verified-admin"}
+        app=FastAPI();app.include_router(create_constructor_publication_router(lambda:(self.database,self.database),require_admin))
+        client=TestClient(app);base=f"/api/admin/schedule/constructor/{draft['id']}"
+        preview_body={"expected_revision":1,"lesson_ids":["l1"]}
+        apply_url=base+"/resolution/"
+        with patch.dict(os.environ,{"MY_ISLAND_CONSOLIDATED_SCHEDULE":"1"}):
+            self.assertEqual(client.post(apply_url+"preview",json=preview_body).status_code,401)
+            headers={"X-School-Admin-Session":"synthetic-admin"}
+            preview=client.post(apply_url+"preview",json=preview_body,headers=headers)
+            self.assertEqual(preview.status_code,200,preview.text)
+            result=client.post(apply_url+"apply",headers=headers,json={**preview_body,"preview_token":preview.json()["preview_token"],"action":"independent_practice","reason":"Verified","actor_user_id":"forged-admin"})
+            self.assertEqual(result.status_code,200,result.text)
+            receipt=result.json()["payload"]["lessons"][0]["resolution_history"][0]
+            self.assertEqual(receipt["actor_id"],"verified-admin")
+            self.assertNotEqual(receipt["actor_id"],"forged-admin")
+            self.assertEqual(client.post(apply_url+"apply",headers=headers,json={**preview_body,"preview_token":preview.json()["preview_token"],"action":"defer","reason":"Replay"}).status_code,409)
+            draft=get_experiment(self.database,draft["id"])
+            published=self.publish(draft)
+            source_url=f"/api/admin/schedule/constructor/publication/{published['publication_id']}/source"
+            self.assertEqual(client.get(source_url).status_code,401)
+            self.assertEqual(client.get(source_url,headers=headers).status_code,200)
+
     def test_group_semantics_change_invalidates_preview(self):
         draft = self.draft()
         p = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
@@ -671,8 +729,11 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertTrue(p["can_publish"], p["blockers"])
         self.assertEqual(len(p["deferred"]), 1)
         self.publish(draft, "week", week_start="2026-10-19")
-        self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")["items"], [])
-        self.assertEqual(p["deferred"][0]["action"], "excluded")
+        unresolved = canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")["items"]
+        self.assertEqual(len(unresolved), 1)
+        self.assertEqual(unresolved[0]["state"], "UNRESOLVED")
+        self.assertIsNone(unresolved[0]["activity"])
+        self.assertEqual(p["deferred"][0]["action"], "retained_unresolved")
         self.assertTrue(get_experiment(self.database, draft["id"])["payload"]["lessons"][0]["deferred"])
 
     def test_protected_unchanged_allowed_but_edit_or_missing_base_block_blocked(self):
