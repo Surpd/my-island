@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeScheduleDrafts, parseQuick } from './schedule-constructor-logic.ts';
+import { linkedInstructionalGroupsForColumn, mergeScheduleDrafts, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds } from './schedule-constructor-logic.ts';
 
 const classes = [
   { id: 'class-7b', name: '7-Б', group_type: 'class' },
@@ -90,4 +90,37 @@ test('three-way merge preserves a genuine audience membership conflict for expli
   assert.deepEqual(result.conflicts.map((item) => item.field), ['audience_snapshot']);
   const resolved = mergeScheduleDrafts(base, local, server, { [result.conflicts[0].key]: 'server' });
   assert.deepEqual(resolved.draft.payload.lessons[0].audience_snapshot.student_ids, ['s2']);
+});
+
+test('grid placement uses club display classes and falls back to the selected column', () => {
+  assert.deepEqual(schedulePlacementClassIds({ activityType: 'club', classIds: [], displayClassIds: ['c7', 'c8'] }, ['c1']), ['c7', 'c8']);
+  assert.deepEqual(schedulePlacementClassIds({ classIds: ['c7'], classId: 'c8' }, ['c1']), ['c7']);
+  assert.deepEqual(schedulePlacementClassIds({ classIds: [] }, ['c1', 'c2']), ['c1', 'c2']);
+});
+
+test('linked instructional groups narrow to canonical members in the current class column', () => {
+  const linked = [
+    { id: 'english-a', group_type: 'instructional' },
+    { id: 'english-b', group_type: 'instructional' },
+  ];
+  const lesson = { groupIds: ['english-a', 'english-b'] };
+  const students = [
+    { id: 's1', groups: ['english-a'], classes: ['class-7b'] },
+    { id: 's2', groups: ['english-b'], classes: ['class-9a'] },
+  ];
+  assert.deepEqual(linkedInstructionalGroupsForColumn(lesson, linked, students, ['class-7b']).map((item) => item.id), ['english-a']);
+  assert.deepEqual(linkedInstructionalGroupsForColumn(lesson, linked, [], ['class-7b']).map((item) => item.id), ['english-a', 'english-b']);
+});
+
+test('pasting remaps class audiences but preserves explicit groups, students, and empty club participants', () => {
+  const classLesson = { id: 'old', classId: 'class-7b', classIds: ['class-7b'], groupId: 'class-7b', groupIds: ['class-7b'], audience: { kind: 'classes', class_ids: ['class-7b'], grade: '7' }, audience_snapshot: { student_ids: ['old-roster'], resolved_at: 'old' } };
+  assert.deepEqual(remapPastedLessonAudience(classLesson, ['class-9a'], 'new'), {
+    id: 'new', classId: 'class-9a', classIds: ['class-9a'], groupId: 'class-9a', groupIds: ['class-9a'], audience: { kind: 'classes', class_ids: ['class-9a'] },
+  });
+  assert.equal(Object.hasOwn(remapPastedLessonAudience(classLesson, ['class-9a'], 'new'), 'audience_snapshot'), false);
+  assert.deepEqual(remapPastedLessonAudience(classLesson, ['class-7b'], 'same-class-copy').audience_snapshot, classLesson.audience_snapshot);
+  const groupLesson = { id: 'old', groupId: 'english:7', groupIds: ['english:7'], classIds: ['class-7b'], audience: { kind: 'groups', group_ids: ['english:7'] } };
+  assert.deepEqual(remapPastedLessonAudience(groupLesson, ['class-9a'], 'new'), { ...groupLesson, id: 'new' });
+  const club = { id: 'old', activityType: 'club', classId: '', classIds: [], displayClassIds: ['class-7b'], audience: { kind: 'students', student_ids: [] } };
+  assert.deepEqual(remapPastedLessonAudience(club, ['class-9a'], 'new'), { ...club, id: 'new', displayClassIds: ['class-9a'] });
 });

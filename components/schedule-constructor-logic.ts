@@ -5,6 +5,115 @@ export type ScheduleGroup = { id: string; name: string; group_type: string; subj
 export type ScheduleTeacher = { id: string; name: string; assignments: { group_id?: string | null; subject: string; course?: string; grade_level?: string | number | null; exam_track?: string; active?: boolean | number; status?: string; valid_from?: string | null; valid_until?: string | null }[] };
 export type ScheduleStudent = { id: string; groups: string[]; classes: string[] };
 
+type PlacementLesson = {
+  activityType?: string;
+  classId?: string;
+  classIds?: string[];
+  displayClassIds?: string[];
+};
+
+/** Classes whose grid cells should contain a lesson, including visual club placement. */
+export function schedulePlacementClassIds(lesson: PlacementLesson, selectedColumnClassIds: string[] = []): string[] {
+  const ids = lesson.activityType === 'club'
+    ? lesson.displayClassIds
+    : lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
+  return [...new Set((ids?.length ? ids : selectedColumnClassIds).filter(Boolean))];
+}
+
+type LinkedLesson = {
+  groupId?: string;
+  groupIds?: string[];
+  audience?: { kind?: string; group_ids?: string[] };
+  canonical?: { assignment?: {
+    canonical_group_ids?: string[];
+    metadata?: { audience?: { canonical_group_ids?: string[] }; audience_rule?: { group_ids?: string[] } };
+  } };
+};
+type LinkedGroup = { id: string; group_type: string };
+type MembershipStudent = { groups?: string[]; classes?: string[] };
+
+/**
+ * Return linked instructional groups appropriate to the current class column.
+ * Narrow only when canonical student memberships prove a class match; when the
+ * directory has no usable membership evidence, preserve the shared label.
+ */
+export function linkedInstructionalGroupsForColumn<T extends LinkedGroup>(
+  lesson: LinkedLesson,
+  groups: T[],
+  students: MembershipStudent[],
+  columnClassIds: string[],
+): T[] {
+  const assignment = lesson.canonical?.assignment;
+  const metadata = assignment?.metadata;
+  const ids = [...new Set([
+    ...(lesson.groupIds || []), lesson.groupId || '',
+    ...(lesson.audience?.kind === 'groups' ? lesson.audience.group_ids || [] : []),
+    ...(assignment?.canonical_group_ids || []),
+    ...(metadata?.audience?.canonical_group_ids || []),
+    ...(metadata?.audience_rule?.group_ids || []),
+  ].map(String).filter(Boolean))];
+  const linked = ids.map((id) => groups.find((group) => group.id === id))
+    .filter((group): group is T => Boolean(group && group.group_type !== 'class'));
+  if (linked.length < 2 || !columnClassIds.length) return linked;
+  const classSet = new Set(columnClassIds);
+  const classesByGroup = new Map<string, Set<string>>();
+  for (const student of students) {
+    const studentClasses = student.classes || [];
+    if (!studentClasses.length) continue;
+    for (const id of student.groups || []) {
+      const found = classesByGroup.get(id) || new Set<string>();
+      studentClasses.forEach((classId) => found.add(classId));
+      classesByGroup.set(id, found);
+    }
+  }
+  const mapped = linked.filter((group) => classesByGroup.has(group.id));
+  if (!mapped.length) return linked;
+  const matching = mapped.filter((group) => [...(classesByGroup.get(group.id) || [])].some((id) => classSet.has(id)));
+  return matching.length ? matching : linked;
+}
+
+/** Copy a lesson into a destination while keeping explicit canonical audiences intact. */
+export function remapPastedLessonAudience<T extends object>(
+  lesson: T,
+  destinationClassIds: string[],
+  newId: string,
+): T {
+  const source = lesson as Record<string, unknown>;
+  const activityType = source.activityType;
+  if (activityType === 'club') {
+    return { ...source, id: newId, classId: '', classIds: [], displayClassIds: [...destinationClassIds] } as T;
+  }
+  const audience = source.audience && typeof source.audience === 'object'
+    ? source.audience as Record<string, unknown> : undefined;
+  const sourceClassIds = new Set([
+    ...(Array.isArray(source.classIds) ? source.classIds.filter((id): id is string => typeof id === 'string') : []),
+    ...(typeof source.classId === 'string' && source.classId ? [source.classId] : []),
+  ]);
+  const sourceGroupIds = Array.isArray(source.groupIds)
+    ? source.groupIds.filter((id): id is string => typeof id === 'string') : [];
+  const sourceGroupId = typeof source.groupId === 'string' ? source.groupId : '';
+  const hasNonClassGroup = sourceGroupIds.some((id) => !sourceClassIds.has(id))
+    || Boolean(sourceGroupId && !sourceClassIds.has(sourceGroupId));
+  const explicitGroupOrStudentAudience = audience?.kind === 'groups' || audience?.kind === 'students' || hasNonClassGroup;
+  if (explicitGroupOrStudentAudience) return { ...source, id: newId } as T;
+  const classes = [...new Set(destinationClassIds.filter(Boolean))];
+  const next: Record<string, unknown> = {
+    ...source,
+    id: newId,
+    classId: classes.length === 1 ? classes[0] : '',
+    classIds: classes,
+  };
+  const sourceClasses = [...sourceClassIds].sort();
+  if (JSON.stringify(sourceClasses) !== JSON.stringify([...classes].sort())) delete next.audience_snapshot;
+  if (sourceGroupId && sourceClassIds.has(sourceGroupId)) next.groupId = classes.length === 1 ? classes[0] : '';
+  if (sourceGroupIds.length && sourceGroupIds.every((id) => sourceClassIds.has(id))) next.groupIds = classes;
+  if (audience && (audience.kind === 'classes' || audience.kind === 'available_slot')) {
+    const { grade: _staleGrade, ...rest } = audience;
+    next.audience = { ...rest, class_ids: classes };
+  }
+  return next as T;
+}
+
 export type TeacherAudienceContext = {
   groupIds?: string[];
   classIds?: string[];
