@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { linkedInstructionalGroupsForColumn, mergeScheduleDrafts, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds } from './schedule-constructor-logic.ts';
+import { linkedInstructionalGroupsForColumn, mergeScheduleDrafts, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds, shouldWarnMissingTeacher } from './schedule-constructor-logic.ts';
 
 const classes = [
   { id: 'class-7b', name: '7-Б', group_type: 'class' },
@@ -57,6 +57,16 @@ test('quick entry asks for an explicit subject when the same token names multipl
 const draft = (lessons, revision = 1) => ({
   id: 'draft', name: 'Week', revision,
   payload: { days: [0, 1], slots: [{ start: '09:00', end: '09:45' }], classes: ['class-7b'], lessons },
+});
+
+test('missing-teacher notices follow activity requirements and accepted responsibility', () => {
+  assert.equal(shouldWarnMissingTeacher({ activityType: 'lesson' }), true);
+  assert.equal(shouldWarnMissingTeacher({ activityType: 'lesson', teacherIds: ['co-teacher'] }), false);
+  assert.equal(shouldWarnMissingTeacher({ activityType: 'lesson', responsible_teacher_ids: ['responsible'] }), true);
+  assert.equal(shouldWarnMissingTeacher({ activityType: 'club' }), false);
+  assert.equal(shouldWarnMissingTeacher({ activityType: 'event', kind: 'event' }), false);
+  assert.equal(shouldWarnMissingTeacher({ kind: 'event', informational: true }), false);
+  assert.equal(shouldWarnMissingTeacher({ activityType: 'lesson' }, true), false);
 });
 
 test('three-way merge composes a local added lesson with an unrelated server edit', () => {

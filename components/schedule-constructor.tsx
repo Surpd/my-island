@@ -39,7 +39,7 @@ import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
-import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
+import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
@@ -371,6 +371,7 @@ function issuesFor(
   groups: Group[],
   students: Student[],
   previews: Record<string, AudiencePreview>,
+  independentPractice: Set<string> = new Set(),
 ): Issue[] {
   const result: Issue[] = [];
   const add = (
@@ -400,7 +401,7 @@ function issuesFor(
     if (audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
       result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: audience.reason || 'Невозможно точно определить участников.' });
     }
-    if (!isSpecialMark(lesson) && lesson.kind !== 'event' && !lesson.teacherId)
+    if (!isSpecialMark(lesson) && shouldWarnMissingTeacher(lesson, independentPractice.has(lesson.id)))
       add(lesson.id, 'warning', 'Преподаватель пока не назначен.');
   }
   for (let i = 0; i < payload.lessons.length; i++)
@@ -532,6 +533,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [conflictActionBusy, setConflictActionBusy] = useState(false);
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'local' | 'server'>>({});
   const [dirty, setDirty] = useState(false);
+  const [resolutionRevision,setResolutionRevision]=useState<number|null>(null);
+  const [resolutionStates,setResolutionStates] = useState<Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>>({});
   const [history, setHistory] = useState<Payload[]>([]);
   const [future, setFuture] = useState<Payload[]>([]);
   const [context, setContext] = useState<{ x: number; y: number } | null>(null);
@@ -1289,10 +1292,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       (item) =>
       item.needsClarification || !payload.days.includes(item.day) || !payload.slots[item.period],
     ) || [];
-  const issues = useMemo(
-    () => (payload ? issuesFor(payload, groups, students, audiencePreviews) : []),
-    [payload, groups, students, audiencePreviews],
-  );
+  const issues = useMemo(() => {
+    if (!payload) return [];
+    const practiceIds = new Set<string>();
+    if (!dirty && resolutionRevision === draft?.revision) {
+      for (const [lessonId, receipts] of Object.entries(resolutionStates))
+        if (receipts.some((receipt) => receipt.type === 'independent_practice' && receipt.lesson_ids?.includes(lessonId))) practiceIds.add(lessonId);
+    }
+    return issuesFor(payload, groups, students, audiencePreviews, practiceIds);
+  }, [payload, groups, students, audiencePreviews, dirty, draft?.revision, resolutionRevision, resolutionStates]);
   const selected = payload?.lessons.find((item) => item.id === selectedId);
   const selectedCell = focus &&
     payload && {
@@ -1924,8 +1932,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     });
     return problems.map((message) => ({ index, message }));
   });
-  const [resolutionRevision,setResolutionRevision]=useState<number|null>(null);
-  const [resolutionStates,setResolutionStates] = useState<Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>>({});
   useEffect(()=>{let active=true;if(!conflictsOpen||dirty||!draft)return;void api<{exceptions:Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>}>(`/api/admin/schedule/constructor/${encodeURIComponent(draft.id)}/resolution/preview`,{method:'POST',body:JSON.stringify({expected_revision:draft.revision,lesson_ids:draft.payload.lessons.map(l=>l.id)})}).then(result=>{if(active){setResolutionStates(result.exceptions||{});setResolutionRevision(draft.revision);}}).catch(()=>{if(active)setResolutionStates({});});return()=>{active=false;};},[api,conflictsOpen,dirty,draft?.id,draft?.revision]);
   const workflowFor=(item:Issue)=>{const receipts=dirty||resolutionRevision!==draft?.revision?[]:[...(resolutionStates[item.lessonId]||[]),...(item.related?resolutionStates[item.related]||[]:[])];const targets=[item.lessonId,...(item.related?[item.related]:[])];const coversIssue=(receipt:{lesson_ids?:string[]})=>targets.every(id=>receipt.lesson_ids?.includes(id));if(item.category==='critical')return 'critical';if(receipts.some(r=>r.type==='defer'&&coversIssue(r)))return 'deferred';if(receipts.some(r=>r.type==='joint'&&item.category==='conflict'&&coversIssue(r)))return 'acknowledged';if(receipts.some(r=>r.type==='independent_practice'&&item.type==='teacher'&&targets.some(id=>r.lesson_ids?.includes(id))))return 'acknowledged';if(receipts.some(r=>r.type==='confirm_roster'&&item.category==='review'&&item.type==='audience'&&r.lesson_ids?.includes(item.lessonId)))return 'acknowledged';return item.type==='room'||item.type!=='audience'&&item.category==='incomplete'?'quick':'decision';};
   const filteredIssues = issues.filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));

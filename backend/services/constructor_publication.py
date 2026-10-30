@@ -66,6 +66,16 @@ class _TransactionDatabase:
         yield self._connection
 
 
+def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: bool = False) -> bool:
+    if independent_practice or lesson.get("activityType") in {"club", "event"}:
+        return False
+    if lesson.get("kind") == "event" or lesson.get("informational") is True:
+        return False
+    if lesson.get("specialMark") in {"lunch", "no_lesson"}:
+        return False
+    return True
+
+
 def initialize_publication_schema(database: Any) -> None:
     """Explicit local fixture setup; production migrations must be approved."""
     with database.connection() as connection:
@@ -318,7 +328,11 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if not subject and special not in {"lunch", "no_lesson"}:
             block("empty_activity", "Activity name is required")
         teacher_ids = sorted({str(x) for x in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
-        responsible_teacher_ids = teacher_ids[:]
+        responsible_source = lesson.get("responsible_teacher_ids") or lesson.get("responsibleTeacherIds") or teacher_ids
+        if not isinstance(responsible_source, (list, tuple, set)):
+            responsible_source = teacher_ids
+        responsible_teacher_ids = sorted({str(value) for value in responsible_source if value})
+        teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
         display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
         if needs_review:
@@ -327,16 +341,16 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             if review_reason == "Не подтверждён преподаватель" and not teacher_ids:
                 pass  # The missing_teacher diagnostic below records this once.
             elif (review_reason == "Нет подтверждённого назначения преподавателя группе"
-                  and teacher_ids and not set(teacher_ids) - teachers.keys()):
+                  and teacher_evidence and not teacher_evidence - teachers.keys()):
                 blockers.append({"code": "teacher_assignment_unverified", "lesson_id": lesson_id, "severity": "info"})
             elif (special == "lunch" and review_reason == "Уточните охват обеда: класс или отдельная группа"
                   and display_classes and all(str(g) in groups and groups[str(g)]["group_type"] == "class" for g in display_classes)):
                 blockers.append({"code": "lunch_scope_advisory", "lesson_id": lesson_id, "severity": "info"})
             else:
                 block("review_required", review_reason)
-        if set(teacher_ids) - teachers.keys():
+        if teacher_evidence - teachers.keys():
             block("unknown_teacher", "An assigned teacher is missing or inactive")
-        if not teacher_ids and not special and not practice and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
+        if not teacher_ids and _requires_physical_teacher(lesson, practice):
             blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
                              "message": "Преподаватель занятия не подтверждён", "severity": "info"})
         if practice:

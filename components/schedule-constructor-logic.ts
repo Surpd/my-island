@@ -5,6 +5,14 @@ export type ScheduleGroup = { id: string; name: string; group_type: string; subj
 export type ScheduleTeacher = { id: string; name: string; assignments: { group_id?: string | null; subject: string; course?: string; grade_level?: string | number | null; exam_track?: string; active?: boolean | number; status?: string; valid_from?: string | null; valid_until?: string | null }[] };
 export type ScheduleStudent = { id: string; groups: string[]; classes: string[] };
 
+export function shouldWarnMissingTeacher(
+  lesson: { activityType?: string; kind?: string; informational?: boolean; teacherId?: string; teacherIds?: string[] },
+  independentPractice = false,
+): boolean {
+  if (lesson.activityType === 'club' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
+  return !lesson.teacherId && !(lesson.teacherIds || []).length;
+}
+
 type PlacementLesson = {
   activityType?: string;
   classId?: string;

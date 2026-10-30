@@ -315,6 +315,30 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(manual_preview["summary"]["deferred_lessons"], 1)
         self.assertIn("review_required", [item["code"] for item in manual_preview["diagnostics"]])
 
+    def test_missing_teacher_diagnostics_match_club_event_and_independent_practice_rules(self):
+        from backend.services.constructor_resolution import apply_resolution, resolution_preview
+
+        ordinary = self.draft([self.lesson(teacherId="")])
+        ordinary_preview = preview_publication(self.database, ordinary["id"], scope_kind="template", expected_revision=1)
+        self.assertIn("missing_teacher", [item["code"] for item in ordinary_preview["diagnostics"]])
+
+        for lesson in (
+            self.lesson(id="club", teacherId="", activityType="club", activityNameSnapshot="Club"),
+            self.lesson(id="event", teacherId="", activityType="event", activityNameSnapshot="Event", kind="event"),
+        ):
+            draft = self.draft([lesson])
+            preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+            self.assertNotIn("missing_teacher", [item["code"] for item in preview["diagnostics"]])
+
+        for responsible in ([], [str(self.teacher["id"])]):
+            draft = self.draft([self.lesson(id="practice", teacherId="", responsible_teacher_ids=responsible)])
+            resolution = resolution_preview(self.database, draft["id"], expected_revision=1, lesson_ids=["practice"])
+            draft = apply_resolution(self.database, draft["id"], expected_revision=1,
+                preview_token=resolution["preview_token"], lesson_ids=["practice"], action="independent_practice",
+                reason="Synthetic independent practice", actor_user_id="synthetic-admin")
+            preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+            self.assertNotIn("missing_teacher", [item["code"] for item in preview["diagnostics"]])
+
     def test_lunch_scope_advisory_publishes_only_known_class(self):
         lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", needsClarification=True,
             clarificationReason="Уточните охват обеда: класс или отдельная группа")
