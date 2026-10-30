@@ -580,6 +580,8 @@
 .campus-shell .constructor-ux.has-draft .constructor-top h1 { grid-column:1; margin:0; }
 .campus-shell .constructor-ux.has-draft .constructor-top .admin-data-source { grid-column:2; grid-row:1; margin:0; white-space:nowrap; }
 .campus-shell .constructor-ux .constructor-current-draft { grid-column:1/-1; color:var(--cp-muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:580px; }
+.campus-shell .constructor-ux .constructor-current-draft:has(form) { overflow:visible; white-space:normal; }
+.campus-shell .constructor-ux.has-draft .constructor-current-draft form p[role=alert] { display:block; flex-basis:100%; margin:0; color:#a33a35; white-space:normal; }
 .campus-shell .constructor-ux.has-draft .constructor-workspaces { margin:0 0 7px; gap:5px; }
 .campus-shell .constructor-ux.has-draft .constructor-workspaces button { min-width:96px; padding:5px 12px; font-size:12px; border-radius:6px; }
 .campus-shell .constructor-ux.has-draft .constructor-workspaces small { display:none; }

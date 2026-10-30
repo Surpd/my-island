@@ -18,6 +18,7 @@ import {
   Expand,
   Plus,
   Palette,
+  Pencil,
   Redo2,
   RefreshCw,
   Save,
@@ -32,13 +33,15 @@ import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
+import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
+import { normalizeRoomKey, normalizeRoomDisplay } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
-import { groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
+import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
-import { audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
+import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
 
 const readOnlySchoolWorkspace = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_READ_ONLY_SCHOOL_WORKSPACE || '') === 'true';
@@ -253,8 +256,8 @@ function lessonClasses(lesson: Lesson) {
 }
 function visualClasses(lesson: Lesson, groups: Group[]) {
   if (lesson.activityType !== 'club') return lessonClasses(lesson);
-  if (lesson.displayClassIds?.length) return lesson.displayClassIds;
-  if (lesson.eligibleGrades?.length) return groups.filter((group) => lesson.eligibleGrades?.includes(Number(group.name.match(/^\s*(\d{1,2})/)?.[1]))).map((group) => group.id);
+  if (lesson.displayClassIds?.length) return schedulePlacementClassIds(lesson);
+  if (lesson.eligibleGrades?.length) return groups.filter((group) => group.group_type === 'class' && lesson.eligibleGrades?.includes(Number(audienceGrade(group)))).map((group) => group.id);
   return [];
 }
 function linkedInstructionalGroups(lesson: Lesson, groups: Group[]) {
@@ -272,9 +275,9 @@ function linkedInstructionalGroups(lesson: Lesson, groups: Group[]) {
     .map((id) => groups.find((group) => group.id === id))
     .filter((group): group is Group => Boolean(group && group.group_type !== 'class'));
 }
-function englishLessonCaption(lesson: Lesson, groups: Group[]) {
+function englishLessonCaption(lesson: Lesson, groups: Group[], localGroups?: Group[]) {
   if (subjectLabel(lesson.subject) !== 'Английский язык') return null;
-  const linked = linkedInstructionalGroups(lesson, groups);
+  const linked = localGroups || linkedInstructionalGroups(lesson, groups);
   if (!linked.length) return { short: 'Англ. · гр. ?', full: 'Английский язык · группа не определена' };
   const parts = linked.map((group) => {
     const number = group.subject_subgroup?.match(/\d+/u)?.[0]
@@ -304,9 +307,9 @@ function audienceOf(lesson: Lesson, groups: Group[]): AudienceRule {
 function projectedClasses(audience: AudienceRule, groups: Group[], students: Student[], fallback: string[] = []) {
   const classes = groups.filter((group) => group.group_type === 'class');
   if (audience.kind === 'classes' || audience.kind === 'available_slot') {
-    return audience.grade
-      ? classes.filter((group) => group.name.match(/^\s*(\d{1,2})/)?.[1] === audience.grade).map((group) => group.id)
-      : (audience.class_ids || []);
+    return audience.class_ids?.length ? audience.class_ids : audience.grade
+      ? classes.filter((group) => audienceGrade(group) === audience.grade).map((group) => group.id)
+      : [];
   }
   const participantIds = audience.kind === 'students'
     ? new Set(audience.student_ids || [])
@@ -343,7 +346,14 @@ function audienceFromGroup(groupId: string, classIds: string[], groups: Group[])
 function isNoLesson(lesson: Lesson) {
   return lesson.specialMark === 'no_lesson' || lesson.canonicalRole === 'explicit_no_lesson' || ['нет урока', 'нет занятия'].some((value) => sameText(lesson.subject, value));
 }
-function isSpecialMark(lesson: Lesson) { return Boolean(lesson.specialMark) || isNoLesson(lesson) || lesson.canonicalRole === 'special_event'; }
+function isLunch(lesson: Lesson) {
+  const assignment = lesson.canonical?.assignment || {};
+  const mark = lesson.specialMark || assignment.metadata?.special_mark;
+  const role = lesson.canonicalRole || assignment.assignment_kind || assignment.role;
+  return mark === 'lunch' || role === 'lunch' || role === 'special_lunch'
+    || role === 'residual' && ['обед', 'lunch'].includes((lesson.subject || lesson.activity || '').trim().toLocaleLowerCase('ru'));
+}
+function isSpecialMark(lesson: Lesson) { return Boolean(lesson.specialMark) || isLunch(lesson) || isNoLesson(lesson) || lesson.canonicalRole === 'special_event'; }
 function editable(target: EventTarget | null) {
   return (
     target instanceof Element &&
@@ -409,7 +419,7 @@ function issuesFor(
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
       if ([...teacherIdsA].some((id) => teacherIdsB.has(id)))
         pair('Преподаватель уже ведёт урок');
-      if (a.room && a.room === b.room) pair(`Кабинет ${a.room} занят`);
+      if (normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${a.room} занят`);
       const studentIdsA = new Set(previews[a.id]?.status === 'ok' ? previews[a.id].student_ids || [] : []);
       const studentIdsB = new Set(previews[b.id]?.status === 'ok' ? previews[b.id].student_ids || [] : []);
       const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
@@ -500,6 +510,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [selectedId, setSelectedId] = useState('');
   const [quick, setQuick] = useState('');
   const [creationMode, setCreationMode] = useState<'quick' | 'form' | 'event' | 'lunch' | 'no_lesson'>('quick');
+  const [creationError, setCreationError] = useState('');
+  const [renameValue, setRenameValue] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState('');
+  const [recalculationOpen, setRecalculationOpen] = useState(false);
   const [quickChoice, setQuickChoice] = useState<{ subject?: string; groupId?: string; teacherId?: string; room?: string; classIds?: string[] }>({});
   const [newTeacherManuallySelected, setNewTeacherManuallySelected] = useState(false);
   const [newLesson, setNewLesson] = useState<{ subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; day?: number; period?: number; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }>({ subject: '', groupId: '', teacherId: '', room: '', classIds: [] });
@@ -532,6 +546,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     duplicate?: boolean;
   } | null>(null);
   const columnHeaders = useRef<Record<string, HTMLDivElement | null>>({});
+  const gridWrap = useRef<HTMLDivElement | null>(null);
   const columnResize = useRef<{ pointerId: number; key: string; startX: number; startWidth: number; scale: number; widths: Record<string, number> } | null>(null);
   const [resizePreview, setResizePreview] = useState<Record<string, number> | null>(null);
   const revision = useRef(0);
@@ -760,14 +775,41 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     const name = window.prompt('Название черновика', item.name)?.trim();
     if (!name || name === item.name) return;
     try {
-      const current = await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}`));
+      const current = draft?.id === item.id ? baseDraftRef.current : await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}`));
+      if (!current) return;
       const updated = await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}`), {
         method: 'PUT',
         body: JSON.stringify({ expected_revision: current.revision, name, payload: current.payload }),
       });
       await refreshDrafts();
-      if (draft?.id === item.id) setDraft(updated);
+      if (draft?.id === item.id) {
+        revision.current = updated.revision;
+        baseDraftRef.current = updated;
+        setDraft((shown) => shown?.id === item.id ? { ...shown, name: updated.name, revision: updated.revision } : shown);
+      }
     } catch (error) { setStatus(String((error as Error).message || error)); }
+  };
+  const renameOpenDraft = async () => {
+    const current = draftRef.current;
+    const base = baseDraftRef.current;
+    const name = renameValue?.trim();
+    if (!name) { setRenameError('Введите непустое название.'); return; }
+    if (!current || !base || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const updated = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`), {
+        method: 'PUT', body: JSON.stringify({ expected_revision: revision.current, name, payload: base.payload }),
+      });
+      revision.current = updated.revision;
+      baseDraftRef.current = updated;
+      setDraft((shown) => shown?.id === current.id ? { ...shown, name, revision: updated.revision, updated_at: updated.updated_at } : shown);
+      setRenameValue(null);
+      setRenameError('');
+      setStatus('Название сохранено. Остальные изменения остаются в черновике.');
+      void refreshDrafts();
+    } catch (error) { setRenameError(String((error as Error).message || error)); }
+    finally { savingRef.current = false; setSaving(false); }
   };
   const duplicate = async (item: DraftSummary) => {
     try {
@@ -1083,8 +1125,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const previewPayload = useMemo(() => payload ? audiencePreviewPayload(payload) : null, [payload]);
   const previewKey = previewPayload ? JSON.stringify(previewPayload) : '';
   const audiencePreviews = audienceSnapshot && audienceSnapshot.key === previewKey ? audienceSnapshot.lessons : EMPTY_AUDIENCE_PREVIEWS;
-  const displayedClasses = (lesson: Lesson) => audiencePreviews[lesson.id]?.status === 'ok' && audiencePreviews[lesson.id].class_ids?.length
-    ? audiencePreviews[lesson.id].class_ids! : lessonClasses(lesson);
+  const displayedClasses = (lesson: Lesson) => {
+    if (lesson.activityType === 'club') return visualClasses(lesson, groups);
+    const rule = audienceOf(lesson, groups);
+    const declared = lessonClasses(lesson);
+    // Empty or partly populated rosters must not erase explicit grid placement.
+    if ((rule.kind === 'classes' || rule.kind === 'available_slot') && declared.length) return declared;
+    return audiencePreviews[lesson.id]?.status === 'ok' && audiencePreviews[lesson.id].class_ids?.length
+      ? audiencePreviews[lesson.id].class_ids! : declared;
+  };
   useEffect(() => {
     if (!previewKey || (focus && creationMode !== 'quick') || audienceSnapshot?.key === previewKey) return;
     let cancelled = false;
@@ -1262,10 +1311,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     ? firstOverlappingSlot(newLesson.start, newLesson.end, payload?.slots || [])
     : newLesson.period ?? selectedCell?.period ?? 0;
   const rawPreviewAudience = activityType === 'club' ? { kind: 'students' as const, student_ids: [] as string[] } : newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups);
-  const previewAudience = rawPreviewAudience.kind === 'available_slot' && !rawPreviewAudience.grade && selectedCell?.gradeScope
+  const previewAudience = rawPreviewAudience.kind === 'available_slot' && !rawPreviewAudience.class_ids?.length && !rawPreviewAudience.grade && selectedCell?.gradeScope
     ? { ...rawPreviewAudience, grade: selectedCell.gradeScope, class_ids: [] }
     : rawPreviewAudience;
-  const concurrentPreviewLessons = previewAudience.kind === 'available_slot' && payload
+  const concurrentPreviewLessons = (previewAudience.kind === 'available_slot' || creationMode === 'lunch') && payload
     ? payload.lessons.filter((lesson) => {
       if (lesson.day !== previewDay) return false;
       const existing = lessonTimes(lesson, payload.slots);
@@ -1292,7 +1341,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     let controller: AbortController | null = null;
     const timer = window.setTimeout(() => {
       const rawAudience = activityType === 'club' ? { kind: 'students' as const, student_ids: [] as string[] } : newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups);
-      const audience = rawAudience.kind === 'available_slot' && !rawAudience.grade && selectedCell?.gradeScope
+      const audience = rawAudience.kind === 'available_slot' && !rawAudience.class_ids?.length && !rawAudience.grade && selectedCell?.gradeScope
         ? { ...rawAudience, grade: selectedCell.gradeScope, class_ids: [] }
         : rawAudience;
       const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds);
@@ -1314,7 +1363,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         controller = new AbortController();
         const timeout = window.setTimeout(() => controller?.abort(), 10_000);
         try {
-          const concurrentLessons = audience.kind === 'available_slot'
+          const concurrentLessons = audience.kind === 'available_slot' || creationMode === 'lunch'
             ? payload.lessons.filter((lesson) => {
               if (lesson.day !== candidate.day) return false;
               const existing = lessonTimes(lesson, payload.slots);
@@ -1437,13 +1486,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   };
   const addStructured = (fields: { subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; specialMark?: 'lunch' | 'no_lesson'; day?: number; period?: number; kind?: 'lesson' | 'event'; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; raw?: string; activityType?: Lesson['activityType']; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }) => {
     if (!payload || !selectedCell) return;
+    setCreationError('');
+    const fail = (message: string) => { setCreationError(message); setStatus(message); };
     if (fields.kind === 'event' && (!fields.start || !fields.end || minutes(fields.end) <= minutes(fields.start))) {
-      setStatus('У события время окончания должно быть позже начала.');
+      fail('У события время окончания должно быть позже начала.');
       return;
     }
     const eventPeriod = fields.kind === 'event' ? firstOverlappingSlot(fields.start!, fields.end!, payload.slots) : -1;
     if (fields.kind === 'event' && eventPeriod < 0) {
-      setStatus('Время события не пересекается с сеткой. Уточните диапазон или добавьте слот.');
+      fail('Время события не пересекается с сеткой. Уточните диапазон или добавьте слот.');
       return;
     }
     const explicitActivityAudience = fields.activityType === 'club'
@@ -1451,17 +1502,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       : fields.activityType === 'elective' && fields.confirmedParticipantIds?.length
         ? { kind: 'students' as const, student_ids: fields.confirmedParticipantIds } : undefined;
     const rawAudience = fields.informational && fields.kind === 'event' ? undefined : explicitActivityAudience || fields.audience || audienceFromGroup(fields.groupId, fields.classIds, groups);
-    const audience = rawAudience?.kind === 'available_slot' && !rawAudience.grade && selectedCell.gradeScope
+    const audience = rawAudience?.kind === 'available_slot' && !rawAudience.class_ids?.length && !rawAudience.grade && selectedCell.gradeScope
       ? { ...rawAudience, grade: selectedCell.gradeScope, class_ids: [] }
       : rawAudience;
     const audienceFields = audience ? audiencePatch(audience, groups, students, fields.classIds) : null;
     const classIds = fields.activityType === 'club' ? [] : audienceFields?.classIds?.length ? audienceFields.classIds : fields.kind === 'event' && fields.informational ? fields.classIds.length ? fields.classIds : payload.classes : fields.classIds;
-    const visualClassIds = (fields.classIds.length ? fields.classIds : selectedCell.classId ? [selectedCell.classId] : []).filter((id) => payload.classes.includes(id));
+    const visualClassIds = (fields.classIds.length ? fields.classIds : selectedCell.classId ? [selectedCell.classId] : gridColumns[focus!.col]?.classIds || []).filter((id) => payload.classes.includes(id));
     const validClassIds = (fields.activityType === 'club' ? visualClassIds : classIds).filter((id) => payload.classes.includes(id));
     const hasAudience = Boolean(audience && (audience.kind === 'groups' ? audience.group_ids?.length : audience.kind === 'students' ? audience.student_ids?.length : audience.grade || audience.class_ids?.length));
     const activityCanHaveNoConfirmedParticipants = fields.activityType === 'club';
     if (!fields.subject.trim() || !validClassIds.length || (!hasAudience && !fields.informational && !activityCanHaveNoConfirmedParticipants)) {
-      setStatus('Укажите название и участников занятия.');
+      fail(!fields.subject.trim() ? 'Введите название занятия.' : !validClassIds.length ? 'Выберите класс или параллель для размещения в сетке.' : 'Выберите участников занятия: класс, учебную группу или учеников.');
       return;
     }
     const lesson: Lesson = {
@@ -1497,6 +1548,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     };
     mutate((state) => ({ ...state, lessons: [...state.lessons, lesson] }));
     setSelectedId(lesson.id);
+    setCreationError('');
     setCreationMode('quick');
   };
   const addLesson = () => {
@@ -1664,18 +1716,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           : destination.classIds.length === 1
             ? destination.classIds[0]
             : '';
-        if ((!classId && !audienceAlreadyFits) || (!audienceAlreadyFits && lessonClasses(lesson).length)) {
+        if (lesson.activityType !== 'club' && ((!classId && !audienceAlreadyFits) || (!audienceAlreadyFits && lessonClasses(lesson).length))) {
           setStatus(
             'Аудитория привязана к другой параллели. Измените участников в занятии; источник не изменён.',
           );
           return;
         }
         created.push({
-          ...lesson,
-          id: freshId(),
+          ...remapPastedLessonAudience(lesson, audienceAlreadyFits ? displayedClasses(lesson) : destination.classIds, freshId()),
           day: dayAtRow(destinationRow),
           period,
-          classId,
+          ...(lesson.activityType === 'club' ? { classId: '', classIds: [] } : { classId }),
           ...(lesson.start && lesson.end && payload.slots[lesson.period] && payload.slots[period]
             ? { start: addMinutes(lesson.start, minutes(payload.slots[period].start) - minutes(payload.slots[lesson.period].start)), end: addMinutes(lesson.end, minutes(payload.slots[period].start) - minutes(payload.slots[lesson.period].start)) }
             : {}),
@@ -1712,7 +1763,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (
       !lesson ||
       !destination ||
-      (!destinationClassId && !audienceAlreadyFits) ||
+      (lesson.activityType !== 'club' && !destinationClassId && !audienceAlreadyFits) ||
       (!audienceAlreadyFits && lessonClasses(lesson).length > 0)
     ) {
       setStatus(
@@ -1725,11 +1776,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       lessons: [
         ...state.lessons.filter((item) => duplicate || item.id !== lessonId),
         {
-          ...lesson,
-          id: duplicate ? freshId() : lesson.id,
+          ...remapPastedLessonAudience(lesson, audienceAlreadyFits ? displayedClasses(lesson) : destination.classIds, duplicate ? freshId() : lesson.id),
           day: dayAtRow(row),
           period: periodAtRow(row),
-          classId: destinationClassId,
+          ...(lesson.activityType === 'club' ? { classId: '', classIds: [] } : { classId: destinationClassId }),
           ...(lesson.start && lesson.end && payload.slots[lesson.period] && payload.slots[periodAtRow(row)]
             ? { start: addMinutes(lesson.start, minutes(payload.slots[periodAtRow(row)].start) - minutes(payload.slots[lesson.period].start)), end: addMinutes(lesson.end, minutes(payload.slots[periodAtRow(row)].start) - minutes(payload.slots[lesson.period].start)) }
             : {}),
@@ -1829,7 +1879,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return Boolean(span.start && span.end && minutes(span.start) < minutes(resourceEnd) && minutes(resourceStart) < minutes(span.end));
   }) || [];
   const busyTeachers = new Set(occupied.flatMap((item) => [...(item.teacherIds || []), item.teacherId].filter(Boolean)));
-  const busyRooms = new Set(occupied.map((item) => item.room));
+  const busyRooms = new Set(occupied.map((item) => normalizeRoomKey(item.room)).filter(Boolean));
   const teacherBusyWith = (id: string) => occupied.find((item) => item.teacherId === id || item.teacherIds?.includes(id));
   const teacherContextAudience = selected
     ? audienceOf(selected, groups)
@@ -1859,7 +1909,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     ? quickParsed.teacherIds[0]
     : quickParsed.teacherIds.length ? '' : recommendedTeacherId);
   const resolvedNewTeacherId = newTeacherManuallySelected ? newLesson.teacherId : newLesson.teacherId || recommendedTeacherId;
-  const allRooms = [...new Set([...knownRooms, ...rooms])];
+  const allRooms = [...new Map([...knownRooms, ...rooms].filter(Boolean).map((room) => [normalizeRoomKey(room), normalizeRoomDisplay(room)])).values()];
   const slotIssues = (payload?.slots || []).flatMap((slot, index, all) => {
     const start = Number(slot.start.slice(0, 2)) * 60 + Number(slot.start.slice(3, 5));
     const end = Number(slot.end.slice(0, 2)) * 60 + Number(slot.end.slice(3, 5));
@@ -1946,7 +1996,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       <header className="constructor-top">
         <div>
           <small>РАСПИСАНИЕ · {workspace === 'school' ? 'ШКОЛА' : 'ПЕСОЧНИЦА'}</small>
-          <h1><span className="desktop-label">Конструктор расписания</span><span className="mobile-label">Расписание</span></h1>{draft ? <span className="constructor-current-draft" title={draft.name}>{draft.name}</span> : null}
+          <h1><span className="desktop-label">Конструктор расписания</span><span className="mobile-label">Расписание</span></h1>{draft ? <div className="constructor-current-draft" title={draft.name}>{renameValue === null ? <><span>{draft.name}</span><button aria-label="Переименовать открытый черновик" title="Переименовать" onClick={() => { setRenameValue(draft.name); setRenameError(''); }}><Pencil size={16} /></button></> : <form onSubmit={(event) => { event.preventDefault(); void renameOpenDraft(); }}><label>Новое название<input ref={(element) => element?.focus()} aria-label="Новое название черновика" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') { setRenameValue(null); setRenameError(''); } }} /></label><button type="submit" disabled={saving}>Сохранить название</button><button type="button" onClick={() => setRenameValue(null)}>Отмена</button>{renameError ? <p role="alert">{renameError}</p> : null}</form>}</div> : null}
           <p>{consolidatedSchedule && workspace === 'school' ? 'Изменения сохраняются в черновике. Публикация — после отдельной проверки и подтверждения.' : 'Черновик · опубликованное расписание не меняется'}</p>
           {scheduleDataSourceLabel ? <span className="admin-data-source">{scheduleDataSourceLabel}</span> : <span className="admin-data-source">{directoryAccess === 'school' ? 'Школьный справочник подключён' : directoryAccess === 'checking' ? 'Подключение…' : 'Локальная песочница'}</span>}{draft ? workspaceTabs : null}
         </div>
@@ -1964,11 +2014,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               <button aria-label="Сохранить черновик" onClick={() => void save()} disabled={!dirty || saving}>
                 <Save size={16} /><span className="desktop-label">Сохранить черновик</span><span className="mobile-label">Сохранить</span>
               </button>
+              <button onClick={() => setRecalculationOpen(true)} disabled={saving}>Пересчитать аудитории</button>
               {consolidatedSchedule && workspace === 'school' ? <button className="constructor-publication-trigger" aria-label="Открыть публикацию расписания" disabled={dirty || saving} title={dirty ? 'Сначала сохраните черновик' : 'Проверить изменения и опубликовать'} onClick={() => setPublicationOpen(true)}>Публикация</button> : null}
             </>
           ) : null}
         </div>
       </header>
+      {recalculationOpen && draft ? <ConstructorAudienceRecalculation api={api} apiPrefix={workspace === 'school' ? '/api/admin/schedule/constructor' : '/api/admin/schedule/experiments'} draftId={draft.id} revision={draft.revision} dirty={dirty} day={day} classId={classFilter || (selected ? audienceOf(selected, groups).kind === 'groups' ? audienceOf(selected, groups).group_ids?.[0] : lessonClasses(selected)[0] : undefined)} classLabel={groups.find((group) => group.id === classFilter)?.name} onClose={() => setRecalculationOpen(false)} onUpdated={(value) => { const updated = value as Draft; if (updated?.payload) { setHistory((items) => [...items.slice(-49), draft.payload]); setFuture([]); revision.current = updated.revision; baseDraftRef.current = updated; setDraft(updated); setDirty(false); changeVersion.current++; setAudienceSnapshot(null); void refreshDrafts(); } }} /> : null}
       {resolutionIssue && draft ? <ConstructorResolutionPanel api={api} draftId={draft.id} revision={draft.revision} lessons={draft.payload.lessons} slots={draft.payload.slots} issue={resolutionIssue} teacherNames={Object.fromEntries(teachers.map(t=>[t.id,t.name]))} groupNames={Object.fromEntries(groups.map(g=>[g.id,g.name]))} studentNames={Object.fromEntries(students.map(s=>[s.id,s.name]))} dirty={dirty} onClose={()=>setResolutionIssue(null)} onNavigate={id=>{openReviewLesson(id);setResolutionIssue(null);setConflictsOpen(false);}} onUpdated={async(value)=>{const updated=value as Draft|undefined;if(updated?.payload){setHistory(items=>[...items.slice(-49),draft.payload]);setFuture([]);revision.current=updated.revision;baseDraftRef.current=updated;setDraft(updated);setDirty(false);changeVersion.current++;}else{await open(draft.id);}await refreshDrafts();}} /> : null}
       {publicationOpen && draft ? <ConstructorPublicationPanel api={api} draftId={draft.id} revision={draft.revision} weekStart={draft.payload.week_start} teacherNames={Object.fromEntries(teachers.map(item => [item.id,item.name]))} groupNames={Object.fromEntries(groups.map(item => [item.id,item.name]))} onClose={() => setPublicationOpen(false)} onPublished={async () => { await refreshDrafts(); await open(draft.id); }} /> : null}
       {!draft ? workspaceTabs : null}
@@ -2208,6 +2260,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               value={classFilter}
               onChange={(event) => {
                 setClassFilter(event.target.value);
+                if (gridWrap.current) gridWrap.current.scrollLeft = 0;
                 setAnchor(null);
                 setFocus(null);
               }}
@@ -2317,7 +2370,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </details>
           ) : null}
           <div className={`constructor-layout ${panelOpen ? '' : 'panel-closed'}`}>
-            <div className={`constructor-grid-wrap ${density}`}>
+            <div ref={gridWrap} className={`constructor-grid-wrap ${density}`}>
               <div
                 className="constructor-grid"
                 style={{
@@ -2444,9 +2497,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         >
                           <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${lessons.length > 3 ? 2 : Math.max(1, lessons.length)}, minmax(0, 1fr))` }}>
                             {lessons.map((item) => {
-                              const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups);
+                              const localGroups = linkedInstructionalGroupsForColumn(item, groups, students, column.classIds);
+                              const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups, localGroups);
                               const isAvailableSlot = audienceOf(item, groups).kind === 'available_slot';
-                              const classCaption = visualClasses(item, groups).map((id) => groups.find((g) => g.id === id)?.name || id).join(', ');
+                              const classCaption = visualClasses(item, groups).filter((id) => column.classIds.includes(id)).map((id) => groups.find((g) => g.id === id)?.name || id).join(', ');
                               return (
                                 <button
                                   key={item.id}
@@ -2494,9 +2548,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                       {item.kind === 'event' ? <>◆ {item.subject}{item.period !== period ? ' ↳' : ''}</> : <><span className="constructor-subject-short">{item.period !== period ? '↳ ' : ''}{englishCaption?.short || shortSubject(item.subject || 'Новый урок')}</span><span className="constructor-subject-full">{item.period !== period ? '↳ ' : ''}{englishCaption?.full || subjectLabel(item.subject) || 'Новый урок'}</span></>}
                                     </strong>
                                     <small>
-                                      {item.kind === 'event' ? lessonClasses(item).length === payload.classes.length ? 'Вся школа' : `${[...new Set(lessonClasses(item).map((id) => groups.find((g) => g.id === id)?.name.match(/^\d+/)?.[0]).filter(Boolean))].join('–')} классы` : item.activityType === 'club' ? 'Кружок' : <>{lessonClasses(item).length > 1 && !isAvailableSlot ? '↔ ' : ''}{isAvailableSlot ? 'Все остальные' : englishCaption ? classCaption || 'Группа не определена' : (linkedInstructionalGroups(item, groups).length ? linkedInstructionalGroups(item, groups).map((group) => audienceShortLabel(group)).join(', ') : lessonClasses(item).map((id) => groups.find((g) => g.id === id)?.name || 'Класс недоступен').join(', ') || 'Группа не определена')}</>}
+                                      {item.activityType === 'club' ? 'Участники не назначены' : <>{lessonClasses(item).length > 1 ? <span title="Совместное занятие">↔ </span> : null}{isAvailableSlot ? 'Все остальные' : localGroups.length ? localGroups.map((group) => audienceShortLabel(group)).join(', ') : classCaption || 'Участники требуют уточнения'}</>}
                                     </small>
-                                    <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || '—')}{item.room ? ` · ${item.room}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small>
+                                    <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || '—')}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small>
                                   </span>
                                   {conflictsOpen && issues.some(
                                     (issue) => issue.lessonId === item.id || issue.related === item.id,
@@ -2581,16 +2635,22 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                   ) : null}
                   {!selected ? (
                     <div className="constructor-creation">
-                      <div className="constructor-creation-tabs" role="group" aria-label="Способ создания">
+                      <strong>Что добавляем?</strong>
+                      <div className="constructor-creation-tabs" role="group" aria-label="Что добавляем?">
+                        {(['lesson', 'lunch', 'club', 'elective', 'event'] as const).map((type) => <button key={type} aria-pressed={type === 'lunch' ? creationMode === 'lunch' : creationMode !== 'lunch' && activityType === type} className={(type === 'lunch' ? creationMode === 'lunch' : creationMode !== 'lunch' && activityType === type) ? 'active' : ''} onClick={() => {
+                          setCreationError(''); setActivityType(type === 'lunch' ? 'lesson' : type);
+                          setCreationMode(type === 'lunch' ? 'lunch' : type === 'event' ? 'event' : 'form');
+                          const classIds = quickClassIds.length ? quickClassIds : selectedCell?.classId ? [selectedCell.classId] : focus ? gridColumns[focus.col]?.classIds || [] : [];
+                          const slot = payload.slots[selectedCell?.period ?? 0];
+                          setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds, audience: { kind: 'classes', class_ids: classIds }, ...(type === 'event' ? { day: selectedCell?.day, start: slot?.start, end: slot?.end } : {}) });
+                          setNewTeacherManuallySelected(false); setTeacherQuery('');
+                        }}>{type === 'lesson' ? 'Урок' : type === 'lunch' ? 'Обед' : type === 'club' ? 'Кружок' : type === 'elective' ? 'Курс по выбору' : 'Событие'}</button>)}
+                      </div>
+                      {activityType === 'lesson' && creationMode !== 'lunch' ? <div className="constructor-creation-tabs" role="group" aria-label="Способ редактирования урока">
                         <button className={creationMode === 'quick' ? 'active' : ''} onClick={() => setCreationMode('quick')}>Быстрый ввод</button>
                         <button className={creationMode === 'form' ? 'active' : ''} onClick={() => { setNewLesson({ subject: quickSubject, groupId: quickGroupId, teacherId: quickExplicitTeacherId, room: quickRoom, classIds: quickClassIds, audience: audienceFromGroup(quickGroupId, quickClassIds, groups) }); setNewTeacherManuallySelected(Boolean(quickExplicitTeacherId)); setTeacherQuery(''); setCreationMode('form'); }}>Форма</button>
-                        <button className={creationMode === 'event' ? 'active' : ''} onClick={() => { const slot = payload.slots[selectedCell?.period ?? 0]; setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds: quickClassIds, audience: { kind: 'classes', class_ids: quickClassIds }, day: selectedCell?.day, start: slot?.start, end: slot?.end }); setNewTeacherManuallySelected(false); setCreationMode('event'); }}>Событие</button>
-                        <button className={creationMode === 'lunch' ? 'active' : ''} onClick={() => setCreationMode('lunch')}>Обед</button>
-                        <button className={creationMode === 'no_lesson' ? 'active' : ''} onClick={() => setCreationMode('no_lesson')}>Нет урока</button>
-                      </div>
-                      <div className="constructor-creation-tabs" role="group" aria-label="Тип активности">
-                        {(['lesson', 'club', 'elective', 'event'] as const).map((type) => <button key={type} className={activityType === type ? 'active' : ''} onClick={() => { setActivityType(type); setCreationMode(type === 'event' ? 'event' : 'form'); }}>{type === 'lesson' ? 'Урок' : type === 'club' ? 'Кружок' : type === 'elective' ? 'Курс по выбору' : 'Событие'}</button>)}
-                      </div>
+                      </div> : null}
+                      {creationError ? <p role="alert" className="constructor-unrecognized">{creationError}</p> : null}
                       {creationMode === 'quick' ? <>
                         <label className="constructor-mobile-quick-field">Быстрый ввод<input className="constructor-mobile-quick" aria-label="Быстрый ввод занятия" value={quick} placeholder="Предмет, группа, преподаватель, кабинет" onChange={(event) => { setQuick(event.target.value); setQuickChoice({}); }} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); addLesson(); } }} /></label>
                         {quick.trim() ? <div className="constructor-suggestions">
@@ -2615,15 +2675,18 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           <button onClick={() => { setNewLesson({ subject: quickSubject, groupId: quickGroupId, teacherId: quickExplicitTeacherId, room: quickRoom, classIds: quickClassIds, audience: audienceFromGroup(quickGroupId, quickClassIds, groups) }); setNewTeacherManuallySelected(Boolean(quickExplicitTeacherId)); setTeacherQuery(''); setCreationMode('form'); }}>Открыть подробную форму</button>
                         </div> : null}
                       </> : <div className="constructor-create-form">
-                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'event' ? 'Название события' : activityType === 'lesson' ? 'Предмет' : activityType === 'club' ? 'Кружок' : 'Курс по выбору'} <input aria-label="Название активности" placeholder="Выберите или введите название" list="constructor-new-subjects" value={newLesson.subject} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => setNewLesson((item) => ({ ...item, subject: event.target.value }))} /></label><datalist id="constructor-new-subjects">{[...subjects, ...activities.filter((item) => item.status === 'active').map((item) => item.name)].filter((item, index, all) => all.indexOf(item) === index).map((item) => <option key={item} value={item} />)}</datalist></> : <p className="constructor-special-mark">{creationMode === 'lunch' ? 'Обед' : 'Нет урока'} · пометка расписания</p>}
+                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'event' ? 'Название события' : activityType === 'lesson' ? 'Предмет' : activityType === 'club' ? 'Кружок' : 'Курс по выбору'} <input aria-label="Название активности" placeholder="Выберите или введите название" list="constructor-new-subjects" value={newLesson.subject} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => setNewLesson((item) => ({ ...item, subject: event.target.value }))} /></label><datalist id="constructor-new-subjects">{[...subjects, ...activities.filter((item) => item.status === 'active').map((item) => item.name)].filter((item, index, all) => all.indexOf(item) === index).map((item) => <option key={item} value={item} />)}</datalist></> : <p className="constructor-special-mark">{creationMode === 'lunch' ? 'Обед' : 'Нет урока'}</p>}
                         {(activityType === 'club' || activityType === 'elective') ? <>
                           <label>Запись каталога <select value={newLesson.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); setNewLesson((current) => ({ ...current, activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || '', subject: item?.name || current.subject, room: item?.room || current.room, teacherId: item?.teacher_ids?.[0] || current.teacherId, eligibleGrades: item?.eligible_grades || current.eligibleGrades })); }}><option value="">Без привязки к каталогу</option>{activities.filter((item) => item.status === 'active' && item.type === activityType).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
                           <details><summary>Управление каталогом · {activities.length}</summary><div className="constructor-related-actions"><button onClick={() => { const item = activities.find((entry) => entry.id === newLesson.activityCatalogId); editActivity(item, activityType as 'club' | 'elective'); }}>Создать / изменить выбранную запись</button>{activities.filter((item) => item.status === 'active').map((item) => <button key={item.id} onClick={() => void archiveActivity(item)}>В архив: {item.name}</button>)}{activities.filter((item) => item.status === 'archived').map((item) => <button key={item.id} onClick={() => void archiveActivity(item)}>Восстановить: {item.name}</button>)}</div></details>
                           {activityType === 'elective' ? <label>Подходящие классы <select multiple value={(newLesson.eligibleGrades || []).map(String)} onChange={(event) => setNewLesson((current) => ({ ...current, eligibleGrades: [...event.target.selectedOptions].map((option) => Number(option.value)) }))}>{[5, 6, 7, 8, 9, 10, 11].map((grade) => <option key={grade} value={grade}>{grade} класс</option>)}</select></label> : null}
                           {activityType === 'elective' ? <><label>Направление <select value={newLesson.electiveDirection || ''} onChange={(event) => setNewLesson((current) => ({ ...current, electiveDirection: event.target.value === 'digital' ? 'digital' : undefined }))}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label></> : null}
                         </> : null}
+                        {creationMode === 'event' ? <p>{payload.week_start ? 'Событие относится только к этой неделе.' : 'Событие повторяется в неделях, созданных из этого шаблона.'}</p> : null}
                         {creationMode === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(newLesson.informational)} onChange={(event) => setNewLesson((item) => ({ ...item, informational: event.target.checked }))} /> Информационное событие без назначенных учеников</label> : null}
                         {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>Преподаватель <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
+                        {creationMode === 'lunch' ? <label>Место (необязательно)<input aria-label="Место обеда" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label> : null}
+                        {activityType === 'club' ? <><label>Размещение в сетке<select multiple aria-label="Классы размещения кружка" value={newAudienceContextClassIds} onChange={(event) => setNewLesson((item) => ({ ...item, classIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><p>Участники не назначены. Кружок виден в конструкторе; ученикам он появится после назначения участников.</p></> : null}
                         {!newLesson.informational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
                         {creationMode === 'event' ? <div className="constructor-field-row"><label>День <select aria-label="День нового занятия" value={newLesson.day ?? selectedCell?.day ?? day} onChange={(event) => setNewLesson((item) => ({ ...item, day: Number(event.target.value) }))}>{payload.days.map((value) => <option key={value} value={value}>{DAYS[value]}</option>)}</select></label><label>Начало <input type="time" value={newLesson.start || ''} onChange={(event) => setNewLesson((item) => ({ ...item, start: event.target.value }))} /></label></div> : null}
                         {creationMode === 'form' && newLesson.blockId ? <label>Название параллельного блока <input value={newLesson.blockName || ''} onChange={(event) => setNewLesson((item) => ({ ...item, blockName: event.target.value }))} placeholder="Например, курсы по выбору 5–6" /></label> : null}
@@ -2635,7 +2698,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           <label>Формат <select value={newLesson.format || ''} onChange={(event) => setNewLesson((item) => ({ ...item, format: event.target.value }))}><option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option></select></label>
                           <label>Описание <textarea value={newLesson.description || ''} onChange={(event) => setNewLesson((item) => ({ ...item, description: event.target.value }))} /></label>
                         </> : null}
-                        <button onClick={() => addStructured({ ...newLesson, subject: creationMode === 'lunch' ? 'Обед' : creationMode === 'no_lesson' ? 'Нет урока' : newLesson.subject, activityType, kind: activityType === 'event' || creationMode === 'event' ? 'event' : 'lesson', specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined, teacherId: creationMode === 'lunch' || creationMode === 'no_lesson' ? '' : resolvedNewTeacherId, room: creationMode === 'lunch' || creationMode === 'no_lesson' ? '' : newLesson.room, start: activityType === 'event' || creationMode === 'event' ? newLesson.start : undefined, end: activityType === 'event' || creationMode === 'event' ? newLesson.end : undefined })}>Добавить {activityType === 'event' || creationMode === 'event' ? 'событие' : activityType === 'club' ? 'кружок' : activityType === 'elective' ? 'курс по выбору' : creationMode === 'lunch' ? 'обед' : creationMode === 'no_lesson' ? 'пометку «Нет урока»' : 'занятие'}</button>
+                        <button onClick={() => addStructured({ ...newLesson, subject: creationMode === 'lunch' ? 'Обед' : creationMode === 'no_lesson' ? 'Нет урока' : newLesson.subject, activityType, kind: activityType === 'event' || creationMode === 'event' ? 'event' : 'lesson', specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined, teacherId: creationMode === 'lunch' || creationMode === 'no_lesson' ? '' : resolvedNewTeacherId, room: newLesson.room, start: activityType === 'event' || creationMode === 'event' ? newLesson.start : undefined, end: activityType === 'event' || creationMode === 'event' ? newLesson.end : undefined })}>Добавить {activityType === 'event' || creationMode === 'event' ? 'событие' : activityType === 'club' ? 'кружок' : activityType === 'elective' ? 'курс по выбору' : creationMode === 'lunch' ? 'обед' : creationMode === 'no_lesson' ? 'пометку «Нет урока»' : 'занятие'}</button>
                       </div>}
                     </div>
                   ) : null}
@@ -2676,6 +2739,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                       </div>
                       <div className="constructor-related-actions"><button onClick={() => { const blockId = selected.blockId || freshId(); if (!selected.blockId) updateLesson(selected.id, { blockId, blockName: selected.blockName || 'Параллельные занятия' }); setSelectedId(''); setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds: lessonClasses(selected), day: selected.day, period: selected.period, blockId, blockName: selected.blockName || 'Параллельные занятия' }); setNewTeacherManuallySelected(false); setCreationMode('form'); }}>+ Параллельное занятие</button>{selected.blockId ? <span>{selected.blockName || 'Параллельные занятия'} · {payload.lessons.filter((item) => item.blockId === selected.blockId).length}</span> : null}</div>
                       {selected.blockId ? <label>Название блока <input value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, blockName: event.target.value } : item) }))} /></label> : null}
+                      {isLunch(selected) ? <p className="constructor-special-mark">Обед</p> : <>
                       <label>
                         Предмет
                         <input
@@ -2694,6 +2758,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         ))}
                       </datalist>
                       <label>Тип активности <select value={selected.activityType || (selected.kind === 'event' ? 'event' : 'lesson')} onChange={(event) => { const type = event.target.value as Lesson['activityType']; const explicitOnly = type === 'club'; const participants = selected.confirmedParticipantIds || []; updateLesson(selected.id, { activityType: type, kind: type === 'event' ? 'event' : 'lesson', ...(explicitOnly ? { audience: { kind: 'students', student_ids: type === 'club' ? [] : participants }, groupId: '', groupIds: [], ...(type === 'club' ? { confirmedParticipantIds: undefined, displayClassIds: visualClasses(selected, groups), classIds: [], classId: '' } : {}) } : {}) }); }}><option value="lesson">Урок</option><option value="club">Кружок</option><option value="elective">Курс по выбору</option><option value="event">Событие</option></select></label>
+                      </>}
                       {(selected.activityType === 'club' || selected.activityType === 'elective') ? <>
                         <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || undefined, activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject, room: item?.room || selected.room, eligibleGrades: item?.eligible_grades || selected.eligibleGrades }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selected.activityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
                         {selected.activityType === 'elective' ? <label>Подходящие классы <select multiple value={(selected.eligibleGrades || []).map(String)} onChange={(event) => updateLesson(selected.id, { eligibleGrades: [...event.target.selectedOptions].map((option) => Number(option.value)) })}>{[5, 6, 7, 8, 9, 10, 11].map((grade) => <option key={grade} value={grade}>{grade} класс</option>)}</select></label> : null}
@@ -2701,6 +2766,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                       </> : null}
                       {selected.kind === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.informational)} onChange={(event) => updateLesson(selected.id, event.target.checked ? { informational: true, audience: undefined, groupId: '', groupIds: [] } : { informational: false, ...audiencePatch({ kind: 'classes', class_ids: lessonClasses(selected) }, groups, students) })} /> Информационное событие без назначенных учеников</label> : null}
 
+                      {!isLunch(selected) ? <>
                       <label>
                         Найти преподавателя
                         <input
@@ -2748,6 +2814,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         {teacherRegistry.notice ? <output>{teacherRegistry.notice}</output> : null}
                         <button type="button" onClick={() => setColorPanelOpen(true)}>Все преподаватели</button>
                       </label> : null}
+                      </> : null}
                       <label>
                         Кабинет
                         <input
@@ -2761,11 +2828,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         />
                       </label>
                       <datalist id="constructor-rooms">
-                        {rooms.map((item) => (
+                        {[...new Map(rooms.map((room) => [normalizeRoomKey(room), normalizeRoomDisplay(room)])).values()].map((item) => (
                           <option key={item} value={item} />
                         ))}
                       </datalist>
-                      {!selected.informational && selected.activityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => { const preview = audiencePreviews[selected.id]; if (window.confirm(`Заменить сохранённый состав (${preview?.student_ids?.length || 0} учеников) на показанный новый состав (${preview?.proposed_student_ids?.length || 0})?`)) updateLesson(selected.id, { audience_snapshot: null }); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
+                      {!selected.informational && selected.activityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
                       <div className="constructor-field-row">
                         <label>
                           День
@@ -2805,7 +2872,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                     </>
                   ) : (
                     <div className="constructor-hint">
-                  {activityType === 'club' && !selected ? 'Укажите название кружка и преподавателя. Участники для кружка не требуются.' : selectedCell?.gradeScope ? 'Укажите название урока и аудиторию для всей параллели или выбранной учебной группы.' : 'Введите название урока и нажмите Enter. Двойной клик по карточке откроет поля занятия.'}
+                  {creationMode === 'lunch' && !selected ? 'Выберите состав участников обеда; преподаватель и название занятия не требуются.' : activityType === 'club' && !selected ? 'Укажите название и размещение кружка. Преподаватель, место и каталог необязательны.' : selectedCell?.gradeScope ? 'Укажите название урока и аудиторию для всей параллели или выбранной учебной группы.' : 'Введите название урока и нажмите Enter. Двойной клик по карточке откроет поля занятия.'}
                     </div>
                   )}
                   <details className="constructor-resources">
@@ -2848,19 +2915,19 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                     </div>
                     <strong>
                       {allRooms.length
-                        ? `Свободные кабинеты: ${allRooms.filter((room) => !busyRooms.has(room)).length}`
+                        ? `Свободные кабинеты: ${allRooms.filter((room) => !busyRooms.has(normalizeRoomKey(room))).length}`
                         : 'Справочник кабинетов пока пуст'}
                     </strong>
                     <div>
                       {allRooms
-                        .filter((room) => !busyRooms.has(room))
+                        .filter((room) => !busyRooms.has(normalizeRoomKey(room)))
                         .slice(0, 12)
                         .map((room) => (
                           <span key={room}>{room}</span>
                         ))}
                     </div>
                     <strong>Занятые кабинеты: {busyRooms.size}</strong>
-                    <div>{allRooms.filter((room) => busyRooms.has(room)).map((room) => <span key={room}>{room} · {occupied.find((item) => item.room === room)?.subject}</span>)}</div>
+                    <div>{allRooms.filter((room) => busyRooms.has(normalizeRoomKey(room))).map((room) => <span key={room}>{room} · {occupied.find((item) => normalizeRoomKey(item.room) === normalizeRoomKey(room))?.subject}</span>)}</div>
                   </details>
                 </>
               ) : panelMode === 'settings' ? (

@@ -62,16 +62,12 @@ type Props = {
 const modes: { kind: AudienceRule['kind']; title: string; hint: string }[] = [
   { kind: 'groups', title: 'Учебные группы', hint: 'Существующие группы' },
   { kind: 'classes', title: 'Весь класс или параллель', hint: 'Административный состав' },
-  { kind: 'available_slot', title: 'Все остальные', hint: 'Свободные в этой параллели и времени' },
+  { kind: 'available_slot', title: 'Все остальные', hint: 'Свободные среди выбранных классов' },
   { kind: 'students', title: 'Отдельные ученики', hint: 'Именной состав' },
 ];
 
 function normalized(value: string): string {
   return value.trim().toLocaleLowerCase('ru');
-}
-
-function gradeOf(name: string): string {
-  return name.match(/^\s*(\d{1,2})(?=[^\d]|$)/)?.[1] || '';
 }
 
 const classAudienceName = classLabel;
@@ -105,8 +101,8 @@ export function ParticipantsPicker({
   const classNames = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
   const groupNames = useMemo(() => new Map(groups.map((item) => [item.id, item.name])), [groups]);
   const studentNames = useMemo(() => new Map(students.map((item) => [item.id, item.name])), [students]);
-  const grades = useMemo(() => [...new Set(classes.map((item) => gradeOf(item.name)).filter(Boolean))].sort((a, b) => Number(a) - Number(b)), [classes]);
-  const contextGrades = useMemo(() => new Set(contextClassIds.map((id) => gradeOf(classNames.get(id) || '')).filter(Boolean)), [contextClassIds, classNames]);
+  const grades = useMemo(() => [...new Set(classes.map((item) => audienceGrade(item)).filter(Boolean))].sort((a, b) => Number(a) - Number(b)), [classes]);
+  const contextGrades = useMemo(() => new Set(contextClassIds.map((id) => { const group = classes.find((item) => item.id === id); return group ? audienceGrade(group) : ''; }).filter(Boolean)), [contextClassIds, classes]);
 
   const rankedGroups = useMemo(() => {
     const needle = normalized(query);
@@ -129,7 +125,7 @@ export function ParticipantsPicker({
   }, [groups, query, subject, contextClassIds, contextGrades, classNames]);
 
   const classOptions = useMemo(() => {
-    const gradesWithMultipleClasses = grades.filter((grade) => classes.filter((item) => gradeOf(item.name) === grade).length > 1);
+    const gradesWithMultipleClasses = grades.filter((grade) => classes.filter((item) => audienceGrade(item) === grade).length > 1);
     return [
       ...gradesWithMultipleClasses.map((grade) => ({ id: `grade:${grade}`, label: `Весь ${grade} класс`, grade })),
       ...classes.map((item) => ({ id: item.id, label: classAudienceName(item.name), grade: '' })),
@@ -144,14 +140,14 @@ export function ParticipantsPicker({
 
   const selectedIds = audience.kind === 'groups' ? unique(audience.group_ids) : audience.kind === 'students' ? unique(audience.student_ids) : unique(audience.class_ids);
   const selectedNames = audience.kind === 'groups' ? groupNames : audience.kind === 'students' ? studentNames : classNames;
-  const selectedClassIds = audience.kind === 'classes' && audience.grade
-    ? classes.filter((item) => gradeOf(item.name) === audience.grade).map((item) => item.id)
+  const selectedClassIds = (audience.kind === 'classes' || audience.kind === 'available_slot') && !audience.class_ids?.length && audience.grade
+    ? classes.filter((item) => audienceGrade(item) === audience.grade).map((item) => item.id)
     : selectedIds;
   const previewClasses = unique(preview?.class_ids).map((id) => classNames.get(id) || id);
   const statusLabel = preview?.status === 'ok' ? 'Состав определён' : preview?.status === 'ambiguous' ? 'Требует уточнения' : preview?.status === 'incomplete' ? 'Недостаточно данных' : preview?.status === 'error' ? 'Ошибка расчёта' : preview?.status || 'Состав рассчитывается';
   const contextGrade = gradeScope || (contextGrades.size === 1 ? [...contextGrades][0] : '');
   const audienceCaption = audience.kind === 'available_slot'
-    ? `Все остальные · ${audience.grade || contextGrade ? `${audience.grade || contextGrade} класс` : 'параллель не определена'}`
+    ? `Все остальные · ${audience.class_ids?.length ? audience.class_ids.map((id) => classNames.get(id) || id).join(', ') : audience.grade || contextGrade ? `${audience.grade || contextGrade} класс` : 'исходная аудитория не определена'}`
     : audience.kind === 'classes'
       ? audience.grade ? `Вся параллель ${audience.grade}` : selectedIds.length ? selectedIds.map((id) => classNames.get(id) || id).join(', ') : 'Классы не выбраны'
       : audience.kind === 'groups'
@@ -162,13 +158,12 @@ export function ParticipantsPicker({
     setQuery('');
     if (kind === audience.kind) return;
     if (kind === 'available_slot') {
-      onChange({ kind, ...(contextGrade ? { grade: contextGrade, class_ids: [] } : { class_ids: unique(contextClassIds) }) });
+      onChange({ kind, ...(contextClassIds.length ? { class_ids: unique(contextClassIds) } : { grade: contextGrade, class_ids: [] }) });
       return;
     }
     if (kind === 'classes') {
       const exactClass = unique(contextClassIds);
-      const gradeContext = contextGrade && exactClass.length > 1;
-      onChange({ kind, ...(gradeContext ? { grade: contextGrade, class_ids: [] } : { class_ids: exactClass }) });
+      onChange({ kind, class_ids: exactClass });
       return;
     }
     onChange({ kind });
@@ -194,23 +189,23 @@ export function ParticipantsPicker({
         {!audience.grade && !contextGrade ? <p>Не удалось определить параллель по колонке расписания.</p> : null}
       </div> : null}
 
-      {audience.kind === 'classes' ? (
+      {audience.kind === 'classes' || audience.kind === 'available_slot' ? (
         <div className={styles.source}>
           <strong>Кто занимается</strong>
           <fieldset className={styles.options} aria-label="Классы участников">
             {classOptions.map((item) => {
-              const gradeClasses = item.grade ? classes.filter((entry) => gradeOf(entry.name) === item.grade).map((entry) => entry.id) : [];
+              const gradeClasses = item.grade ? classes.filter((entry) => audienceGrade(entry) === item.grade).map((entry) => entry.id) : [];
               const checked = item.grade
                 ? gradeClasses.length > 0 && gradeClasses.every((id) => selectedClassIds.includes(id))
                 : selectedClassIds.includes(item.id);
-              return <label className={styles.option} key={item.id}>
+              return <label className={styles.option} key={item.id} aria-label={item.label}>
                 <input type="checkbox" checked={checked} onChange={() => {
                   if (item.grade) {
                     const keep = selectedClassIds.filter((id) => !gradeClasses.includes(id));
-                    onChange({ kind: 'classes', class_ids: checked ? keep : unique([...keep, ...gradeClasses]) });
+                    onChange({ kind: audience.kind, class_ids: checked ? keep : unique([...keep, ...gradeClasses]) });
                     return;
                   }
-                  onChange({ kind: 'classes', class_ids: toggle(selectedClassIds, item.id) });
+                  onChange({ kind: audience.kind, class_ids: toggle(selectedClassIds, item.id) });
                 }} />
                 <span><b>{item.label}</b></span>
               </label>;

@@ -24,7 +24,7 @@ export function ConstructorInspectorShell({children, onClose}: {children: ReactN
     };
     const keydown = (event: KeyboardEvent) => {
       if (!media.matches) return;
-      if (document.querySelector('.constructor-conflict-backdrop')) return;
+      if (document.querySelector('.constructor-conflict-backdrop, .constructor-audience-recalculation[open]')) return;
       if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); close.current(); }
       if (event.key === 'Tab') {
         const items = focusable();
@@ -33,7 +33,7 @@ export function ConstructorInspectorShell({children, onClose}: {children: ReactN
         else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
       }
     };
-    const contain = (event: FocusEvent) => { if (media.matches && !node.contains(event.target as Node) && !document.querySelector('.constructor-conflict-backdrop')) focusEditor(); };
+    const contain = (event: FocusEvent) => { if (media.matches && !node.contains(event.target as Node) && !document.querySelector('.constructor-conflict-backdrop, .constructor-audience-recalculation[open]')) focusEditor(); };
     let viewportFrame = 0;
     const viewport = window.visualViewport;
     const fitViewport = () => {

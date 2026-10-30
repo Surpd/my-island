@@ -3911,3 +3911,18 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .school-group-settings > footer, .school-archive-dialog > footer { position: sticky; bottom: -21px; z-index: 1; padding: 12px 0 4px; background: #fff; }
 .admin-button:disabled { opacity: .5; cursor: not-allowed; }
 @media (max-width: 640px) { .school-group-grid:has(.is-expanded) { grid-template-columns: 1fr; } .school-archive-counts { grid-template-columns: 1fr; } }
+
+.constructor-audience-recalculation { position: fixed; z-index: 1050; inset: 5vh max(12px, calc((100vw - 760px) / 2)); max-height: 90vh; overflow: auto; padding: 24px; border: 1px solid #b9ccc7; border-radius: 12px; background: #fffefa; box-shadow: 0 16px 80px #143c4055; display: grid; align-content: start; gap: 12px; }
+.constructor-audience-recalculation h2, .constructor-audience-recalculation p { margin: 0; }
+.constructor-audience-recalculation button, .constructor-audience-recalculation select { min-height: 44px; }
+.constructor-roster-results { max-height: 40vh; overflow: auto; }
+.constructor-roster-results article { padding: 10px; border-bottom: 1px solid #dce3dd; }
+.constructor-current-draft > button { margin-left: 8px; min-width: 44px; min-height: 44px; vertical-align: middle; }
+.constructor-current-draft form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.constructor-current-draft form input { max-width: 100%; min-height: 44px; }
+
+.constructor-audience-recalculation::backdrop { background: #143c4055; }
+
+.constructor-creation-tabs { flex-wrap: wrap; }
+.constructor-audience-recalculation label { display: grid; gap: 6px; min-width: 0; }
+.constructor-audience-recalculation select { max-width: 100%; }
