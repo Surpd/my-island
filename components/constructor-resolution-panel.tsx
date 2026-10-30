@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
+import { normalizeRoomDisplay, normalizeRoomInput, normalizeRoomKey } from './schedule-rooms';
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type ContextLesson = {
@@ -231,7 +232,8 @@ export function ConstructorResolutionPanel({
       setBusy(false);
     }
   };
-  const suggestions = (roomPreview?.rooms || []).filter((s) => s.available);
+  const suggestions = [...new Map((roomPreview?.rooms || []).filter((s) => s.available)
+    .map((item) => [normalizeRoomKey(item.room), item] as const)).values()];
   const exceptions = [
     ...new Map(
       Object.values(preview?.exceptions || {})
@@ -322,7 +324,7 @@ export function ConstructorResolutionPanel({
                     .join(', ') || 'Не назначен'}
                 </dd>
                 <dt>Кабинет</dt>
-                <dd>{l.room || 'Не указан'}</dd>
+                <dd>{l.room ? normalizeRoomDisplay(l.room) : 'Не указан'}</dd>
               </dl>
               <button onClick={() => onNavigate(l.id)}>
                 Перейти к занятию
@@ -373,12 +375,12 @@ export function ConstructorResolutionPanel({
                 aria-label="Свободные по расписанию кабинеты"
               >
                 {suggestions.map((s) => {
-                  const name = s.room;
+                  const name = normalizeRoomDisplay(s.room);
                   return (
                     <button
                       key={name}
                       onClick={() => setRoom(name)}
-                      aria-pressed={room === name}
+                      aria-pressed={normalizeRoomKey(room) === normalizeRoomKey(s.room)}
                     >
                       {name}
                     </button>
@@ -394,7 +396,7 @@ export function ConstructorResolutionPanel({
             <label>
               Новый кабинет
               <input
-                value={room}
+                value={normalizeRoomInput(room)}
                 onChange={(e) => {
                   setRoom(e.target.value);
                   setConfirmed(false);

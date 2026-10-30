@@ -80,30 +80,48 @@ export function linkedInstructionalGroupsForColumn<T extends LinkedGroup>(
   return matching.length ? matching : linked;
 }
 
-/** Copy a lesson into a destination while keeping explicit canonical audiences intact. */
+/** True only when the lesson is unambiguously assigned to one whole class. */
+export function isWholeClassAudience(lesson: object): boolean {
+  const source = lesson as Record<string, unknown>;
+  const classes = [...new Set([
+    ...(Array.isArray(source.classIds) ? source.classIds.filter((id): id is string => typeof id === 'string' && Boolean(id)) : []),
+    ...(typeof source.classId === 'string' && source.classId ? [source.classId] : []),
+  ])];
+  if (classes.length !== 1 || source.blockId || source.audienceMode === 'remainder') return false;
+  const audience = source.audience && typeof source.audience === 'object'
+    ? source.audience as Record<string, unknown> : undefined;
+  if (audience?.kind && audience.kind !== 'classes') return false;
+  if (audience && (['student_ids', 'include_student_ids', 'exclude_student_ids'].some((key) =>
+    Array.isArray(audience[key]) && (audience[key] as unknown[]).length > 0))) return false;
+  if (Array.isArray(audience?.class_ids) && JSON.stringify([...new Set(audience.class_ids)].sort()) !== JSON.stringify(classes.slice().sort())) return false;
+  const groupIds = [
+    ...(Array.isArray(source.groupIds) ? source.groupIds.filter((id): id is string => typeof id === 'string') : []),
+    ...(typeof source.groupId === 'string' && source.groupId ? [source.groupId] : []),
+  ];
+  return groupIds.every((id) => classes.includes(id));
+}
+
+/** Copy a lesson into a destination while keeping explicit audiences unless the user replaces them. */
 export function remapPastedLessonAudience<T extends object>(
   lesson: T,
   destinationClassIds: string[],
   newId: string,
+  replaceAudience = false,
 ): T {
   const source = lesson as Record<string, unknown>;
   const activityType = source.activityType;
   if (activityType === 'club') {
     return { ...source, id: newId, classId: '', classIds: [], displayClassIds: [...destinationClassIds] } as T;
   }
+  if (!replaceAudience && !isWholeClassAudience(lesson)) return { ...source, id: newId } as T;
   const audience = source.audience && typeof source.audience === 'object'
     ? source.audience as Record<string, unknown> : undefined;
   const sourceClassIds = new Set([
     ...(Array.isArray(source.classIds) ? source.classIds.filter((id): id is string => typeof id === 'string') : []),
     ...(typeof source.classId === 'string' && source.classId ? [source.classId] : []),
   ]);
-  const sourceGroupIds = Array.isArray(source.groupIds)
-    ? source.groupIds.filter((id): id is string => typeof id === 'string') : [];
+  const sourceGroupIds = Array.isArray(source.groupIds) ? source.groupIds.filter((id): id is string => typeof id === 'string') : [];
   const sourceGroupId = typeof source.groupId === 'string' ? source.groupId : '';
-  const hasNonClassGroup = sourceGroupIds.some((id) => !sourceClassIds.has(id))
-    || Boolean(sourceGroupId && !sourceClassIds.has(sourceGroupId));
-  const explicitGroupOrStudentAudience = audience?.kind === 'groups' || audience?.kind === 'students' || hasNonClassGroup;
-  if (explicitGroupOrStudentAudience) return { ...source, id: newId } as T;
   const classes = [...new Set(destinationClassIds.filter(Boolean))];
   const next: Record<string, unknown> = {
     ...source,
@@ -112,10 +130,25 @@ export function remapPastedLessonAudience<T extends object>(
     classIds: classes,
   };
   const sourceClasses = [...sourceClassIds].sort();
-  if (JSON.stringify(sourceClasses) !== JSON.stringify([...classes].sort())) delete next.audience_snapshot;
-  if (sourceGroupId && sourceClassIds.has(sourceGroupId)) next.groupId = classes.length === 1 ? classes[0] : '';
-  if (sourceGroupIds.length && sourceGroupIds.every((id) => sourceClassIds.has(id))) next.groupIds = classes;
-  if (audience && (audience.kind === 'classes' || audience.kind === 'available_slot')) {
+  const changedClass = replaceAudience || JSON.stringify(sourceClasses) !== JSON.stringify([...classes].sort());
+  if (changedClass) {
+    delete next.audience_snapshot;
+    delete next.confirmedParticipantIds;
+    delete next.canonical;
+    delete next.source;
+    delete next.excludedGroupIds;
+  }
+  if (replaceAudience) {
+    next.groupId = classes[0] || '';
+    next.groupIds = classes;
+    next.audienceMode = 'canonical';
+  } else {
+    if (sourceGroupId && sourceClassIds.has(sourceGroupId)) next.groupId = classes.length === 1 ? classes[0] : '';
+    if (sourceGroupIds.length && sourceGroupIds.every((id) => sourceClassIds.has(id))) next.groupIds = classes;
+  }
+  if (replaceAudience) {
+    next.audience = { kind: 'classes', class_ids: classes };
+  } else if (audience && audience.kind === 'classes') {
     const { grade: _staleGrade, ...rest } = audience;
     next.audience = { ...rest, class_ids: classes };
   }

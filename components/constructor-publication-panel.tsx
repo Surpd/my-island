@@ -3,6 +3,7 @@
 import {useEffect, useState} from 'react';
 import {X} from 'lucide-react';
 import Link from 'next/link';
+import { normalizeRoomDisplay } from './schedule-rooms';
 
 type Api = <T>(path:string, init?:RequestInit)=>Promise<T>;
 type ApiError = Error & {status?:number};
@@ -65,7 +66,7 @@ export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onCl
   if (typeof window!=='undefined' && new URLSearchParams(window.location.search).get('role')==='admin') publishedQuery.set('role','admin');
   const publishedHref = `/admin/schedule/published${publishedQuery.size ? `?${publishedQuery}` : ''}`;
   const body = {scope_kind:scope, expected_revision:revision, ...(scope==='week' ? {week_start:week} : {})};
-  const describe = (block:SemanticBlock|null) => block ? <><strong>{dayNames[block.weekday]} {block.start}–{block.end} · {block.grade} параллель</strong>{block.assignments.map((item,index)=><p key={index}>{item.activity} · {item.teachers.map(id=>teacherNames[id]||'Преподаватель не подтверждён').join(', ')||'без преподавателя'} · {item.groups.map(id=>groupNames[id]||'Группа не подтверждена').join(', ')}{item.metadata?.room ? ` · ${item.metadata.room}` : ''}</p>)}</> : <span>Нет занятия</span>;
+  const describe = (block:SemanticBlock|null) => block ? <><strong>{dayNames[block.weekday]} {block.start}–{block.end} · {block.grade} параллель</strong>{block.assignments.map((item,index)=><p key={index}>{item.activity} · {item.teachers.map(id=>teacherNames[id]||'Преподаватель не подтверждён').join(', ')||'без преподавателя'} · {item.groups.map(id=>groupNames[id]||'Группа не подтверждена').join(', ')}{item.metadata?.room ? ` · ${normalizeRoomDisplay(item.metadata.room)}` : ''}</p>)}</> : <span>Нет занятия</span>;
   const previewMatches=previewTarget?.draftId===draftId&&previewTarget.revision===revision&&previewTarget.scope===scope&&(scope!=='week'||previewTarget.week===week);
   const activePreview=previewMatches?preview:null;
   const summary = {...emptySummary,...activePreview?.summary};

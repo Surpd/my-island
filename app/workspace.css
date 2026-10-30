@@ -734,6 +734,16 @@
   .campus-shell .constructor-ux .constructor-menu-body .constructor-mobile-tool { display:inline-flex; }
 }
 
+/* A compact inspector stays in document flow on narrow screens; only the explicitly expanded editor is modal. */
+@media(max-width:900px){
+  .campus-shell .constructor-ux .constructor-inspector.is-compact { position:static; inset:auto; z-index:3; width:auto; height:auto; max-height:none; overflow:visible; border-radius:10px; box-shadow:none; overscroll-behavior:auto; }
+}
+@media(max-width:600px){
+  .campus-shell .constructor-ux.has-draft .constructor-top { flex-wrap:wrap; }
+  .campus-shell .constructor-ux.has-draft .constructor-top > div:first-child { flex:1 0 100%; }
+  .campus-shell .constructor-ux .constructor-actions { width:100%; flex-direction:row; flex-wrap:wrap; justify-content:flex-end; align-items:center; }
+}
+
 /* Consolidated schedule: publication uses existing Campus Pop surfaces. */
 .constructor-publication-panel { max-width: 780px; }
 .constructor-publication-panel > p,.constructor-publication-panel section { margin: 16px 0; }

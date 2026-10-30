@@ -34,12 +34,12 @@ import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
-import { normalizeRoomKey, normalizeRoomDisplay } from './schedule-rooms';
+import { normalizeRoomKey, normalizeRoomDisplay, normalizeRoomInput } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
-import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
+import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
@@ -420,7 +420,7 @@ function issuesFor(
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
       if ([...teacherIdsA].some((id) => teacherIdsB.has(id)))
         pair('Преподаватель уже ведёт урок');
-      if (normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${a.room} занят`);
+      if (normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
       const studentIdsA = new Set(previews[a.id]?.status === 'ok' ? previews[a.id].student_ids || [] : []);
       const studentIdsB = new Set(previews[b.id]?.status === 'ok' ? previews[b.id].student_ids || [] : []);
       const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
@@ -497,6 +497,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [targetClassId, setTargetClassId] = useState('');
   const [panelMode, setPanelMode] = useState<'lesson' | 'settings'>('lesson');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [inspectorExpanded, setInspectorExpanded] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [colorMode, setColorMode] = useState<'teacher' | 'subject' | 'none'>('teacher');
   const [colorPanelOpen, setColorPanelOpen] = useState(false);
@@ -1454,7 +1455,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       col >= bounds.left &&
       col <= bounds.right,
     );
-  const selectCell = (row: number, col: number, extend = false, focusEditor = true) => {
+  const selectCell = (row: number, col: number, extend = false, focusEditor = false) => {
     const cell = { row, col };
     if (!extend || !anchor) setAnchor(cell);
     setFocus(cell);
@@ -1463,6 +1464,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     setCreationMode('quick');
     setPanelMode('lesson');
     setPanelOpen(true);
+    setInspectorExpanded(false);
     if (viewMode === 'day' && gridColumns[col]?.classIds.length === 1)
       setTargetClassId(gridColumns[col].classIds[0]);
     else if (gridColumns[col]?.classIds.length > 1)
@@ -1476,6 +1478,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (!focus || !payload) return;
     setPanelMode('lesson');
     setPanelOpen(true);
+    setInspectorExpanded(true);
     const classId = classIdAtColumn(focus.col);
     if (!classId) return;
     const found = payload.lessons.find(
@@ -1625,6 +1628,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     setSelectedId(id);
     setPanelMode('lesson');
     setPanelOpen(true);
+    setInspectorExpanded(true);
     const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((classId) => entry.classIds.includes(classId)));
     if (col >= 0) { setAnchor({ row: lesson.period, col }); setFocus({ row: lesson.period, col }); }
   };
@@ -1707,6 +1711,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     }
     const created: Lesson[] = [];
     const copiedIds = new Set<string>();
+    const audienceChanges: string[] = [];
     for (const cell of value.cells) {
       const destination = gridColumns[focus.col + cell.col];
       const destinationRow = focus.row + cell.row;
@@ -1718,28 +1723,41 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       for (const lesson of cell.lessons) {
         if (copiedIds.has(lesson.id)) continue;
         copiedIds.add(lesson.id);
-        const audienceAlreadyFits = displayedClasses(lesson).some((id) => destination.classIds.includes(id));
-        const classId = audienceAlreadyFits
-          ? lesson.classId
-          : destination.classIds.length === 1
-            ? destination.classIds[0]
-            : '';
-        if (lesson.activityType !== 'club' && ((!classId && !audienceAlreadyFits) || (!audienceAlreadyFits && lessonClasses(lesson).length))) {
-          setStatus(
-            'Аудитория привязана к другой параллели. Измените участников в занятии; источник не изменён.',
-          );
-          return;
+        const sourceClasses = displayedClasses(lesson);
+        const explicitlySelectedClass = targetClassId && destination.classIds.includes(targetClassId) ? targetClassId : '';
+        const targetClassIds = explicitlySelectedClass ? [explicitlySelectedClass] : destination.classIds;
+        const audienceAlreadyFits = sourceClasses.length > 0 && sourceClasses.every((id) => targetClassIds.includes(id));
+        const wholeClass = isWholeClassAudience(lesson);
+        const needsAudienceConfirmation = !audienceAlreadyFits && lesson.activityType !== 'club' && !wholeClass
+          || destination.classIds.length > 1 && !explicitlySelectedClass;
+        const targetLabel = targetClassIds.map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'выбранной аудитории';
+        if (needsAudienceConfirmation) {
+          const sourceLabel = sourceClasses.map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'исходная аудитория';
+          audienceChanges.push(`${lesson.subject || 'Занятие'}: ${sourceLabel} → ${targetLabel}`);
         }
+        const replaceAudience = needsAudienceConfirmation;
+        const newId = value.cutIds.includes(lesson.id) ? lesson.id : freshId();
+        const remapped = remapPastedLessonAudience(
+          lesson,
+          audienceAlreadyFits && !explicitlySelectedClass ? sourceClasses : targetClassIds,
+          newId,
+          replaceAudience,
+        );
+        const classId = remapped.classId;
         created.push({
-          ...remapPastedLessonAudience(lesson, audienceAlreadyFits ? displayedClasses(lesson) : destination.classIds, freshId()),
+          ...remapped,
           day: dayAtRow(destinationRow),
           period,
-          ...(lesson.activityType === 'club' ? { classId: '', classIds: [] } : { classId }),
+          ...(lesson.activityType === 'club' ? { classId: '', classIds: [], displayClassIds: targetClassIds } : { classId }),
           ...(lesson.start && lesson.end && payload.slots[lesson.period] && payload.slots[period]
             ? { start: addMinutes(lesson.start, minutes(payload.slots[period].start) - minutes(payload.slots[lesson.period].start)), end: addMinutes(lesson.end, minutes(payload.slots[period].start) - minutes(payload.slots[lesson.period].start)) }
             : {}),
         });
       }
+    }
+    if (audienceChanges.length && !window.confirm(`Перед вставкой подтвердите новый охват:\n\n${audienceChanges.join('\n')}\n\nНазначить перечисленным классам?`)) {
+      setStatus('Вставка отменена. Исходные занятия не изменены.');
+      return;
     }
     mutate((state) => ({
       ...state,
@@ -1748,8 +1766,16 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         ...created,
       ],
     }));
+    if (created[0]) {
+      setSelectedId(created[0].id);
+      setPanelMode('lesson');
+      setInspectorExpanded(false);
+      setPanelOpen(true);
+    }
     clip.current = { ...value, cutIds: [] };
-    setStatus(`Вставлено ${created.length} занятий.`);
+    setStatus(audienceChanges.length
+      ? `Вставлено ${created.length} занятий. Новая аудитория подтверждена: ${audienceChanges.slice(0, 2).join('; ')}${audienceChanges.length > 2 ? ` и ещё ${audienceChanges.length - 2}` : ''}.`
+      : `Вставлено ${created.length} занятий.`);
   };
   const move = (
     lessonId: string,
@@ -1760,34 +1786,36 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (!payload) return;
     const lesson = payload.lessons.find((item) => item.id === lessonId),
       destination = gridColumns[col];
-    const audienceAlreadyFits = lesson && destination && displayedClasses(lesson).some((id) => destination.classIds.includes(id));
-    const destinationClassId = audienceAlreadyFits
-      ? lesson.classId
-      : destination?.classIds.includes(targetClassId)
-      ? targetClassId
-      : destination?.classIds.length === 1
-        ? destination.classIds[0]
-        : '';
-    if (
-      !lesson ||
-      !destination ||
-      (lesson.activityType !== 'club' && !destinationClassId && !audienceAlreadyFits) ||
-      (!audienceAlreadyFits && lessonClasses(lesson).length > 0)
-    ) {
-      setStatus(
-        'Аудитория привязана к другой параллели. Измените участников в занятии.',
-      );
-      return;
+    if (!lesson || !destination) return;
+    const sourceClasses = displayedClasses(lesson);
+    const explicitlySelectedClass = targetClassId && destination.classIds.includes(targetClassId) ? targetClassId : '';
+    const targetClassIds = explicitlySelectedClass ? [explicitlySelectedClass] : destination.classIds;
+    const audienceAlreadyFits = sourceClasses.length > 0 && sourceClasses.every((id) => targetClassIds.includes(id));
+    const wholeClass = isWholeClassAudience(lesson);
+    const needsAudienceConfirmation = !audienceAlreadyFits && lesson.activityType !== 'club' && !wholeClass
+      || destination.classIds.length > 1 && !explicitlySelectedClass;
+    const targetLabel = targetClassIds.map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'выбранной аудитории';
+    if (needsAudienceConfirmation) {
+      const sourceLabel = sourceClasses.map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'исходная аудитория';
+      if (!window.confirm(`${lesson.subject || 'Занятие'}: ${sourceLabel} → ${targetLabel}.\n\nПодтвердить новый охват?`)) return;
     }
+    const destinationClassId = targetClassIds.length === 1 ? targetClassIds[0] : '';
+    const newId = duplicate ? freshId() : lesson.id;
+    const remapped = remapPastedLessonAudience(
+      lesson,
+      audienceAlreadyFits && !explicitlySelectedClass ? sourceClasses : targetClassIds,
+      newId,
+      needsAudienceConfirmation,
+    );
     mutate((state) => ({
       ...state,
       lessons: [
         ...state.lessons.filter((item) => duplicate || item.id !== lessonId),
         {
-          ...remapPastedLessonAudience(lesson, audienceAlreadyFits ? displayedClasses(lesson) : destination.classIds, duplicate ? freshId() : lesson.id),
+          ...remapped,
           day: dayAtRow(row),
           period: periodAtRow(row),
-          ...(lesson.activityType === 'club' ? { classId: '', classIds: [] } : { classId: destinationClassId }),
+          ...(lesson.activityType === 'club' ? { classId: '', classIds: [], displayClassIds: targetClassIds } : { classId: remapped.classId || destinationClassId }),
           ...(lesson.start && lesson.end && payload.slots[lesson.period] && payload.slots[periodAtRow(row)]
             ? { start: addMinutes(lesson.start, minutes(payload.slots[periodAtRow(row)].start) - minutes(payload.slots[lesson.period].start)), end: addMinutes(lesson.end, minutes(payload.slots[periodAtRow(row)].start) - minutes(payload.slots[lesson.period].start)) }
             : {}),
@@ -1796,7 +1824,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     }));
     if (selectedId && selectedId !== lessonId) return;
     selectCell(row, col);
-    if (!duplicate) setSelectedId(lessonId);
+    setSelectedId(newId);
+    setInspectorExpanded(false);
+    setPanelOpen(true);
+    setStatus(needsAudienceConfirmation
+      ? `${duplicate ? 'Скопировано' : 'Перенесено'} для ${targetLabel} после подтверждения охвата.`
+      : `${duplicate ? 'Скопировано' : 'Перенесено'}: ${lesson.subject || 'занятие'}.`);
   };
   const onKeyDown = (event: KeyboardEvent | ReactKeyboardEvent<HTMLDivElement>) => {
     if (editable(event.target)) return;
@@ -1996,13 +2029,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           if (context) setContext(null);
           root.current?.querySelectorAll<HTMLDetailsElement>('details[data-ui-menu][open]').forEach((menu) => { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); });
           if (conflictsOpen) setConflictsOpen(false);
+          if (inspectorExpanded) { setInspectorExpanded(false); return; }
         }
       }}
     >
       <header className="constructor-top">
         <div>
           <small>РАСПИСАНИЕ · {workspace === 'school' ? 'ШКОЛА' : 'ПЕСОЧНИЦА'}</small>
-          <h1><span className="desktop-label">Конструктор расписания</span><span className="mobile-label">Расписание</span></h1>{draft ? <div className="constructor-current-draft" title={draft.name}>{renameValue === null ? <><span>{draft.name}</span><button aria-label="Переименовать открытый черновик" title="Переименовать" onClick={() => { setRenameValue(draft.name); setRenameError(''); }}><Pencil size={16} /></button></> : <form onSubmit={(event) => { event.preventDefault(); void renameOpenDraft(); }}><label>Новое название<input ref={(element) => element?.focus()} aria-label="Новое название черновика" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') { setRenameValue(null); setRenameError(''); } }} /></label><button type="submit" disabled={saving}>Сохранить название</button><button type="button" onClick={() => setRenameValue(null)}>Отмена</button>{renameError ? <p role="alert">{renameError}</p> : null}</form>}</div> : null}
+          <h1><span className="desktop-label">Конструктор расписания</span><span className="mobile-label">Расписание</span></h1>{draft ? <div className="constructor-current-draft" title={draft.name}><span>{draft.name}</span><button aria-label="Переименовать открытый черновик" aria-expanded={renameValue !== null} title="Переименовать" onClick={() => { setRenameValue(draft.name); setRenameError(''); }}><Pencil size={16} /></button>{renameValue !== null ? <div className="constructor-rename-popover" role="dialog" aria-label="Переименовать открытый черновик"><form onSubmit={(event) => { event.preventDefault(); void renameOpenDraft(); }}><label>Новое название<input ref={(element) => element?.focus()} aria-label="Новое название черновика" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') { setRenameValue(null); setRenameError(''); } }} /></label>{renameError ? <p role="alert">{renameError}</p> : null}<div><button type="submit" disabled={saving}>Сохранить название</button><button type="button" onClick={() => { setRenameValue(null); setRenameError(''); }}>Отмена</button></div></form></div> : null}</div> : null}
           <p>{consolidatedSchedule && workspace === 'school' ? 'Изменения сохраняются в черновике. Публикация — после отдельной проверки и подтверждения.' : 'Черновик · опубликованное расписание не меняется'}</p>
           {scheduleDataSourceLabel ? <span className="admin-data-source">{scheduleDataSourceLabel}</span> : <span className="admin-data-source">{directoryAccess === 'school' ? 'Школьный справочник подключён' : directoryAccess === 'checking' ? 'Подключение…' : 'Локальная песочница'}</span>}{draft ? workspaceTabs : null}
         </div>
@@ -2049,7 +2083,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         <label>Тип<select value={activityEditor.type} onChange={(event) => setActivityEditor((item) => item ? { ...item, type: event.target.value === 'elective' ? 'elective' : 'club' } : item)}><option value="club">Кружок</option><option value="elective">Курс по выбору</option></select></label>
         <label>Другие названия<input placeholder="Например, Game Design" value={activityEditor.aliases} onChange={(event) => setActivityEditor((item) => item ? { ...item, aliases: event.target.value } : item)} /></label>
         <label>Преподаватели<select multiple value={activityEditor.teacher_ids} onChange={(event) => setActivityEditor((item) => item ? { ...item, teacher_ids: [...event.target.selectedOptions].map((option) => option.value) } : item)}>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label>
-        <label>Кабинет<input value={activityEditor.room} onChange={(event) => setActivityEditor((item) => item ? { ...item, room: event.target.value } : item)} /></label>
+        <label>Кабинет<input value={normalizeRoomInput(activityEditor.room)} onChange={(event) => setActivityEditor((item) => item ? { ...item, room: event.target.value } : item)} /></label>
         <p>Изменения каталога не переписывают занятия уже созданных недель. Кружки не назначаются ученикам.</p>
         <footer>{activityEditor.item ? <button disabled={catalogSaving} onClick={async () => { await archiveActivity(activityEditor.item!); setActivityEditor(null); }}>{activityEditor.item.status === 'active' ? 'В архив' : 'Восстановить'}</button> : null}<button disabled={catalogSaving} onClick={() => setActivityEditor(null)}>Отмена</button><button className="is-primary" disabled={catalogSaving || !activityEditor.name.trim()} onClick={() => void saveActivityEditor()}>{catalogSaving ? 'Сохраняем…' : 'Сохранить запись'}</button></footer>
       </dialog></div> : null}
@@ -2138,7 +2172,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 JSON.stringify(Object.values(other.source_text || {})) === JSON.stringify(Object.values(item.source_text || {})));
               return <details key={item.lesson_id} className="constructor-review-item">
                 <summary>{DAYS[item.day]} {item.start}–{item.end} · {lessonClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name || id).join(', ')} · {lesson.subject} · {item.status === 'needs_confirmation' ? 'Требует проверки' : item.status === 'auto_applied' ? 'Перенесено' : item.status === 'confirmed' ? 'Подтверждено' : 'Отклонено'}</summary>
-                <div className="constructor-review-comparison"><div><b>Исходник · {item.source_cells?.join(', ')}</b><p>{Object.values(item.source_text || {}).join(' / ')}</p></div><div><b>Было</b><p>{item.before?.length ? item.before.map((entry: Raw) => `${entry.subject || 'Без предмета'} · ${(entry.group_ids || []).map((id: string) => groups.find((group) => group.id === id)?.name || 'группа не найдена').join(', ') || 'без группы'} · ${(entry.teacher_ids || []).map((id: string) => teachers.find((teacher) => teacher.id === id)?.name || 'преподаватель не найден').join(', ') || 'без преподавателя'}${entry.room ? ` · ${entry.room}` : ''}`).join('; ') : 'В прежнем черновике нет'}</p></div><div><b>Стало</b><p>{lesson.subject} · {groups.find((group) => group.id === lesson.groupId)?.name || 'группа требует уточнения'} · {teachers.find((teacher) => teacher.id === lesson.teacherId)?.name || 'преподаватель требует уточнения'}{lesson.room ? ` · ${lesson.room}` : ''}</p></div></div>
+                <div className="constructor-review-comparison"><div><b>Исходник · {item.source_cells?.join(', ')}</b><p>{Object.values(item.source_text || {}).join(' / ')}</p></div><div><b>Было</b><p>{item.before?.length ? item.before.map((entry: Raw) => `${entry.subject || 'Без предмета'} · ${(entry.group_ids || []).map((id: string) => groups.find((group) => group.id === id)?.name || 'группа не найдена').join(', ') || 'без группы'} · ${(entry.teacher_ids || []).map((id: string) => teachers.find((teacher) => teacher.id === id)?.name || 'преподаватель не найден').join(', ') || 'без преподавателя'}${entry.room ? ` · ${normalizeRoomDisplay(entry.room)}` : ''}`).join('; ') : 'В прежнем черновике нет'}</p></div><div><b>Стало</b><p>{lesson.subject} · {groups.find((group) => group.id === lesson.groupId)?.name || 'группа требует уточнения'} · {teachers.find((teacher) => teacher.id === lesson.teacherId)?.name || 'преподаватель требует уточнения'}{lesson.room ? ` · ${normalizeRoomDisplay(lesson.room)}` : ''}</p></div></div>
                 {item.reasons?.length ? <p>Причина: {item.reasons.join('; ')}</p> : <p>Исходник изменился или отсутствовал в прежнем черновике; запись перенесена автоматически.</p>}
                 <div className="constructor-draft-actions"><button onClick={() => openReviewLesson(item.lesson_id)}>Показать и исправить</button>{item.status === 'needs_confirmation' ? <><button onClick={() => reviewDecision([item.lesson_id], 'confirmed')}>Подтвердить</button><button onClick={() => reviewDecision([item.lesson_id], 'rejected')}>Отклонить сопоставление</button>{sameCases.length > 1 ? <button onClick={() => reviewDecision(sameCases.map((other: Raw) => other.lesson_id), 'confirmed')}>Подтвердить одинаковые · {sameCases.length}</button> : null}</> : null}</div>
               </details>;
@@ -2194,7 +2228,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <button onClick={() => { setFitWidth(false); setZoom((value) => Math.min(150, value + 10)); }} aria-label="Увеличить масштаб">+</button>
             <button onClick={() => setFullScreen((value) => !value)} aria-label={fullScreen ? 'Выйти из полного экрана' : 'Полный экран'}><Expand size={16} /></button>
                   <button onClick={() => editActivity()}>+ Каталог кружков / курсов</button>
-                  <button className="constructor-mobile-tool" onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setFocus(null); setAnchor(null); setSelectedId(''); }}>Шаблон</button>
+                  <button className="constructor-mobile-tool" onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setInspectorExpanded(true); setFocus(null); setAnchor(null); setSelectedId(''); }}>Шаблон</button>
                   {!panelOpen ? <button className="constructor-mobile-tool" aria-label="Открыть панель" onClick={() => setPanelOpen(true)}>Детали</button> : null}
                 </div>
               </details>
@@ -2220,7 +2254,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               <button onClick={removeSelected} disabled={!focus} title="Удалить · Delete" aria-label="Удалить"><Trash2 size={15} /><span>Удалить</span></button>
             <button
               className={`constructor-secondary-edit ${panelMode === 'settings' ? 'active' : ''}`}
-              onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setFocus(null); setAnchor(null); setSelectedId(''); }}
+              onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setInspectorExpanded(true); setFocus(null); setAnchor(null); setSelectedId(''); }}
             >
               Шаблон
             </button>
@@ -2330,6 +2364,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           ),
                         });
                         setSelectedId(item.id);
+                        setInspectorExpanded(true);
                         setQuery('');
                       }}
                     >
@@ -2511,7 +2546,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                 <button
                                   key={item.id}
                                   data-lesson-id={item.id}
-                                  title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${item.room || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
+                                  title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${item.room ? normalizeRoomDisplay(item.room) : 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
                                   style={{ backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(item.subject || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
                                   className={`constructor-card ${item.kind === 'event' ? 'event' : ''} ${item.kind === 'event' || item.end && item.end !== payload.slots[item.period]?.end ? `multislot ${item.period !== period ? 'event-continuation' : ''} ${overlapsSlot(item, cellDay, period + 1, payload.slots) ? 'event-continues' : ''}` : ''} ${selectedId === item.id ? 'active' : ''} ${conflictsOpen && issues.some((issue) => (issue.lessonId === item.id || issue.related === item.id) && issue.severity === 'error') ? 'error' : conflictsOpen && issues.some((issue) => issue.lessonId === item.id || issue.related === item.id) ? 'warning' : ''}`}
                                   draggable
@@ -2538,15 +2573,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     selectCell(row, col);
-                                    setSelectedId(item.id);
+                            setSelectedId(item.id);
                                     setPanelMode('lesson');
                                     setPanelOpen(true);
+                            setInspectorExpanded(false);
                                   }}
                                   onDoubleClick={(event) => {
                                     event.stopPropagation();
                                     setSelectedId(item.id);
                                     setPanelMode('lesson');
                                     setPanelOpen(true);
+                            setInspectorExpanded(true);
                                   }}
                                 >
                                   <span>
@@ -2607,7 +2644,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 ))}
               </div>
             </div>
-            {panelOpen ? <ConstructorInspectorShell onClose={() => setPanelOpen(false)}>
+            {panelOpen ? <ConstructorInspectorShell compact={!inspectorExpanded} onClose={() => inspectorExpanded ? setInspectorExpanded(false) : setPanelOpen(false)}>
               <div className="constructor-inspector-head">
                 <div>
                   <small>{selected ? selected.kind === 'event' ? 'СОБЫТИЕ' : 'ЗАНЯТИЕ' : 'ВЫБРАННАЯ ЯЧЕЙКА'}</small>
@@ -2619,7 +2656,18 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         : 'Выберите ячейку'}
                   </h2>
                 </div>
-                <button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button>
+                <div className="constructor-inspector-head-actions">{inspectorExpanded ? <button type="button" onClick={() => setInspectorExpanded(false)}>Свернуть</button> : null}<button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
+              </div>
+              <div className="constructor-inspector-preview">
+                {selected ? <>
+                  <p>{DAYS[selected.day]} · {payload?.slots[selected.period]?.start}{selected.end && selected.end !== payload?.slots[selected.period]?.end ? `–${selected.end}` : ''}</p>
+                  <p>{[visualClasses(selected, groups).map((id) => groups.find((group) => group.id === id)?.name || id).join(', '), linkedInstructionalGroups(selected, groups).map((group) => audienceLabel(group)).join(', '), teachers.find((teacher) => teacher.id === selected.teacherId)?.name || (selected.teacherId ? 'Преподаватель не найден' : 'Без преподавателя'), selected.room ? normalizeRoomDisplay(selected.room) : 'Без кабинета'].filter(Boolean).join(' · ')}</p>
+                  {issues.filter((issue) => issue.lessonId === selected.id || issue.related === selected.id).slice(0, 2).map((issue, index) => <p className={`constructor-preview-issue ${issue.severity}`} key={`${issue.type}-${index}`}>{issue.message}</p>)}
+                  <button type="button" onClick={() => setInspectorExpanded(true)}>Изменить</button>
+                </> : <>
+                  <p>{selectedCell ? `${gridColumns[focus!.col]?.label} · ${DAYS[selectedCell.day]}, ${payload?.slots[selectedCell.period]?.start}` : panelMode === 'settings' ? 'Настройки шаблона' : 'Выберите ячейку расписания'}</p>
+                  {panelMode === 'settings' ? <button type="button" onClick={() => setInspectorExpanded(true)}>Открыть настройки</button> : focus ? <button type="button" onClick={() => { setInspectorExpanded(true); setTimeout(() => quickInput.current?.focus(), 0); }}>Добавить занятие</button> : null}
+                </>}
               </div>
               {selected ? (
                 <button
@@ -2690,7 +2738,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         </> : null}
                         {creationMode === 'event' ? <p>{payload.week_start ? 'Событие относится только к этой неделе.' : 'Событие повторяется в неделях, созданных из этого шаблона.'}</p> : null}
                         {creationMode === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(newLesson.informational)} onChange={(event) => setNewLesson((item) => ({ ...item, informational: event.target.checked }))} /> Информационное событие без назначенных учеников</label> : null}
-                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>Преподаватель <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
+                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>Преподаватель <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" value={normalizeRoomInput(newLesson.room)} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
                         {creationMode === 'lunch' ? <label>Место (необязательно)<input aria-label="Место обеда" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label> : null}
                         {activityType === 'club' ? <><label>Размещение в сетке<select multiple aria-label="Классы размещения кружка" value={newAudienceContextClassIds} onChange={(event) => setNewLesson((item) => ({ ...item, classIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><p>Участники не назначены. Кружок виден в конструкторе; ученикам он появится после назначения участников.</p></> : null}
                         {!newLesson.informational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
@@ -2825,7 +2873,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         Кабинет
                         <input
                           list="constructor-rooms"
-                          value={selected.room}
+                          value={normalizeRoomInput(selected.room)}
                           onChange={(event) =>
                             updateLesson(selected.id, {
                               room: event.target.value,
@@ -2996,7 +3044,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               ) : (
                 <div className="constructor-hint">Выберите ячейку расписания или откройте настройку шаблона.</div>
               )}
-              <div className="constructor-editor-actions"><button onClick={() => setPanelOpen(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> Сохранить черновик</button></div>
+              <div className="constructor-editor-actions"><button onClick={() => setInspectorExpanded(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> Сохранить черновик</button></div>
             </ConstructorInspectorShell> : null}
           </div>
           <footer className="constructor-footer">

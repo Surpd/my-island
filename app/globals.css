@@ -3917,9 +3917,36 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-audience-recalculation button, .constructor-audience-recalculation select { min-height: 44px; }
 .constructor-roster-results { max-height: 40vh; overflow: auto; }
 .constructor-roster-results article { padding: 10px; border-bottom: 1px solid #dce3dd; }
-.constructor-current-draft > button { margin-left: 8px; min-width: 44px; min-height: 44px; vertical-align: middle; }
-.constructor-current-draft form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
-.constructor-current-draft form input { max-width: 100%; min-height: 44px; }
+.constructor-current-draft { position: relative; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
+.constructor-current-draft > button { margin-left: 4px; min-width: 44px; min-height: 44px; vertical-align: middle; }
+.constructor-rename-popover { position: absolute; z-index: 30; top: -54px; left: calc(100% + 230px); box-sizing: border-box; width: min(400px, calc(100vw - 520px)); padding: 8px; border: 1px solid #cbd8d3; border-radius: 10px; background: #fffefa; box-shadow: 0 12px 32px #183b3d2b; }
+.constructor-rename-popover form { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; }
+.constructor-rename-popover label { display: grid; flex: 1 1 180px; gap: 3px; min-width: 0; color: #46636b; font-size: 11px; font-weight: 700; }
+.constructor-rename-popover input { box-sizing: border-box; width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid #d7ded9; border-radius: 6px; }
+.constructor-rename-popover form > div { display: flex; flex-wrap: wrap; gap: 5px; }
+.constructor-rename-popover button { min-height: 36px; padding: 6px; font-size: 11px; white-space: nowrap; }
+.constructor-rename-popover p { margin: 0; color: #a52c2c; }
+.constructor-inspector-head-actions { display: flex; align-items: center; gap: 4px; }
+.constructor-inspector-preview { display: none; }
+.constructor-inspector.is-compact { position: static; max-height: none; overflow: visible; padding: 10px 12px; }
+.constructor-inspector.is-compact > :not(.constructor-inspector-head):not(.constructor-inspector-preview) { display: none !important; }
+.constructor-inspector.is-compact .constructor-inspector-head { align-items: center; margin-bottom: 8px; }
+.constructor-inspector.is-compact .constructor-inspector-head h2 { font-size: 18px; }
+.constructor-inspector.is-compact .constructor-inspector-preview { display: grid; gap: 5px; }
+.constructor-inspector-preview p { margin: 0; color: #46636b; font-size: 12px; line-height: 1.4; }
+.constructor-inspector-preview .constructor-preview-issue { color: #825a05; }
+.constructor-inspector-preview .constructor-preview-issue.error { color: #9a2929; }
+.constructor-inspector-preview button { justify-self: start; min-height: 38px; margin-top: 3px; }
+@media (max-width: 640px) {
+  .constructor-current-draft { max-width: calc(100vw - 28px); }
+  .constructor-current-draft > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .constructor-rename-popover { top: calc(100% - 20px); left: 0; right: auto; width: min(430px, calc(100vw - 36px)); }
+  .constructor-rename-popover form { flex-wrap: nowrap; align-items: center; }
+  .constructor-rename-popover label { flex: 1 1 90px; font-size: 0; }
+  .constructor-rename-popover input { min-width: 0; font-size: 12px; }
+  .constructor-rename-popover form > div { flex-wrap: nowrap; }
+}
+@media (min-width: 641px) and (max-width: 1150px) { .constructor-rename-popover { top: calc(100% - 8px); left: 0; width: min(430px, calc(100vw - 32px)); } }
 
 .constructor-audience-recalculation::backdrop { background: #143c4055; }
 

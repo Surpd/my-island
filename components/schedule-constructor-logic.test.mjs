@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { linkedInstructionalGroupsForColumn, mergeScheduleDrafts, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds, shouldWarnMissingTeacher } from './schedule-constructor-logic.ts';
+import { isWholeClassAudience, linkedInstructionalGroupsForColumn, mergeScheduleDrafts, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds, shouldWarnMissingTeacher } from './schedule-constructor-logic.ts';
 
 const classes = [
   { id: 'class-7b', name: '7-Б', group_type: 'class' },
@@ -130,7 +130,18 @@ test('pasting remaps class audiences but preserves explicit groups, students, an
   assert.equal(Object.hasOwn(remapPastedLessonAudience(classLesson, ['class-9a'], 'new'), 'audience_snapshot'), false);
   assert.deepEqual(remapPastedLessonAudience(classLesson, ['class-7b'], 'same-class-copy').audience_snapshot, classLesson.audience_snapshot);
   const groupLesson = { id: 'old', groupId: 'english:7', groupIds: ['english:7'], classIds: ['class-7b'], audience: { kind: 'groups', group_ids: ['english:7'] } };
+  assert.equal(isWholeClassAudience(classLesson), true);
+  assert.equal(isWholeClassAudience(groupLesson), false);
+  assert.equal(isWholeClassAudience({ ...classLesson, audienceMode: 'remainder' }), false);
+  assert.equal(isWholeClassAudience({ ...classLesson, blockId: 'joint' }), false);
+  assert.equal(isWholeClassAudience({ ...classLesson, audience: { kind: 'classes', class_ids: ['class-7b'], exclude_student_ids: ['s1'] } }), false);
   assert.deepEqual(remapPastedLessonAudience(groupLesson, ['class-9a'], 'new'), { ...groupLesson, id: 'new' });
+  const confirmed = remapPastedLessonAudience({ ...groupLesson, audience_snapshot: { student_ids: ['old-student'], resolved_at: 'old' }, confirmedParticipantIds: ['old-student'], canonical: { assignment: { canonical_group_ids: ['english:7'] } } }, ['class-9a'], 'confirmed', true);
+  assert.deepEqual(confirmed.audience, { kind: 'classes', class_ids: ['class-9a'] });
+  assert.deepEqual(confirmed.classIds, ['class-9a']);
+  assert.equal(Object.hasOwn(confirmed, 'audience_snapshot'), false);
+  assert.equal(Object.hasOwn(confirmed, 'confirmedParticipantIds'), false);
+  assert.equal(Object.hasOwn(confirmed, 'canonical'), false);
   const club = { id: 'old', activityType: 'club', classId: '', classIds: [], displayClassIds: ['class-7b'], audience: { kind: 'students', student_ids: [] } };
   assert.deepEqual(remapPastedLessonAudience(club, ['class-9a'], 'new'), { ...club, id: 'new', displayClassIds: ['class-9a'] });
 });
