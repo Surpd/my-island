@@ -309,6 +309,18 @@ class ScheduleExperimentAudiencePreviewPayload(BaseModel):
     payload: dict
 
 
+class ScheduleExperimentAudienceBulkPreviewPayload(BaseModel):
+    expected_revision: int = Field(ge=1)
+    scope: str
+    day: int | None = None
+    class_id: str | None = None
+
+
+class ScheduleExperimentAudienceBulkApplyPayload(ScheduleExperimentAudienceBulkPreviewPayload):
+    preview_token: str
+    reason: str = Field(min_length=1)
+
+
 class ScheduleExportPayload(BaseModel):
     expected_revision: int = Field(ge=1)
 
@@ -1761,6 +1773,32 @@ def create_router(database: Database) -> APIRouter:
             return get_experiment(database, experiment_id)
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/{experiment_id}/audiences/preview")
+    def admin_schedule_experiment_bulk_audience_preview(experiment_id: str, payload: ScheduleExperimentAudienceBulkPreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        from backend.services.constructor_resolution import bulk_audience_preview
+        try:
+            return bulk_audience_preview(database, experiment_id, **payload.model_dump())
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/{experiment_id}/audiences/apply")
+    def admin_schedule_experiment_bulk_audience_apply(experiment_id: str, payload: ScheduleExperimentAudienceBulkApplyPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        from backend.services.constructor_resolution import apply_bulk_audience
+        try:
+            return apply_bulk_audience(database, experiment_id, actor_user_id=actor["id"], **payload.model_dump())
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/admin/schedule/experiments/{experiment_id}/duplicate")
     def admin_schedule_duplicate_experiment(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

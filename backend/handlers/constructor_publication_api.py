@@ -48,6 +48,18 @@ class ResolutionApplyBody(ResolutionBody):
     exception_id: str | None = None
 
 
+class AudienceBulkPreviewBody(BaseModel):
+    expected_revision: int = Field(ge=1)
+    scope: str
+    day: int | None = None
+    class_id: str | None = None
+
+
+class AudienceBulkApplyBody(AudienceBulkPreviewBody):
+    preview_token: str
+    reason: str = Field(min_length=1)
+
+
 def create_constructor_publication_router(
     resolve_stores: Callable[[], tuple[Any, Any]],
     require_school_admin: Callable[[str | None], Any],
@@ -119,6 +131,18 @@ def create_constructor_publication_router(
         from backend.services.constructor_resolution import apply_resolution
         source,drafts,actor=resolution_stores(x_school_admin_session)
         return call(apply_resolution,drafts,draft_id,audience_database=source,actor_user_id=actor,**body.model_dump())
+
+    @router.post('/{draft_id}/audiences/preview')
+    def bulk_audience_preview_route(draft_id: str, body: AudienceBulkPreviewBody, x_school_admin_session: str | None = Header(default=None)):
+        from backend.services.constructor_resolution import bulk_audience_preview
+        source,drafts,_=resolution_stores(x_school_admin_session)
+        return call(bulk_audience_preview,drafts,draft_id,audience_database=source,**body.model_dump())
+
+    @router.post('/{draft_id}/audiences/apply')
+    def bulk_audience_apply_route(draft_id: str, body: AudienceBulkApplyBody, x_school_admin_session: str | None = Header(default=None)):
+        from backend.services.constructor_resolution import apply_bulk_audience
+        source,drafts,actor=resolution_stores(x_school_admin_session)
+        return call(apply_bulk_audience,drafts,draft_id,audience_database=source,actor_user_id=actor,**body.model_dump())
 
     @router.get('/publication/{publication_id}/source')
     def published_source_route(publication_id: str,x_school_admin_session: str|None=Header(default=None)):

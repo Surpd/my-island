@@ -370,7 +370,8 @@ class ConstructorPublicationTests(unittest.TestCase):
         peer = self.database.create_identity("student", "Synthetic 9B", "9B")
         self.database.create_membership(other_class["id"], peer["id"], "student", "synthetic")
         draft = self.draft([self.lesson(), self.lesson(id="lunch", subject="Lunch", specialMark="lunch", teacherId="",
-            classId="", classIds=[str(self.group["id"]),str(other_class["id"])])])
+            classId="", classIds=[str(self.group["id"]),str(other_class["id"])],
+            audience={"kind":"classes","class_ids":[str(self.group["id"]),str(other_class["id"])]})])
         self.publish(draft)
         self.publish(draft, "week", week_start="2026-10-19")
         for student, activity in ((self.student,"Math"),(peer,"Lunch")):
@@ -640,6 +641,44 @@ class ConstructorPublicationTests(unittest.TestCase):
             source_url=f"/api/admin/schedule/constructor/publication/{published['publication_id']}/source"
             self.assertEqual(client.get(source_url).status_code,401)
             self.assertEqual(client.get(source_url,headers=headers).status_code,200)
+
+    def test_bulk_audience_routes_preview_stale_guard_and_apply_with_verified_actor(self):
+        from backend.handlers.constructor_publication_api import create_constructor_publication_router
+        from backend.services.schedule_experiments import save_experiment
+        from fastapi import HTTPException
+        draft = self.draft()
+        draft = save_experiment(self.database, draft['id'], expected_revision=draft['revision'], payload=draft['payload'])
+        def require_admin(token):
+            if token != 'synthetic-admin':
+                raise HTTPException(401, 'School admin session required')
+            return {'id': 'verified-admin'}
+        app = FastAPI()
+        app.include_router(create_constructor_publication_router(lambda: (self.database, self.database), require_admin))
+        client = TestClient(app)
+        base = f"/api/admin/schedule/constructor/{draft['id']}/audiences/"
+        body = {'expected_revision': draft['revision'], 'scope': 'template'}
+        headers = {'X-School-Admin-Session': 'synthetic-admin'}
+        with patch.dict(os.environ, {'MY_ISLAND_CONSOLIDATED_SCHEDULE': '1'}):
+            self.assertEqual(client.post(base+'preview', json=body).status_code, 401)
+            preview = client.post(base+'preview', json=body, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()['summary']['safe_count'], 0)
+            self.assertIn('preview_token', preview.json())
+
+            added = self.database.create_identity('student', 'Route synthetic pupil', '9A')
+            self.database.create_membership(self.group['id'], added['id'], 'student', 'synthetic')
+            stale = client.post(base+'apply', headers=headers, json={**body, 'preview_token': preview.json()['preview_token'], 'reason': 'Confirm checked audience'})
+            self.assertEqual(stale.status_code, 409, stale.text)
+
+            refreshed = client.post(base+'preview', json=body, headers=headers)
+            self.assertEqual(refreshed.status_code, 200, refreshed.text)
+            applied = client.post(base+'apply', headers=headers, json={**body, 'preview_token': refreshed.json()['preview_token'], 'reason': 'Confirm checked audience'})
+            self.assertEqual(applied.status_code, 200, applied.text)
+            saved = applied.json()
+            lesson = saved['payload']['lessons'][0]
+            self.assertIn(str(added['id']), lesson['audience_snapshot']['student_ids'])
+            self.assertEqual(lesson['resolution_history'][-1]['actor_id'], 'verified-admin')
+            self.assertEqual(saved['revision'], draft['revision'] + 1)
 
     def test_group_semantics_change_invalidates_preview(self):
         draft = self.draft()

@@ -135,6 +135,35 @@ class PartialPublicationPostgresTests(unittest.TestCase):
             expected_revision=draft["revision"], preview_token=preview["preview_token"],
             confirmed=True, **kwargs)
 
+    def test_bulk_roster_confirmation_is_single_cas_and_preserves_directory(self):
+        from backend.services.constructor_resolution import bulk_audience_preview, apply_bulk_audience
+        from backend.services.schedule_experiments import ExperimentConflict
+
+        actor = self.database.get_or_create_user(990000123, 'admin')
+        draft = self.draft([self.lesson('bulk-known'), self.lesson('bulk-unknown',
+            audience={'kind': 'groups', 'group_ids': ['missing-group']})])
+        with self.database.connection() as connection:
+            memberships_before = self.database.execute(connection, 'SELECT count(*) AS n FROM memberships').fetchone()['n']
+        # Simulate a confirmed roster becoming stale after an isolated directory edit.
+        extra = self.database.create_identity('student', f'PG Added {self.suffix}', '9A')
+        self.database.create_membership(self.class9['id'], extra['id'], 'student', 'admin_override', self.suffix)
+        preview = bulk_audience_preview(self.database, draft['id'], expected_revision=draft['revision'], scope='template')
+        self.assertEqual(preview['summary']['safe_count'], 1)
+        self.assertEqual(preview['summary']['unresolved_count'], 1)
+        updated = apply_bulk_audience(self.database, draft['id'], expected_revision=draft['revision'],
+            scope='template', preview_token=preview['preview_token'], reason='Verified PostgreSQL fixture', actor_user_id=actor['id'])
+        self.assertEqual(updated['revision'], draft['revision'] + 1)
+        with self.database.connection() as connection:
+            self.assertEqual(self.database.execute(connection, 'SELECT count(*) AS n FROM memberships').fetchone()['n'], memberships_before + 1)
+            self.assertEqual(self.database.execute(connection, 'SELECT count(*) AS n FROM schedule_constructor_publications').fetchone()['n'], 0)
+        with self.assertRaises(ExperimentConflict):
+            apply_bulk_audience(self.database, draft['id'], expected_revision=draft['revision'], scope='template',
+                preview_token=preview['preview_token'], reason='Stale confirmation', actor_user_id=actor['id'])
+        again = bulk_audience_preview(self.database, draft['id'], expected_revision=updated['revision'], scope='template')
+        unchanged = apply_bulk_audience(self.database, draft['id'], expected_revision=updated['revision'], scope='template',
+            preview_token=again['preview_token'], reason='No changes', actor_user_id=actor['id'])
+        self.assertEqual(unchanged['revision'], updated['revision'])
+
     def test_all_386_unresolved_sources_remain_immutable_in_postgres(self):
         from backend.services.constructor_publication import get_published_source
 

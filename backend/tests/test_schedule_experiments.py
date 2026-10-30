@@ -582,9 +582,66 @@ class ScheduleExperimentTests(unittest.TestCase):
              "audience": {"kind": "available_slot", "class_ids": [class_id]}},
         ]}
         result = experiment_audience_preview(self.database, payload)["lessons"]
+        # A parallel remainder is a separate, unresolved fallback audience;
+        # lunch cannot capture that whole cohort at the same time.
         self.assertEqual(result["lunch"]["student_ids"], [])
         self.assertEqual(result["free"]["student_ids"], [])
         self.assertEqual(result["rest"]["student_ids"], [str(student["id"])])
+
+    def test_lunch_is_a_class_scoped_fallback_behind_overlapping_lessons(self):
+        class_id = str(self.class_group["id"])
+        math = self.database.create_group("9A math", "instructional", base_class_name="9A")
+        chemistry = self.database.create_group("9A chemistry", "instructional", base_class_name="9A")
+        math_student = self.database.create_identity("student", "Math pupil")
+        free_student = self.database.create_identity("student", "Free pupil")
+        self.database.create_membership(class_id, math_student["id"], "student", "test")
+        self.database.create_membership(class_id, free_student["id"], "student", "test")
+        self.database.create_membership(str(math["id"]), math_student["id"], "student", "test")
+        payload = {"slots": [{"start": "11:50", "end": "12:35"}], "lessons": [
+            {"id": "math", "day": 0, "period": 0,
+             "audience": {"kind": "groups", "group_ids": [str(math["id"])]}, "classIds": [class_id]},
+            {"id": "lunch", "specialMark": "lunch", "day": 0, "period": 0,
+             "audience": {"kind": "classes", "class_ids": [class_id]}},
+        ]}
+        result = experiment_audience_preview(self.database, payload)["lessons"]
+        self.assertEqual(result["math"]["student_ids"], [str(math_student["id"])])
+        self.assertEqual(result["lunch"]["status"], "ok")
+        self.assertEqual(result["lunch"]["source_count"], 2)
+        self.assertEqual(result["lunch"]["student_ids"], [str(free_student["id"])])
+
+    def test_historical_canonical_lunch_without_staffing_uses_its_saved_audience(self):
+        class_id = str(self.class_group["id"])
+        pupil = self.database.create_identity("student", "Historical lunch pupil")
+        self.database.create_membership(class_id, pupil["id"], "student", "test")
+        result = experiment_audience_preview(self.database, {
+            "slots": [{"start": "12:00", "end": "12:45"}],
+            "lessons": [{"id": "historical-lunch", "subject": "Обед", "day": 0, "period": 0,
+                         "teacherIds": [], "canonicalRole": "residual",
+                         "canonical": {"assignment": {"metadata": {
+                             "special_mark": "lunch",
+                             "audience_rule": {"kind": "whole_grade", "class_group_id": class_id},
+                         }}}}],
+        })["lessons"]["historical-lunch"]
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["student_ids"], [str(pupil["id"])])
+
+    def test_grade_expansion_uses_human_class_metadata_and_ignores_grade_catalog_group(self):
+        class_one = self.database.create_group("grade9:base:opaque-a", "class", display_name="9-Ан", base_class_name="9-Ан")
+        class_two = self.database.create_group("grade9:base:opaque-d", "class", display_name="9-Д", base_class_name="9-Д")
+        other_grade = self.database.create_group("grade10:base:opaque", "class", display_name="10-А", base_class_name="10-А")
+        grade_catalog = self.parallel_group
+        students = []
+        for index, group in enumerate((class_one, class_two, other_grade, grade_catalog)):
+            student = self.database.create_identity("student", f"Metadata pupil {index}")
+            self.database.create_membership(str(group["id"]), student["id"], "student", "test")
+            students.append(student)
+        result = experiment_audience_preview(self.database, {
+            "slots": [{"start": "12:00", "end": "12:45"}],
+            "lessons": [{"id": "grade9", "day": 0, "period": 0,
+                         "audience": {"kind": "available_slot", "grade": "9"}}],
+        })["lessons"]["grade9"]
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(set(result["student_ids"]), {str(students[0]["id"]), str(students[1]["id"])})
 
     def test_column_widths_and_reference_date_round_trip_only_in_experiment(self):
         baseline = canonical_version(self.database)

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from threading import Lock
 
 from backend.database import Database
+from backend.services.schedule_rooms import display_room
 from backend.services.canonical_schedule import canonical_version, read_canonical_template
 from backend.services.schedule_activities import list_activities, validate_activity_lessons
 
@@ -141,6 +142,26 @@ def _audience_fingerprint(lesson: Mapping[str, Any], payload: Mapping[str, Any])
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _lesson_special_mark(lesson: Mapping[str, Any]) -> str:
+    canonical = lesson.get("canonical") if isinstance(lesson.get("canonical"), Mapping) else {}
+    assignment = canonical.get("assignment") if isinstance(canonical.get("assignment"), Mapping) else {}
+    metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+    return str(lesson.get("specialMark") or metadata.get("special_mark") or "")
+
+
+def _is_lunch_lesson(lesson: Mapping[str, Any]) -> bool:
+    mark = _lesson_special_mark(lesson)
+    if mark == "lunch" or str(lesson.get("activityType") or "").casefold() == "lunch":
+        return True
+    canonical = lesson.get("canonical") if isinstance(lesson.get("canonical"), Mapping) else {}
+    assignment = canonical.get("assignment") if isinstance(canonical.get("assignment"), Mapping) else {}
+    role = str(lesson.get("canonicalRole") or assignment.get("assignment_kind") or assignment.get("role") or "").casefold()
+    label = str(lesson.get("activity") or lesson.get("subject") or "").strip().casefold()
+    # Historical canonical exports sometimes kept the lunch label and role
+    # without copying special_mark into constructor fields.
+    return role in {"lunch", "special_lunch"} or role == "residual" and label in {"обед", "lunch"}
+
+
 def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     """Read both the current ID rule and persisted pre-rule constructor lessons."""
     # Clubs currently target teachers and time only; historical class, roster,
@@ -152,7 +173,14 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     if lesson.get("activityType") == "elective" and "confirmedParticipantIds" in lesson:
         return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "",
                 "student_ids": _ids(lesson.get("confirmedParticipantIds"))}
-    if lesson.get("specialMark") in {"lunch", "no_lesson"} or lesson.get("kind") == "event" and lesson.get("informational") is True:
+    mark = _lesson_special_mark(lesson)
+    if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True:
+        return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
+    if (_is_lunch_lesson(lesson) and lesson.get("needsClarification") is True
+            and str(lesson.get("clarificationReason") or "").strip() == "Уточните охват обеда: класс или отдельная группа"):
+        # Historical lunch rows with an advisory-only class column never
+        # asserted which students were actually assigned. Keep them as
+        # informational markers until an explicit audience rule is authored.
         return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     raw = lesson.get("audience")
     if isinstance(raw, Mapping):
@@ -235,6 +263,20 @@ def _lesson_interval(lesson: Mapping[str, Any], slots: list[Any]) -> tuple[int, 
     return (start, end) if start is not None and end is not None and start < end else None
 
 
+def _grade_number(value: Any) -> str | None:
+    """Extract a grade from an explicit grade label or human class label.
+
+    Callers pass canonical group metadata/display names, never internal group
+    identifiers. Keeping this small parser centralized prevents technical IDs
+    from accidentally expanding a lesson into a parallel.
+    """
+    label = str(value or "").strip()
+    if ":" in label:
+        return None
+    match = re.match(r"^\s*(\d{1,2})(?!\d)", label, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
 def experiment_audience_preview(database: Database, payload: Mapping[str, Any], *, snapshot: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Resolve all audiences from one experimental snapshot, without writing data."""
     import logging
@@ -258,19 +300,26 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
             students = {str(row["id"]): dict(row) for row in database.execute(connection,
                 "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
             groups = {str(row["id"]): dict(row) for row in database.execute(connection,
-                "SELECT id,COALESCE(display_name,name) AS name,group_type,base_class_name,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()}
-            memberships = database.execute(connection, """SELECT m.identity_id,m.group_id FROM memberships m
+                "SELECT id,name AS raw_name,display_name,COALESCE(display_name,name) AS name,group_type,base_class_name,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()}
+            memberships = database.execute(connection, """SELECT m.identity_id,m.group_id,m.valid_from,m.valid_until FROM memberships m
                 JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
                 WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student'
                   AND i.status='active' AND g.canonical IS TRUE
                   AND (m.valid_from IS NULL OR m.valid_from <= ?)
                   AND (m.valid_until IS NULL OR m.valid_until >= ?)""", (reference_date.isoformat(), reference_date.isoformat())).fetchall()
-            membership_overrides = database.execute(connection, """SELECT identity_id,group_id,action FROM membership_overrides
+            membership_overrides = database.execute(connection, """SELECT identity_id,group_id,action,valid_from,valid_until FROM membership_overrides
                 WHERE active IS TRUE AND member_role='student' AND action IN ('include','exclude')
                   AND (valid_from IS NULL OR valid_from <= ?)
                   AND (valid_until IS NULL OR valid_until >= ?)""", (reference_date.isoformat(), reference_date.isoformat())).fetchall()
         query_ms = (perf_counter() - query_started) * 1000
     calculation_started = perf_counter()
+    directory_state = {
+        "students": sorted(students.values(), key=lambda row: str(row.get("id"))),
+        "groups": sorted(groups.values(), key=lambda row: str(row.get("id"))),
+        "memberships": sorted((dict(row) for row in memberships), key=lambda row: (str(row.get("identity_id")), str(row.get("group_id")), str(row.get("valid_from")), str(row.get("valid_until")))),
+        "membership_overrides": sorted((dict(row) for row in membership_overrides), key=lambda row: (str(row.get("identity_id")), str(row.get("group_id")), str(row.get("action")), str(row.get("valid_from")), str(row.get("valid_until")))),
+    }
+    directory_fingerprint = hashlib.sha256(json.dumps(directory_state, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")).hexdigest()
     excluded_pairs = {(str(row["identity_id"]), str(row["group_id"])) for row in membership_overrides if row["action"] == "exclude"}
     included_pairs = {(str(row["identity_id"]), str(row["group_id"])) for row in membership_overrides if row["action"] == "include"}
     by_group: dict[str, set[str]] = {}
@@ -308,12 +357,13 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
                 ids = instructional
         ids_from_grade = kind in {"classes", "available_slot", "legacy_remaining"} and not ids and bool(rule["grade"])
         if ids_from_grade:
-            grade = re.match(r"^\s*(\d{1,2})\b", rule["grade"])
+            grade = _grade_number(rule["grade"])
             if grade:
                 ids = [group_id for group_id, group in groups.items()
                        if group["group_type"] == "class"
-                       and re.match(r"^\s*" + grade.group(1) + r"(?!\d)", str(group["name"]))
-                       and not re.fullmatch(r"\s*" + grade.group(1) + r"\s*класс\s*", str(group["name"]), re.IGNORECASE)]
+                       and _grade_number(group.get("base_class_name") or group.get("display_name") or group.get("raw_name") or group.get("name")) == grade
+                       and not re.fullmatch(r"\s*" + re.escape(grade) + r"\s*класс\s*",
+                                            str(group.get("display_name") or group.get("raw_name") or group.get("name") or ""), re.IGNORECASE)]
         if not ids:
             return set(), "Не выбран исходный класс или параллель" if kind in {"available_slot", "legacy_remaining"} else "Не выбраны группы или классы"
         wrong = [item for item in ids if item not in groups or (kind != "groups" and groups[item]["group_type"] != "class")
@@ -355,7 +405,8 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         rule = _lesson_audience(lesson)
         interval = _lesson_interval(lesson, slots)
         base, reason = resolve_explicit(rule)
-        if not rule["kind"] and (lesson.get("kind") == "event" or lesson.get("specialMark") in {"lunch", "no_lesson"}):
+        if not rule["kind"] and (lesson.get("kind") == "event" or _lesson_special_mark(lesson) == "no_lesson"
+                                  or _is_lunch_lesson(lesson) and lesson.get("needsClarification") is True):
             reason = None  # An informational event has no assigned students.
         if rule["kind"] == "available_slot" and not interval:
             reason = "Не задан корректный временной интервал"
@@ -400,18 +451,17 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         return None
 
     def scope_grade(rule: Mapping[str, Any]) -> str | None:
-        grade = re.match(r"^\s*(\d{1,2})\b", str(rule.get("grade") or ""))
+        grade = _grade_number(rule.get("grade"))
         if grade:
-            return grade.group(1)
+            return grade
         class_ids = rule.get("class_ids") or []
         display_grades = [re.match(r"^grade(\d+):base:", item, re.IGNORECASE) for item in class_ids]
         if class_ids and all(display_grades):
             values = {match.group(1) for match in display_grades if match}
             return next(iter(values)) if len(values) == 1 else None
-        class_names = [str(groups[item].get("name") or "") for item in class_ids
+        class_names = [str(groups[item].get("base_class_name") or groups[item].get("display_name") or groups[item].get("raw_name") or groups[item].get("name") or "") for item in class_ids
                        if item in groups and groups[item].get("group_type") == "class"]
-        values = {match.group(1) for name in class_names
-                  if (match := re.match(r"^\s*(\d{1,2})(?!\d)", name))}
+        values = {value for name in class_names if (value := _grade_number(name))}
         return next(iter(values)) if class_names and len(values) == 1 else None
     results: dict[str, dict[str, Any]] = {}
     for state_key, state in states.items():
@@ -424,18 +474,26 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
             status = "error" if state["lesson"].get("importError") or invalid_id else "incomplete"
         excluded: set[str] = set()
         blockers: list[dict[str, Any]] = []
-        if rule["kind"] == "available_slot" and not reason:
+        is_lunch = _is_lunch_lesson(state["lesson"])
+        if (rule["kind"] == "available_slot" or is_lunch) and not reason:
             for other_key, other in states.items():
                 if other_key == state_key or other["lesson"].get("day") != state["lesson"].get("day"):
                     continue
-                if other["lesson"].get("specialMark") in {"lunch", "no_lesson"}:
+                if _lesson_special_mark(other["lesson"]) in {"lunch", "no_lesson"}:
                     continue
                 other_interval = other["interval"]
                 if not other_interval or not interval or not (interval[0] < other_interval[1] and other_interval[0] < interval[1]):
                     continue
                 overlap = base & other["occupancy_base"]
                 if other["rule"]["kind"] == "available_slot":
-                    if overlap:
+                    if is_lunch:
+                        # A concurrent remainder assignment is itself an
+                        # educational fallback, so those candidate students
+                        # cannot also be claimed by lunch. Keep the lesson
+                        # resolved with an empty overlap instead of treating
+                        # lunch as a conflicting academic activity.
+                        excluded.update(overlap)
+                    elif overlap:
                         blockers.append({"lesson_id": other["id"],
                                          "subject": str(other["lesson"].get("subject") or other["lesson"].get("activity") or ""),
                                          "reason": "Пересекаются исходные аудитории двух занятий «Все остальные»"})
@@ -487,7 +545,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
             (perf_counter() - total_started) * 1000, len(lessons), len(students),
             len(groups), len(memberships), len(membership_overrides),
         )
-    return {"lessons": results}
+    return {"lessons": results, "directory_fingerprint": directory_fingerprint}
 
 
 def _canonical_payload(database: Database, version_id: str, *, source_blocks: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -576,7 +634,7 @@ def _canonical_payload(database: Database, version_id: str, *, source_blocks: Ma
         audience_kind = str(assignment.get("audience_kind") or (metadata.get("audience") or {}).get("type") or "")
         audience_rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), Mapping) else {}
         activity = str(assignment.get("activity") or "")
-        raw_room = str(metadata.get("room") or "").strip()
+        raw_room = display_room(metadata.get("room"))
         room = "" if raw_room in {"—", "–", "-"} else raw_room
         no_lesson = role == "explicit_no_lesson" or activity.strip().casefold() in {"нет урока", "нет занятия"}
         if no_lesson:
@@ -870,7 +928,7 @@ def delete_experiment(database: Database, experiment_id: str) -> None:
         raise ExperimentNotFound(experiment_id)
 
 
-def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, _trusted_resolution_history: bool = False) -> dict[str, Any]:
+def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
     clean = _clean_payload(payload)
     clean["lessons"] = validate_activity_lessons(clean["lessons"], list_activities(database, include_archived=True))
     normalized_name = str(name or "").strip() if name is not None else None
@@ -912,7 +970,8 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         else:
             lesson.pop("audience_snapshot", None)
 
-    resolved = experiment_audience_preview(audience_database or database, clean)["lessons"]
+    resolved = (_audience_resolution.get("lessons", {}) if isinstance(_audience_resolution, Mapping)
+                else experiment_audience_preview(audience_database or database, clean)["lessons"])
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
@@ -934,6 +993,9 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         preview = resolved.get(str(lesson.get("id") or index), {})
         if explicit_reset and (preview.get("status") != "ok" or preview.get("proposed_student_ids") is None):
             raise ValueError(f"Audience for lesson {lesson.get('id') or index} cannot be recalculated until its preview is unambiguous")
+        if _preserve_unconfirmed_rosters and not explicit_reset:
+            lesson.pop("audience_snapshot", None)
+            continue
         if preview.get("status") != "ok" or not _lesson_audience(lesson)["kind"]:
             lesson.pop("audience_snapshot", None)
             continue
