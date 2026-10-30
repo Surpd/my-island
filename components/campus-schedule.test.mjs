@@ -7,6 +7,7 @@ test('published canonical API activities render as dated lessons with teacher an
   const [lesson] = campusLessons(raw);
   assert.equal(lesson.subject, 'Математика'); assert.equal(lesson.lesson_date, '2026-09-21');
   assert.equal(lesson.teacher, 'Тестовый педагог'); assert.equal(lesson.room, '17'); assert.equal(lesson.audience, 'Математика A · 7');
+  assert.equal(campusLessons([{ ...raw[0], room: 'Кабинет 17' }])[0].room, '17');
   assert.equal(campusStudentDays(raw)[0].items[0].canonical_title, 'Математика');
 });
 test('canonical no-lesson and unresolved states are not silently converted to ordinary lessons', () => {

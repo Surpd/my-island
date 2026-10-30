@@ -1,4 +1,6 @@
 /** View adapters for the published canonical API. No resolution or membership logic lives here. */
+import { normalizeRoomDisplay } from './schedule-rooms.ts';
+
 type RawLesson = Record<string, unknown>;
 export type CampusLesson = { lesson_date: string; start_time: string; end_time?: string; subject: string; teacher?: string; room?: string; audience?: string; lesson_type?: string; activity_format?: string; physical_presence?: boolean; responsible_teacher?: string };
 type CampusItem = { date: string; slot: { start: string; end?: string }; state: 'lesson' | 'no_lesson' | 'conflict' | 'special_event'; canonical_title?: string; teacher?: string; room?: string; activity_format?: string; responsible_teacher?: string; no_lesson?: { reason?: 'break' }; conflict?: { state: string; label: string; alternatives: Array<{ title: string }> }; special_event?: { kind: string; title: string } };
@@ -20,7 +22,7 @@ export function campusLessons(value: unknown): CampusLesson[] {
       responsible_teacher: isPractice ? list(row.responsible_teachers) || list(row.teacher_names) : '',
       physical_presence: typeof row.physical_presence === 'boolean' ? row.physical_presence : undefined,
       activity_format: activityFormat || undefined,
-      room: string(row.room),
+      room: normalizeRoomDisplay(row.room),
       audience: string(row.audience) || list(row.audiences) || list(row.group_context),
       lesson_type: isConflict(row) ? 'conflict' : string(row.lesson_type || row.activity_kind),
     };

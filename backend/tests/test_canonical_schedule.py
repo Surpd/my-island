@@ -114,6 +114,19 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(other_first["state"], "NO_LESSON")
         self.assertEqual(other_first["activity"], "NO_LESSON")
 
+    def test_room_projection_is_normalized_without_rewriting_canonical_storage(self):
+        artifact = self.artifact()
+        artifact["blocks"][self.block_key]["assignments"][0]["room"] = "Кабинет 16"
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+
+        projection = project_student(self.database, self.student["id"], "2026-09-07")
+        first = next(item for item in projection["items"] if item["start_time"] == "09:00")
+        restored = read_canonical_template(self.database, self.version_id)
+
+        self.assertEqual(first["room"], "16")
+        self.assertEqual(restored["blocks"][self.block_key]["assignments"][0]["metadata"]["room"], "Кабинет 16")
+
     def test_admin_observability_reads_canonical_and_effective_state(self):
         import_canonical_artifact(self.database, self.artifact())
         materialize_effective_week(self.database, self.version_id, "2026-09-07")

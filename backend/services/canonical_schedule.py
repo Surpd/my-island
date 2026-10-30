@@ -15,6 +15,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from backend.database import Database
+from backend.services.schedule_rooms import display_room
 
 
 CANONICAL_STATUSES = {"draft", "approved_baseline", "approved_with_exceptions", "authoritative", "superseded"}
@@ -1093,7 +1094,7 @@ def schedule_admin_observability(database: Database, week_start: str | None = No
             "groups": [group_names.get(group_id, group_id) for group_id in group_ids],
             "teacher_ids": teacher_ids,
             "teachers": [teacher_names.get(teacher_id, teacher_id) for teacher_id in teacher_ids],
-            "room": metadata.get("room") or "",
+            "room": display_room(metadata.get("room")),
             "note": metadata.get("note") or "",
             "source_cells": assignment.get("source_cells") or [],
             "student_count": len(affected) if group_ids else None,
@@ -1585,7 +1586,7 @@ def _project_student_block(
             result = {
                 "state": "ACTIVITY", "activity": selected["activity"],
                 "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [],
-                "room": metadata.get("room", ""),
+                "room": display_room(metadata.get("room")),
                 "provenance": {**provenance, "source_cells": selected["source_cells"]},
             }
             if metadata.get("audience_coverage") == "explicit" and metadata.get("joint_activity_id"):
@@ -1606,7 +1607,7 @@ def _project_student_block(
                 selected = sorted(non_no_lesson, key=lambda claim: (claim["activity"], claim["assignment_id"]))[0]
                 assignment = selected["assignment"]
                 metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
-                result = {"state": "ACTIVITY", "activity": selected["activity"], "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [], "room": metadata.get("room", ""), "provenance": {**provenance, "source_cells": selected["source_cells"]}}
+                result = {"state": "ACTIVITY", "activity": selected["activity"], "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [], "room": display_room(metadata.get("room")), "provenance": {**provenance, "source_cells": selected["source_cells"]}}
             else:
                 note = next((str(trace.get("note") or "") for trace in assignment_traces if trace["matched"] and trace["activity"] == _NO_LESSON and trace.get("note")), "")
                 result = {"state": "NO_LESSON", "activity": _NO_LESSON, "reason": "no applicable canonical activity", "note": note, "provenance": provenance}
@@ -1771,7 +1772,7 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
                     "activity": assignment.get("activity"), "audience_group_ids": group_ids,
                     "audiences": [groups.get(group_id, group_id) for group_id in group_ids],
                     "grade_scope": block.get("grade_scope"), "teacher_ids": teacher_ids,
-                    "teacher_names": metadata.get("teachers") or [], "room": metadata.get("room", ""),
+                    "teacher_names": metadata.get("teachers") or [], "room": display_room(metadata.get("room")),
                     "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
             if responsible_ids:
                 item['activity_format']='independent_practice'

@@ -21,6 +21,7 @@ from backend.services.schedule_experiments import (
     get_experiment, experiment_audience_preview, _lesson_audience, _lesson_interval, _audience_fingerprint, _canonical_time,
 )
 from backend.services.constructor_resolution import validated_exceptions
+from backend.services.schedule_rooms import room_key
 
 
 PUBLICATION_SCHEMA = (
@@ -343,7 +344,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
-                              "subject": subject, "room": str(lesson.get("room") or "").strip()})
+                              "subject": subject, "room": room_key(lesson.get("room"))})
         rule = _lesson_audience(lesson)
         grade = str(rule.get("grade") or lesson.get("grade_scope") or "")
         class_ids = rule.get("class_ids") or []
