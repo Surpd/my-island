@@ -13,6 +13,8 @@ import {
 import {
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
   Copy,
   Expand,
@@ -497,7 +499,33 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [targetClassId, setTargetClassId] = useState('');
   const [panelMode, setPanelMode] = useState<'lesson' | 'settings'>('lesson');
   const [panelOpen, setPanelOpen] = useState(false);
-  const [inspectorExpanded, setInspectorExpanded] = useState(false);
+  const drawerPointer = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const suppressDrawerClick = useRef(false);
+  const handleDrawerPointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!event.isPrimary) return;
+    drawerPointer.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
+    suppressDrawerClick.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const handleDrawerPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const gesture = drawerPointer.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (Math.abs(event.clientX - gesture.startX) > 8) gesture.moved = true;
+  };
+  const handleDrawerPointerUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const gesture = drawerPointer.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    drawerPointer.current = null;
+    const deltaX = event.clientX - gesture.startX;
+    const deltaY = event.clientY - gesture.startY;
+    if (gesture.moved) suppressDrawerClick.current = true;
+    if (Math.abs(deltaX) >= 40 && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) setPanelOpen(deltaX < 0);
+  };
+  const handleDrawerPointerCancel = () => { drawerPointer.current = null; suppressDrawerClick.current = true; };
+  const toggleDrawerFromClick = () => {
+    if (suppressDrawerClick.current) { suppressDrawerClick.current = false; return; }
+    setPanelOpen((open) => !open);
+  };
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [colorMode, setColorMode] = useState<'teacher' | 'subject' | 'none'>('teacher');
   const [colorPanelOpen, setColorPanelOpen] = useState(false);
@@ -1463,8 +1491,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (!extend) { setQuick(''); setQuickChoice({}); }
     setCreationMode('quick');
     setPanelMode('lesson');
-    setPanelOpen(true);
-    setInspectorExpanded(false);
     if (viewMode === 'day' && gridColumns[col]?.classIds.length === 1)
       setTargetClassId(gridColumns[col].classIds[0]);
     else if (gridColumns[col]?.classIds.length > 1)
@@ -1478,7 +1504,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (!focus || !payload) return;
     setPanelMode('lesson');
     setPanelOpen(true);
-    setInspectorExpanded(true);
     const classId = classIdAtColumn(focus.col);
     if (!classId) return;
     const found = payload.lessons.find(
@@ -1628,7 +1653,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     setSelectedId(id);
     setPanelMode('lesson');
     setPanelOpen(true);
-    setInspectorExpanded(true);
     const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((classId) => entry.classIds.includes(classId)));
     if (col >= 0) { setAnchor({ row: lesson.period, col }); setFocus({ row: lesson.period, col }); }
   };
@@ -1769,7 +1793,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (created[0]) {
       setSelectedId(created[0].id);
       setPanelMode('lesson');
-      setInspectorExpanded(false);
       setPanelOpen(true);
     }
     clip.current = { ...value, cutIds: [] };
@@ -1825,7 +1848,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (selectedId && selectedId !== lessonId) return;
     selectCell(row, col);
     setSelectedId(newId);
-    setInspectorExpanded(false);
     setPanelOpen(true);
     setStatus(needsAudienceConfirmation
       ? `${duplicate ? 'Скопировано' : 'Перенесено'} для ${targetLabel} после подтверждения охвата.`
@@ -2029,7 +2051,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           if (context) setContext(null);
           root.current?.querySelectorAll<HTMLDetailsElement>('details[data-ui-menu][open]').forEach((menu) => { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); });
           if (conflictsOpen) setConflictsOpen(false);
-          if (inspectorExpanded) { setInspectorExpanded(false); return; }
         }
       }}
     >
@@ -2228,8 +2249,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <button onClick={() => { setFitWidth(false); setZoom((value) => Math.min(150, value + 10)); }} aria-label="Увеличить масштаб">+</button>
             <button onClick={() => setFullScreen((value) => !value)} aria-label={fullScreen ? 'Выйти из полного экрана' : 'Полный экран'}><Expand size={16} /></button>
                   <button onClick={() => editActivity()}>+ Каталог кружков / курсов</button>
-                  <button className="constructor-mobile-tool" onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setInspectorExpanded(true); setFocus(null); setAnchor(null); setSelectedId(''); }}>Шаблон</button>
-                  {!panelOpen ? <button className="constructor-mobile-tool" aria-label="Открыть панель" onClick={() => setPanelOpen(true)}>Детали</button> : null}
+                  <button className="constructor-mobile-tool" onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setFocus(null); setAnchor(null); setSelectedId(''); }}>Шаблон</button>
                 </div>
               </details>
             </div>
@@ -2254,11 +2274,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               <button onClick={removeSelected} disabled={!focus} title="Удалить · Delete" aria-label="Удалить"><Trash2 size={15} /><span>Удалить</span></button>
             <button
               className={`constructor-secondary-edit ${panelMode === 'settings' ? 'active' : ''}`}
-              onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setInspectorExpanded(true); setFocus(null); setAnchor(null); setSelectedId(''); }}
+              onClick={() => { setPanelMode((mode) => mode === 'settings' ? 'lesson' : 'settings'); setPanelOpen(true); setFocus(null); setAnchor(null); setSelectedId(''); }}
             >
               Шаблон
             </button>
-            {!panelOpen ? <button className="constructor-secondary-edit" aria-label="Открыть панель" onClick={() => setPanelOpen(true)}>Детали</button> : null}
               <details className="constructor-menu constructor-draft-menu" data-ui-menu>
                 <summary>Черновик <ChevronDown size={13} /></summary>
                 <div className="constructor-menu-body" role="group" aria-label="Черновик и публикация недели">
@@ -2364,7 +2383,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           ),
                         });
                         setSelectedId(item.id);
-                        setInspectorExpanded(true);
                         setQuery('');
                       }}
                     >
@@ -2410,7 +2428,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               </details>)}
             </details>
           ) : null}
-          <div className={`constructor-layout ${panelOpen ? '' : 'panel-closed'}`}>
+          <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
             <div ref={gridWrap} className={`constructor-grid-wrap ${density}`}>
               <div
                 className="constructor-grid"
@@ -2573,17 +2591,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     selectCell(row, col);
-                            setSelectedId(item.id);
+                                    setSelectedId(item.id);
                                     setPanelMode('lesson');
-                                    setPanelOpen(true);
-                            setInspectorExpanded(false);
                                   }}
                                   onDoubleClick={(event) => {
                                     event.stopPropagation();
                                     setSelectedId(item.id);
                                     setPanelMode('lesson');
                                     setPanelOpen(true);
-                            setInspectorExpanded(true);
                                   }}
                                 >
                                   <span>
@@ -2644,7 +2659,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 ))}
               </div>
             </div>
-            {panelOpen ? <ConstructorInspectorShell compact={!inspectorExpanded} onClose={() => inspectorExpanded ? setInspectorExpanded(false) : setPanelOpen(false)}>
+            <ConstructorInspectorShell open={panelOpen} onClose={() => setPanelOpen(false)}>
               <div className="constructor-inspector-head">
                 <div>
                   <small>{selected ? selected.kind === 'event' ? 'СОБЫТИЕ' : 'ЗАНЯТИЕ' : 'ВЫБРАННАЯ ЯЧЕЙКА'}</small>
@@ -2656,18 +2671,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         : 'Выберите ячейку'}
                   </h2>
                 </div>
-                <div className="constructor-inspector-head-actions">{inspectorExpanded ? <button type="button" onClick={() => setInspectorExpanded(false)}>Свернуть</button> : null}<button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
-              </div>
-              <div className="constructor-inspector-preview">
-                {selected ? <>
-                  <p>{DAYS[selected.day]} · {payload?.slots[selected.period]?.start}{selected.end && selected.end !== payload?.slots[selected.period]?.end ? `–${selected.end}` : ''}</p>
-                  <p>{[visualClasses(selected, groups).map((id) => groups.find((group) => group.id === id)?.name || id).join(', '), linkedInstructionalGroups(selected, groups).map((group) => audienceLabel(group)).join(', '), teachers.find((teacher) => teacher.id === selected.teacherId)?.name || (selected.teacherId ? 'Преподаватель не найден' : 'Без преподавателя'), selected.room ? normalizeRoomDisplay(selected.room) : 'Без кабинета'].filter(Boolean).join(' · ')}</p>
-                  {issues.filter((issue) => issue.lessonId === selected.id || issue.related === selected.id).slice(0, 2).map((issue, index) => <p className={`constructor-preview-issue ${issue.severity}`} key={`${issue.type}-${index}`}>{issue.message}</p>)}
-                  <button type="button" onClick={() => setInspectorExpanded(true)}>Изменить</button>
-                </> : <>
-                  <p>{selectedCell ? `${gridColumns[focus!.col]?.label} · ${DAYS[selectedCell.day]}, ${payload?.slots[selectedCell.period]?.start}` : panelMode === 'settings' ? 'Настройки шаблона' : 'Выберите ячейку расписания'}</p>
-                  {panelMode === 'settings' ? <button type="button" onClick={() => setInspectorExpanded(true)}>Открыть настройки</button> : focus ? <button type="button" onClick={() => { setInspectorExpanded(true); setTimeout(() => quickInput.current?.focus(), 0); }}>Добавить занятие</button> : null}
-                </>}
+                <div className="constructor-inspector-head-actions"><button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
               </div>
               {selected ? (
                 <button
@@ -3044,8 +3048,21 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               ) : (
                 <div className="constructor-hint">Выберите ячейку расписания или откройте настройку шаблона.</div>
               )}
-              <div className="constructor-editor-actions"><button onClick={() => setInspectorExpanded(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> Сохранить черновик</button></div>
-            </ConstructorInspectorShell> : null}
+              <div className="constructor-editor-actions"><button onClick={() => setPanelOpen(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> Сохранить черновик</button></div>
+            </ConstructorInspectorShell>
+            <button
+              type="button"
+              className={`constructor-drawer-tab${panelOpen ? ' is-open' : ''}`}
+              aria-label={panelOpen ? 'Закрыть редактор расписания' : 'Открыть редактор расписания'}
+              aria-expanded={panelOpen}
+              aria-controls="constructor-inspector-drawer"
+              title={panelOpen ? 'Закрыть редактор' : 'Открыть редактор'}
+              onPointerDown={handleDrawerPointerDown}
+              onPointerMove={handleDrawerPointerMove}
+              onPointerUp={handleDrawerPointerUp}
+              onPointerCancel={handleDrawerPointerCancel}
+              onClick={toggleDrawerFromClick}
+            >{panelOpen ? <ChevronRight size={18} aria-hidden="true" /> : <ChevronLeft size={18} aria-hidden="true" />}</button>
           </div>
           <footer className="constructor-footer">
             <span>

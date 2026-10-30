@@ -3927,16 +3927,6 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-rename-popover button { min-height: 36px; padding: 6px; font-size: 11px; white-space: nowrap; }
 .constructor-rename-popover p { margin: 0; color: #a52c2c; }
 .constructor-inspector-head-actions { display: flex; align-items: center; gap: 4px; }
-.constructor-inspector-preview { display: none; }
-.constructor-inspector.is-compact { position: static; max-height: none; overflow: visible; padding: 10px 12px; }
-.constructor-inspector.is-compact > :not(.constructor-inspector-head):not(.constructor-inspector-preview) { display: none !important; }
-.constructor-inspector.is-compact .constructor-inspector-head { align-items: center; margin-bottom: 8px; }
-.constructor-inspector.is-compact .constructor-inspector-head h2 { font-size: 18px; }
-.constructor-inspector.is-compact .constructor-inspector-preview { display: grid; gap: 5px; }
-.constructor-inspector-preview p { margin: 0; color: #46636b; font-size: 12px; line-height: 1.4; }
-.constructor-inspector-preview .constructor-preview-issue { color: #825a05; }
-.constructor-inspector-preview .constructor-preview-issue.error { color: #9a2929; }
-.constructor-inspector-preview button { justify-self: start; min-height: 38px; margin-top: 3px; }
 @media (max-width: 640px) {
   .constructor-current-draft { max-width: calc(100vw - 28px); }
   .constructor-current-draft > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

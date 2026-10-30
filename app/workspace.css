@@ -734,14 +734,96 @@
   .campus-shell .constructor-ux .constructor-menu-body .constructor-mobile-tool { display:inline-flex; }
 }
 
-/* A compact inspector stays in document flow on narrow screens; only the explicitly expanded editor is modal. */
-@media(max-width:900px){
-  .campus-shell .constructor-ux .constructor-inspector.is-compact { position:static; inset:auto; z-index:3; width:auto; height:auto; max-height:none; overflow:visible; border-radius:10px; box-shadow:none; overscroll-behavior:auto; }
-}
 @media(max-width:600px){
   .campus-shell .constructor-ux.has-draft .constructor-top { flex-wrap:wrap; }
   .campus-shell .constructor-ux.has-draft .constructor-top > div:first-child { flex:1 0 100%; }
   .campus-shell .constructor-ux .constructor-actions { width:100%; flex-direction:row; flex-wrap:wrap; justify-content:flex-end; align-items:center; }
+}
+
+/* The schedule grid keeps its full width; the single Inspector slides over it. */
+.campus-shell .constructor-ux .constructor-layout.panel-closed,
+.campus-shell .constructor-ux .constructor-layout.panel-open,
+.admin-workspace .constructor-ux .constructor-layout.panel-closed,
+.admin-workspace .constructor-ux .constructor-layout.panel-open {
+  position:relative;
+  display:block;
+  grid-template-columns:minmax(0,1fr);
+  gap:0;
+}
+.campus-shell .constructor-ux .constructor-grid-wrap,
+.admin-workspace .constructor-ux .constructor-grid-wrap { width:100%; min-width:0; }
+.campus-shell .constructor-ux .constructor-inspector,
+.admin-workspace .constructor-ux .constructor-inspector {
+  --constructor-drawer-width:min(420px,calc(100vw - 56px));
+  position:fixed;
+  inset:12px 0 12px auto;
+  z-index:1001;
+  box-sizing:border-box;
+  width:var(--constructor-drawer-width);
+  max-height:none;
+  overflow:auto;
+  border:1px solid var(--cp-line,var(--ws-line,#cbd8d3));
+  border-radius:12px 0 0 12px;
+  background:#fff;
+  box-shadow:0 10px 42px #172a3230;
+  overscroll-behavior:contain;
+  transform:translate3d(100%,0,0);
+  transition:transform .24s cubic-bezier(.2,.7,.2,1);
+  pointer-events:none;
+  scrollbar-width:thin;
+}
+.campus-shell .constructor-ux .constructor-inspector.is-open,
+.admin-workspace .constructor-ux .constructor-inspector.is-open { transform:translate3d(0,0,0); pointer-events:auto; }
+.campus-shell .constructor-ux .constructor-drawer-tab,
+.admin-workspace .constructor-ux .constructor-drawer-tab {
+  position:fixed;
+  z-index:1002;
+  top:50%;
+  right:0;
+  display:grid;
+  width:36px;
+  height:68px;
+  min-height:0;
+  padding:0;
+  place-items:center;
+  border:1px solid var(--cp-line,var(--ws-line,#b8cbc5));
+  border-right:0;
+  border-radius:10px 0 0 10px;
+  background:#fff;
+  box-shadow:0 3px 16px #172a3224;
+  color:var(--cp-ink,var(--ws-ink,#27434a));
+  cursor:grab;
+  touch-action:pan-y;
+  user-select:none;
+  transform:translateY(-50%);
+  transition:right .24s cubic-bezier(.2,.7,.2,1),background-color .15s ease;
+}
+.campus-shell .constructor-ux .constructor-drawer-tab:hover,
+.admin-workspace .constructor-ux .constructor-drawer-tab:hover { background:#f2f7f4; }
+.campus-shell .constructor-ux .constructor-drawer-tab:active,
+.admin-workspace .constructor-ux .constructor-drawer-tab:active { cursor:grabbing; }
+.campus-shell .constructor-ux .constructor-layout.panel-open .constructor-drawer-tab,
+.admin-workspace .constructor-ux .constructor-layout.panel-open .constructor-drawer-tab { right:min(420px,calc(100vw - 56px)); }
+.campus-shell .constructor-ux .constructor-drawer-tab:focus-visible,
+.admin-workspace .constructor-ux .constructor-drawer-tab:focus-visible { outline:3px solid #2e8290; outline-offset:2px; }
+@media(max-width:900px){
+  .campus-shell .constructor-ux .constructor-inspector,
+  .admin-workspace .constructor-ux .constructor-inspector {
+    --constructor-drawer-width:min(430px,calc(100vw - 44px));
+    inset:var(--constructor-editor-top,6px) 0 auto auto;
+    width:var(--constructor-drawer-width);
+    height:var(--constructor-editor-height,calc(100dvh - 12px));
+    max-height:none;
+    border-radius:12px 0 0 12px;
+  }
+  .campus-shell .constructor-ux .constructor-layout.panel-open .constructor-drawer-tab,
+  .admin-workspace .constructor-ux .constructor-layout.panel-open .constructor-drawer-tab { right:min(430px,calc(100vw - 44px)); }
+}
+@media(prefers-reduced-motion:reduce){
+  .campus-shell .constructor-ux .constructor-inspector,
+  .admin-workspace .constructor-ux .constructor-inspector,
+  .campus-shell .constructor-ux .constructor-drawer-tab,
+  .admin-workspace .constructor-ux .constructor-drawer-tab { transition-duration:.01ms; }
 }
 
 /* Consolidated schedule: publication uses existing Campus Pop surfaces. */

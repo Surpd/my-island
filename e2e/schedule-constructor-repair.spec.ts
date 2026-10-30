@@ -86,7 +86,7 @@ async function filterClass(page: Page, classId: string) {
   await selector.selectOption(classId);
 }
 
-test('constructor repair: compact inspector, room labels, rename popover and whole-class copy', async ({ page }) => {
+test('constructor repair: sliding inspector, room labels, rename popover and whole-class copy', async ({ page }) => {
   test.setTimeout(45_000);
   const suffix = Date.now().toString(36).slice(-5);
   const sourceName = `9-А E2E copy ${suffix}`;
@@ -96,7 +96,12 @@ test('constructor repair: compact inspector, room labels, rename popover and who
   await openEmptyWeek(page);
   await filterClass(page, sourceId);
   await page.locator('[data-cell="0:0"]').click();
-  await page.locator('.constructor-inspector-preview').getByRole('button', { name: 'Добавить занятие' }).click();
+  const inspector = page.locator('.constructor-inspector');
+  const drawerTab = page.locator('.constructor-drawer-tab');
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  await expect(drawerTab).toHaveAttribute('aria-expanded', 'false');
+  await drawerTab.click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'false');
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Русский язык');
   await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('каб. 8');
@@ -104,17 +109,63 @@ test('constructor repair: compact inspector, room labels, rename popover and who
 
   const sourceLesson = page.locator('.constructor-card').filter({ hasText: 'Русский язык' });
   await expect(sourceLesson).toContainText('каб. 8');
+  await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
   await sourceLesson.click();
-  const inspector = page.locator('.constructor-inspector');
-  await expect(inspector).toHaveClass(/is-compact/);
-  await expect(inspector.locator('.constructor-inspector-preview')).toContainText(sourceName);
-  await expect(inspector.locator('.constructor-inspector-preview')).toContainText('Без преподавателя');
-  await expect(inspector.getByRole('combobox', { name: 'Предмет', exact: true })).toBeHidden();
-  await screenshot(page, 'compact-inspector-desktop');
-  await inspector.getByRole('button', { name: 'Изменить' }).click();
-  await expect(inspector.getByRole('combobox', { name: 'Предмет', exact: true })).toBeVisible();
-  await inspector.getByRole('button', { name: 'Свернуть' }).click();
-  await expect(inspector).toHaveClass(/is-compact/);
+  await expect(sourceLesson).toHaveClass(/active/);
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  await screenshot(page, 'drawer-closed-full-grid');
+
+  const tabBox = await drawerTab.boundingBox();
+  expect(tabBox).not.toBeNull();
+  if (tabBox) {
+    await page.mouse.move(tabBox.x + tabBox.width / 2, tabBox.y + tabBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(tabBox.x - 56, tabBox.y + tabBox.height / 2, { steps: 5 });
+    await page.mouse.up();
+  }
+  await expect(inspector).toHaveAttribute('aria-hidden', 'false');
+  await page.waitForTimeout(300);
+  const openTabBox = await drawerTab.boundingBox();
+  expect(openTabBox).not.toBeNull();
+  if (openTabBox) {
+    await page.mouse.move(openTabBox.x + openTabBox.width / 2, openTabBox.y + openTabBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(openTabBox.x + openTabBox.width / 2 + 56, openTabBox.y + openTabBox.height / 2, { steps: 5 });
+    await page.mouse.up();
+  }
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  await sourceLesson.dblclick();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'false');
+  await expect(inspector.getByLabel('Кабинет', { exact: true })).toHaveValue('8');
+  await screenshot(page, 'drawer-open-editor');
+  await page.waitForTimeout(300);
+  const drawerGeometry = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('.constructor-inspector')?.getBoundingClientRect();
+    const tab = document.querySelector<HTMLElement>('.constructor-drawer-tab')?.getBoundingClientRect();
+    return panel && tab ? { panelLeft: panel.left, tabRight: tab.right } : null;
+  });
+  expect(drawerGeometry).not.toBeNull();
+  if (drawerGeometry) {
+    console.log(`drawer geometry: ${JSON.stringify(drawerGeometry)}`);
+    expect(drawerGeometry.tabRight).toBeLessThanOrEqual(drawerGeometry.panelLeft + 1);
+    expect(drawerGeometry.panelLeft - drawerGeometry.tabRight).toBeLessThan(12);
+  }
+
+  const roomField = inspector.getByLabel('Кабинет', { exact: true });
+  await roomField.fill('каб. 9');
+  await expect(inspector).toContainText('Есть изменения');
+  const gridWrap = page.locator('.constructor-grid-wrap');
+  const scrollBeforeClose = await gridWrap.evaluate((element) => ({ top: element.scrollTop, left: element.scrollLeft }));
+  await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  await drawerTab.click();
+  await expect(roomField).toHaveValue('9');
+  expect(await gridWrap.evaluate((element) => ({ top: element.scrollTop, left: element.scrollLeft }))).toEqual(scrollBeforeClose);
+  await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  await page.locator('.constructor-actions').getByRole('button', { name: 'Сохранить черновик' }).click();
+  await expect(page.locator('.constructor-actions')).toContainText('Сохранено');
 
   const header = page.locator('.constructor-top');
   const initialHeaderHeight = await header.evaluate((element) => element.getBoundingClientRect().height);
@@ -134,12 +185,16 @@ test('constructor repair: compact inspector, room labels, rename popover and who
   await page.keyboard.press('Control+v');
   const pasted = page.locator('[data-cell="1:0"] .constructor-card').filter({ hasText: 'Русский язык' });
   await expect(pasted).toBeVisible();
-  await expect(pasted).toContainText('каб. 8');
+  await expect(pasted).toContainText('каб. 9');
 
   await page.setViewportSize({ width: 375, height: 812 });
   const mobileEditorCta = page.getByRole('button', { name: 'Открыть редактор и разбор проблем' });
   if (await mobileEditorCta.isVisible()) await mobileEditorCta.click();
   await expect(page.locator('.constructor-grid')).toBeVisible();
+  if (await inspector.getAttribute('aria-hidden') === 'false') {
+    await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+    await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  }
   const mobileHeaderHeight = await header.evaluate((element) => element.getBoundingClientRect().height);
   await page.getByRole('button', { name: 'Переименовать открытый черновик' }).click();
   await expect(rename).toBeVisible();
@@ -147,21 +202,24 @@ test('constructor repair: compact inspector, room labels, rename popover and who
   await screenshot(page, 'draft-rename-popover-mobile');
   await rename.press('Escape');
   await expect(rename).toBeHidden();
+  if (await inspector.getAttribute('aria-hidden') === 'false') await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
   await pasted.click();
-  await expect(inspector).toHaveClass(/is-compact/);
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
+  await drawerTab.click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'false');
   await expect(page.locator('.constructor-grid')).toBeVisible();
   const mobileGeometry = await page.evaluate(() => {
     const inspectorElement = document.querySelector<HTMLElement>('.constructor-inspector');
     const gridWrap = document.querySelector<HTMLElement>('.constructor-grid-wrap');
-    const rect = (element: HTMLElement | null) => element ? { top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom, position: getComputedStyle(element).position, height: getComputedStyle(element).height } : null;
+    const rect = (element: HTMLElement | null) => element ? { left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right, position: getComputedStyle(element).position, width: getComputedStyle(element).width } : null;
     return { inspector: rect(inspectorElement), grid: rect(gridWrap) };
   });
-  console.log(`compact mobile layout: ${JSON.stringify(mobileGeometry)}`);
-  expect(mobileGeometry.inspector?.top).toBeGreaterThanOrEqual((mobileGeometry.grid?.bottom || 0) - 1);
-  await screenshot(page, 'compact-inspector-mobile');
-  await inspector.getByRole('button', { name: 'Изменить' }).click();
-  await expect(inspector.getByRole('combobox', { name: 'Предмет', exact: true })).toBeVisible();
-  await expect(page.locator('.constructor-grid')).toBeVisible();
+  console.log(`drawer mobile layout: ${JSON.stringify(mobileGeometry)}`);
+  expect(mobileGeometry.inspector?.position).toBe('fixed');
+  expect(mobileGeometry.inspector?.left).toBeGreaterThan(0);
+  await screenshot(page, 'drawer-open-mobile');
+  await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'true');
 });
 
 test('constructor repair: lunch for a selected group remains editable through inline draft rename', async ({ page }) => {
