@@ -222,6 +222,46 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
   await expect(inspector).toHaveAttribute('aria-hidden', 'true');
 });
 
+test('constructor electives: parallel courses use class availability without student rosters', async ({ page }) => {
+  const suffix = Date.now().toString(36).slice(-5);
+  const class5 = await createClass(page, `5-А elective ${suffix}`);
+  const class6 = await createClass(page, `6-А elective ${suffix}`);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  const classIds = await openEmptyWeek(page);
+  expect(classIds).toContain(class5);
+  expect(classIds).toContain(class6);
+  await filterClass(page, class5);
+  await page.locator('[data-cell="0:0"]').click();
+  const inspector = page.locator('.constructor-inspector');
+  await page.locator('.constructor-drawer-tab').click();
+  await expect(inspector).toHaveAttribute('aria-hidden', 'false');
+
+  const createCourse = async (name: string) => {
+    await page.getByRole('button', { name: 'Курс по выбору', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Название активности' }).fill(name);
+    const availability = page.locator('.constructor-elective-choice').nth(0);
+    const placement = page.locator('.constructor-elective-choice').nth(1);
+    await availability.getByRole('checkbox', { name: '5 класс' }).check();
+    await availability.getByRole('checkbox', { name: '6 класс' }).check();
+    await placement.getByRole('checkbox', { name: `6-А elective ${suffix}` }).check();
+    await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill(`E-${name.slice(-1)}`);
+    await expect(page.getByText('Именной состав курсов по выбору не ведётся')).toBeVisible();
+    await expect(inspector.getByRole('region', { name: 'Участники занятия' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Добавить курс по выбору', exact: true }).click();
+    await expect(page.locator('.constructor-card').filter({ hasText: name })).toBeVisible();
+  };
+
+  await createCourse(`E2E elective 1 ${suffix}`);
+  await page.getByRole('button', { name: '+ Параллельное занятие' }).click();
+  await createCourse(`E2E elective 2 ${suffix}`);
+  await page.getByRole('button', { name: '+ Параллельное занятие' }).click();
+  await createCourse(`E2E elective 3 ${suffix}`);
+  await expect(page.locator('.constructor-card').filter({ hasText: `E2E elective 1 ${suffix}` })).toBeVisible();
+  await expect(page.locator('.constructor-card').filter({ hasText: `E2E elective 2 ${suffix}` })).toBeVisible();
+  await expect(page.locator('.constructor-card').filter({ hasText: `E2E elective 3 ${suffix}` })).toBeVisible();
+  await expect(page.locator('.constructor-issues')).not.toContainText('Учеников назначено одновременно');
+});
+
 test('constructor repair: lunch for a selected group remains editable through inline draft rename', async ({ page }) => {
   const suffix = Date.now();
   const tag = suffix.toString(36).slice(-5);

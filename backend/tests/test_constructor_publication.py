@@ -489,6 +489,23 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(p["summary"]["ready_lessons"],0)
         self.assertIn("student_overlap",[i["code"] for i in p["diagnostics"]])
 
+    def test_parallel_electives_do_not_conflict_by_class_but_keep_teacher_validation(self):
+        class_id = str(self.group["id"])
+        courses = [self.lesson(id=f"elective-{index}", subject=f"Elective {index}", activityType="elective",
+                               activityNameSnapshot=f"Elective {index}",
+                               classId=class_id, classIds=[class_id], eligibleGrades=[9],
+                               confirmedParticipantIds=[str(self.student["id"])],
+                               audience={"kind": "classes", "class_ids": [class_id]},
+                               teacherId="", room=f"E-{index}") for index in range(3)]
+        draft = self.draft(courses)
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertNotIn("student_overlap", [item["code"] for item in preview["diagnostics"]])
+
+        assigned = {**courses[0], "teacherId": str(self.teacher["id"])}
+        conflicting = self.draft([assigned, {**courses[1], "teacherId": str(self.teacher["id"]), "room": "E-2"}])
+        conflict_preview = preview_publication(self.database, conflicting["id"], scope_kind="template", expected_revision=1)
+        self.assertIn("teacher_overlap", [item["code"] for item in conflict_preview["diagnostics"]])
+
     def test_compatible_duplicate_without_teacher_uses_its_confirmed_source_copy(self):
         draft=self.draft([self.lesson(id="a-unknown",teacherId=""),self.lesson(id="z-known")])
         self.publish(draft)

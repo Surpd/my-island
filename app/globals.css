@@ -3657,6 +3657,11 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-audience-classes label { display: inline-flex; align-items: center; gap: 3px; margin: 0; }
 .constructor-audience-classes input { width: auto !important; min-height: 0 !important; }
 .constructor-audience-classes small { flex-basis: 100%; color: #708689; }
+.constructor-elective-choice { display: flex; flex-wrap: wrap; gap: 5px 12px; margin: 7px 0; padding: 7px; border: 1px solid #d4ddd9; border-radius: 6px; }
+.constructor-elective-choice legend { color: #31525a; font-size: 12px; font-weight: 700; }
+.constructor-elective-choice label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+.constructor-elective-choice input[type="checkbox"] { width: 16px; min-height: 16px; margin: 0; }
+.constructor-elective-choice small { flex-basis: 100%; color: #63797c; font-size: 11px; }
 .constructor-membership-note { margin: 4px 0; color: #63797c; font-size: 11px; }
 .constructor-event-fields textarea, .constructor-create-form textarea { min-height: 60px; resize: vertical; border: 1px solid #d7ded9; border-radius: 6px; }
 .constructor-related-actions { display: flex; align-items: center; gap: 8px; margin: 8px 0; }

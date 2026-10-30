@@ -115,6 +115,35 @@ class ScheduleActivityTests(unittest.TestCase):
         self.assertEqual(result["club"]["student_ids"], [])
         self.assertEqual(set(result["residual"]["student_ids"]), {str(s["id"]) for s in students})
 
+    def test_electives_keep_class_placement_but_never_infer_or_recalculate_rosters(self):
+        class_group = self.db.create_group("5A", "class")
+        pupil = self.db.create_identity("student", "Synthetic elective pupil")
+        self.db.create_membership(class_group["id"], pupil["id"], "student", "test")
+        class_id = str(class_group["id"])
+        snapshot = {"student_ids": [str(pupil["id"])], "fingerprint": "historic"}
+        course = {"activityType": "elective", "classId": class_id, "classIds": [class_id],
+                  "eligibleGrades": [5], "audience": {"kind": "classes", "class_ids": [class_id]},
+                  "confirmedParticipantIds": [str(pupil["id"])], "audience_snapshot": snapshot}
+        self.assertEqual(_lesson_audience(course)["student_ids"], [])
+        payload = {"reference_date": "2026-10-19", "slots": [{"start": "09:00", "end": "09:45"}],
+                   "lessons": [{"id": f"course-{index}", "day": 0, "period": 0, "subject": f"Course {index}", **course}
+                               for index in range(3)]}
+        previews = experiment_audience_preview(self.db, payload)["lessons"]
+        for preview in previews.values():
+            self.assertEqual(preview["status"], "ok")
+            self.assertEqual(preview["student_ids"], [])
+
+        draft = create_experiment(self.db, name="Elective roster preservation", source="import",
+                                  payload={"days": [0], "slots": payload["slots"], "classes": [class_id],
+                                           "lessons": [{"id": "course", "day": 0, "period": 0, "subject": "Before",
+                                                        "activityNameSnapshot": "Before", **course}]})
+        changed = {**draft["payload"], "lessons": [{**draft["payload"]["lessons"][0], "subject": "After"}]}
+        saved = save_experiment(self.db, draft["id"], expected_revision=draft["revision"], payload=changed)
+        saved_course = saved["payload"]["lessons"][0]
+        self.assertEqual(saved_course["confirmedParticipantIds"], [str(pupil["id"])])
+        self.assertEqual(saved_course["audience_snapshot"], draft["payload"]["lessons"][0]["audience_snapshot"])
+        self.assertEqual(saved_course["classIds"], [class_id])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -168,11 +168,11 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     # and grade eligibility fields must never turn them into student occupancy.
     if lesson.get("activityType") == "club":
         return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
-    # Electives can retain explicit participants, while grade eligibility is
-    # display metadata and never expands into a whole class.
-    if lesson.get("activityType") == "elective" and "confirmedParticipantIds" in lesson:
-        return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "",
-                "student_ids": _ids(lesson.get("confirmedParticipantIds"))}
+    # Elective availability and grid placement are administrative metadata.
+    # Electives do not track or infer student rosters, including from legacy
+    # audience rules or confirmedParticipantIds fields.
+    if lesson.get("activityType") == "elective":
+        return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     mark = _lesson_special_mark(lesson)
     if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True:
         return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
@@ -410,7 +410,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
             reason = None  # An informational event has no assigned students.
         if rule["kind"] == "available_slot" and not interval:
             reason = "Не задан корректный временной интервал"
-        optional_roster = lesson.get("activityType") == "club"
+        optional_roster = lesson.get("activityType") in {"club", "elective"}
         snapshot_value = None if optional_roster else lesson.get("audience_snapshot")
         snapshot = dict(snapshot_value) if isinstance(snapshot_value, Mapping) else None
         snapshot_ids = set(_ids(snapshot.get("student_ids"))) if snapshot else set()
@@ -959,6 +959,13 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
             if "audience_snapshot" not in lesson and isinstance(existing, Mapping):
                 lesson["audience_snapshot"] = dict(existing)
             continue
+        if lesson.get("activityType") == "elective":
+            # Keep legacy snapshots untouched for audit/history, but electives
+            # no longer have or recalculate student rosters.
+            existing = previous.get("audience_snapshot")
+            if "audience_snapshot" not in lesson and isinstance(existing, Mapping):
+                lesson["audience_snapshot"] = dict(existing)
+            continue
         if "audience_snapshot" in lesson and lesson["audience_snapshot"] is None:
             reset_keys.add(key)
             continue
@@ -975,7 +982,7 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
-        if lesson.get("activityType") == "club":
+        if lesson.get("activityType") in {"club", "elective"}:
             continue
         had_snapshot = isinstance(previous.get("audience_snapshot"), Mapping)
         explicit_reset = key in reset_keys
