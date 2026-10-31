@@ -372,6 +372,18 @@ class ConstructorPublicationTests(unittest.TestCase):
         student_sdep = canonical.project_student(self.database, self.student["id"], "2026-10-19")
         self.assertEqual(student_sdep["day_modes"], [{"date": "2026-10-19", "mode": "sdep"}])
 
+        conducted = self.draft([
+            self.lesson(id="conducted-a", room="101"),
+            self.lesson(id="conducted-b", room="102", subject="Science"),
+        ])
+        conducted_payload = copy.deepcopy(conducted["payload"])
+        conducted_payload["day_modes"] = {str(self.group["id"]): {"0": "sdep"}}
+        conducted = save_experiment(self.database, conducted["id"], expected_revision=conducted["revision"], payload=conducted_payload)
+        conducted_preview = preview_publication(self.database, conducted["id"], scope_kind="template", expected_revision=conducted["revision"])
+        conducted_codes = {item["code"] for item in conducted_preview["diagnostics"]}
+        self.assertIn("student_overlap", conducted_codes)
+        self.assertIn("teacher_overlap", conducted_codes)
+
     def test_lunch_scope_advisory_publishes_only_known_class(self):
         lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", needsClarification=True,
             clarificationReason="Уточните охват обеда: класс или отдельная группа")
