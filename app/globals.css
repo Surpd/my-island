@@ -518,6 +518,7 @@ button {
   margin-bottom: 17px;
 }
 .day-picker button {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -533,19 +534,26 @@ button {
   background: var(--teal);
   color: white;
 }
+.day-picker button.is-today:not(.is-active) { border-color: #a9c6b8; }
+.day-picker button.is-today::after { position: absolute; top: 5px; right: 6px; width: 5px; height: 5px; border-radius: 50%; background: #d28a48; content: ''; }
+.day-picker button.is-today.is-active::after { background: #fff; }
 .day-picker small {
-  font-size: 9px;
+  font-size: 10px;
   text-transform: uppercase;
 }
 .day-picker strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 .day-picker em {
+  min-width: 19px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #edf3f5;
   color: var(--muted);
   font-size: 9px;
   font-style: normal;
 }
-.day-picker button.is-active em { color: white; }
+.day-picker button.is-active em { background: rgb(255 255 255/17%); color: white; }
 .student-schedule-lesson--button {
   width: 100%;
   color: inherit;
@@ -3362,8 +3370,8 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
   white-space: nowrap;
 }
 .schedule-focus-peek__queue b { margin-right: 4px; color: #315650; }
-.student-schedule-stack { display: grid; gap: 7px; }
-.student-schedule-lesson time { width: 39px; flex: 0 0 auto; padding-top: 2px; color: #9c5436; font-size: 11px; font-weight: 800; }
+.student-schedule-stack { display: grid; gap: 8px; }
+.student-schedule-lesson time { width: 88px; flex: 0 0 auto; padding-top: 1px; color: #176f68; font-size: 10px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .student-schedule-conflict { border-color: #e6d9bf; background: #fff9ed; }
 .student-schedule-conflict__mark { background: #f4e7c8; color: #8b6334; font-weight: 900; }
 .student-schedule-event { border-color: #d5e0ec; background: #f1f7fb; }

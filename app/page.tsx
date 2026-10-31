@@ -556,6 +556,13 @@ function scheduleStartingDay(days: StudentScheduleDay[]) {
   return relevant[0] || days.map((day) => day.date).sort()[0] || today;
 }
 
+function formatStudentLessonCount(count: number) {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  const noun = lastTwo >= 11 && lastTwo <= 14 ? 'занятий' : last === 1 ? 'занятие' : last >= 2 && last <= 4 ? 'занятия' : 'занятий';
+  return `${count} ${noun}`;
+}
+
 function scheduleDetailKey(item: StudentScheduleItem, index: number) { return `lesson:${item.date}:${item.slot.start}:${item.state}:${index}`; }
 
 function ScheduleItemRow({ item, index, onOpen }: { item: StudentScheduleItem; index: number; onOpen?: (key: string) => void }) {
@@ -571,7 +578,7 @@ function ScheduleItemRow({ item, index, onOpen }: { item: StudentScheduleItem; i
   if (item.state !== 'lesson') return null;
   const context = Array.isArray(item.group_context) ? item.group_context.join(' · ') : item.group_context;
   const independentPractice = item.activity_format === 'independent_practice';
-  const row = <><time>{formatLessonTime(item.slot.start) || 'Время не указано'}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{independentPractice ? [item.room ? normalizeRoomDisplay(item.room) : '', item.responsible_teacher ? `Ответственный за задание: ${item.responsible_teacher}` : 'Самостоятельная практика'].filter(Boolean).join(' · ') : [item.room ? normalizeRoomDisplay(item.room) : '', item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span>{independentPractice ? <small>Самостоятельная практика</small> : null}</div></>;
+  const row = <><time>{formatLessonTimeRange(item.slot.start, item.slot.end)}</time><div><strong>{item.canonical_title || 'Занятие'}</strong><span>{independentPractice ? [item.room ? normalizeRoomDisplay(item.room) : '', item.responsible_teacher ? `Ответственный за задание: ${item.responsible_teacher}` : 'Самостоятельная практика'].filter(Boolean).join(' · ') : [item.room ? normalizeRoomDisplay(item.room) : '', item.teacher || context].filter(Boolean).join(' · ') || 'Детали уточняются'}</span>{independentPractice ? <small>Самостоятельная практика</small> : null}</div></>;
   return onOpen ? <button type="button" className="student-schedule-lesson student-schedule-lesson--button" aria-label={`Подробности урока: ${item.canonical_title || 'Занятие'}`} onClick={() => onOpen(scheduleDetailKey(item, index))}>{row}</button> : <article className="student-schedule-lesson">{row}</article>;
 }
 
@@ -612,11 +619,13 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
       <div className="day-picker">
         {days.map((day) => {
           const lessonCount = projection.days.find(item => item.date === day)?.items.filter(item => ['lesson', 'conflict', 'special_event'].includes(item.state)).length || 0;
+          const isToday = day === isoDate(new Date());
           return (
           <button
             key={day}
-            className={day === selectedDay ? 'is-active' : ''}
+            className={[day === selectedDay ? 'is-active' : '', isToday ? 'is-today' : ''].filter(Boolean).join(' ')}
             aria-pressed={day === selectedDay}
+            aria-label={`${new Intl.DateTimeFormat('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date(`${day}T12:00:00`))}${isToday ? ', сегодня' : ''}, ${formatStudentLessonCount(lessonCount)}`}
             onClick={() => setSelectedDay(day)}
           >
             <small>
@@ -631,7 +640,7 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
       </div>
       <div className="panel-date">
         <strong>{formatDate(selectedDay, true)}</strong>
-        <span>{hasLessons ? `${day?.items.filter((item) => item.state === 'lesson').length || 0} занятий` : 'Учебный день'}</span>
+        <span>{hasLessons ? formatStudentLessonCount(day?.items.filter((item) => ['lesson', 'conflict', 'special_event'].includes(item.state)).length || 0) : day?.mode === 'sdep' || day?.special?.kind === 'sdep' ? 'Самостоятельная работа' : day?.mode === 'online' ? 'Онлайн' : [0, 6].includes(new Date(`${selectedDay}T12:00:00`).getDay()) ? 'Выходной' : 'Нет занятий'}</span>
       </div>
       {day?.mode === 'online' ? <div className="campus-day-mode online"><strong>Онлайн</strong><span>Занятия проходят дистанционно.</span></div> : null}
       {day?.mode === 'sdep' || day?.special?.kind === 'sdep' ? <div className="student-schedule-sdep"><strong>SDEP</strong><span>Самостоятельная работа по расписанию.</span></div> : null}

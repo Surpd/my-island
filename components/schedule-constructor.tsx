@@ -223,6 +223,12 @@ const DAYS = [
   'Пятница',
   'Суббота',
 ];
+function russianCount(count: number, one: string, few: string, many: string) {
+  const lastTwo = Math.abs(count) % 100;
+  const last = Math.abs(count) % 10;
+  const noun = lastTwo >= 11 && lastTwo <= 14 ? many : last === 1 ? one : last >= 2 && last <= 4 ? few : many;
+  return `${count} ${noun}`;
+}
 const CLIP_MIME = 'application/x-my-island-schedule+json';
 const EMPTY_AUDIENCE_PREVIEWS: Record<string, AudiencePreview> = {};
 const CARD_COLORS = ['#e5f0fd', '#fce8e5', '#e9f2dd', '#f5e8fa', '#fff0d5', '#ddf2ee', '#ebebfb', '#f7e7ed', '#e8f1f2', '#f2eddd'];
@@ -265,8 +271,11 @@ function lessonClasses(lesson: Lesson) {
 }
 type DayModeState = DayMode | 'normal' | 'conflict';
 function canonicalGradeOfGroup(group: Group | undefined): string {
-  const canonicalName = String(group?.base_class_name || group?.name || '').trim();
-  return canonicalName.match(/^(\d{1,2})/)?.[1] || '';
+  if (!group || (group.group_type !== 'class' && group.role !== 'base_class')) return '';
+  const canonicalName = String(group.base_class_name || '').trim();
+  const grade = canonicalName.match(/^(\d{1,2})(?:\D|$)/)?.[1];
+  if (grade) return grade;
+  return String(group.name || '').match(/^grade(\d{1,2}):base:/)?.[1] || '';
 }
 function dayModeForGrade(payload: Payload, grade: string, classes: Group[], weekday: number): DayModeState {
   const day = String(weekday);
@@ -2339,7 +2348,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 <header><div><strong>Режимы дней</strong><small>Одна настройка для всей параллели</small></div><button type="button" aria-label="Закрыть матрицу режимов" onClick={() => { setDayModesOpen(false); setDayModeEditor(null); }}><X size={15} /></button></header>
                 <div className="constructor-day-modes-table-wrap"><table>
                   <thead><tr><th scope="col">Класс</th>{[0, 1, 2, 3, 4].map((weekday) => <th key={weekday} scope="col">{['Пн', 'Вт', 'Ср', 'Чт', 'Пт'][weekday]}</th>)}</tr></thead>
-                  <tbody>{['5', '6', '7', '8', '9', '10', '11'].filter((grade) => classes.some((item) => canonicalGradeOfGroup(item) === grade)).map((grade) => <tr key={grade}>
+                  <tbody>{['5', '6', '7', '8', '9', '10', '11'].map((grade) => <tr key={grade}>
                     <th scope="row">{grade} класс</th>
                     {[0, 1, 2, 3, 4].map((weekday) => {
                       const mode = dayModeForGrade(payload, grade, classes, weekday);
@@ -2361,7 +2370,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </span> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <button className="constructor-issue-count" onClick={() => setConflictsOpen((open) => !open)} aria-expanded={conflictsOpen}>
-              <AlertTriangle size={14} /><span className="desktop-label">Проверка · {conflictLessons.size} занятий · {conflictPairs.size} парных совпадений</span><span className="mobile-label">Проверка · {conflictLessons.size}</span>
+              <AlertTriangle size={14} /><span className="desktop-label">Проверка · {russianCount(conflictLessons.size, 'занятие', 'занятия', 'занятий')} · {russianCount(conflictPairs.size, 'парное совпадение', 'парных совпадения', 'парных совпадений')}</span><span className="mobile-label">Проверка · {conflictLessons.size}</span>
             </button>
             <button onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>Фильтры</button>
               <button className="constructor-open-colors" onClick={() => setColorPanelOpen(true)} title="Поиск и цвета преподавателей"><Palette size={15}/><span>Преподаватели</span></button>
@@ -2542,7 +2551,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 const title = category === 'quick' ? 'Исправляемые быстро' : category === 'decision' ? 'Требуют решения администратора' : category === 'acknowledged' ? 'Подтверждённые исключения' : category === 'deferred' ? 'Отложенные решения' : 'Критические технические проблемы';
                 const affected = new Set(categoryIssues.map((item) => item.lessonId));
                 const pairs = new Set(categoryIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
-                const count = category === 'decision' ? `${affected.size} занятий · ${pairs.size} парных совпадений` : `${affected.size} занятий`;
+                const count = category === 'decision' ? `${russianCount(affected.size, 'занятие', 'занятия', 'занятий')} · ${russianCount(pairs.size, 'парное совпадение', 'парных совпадения', 'парных совпадений')}` : russianCount(affected.size, 'занятие', 'занятия', 'занятий');
                 return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
                   const lesson = payload.lessons.find((entry) => entry.id === item.lessonId);
                   const targetGroup = groups.find((entry) => entry.id === lesson?.groupId);

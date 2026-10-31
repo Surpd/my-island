@@ -13,6 +13,8 @@ test('weekday modes remain saved after reopening the constructor draft', async (
   await expect(page.locator('.constructor-grid-wrap')).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: '.local-test/day-modes-day-1280.png', fullPage: true });
+  await expect(page.locator('.constructor-head .constructor-day-mode-button[aria-label^="7 класс,"]')).toHaveCount(1);
+  await expect(page.locator('.constructor-head .constructor-day-mode-button[aria-label^="9 класс,"]')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Среда', exact: true }).click();
   await page.getByRole('button', { name: /6 класс, Среда: Обычный\. Изменить режим дня/ }).click();
@@ -24,6 +26,7 @@ test('weekday modes remain saved after reopening the constructor draft', async (
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole('button', { name: 'Режимы дней', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Режимы дней по параллелям' })).toBeVisible();
+  await expect(page.locator('#constructor-day-modes-matrix tbody tr')).toHaveCount(7);
   await page.screenshot({ path: '.local-test/day-modes-matrix-1440.png', fullPage: true });
   await page.getByRole('button', { name: /10 класс, Пятница: Обычный\. Изменить режим дня/ }).click();
   await page.getByRole('group', { name: 'Выбор режима 10 класс · Пятница' }).getByRole('button', { name: 'SDEP' }).click();
