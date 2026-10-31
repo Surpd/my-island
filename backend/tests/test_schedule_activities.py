@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import hashlib
+import json
 from unittest.mock import patch
 from pathlib import Path
 
@@ -143,6 +145,51 @@ class ScheduleActivityTests(unittest.TestCase):
         self.assertEqual(saved_course["confirmedParticipantIds"], [str(pupil["id"])])
         self.assertEqual(saved_course["audience_snapshot"], draft["payload"]["lessons"][0]["audience_snapshot"])
         self.assertEqual(saved_course["classIds"], [class_id])
+
+    def test_legacy_optional_activity_snapshot_and_catalog_detach_round_trip(self):
+        catalog = next(item for item in list_activities(self.db, include_archived=True) if item["id"] == "animation")
+        payload = {"days": [0], "classes": [], "slots": [{"start": "09:00", "end": "09:45"}], "lessons": [
+            {"id": "legacy-club", "day": 0, "period": 0, "subject": "Анимация",
+             "activityType": "club", "activityCatalogId": catalog["id"]},
+        ]}
+        draft = create_experiment(self.db, name="Legacy optional activity", source="import", payload=payload)
+        lesson = draft["payload"]["lessons"][0]
+        self.assertEqual(lesson["activityNameSnapshot"], "Анимация")
+
+        # An explicit blank ID means “detached”, even when the title aliases a catalog entry.
+        unlinked = {**lesson, "activityCatalogId": "", "activityNameSnapshot": "Личная анимация"}
+        saved = save_experiment(self.db, draft["id"], expected_revision=draft["revision"],
+                                payload={**draft["payload"], "lessons": [unlinked]})
+        loaded = get_experiment(self.db, draft["id"])
+        result = loaded["payload"]["lessons"][0]
+        self.assertEqual(result["activityCatalogId"], "")
+        self.assertEqual(result["activityNameSnapshot"], "Личная анимация")
+        self.assertEqual(result["subject"], "Анимация")
+
+    def test_changing_lesson_to_optional_activity_fills_snapshot_from_subject(self):
+        payload = {"days": [0], "classes": [], "slots": [], "lessons": [
+            {"id": "to-club", "day": 0, "period": 0, "subject": "Театр", "activityType": "lesson"},
+        ]}
+        draft = create_experiment(self.db, name="Activity type change", source="import", payload=payload)
+        changed = {**draft["payload"]["lessons"][0], "activityType": "club", "activityCatalogId": ""}
+        saved = save_experiment(self.db, draft["id"], expected_revision=draft["revision"],
+                                payload={**draft["payload"], "lessons": [changed]})
+        self.assertEqual(saved["payload"]["lessons"][0]["activityNameSnapshot"], "Театр")
+
+    def test_large_optional_draft_round_trip_preserves_all_records(self):
+        lessons = [{"id": f"synthetic-{index}", "day": index % 5, "period": index % 7,
+                    "subject": f"Курс {index}", "activityType": "elective", "activityCatalogId": ""}
+                   for index in range(385)]
+        payload = {"days": list(range(5)), "classes": [], "slots": [], "lessons": lessons,
+                   "grade_modes": {"10": {"4": "sdep"}}}
+        draft = create_experiment(self.db, name="Synthetic round trip", source="import", payload=payload)
+        normalized = draft["payload"]
+        before = hashlib.sha256(json.dumps(normalized, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        saved = save_experiment(self.db, draft["id"], expected_revision=draft["revision"], payload=normalized)
+        loaded = get_experiment(self.db, draft["id"])
+        after = hashlib.sha256(json.dumps(loaded["payload"], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        self.assertEqual(len(loaded["payload"]["lessons"]), 385)
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

@@ -193,7 +193,8 @@ def validate_activity_lessons(lessons: list[Any], catalog: list[Mapping[str, Any
             raise ValueError("activityType must be lesson, club, elective or event")
         if activity_type in {"club", "elective"}:
             cid = str(lesson.get("activityCatalogId") or "")
-            item = by_id.get(cid) if cid else aliases.get(normalize_activity_name(lesson.get("activityNameSnapshot") or lesson.get("subject") or ""))
+            explicitly_detached = "activityCatalogId" in lesson and not cid
+            item = by_id.get(cid) if cid else None if explicitly_detached else aliases.get(normalize_activity_name(lesson.get("activityNameSnapshot") or lesson.get("subject") or ""))
             if not cid and item and item.get("type") != activity_type:
                 item = None
             if cid and not item:
@@ -202,8 +203,16 @@ def validate_activity_lessons(lessons: list[Any], catalog: list[Mapping[str, Any
                 if item.get("type") != activity_type:
                     raise ValueError("activityType must match the catalog activity type")
                 lesson["activityCatalogId"] = str(item["id"])
-                lesson.setdefault("activityNameSnapshot", str(item["name"]))
-            if not lesson.get("activityNameSnapshot"):
+                if not str(lesson.get("activityNameSnapshot") or "").strip():
+                    lesson["activityNameSnapshot"] = str(item["name"])
+            if not str(lesson.get("activityNameSnapshot") or "").strip():
+                # Older constructor drafts may have the real title in subject
+                # but predate the frozen optional-activity display snapshot.
+                # Preserve that authored name without inventing a catalog entry.
+                subject_name = str(lesson.get("subject") or "").strip()
+                if subject_name:
+                    lesson["activityNameSnapshot"] = subject_name
+            if not str(lesson.get("activityNameSnapshot") or "").strip():
                 raise ValueError("Optional activities require activityNameSnapshot")
             if "eligibleGrades" in lesson:
                 grades = lesson["eligibleGrades"]
