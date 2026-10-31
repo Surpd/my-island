@@ -19,6 +19,7 @@ from uuid import uuid4
 from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import (
     get_experiment, experiment_audience_preview, _lesson_audience, _lesson_interval, _audience_fingerprint, _canonical_time,
+    resolve_payload_day_mode, payload_day_mode_conflicts,
 )
 from backend.services.constructor_resolution import validated_exceptions
 from backend.services.schedule_rooms import room_key
@@ -76,15 +77,20 @@ def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: 
     return True
 
 
-def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any]) -> set[str]:
+def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], class_grades: Mapping[str, str]) -> set[str]:
     class_ids = lesson.get("classIds") or ([lesson.get("classId")] if lesson.get("classId") else [])
-    modes = payload.get("day_modes") or {}
-    return {str((modes.get(str(class_id)) or {}).get(str(lesson.get("day", lesson.get("weekday", -1))), "normal"))
-            for class_id in class_ids}
+    try:
+        weekday = int(lesson.get("day", lesson.get("weekday", -1)))
+    except (TypeError, ValueError):
+        return set()
+    grades = {class_grades.get(str(class_id), "") for class_id in class_ids}
+    grades.discard("")
+    modes = {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] for grade in grades}
+    return {str(mode) for mode in modes if mode is not None}
 
 
-def _sdep_independent_lesson(payload: Mapping[str, Any], lesson: Mapping[str, Any], teacher_ids: set[str]) -> bool:
-    class_modes = _lesson_day_modes(payload, lesson)
+def _sdep_independent_lesson(payload: Mapping[str, Any], lesson: Mapping[str, Any], teacher_ids: set[str], class_grades: Mapping[str, str]) -> bool:
+    class_modes = _lesson_day_modes(payload, lesson, class_grades)
     if not class_modes or class_modes != {"sdep"}:
         return False
     if isinstance(lesson.get("sdepIndependent"), bool):
@@ -298,9 +304,10 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teachers = {str(r["id"]): str(r["display_name"]) for r in database.execute(connection,
             "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()}
         groups = {str(r["id"]): dict(r) for r in database.execute(connection,
-            "SELECT id,name,display_name,group_type,base_class_name FROM groups WHERE canonical IS TRUE").fetchall()}
+            "SELECT id,name,display_name,group_type,base_class_name,role FROM groups WHERE canonical IS TRUE").fetchall()}
         students = {str(r["id"]): str(r["class_name"] or "") for r in database.execute(connection,
             "SELECT id,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
+    class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()}
     blocks: dict[str, Any] = {}
     ids: set[str] = set()
     occupancy: list[dict[str, Any]] = []
@@ -351,9 +358,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
         display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
-        class_modes = _lesson_day_modes(payload, lesson)
+        class_modes = _lesson_day_modes(payload, lesson, class_grades)
         online_only = bool(class_modes) and class_modes == {"online"}
-        sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids))
+        sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids), class_grades)
         if needs_review:
             # Imported staffing checks do not make an explicit student audience
             # ambiguous. Keep the diagnostic without inventing any teacher.
@@ -669,6 +676,11 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
     effective = canonical._effective_week(database, None, week_start) if scope_kind == "week" else None
     blocks, diagnostics, deferred = _compile(database, draft["payload"], base, scope_kind,
                                          week_start if scope_kind == "week" else None)
+    for conflict in payload_day_mode_conflicts(database, draft["payload"]):
+        diagnostics.append({"code": "day_mode_conflict", "severity": "critical",
+                            "grade": conflict["grade"], "weekday": conflict["weekday"],
+                            "class_ids": conflict["class_ids"],
+                            "message": f"Режимы дня для {conflict['grade']} параллели различаются; выберите общий режим"})
     for entry in deferred:
         entry["action"]="retained_unresolved"
         entry["reason"]="Связанный блок будет сохранён в опубликованном исходнике как нерешённый; безопасные назначения ожидают уточнения"

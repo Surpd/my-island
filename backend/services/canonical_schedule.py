@@ -803,6 +803,32 @@ def _grade(value: Any) -> str:
     return match.group(1) if match else ""
 
 
+def canonical_group_grade(group: Mapping[str, Any]) -> str:
+    """Return the canonical grade carried by a class group, never a display guess."""
+    if group.get("group_type") != "class" and group.get("role") != "base_class":
+        return ""
+    for field in ("base_class_name", "display_name", "name"):
+        grade = _grade(group.get(field))
+        if grade:
+            return grade
+    technical = re.match(r"^grade(\d{1,2}):base:", str(group.get("name") or ""))
+    return technical.group(1) if technical else ""
+
+
+def resolve_grade_day_mode(payload: Mapping[str, Any], grade: str, weekday: int,
+                           class_grades: Mapping[str, str]) -> tuple[str | None, list[str]]:
+    explicit = (payload.get("grade_modes") or {}).get(str(grade)) or {}
+    day = str(weekday)
+    if day in explicit:
+        return str(explicit[day]), []
+    legacy = payload.get("day_modes") or {}
+    class_ids = sorted(class_id for class_id, value in class_grades.items() if value == str(grade))
+    values = {str((legacy.get(class_id) or {}).get(day) or "normal") for class_id in class_ids}
+    if len(values) > 1:
+        return None, class_ids
+    return (next(iter(values)) if values else "normal"), []
+
+
 def class_context_group_ids(groups: Mapping[str, Mapping[str, Any]], grade: str, class_group_id: str = "") -> set[str]:
     """Resolve a single grid's base-class cohort from canonical directory groups."""
     if class_group_id:
@@ -1677,47 +1703,42 @@ def _published_source_for_effective(database: Database, effective: Mapping[str, 
 def _student_day_modes(database: Database, context: StudentProjectionContext, student: Mapping[str, Any], effective: Mapping[str, Any], week_start: str) -> list[dict[str, Any]]:
     source=_published_source_for_effective(database,effective)
     payload=(source or {}).get('payload') or {}
-    modes=payload.get('day_modes') or {}
     class_ids={str(value) for value in payload.get('classes') or []}
-    if not modes or not class_ids:
+    if not class_ids:
         return []
     student_id=str(student.get('id') or '')
-    class_name=' '.join(str(student.get('class_name') or '').casefold().replace('ё','е').split())
+    class_grades={class_id:canonical_group_grade(context.groups.get(class_id) or {}) for class_id in class_ids}
+    grades={grade for grade in class_grades.values() if grade}
+    fallback_grade=_grade(student.get('class_name'))
     start=date.fromisoformat(week_start)
     result=[]
     for weekday in range(7):
         day=(start+timedelta(days=weekday)).isoformat()
         memberships=_student_memberships(context,student_id,day)
-        matching=[]
-        for class_id in class_ids & set(modes):
-            group=context.groups.get(class_id) or {}
-            if group.get('group_type')!='class':
-                continue
-            labels={" ".join(str(group.get(key) or '').casefold().replace('ё','е').split()) for key in ('name','display_name','base_class_name')}
-            if class_id in memberships or class_name and class_name in labels:
-                mode=str((modes.get(class_id) or {}).get(str(weekday)) or 'normal')
-                if mode in {'online','sdep'}:
-                    matching.append(mode)
-        unique=set(matching)
-        if len(unique)==1:
-            result.append({'date':day,'mode':next(iter(unique))})
+        member_grades={canonical_group_grade(context.groups.get(class_id) or {}) for class_id in class_ids & memberships}
+        member_grades.discard('')
+        if not member_grades and fallback_grade in grades:
+            member_grades={fallback_grade}
+        if len(member_grades)!=1:
+            continue
+        grade=next(iter(member_grades))
+        mode,_=resolve_grade_day_mode(payload,grade,weekday,class_grades)
+        if mode in {'online','sdep'}:
+            result.append({'date':day,'mode':mode})
     return result
 
 
 def _teacher_day_modes(database: Database, effective: Mapping[str, Any], teacher_id: str, week_start: str) -> list[dict[str, Any]]:
     source=_published_source_for_effective(database,effective)
     payload=(source or {}).get('payload') or {}
-    modes=payload.get('day_modes') or {}
-    if not modes:
+    class_ids={str(value) for value in payload.get('classes') or []}
+    if not class_ids:
         return []
     rows=[lesson for lesson in payload.get('lessons') or [] if isinstance(lesson,Mapping)]
-    class_names={}
-    ids=sorted(set(modes))
-    if ids:
-        placeholders=','.join('?' for _ in ids)
-        with database.connection() as connection:
-            found=database.execute(connection,f"SELECT id,name,display_name FROM groups WHERE id IN ({placeholders})",tuple(ids)).fetchall()
-        class_names={str(row['id']):str(row['display_name'] or row['name']) for row in found}
+    placeholders=','.join('?' for _ in class_ids)
+    with database.connection() as connection:
+        found=database.execute(connection,f"SELECT id,name,display_name,base_class_name,group_type,role FROM groups WHERE id IN ({placeholders})",tuple(sorted(class_ids))).fetchall()
+    class_grades={str(row['id']):canonical_group_grade(dict(row)) for row in found}
     start=date.fromisoformat(week_start)
     result=set()
     for lesson in rows:
@@ -1735,9 +1756,12 @@ def _teacher_day_modes(database: Database, effective: Mapping[str, Any], teacher
             continue
         for class_id in lesson.get('classIds') or ([lesson.get('classId')] if lesson.get('classId') else []):
             class_id=str(class_id)
-            mode=str((modes.get(class_id) or {}).get(str(weekday)) or 'normal')
+            grade=class_grades.get(class_id,'')
+            if not grade:
+                continue
+            mode,_=resolve_grade_day_mode(payload,grade,weekday,class_grades)
             if mode in {'online','sdep'}:
-                result.add(((start+timedelta(days=weekday)).isoformat(),mode,class_id,class_names.get(class_id,class_id)))
+                result.add(((start+timedelta(days=weekday)).isoformat(),mode,grade,f'{grade} класс'))
     return [{'date':day,'mode':mode,'class_id':class_id,'class_name':class_name}
             for day,mode,class_id,class_name in sorted(result)]
 

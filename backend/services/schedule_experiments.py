@@ -11,7 +11,7 @@ from threading import Lock
 
 from backend.database import Database
 from backend.services.schedule_rooms import display_room
-from backend.services.canonical_schedule import canonical_version, read_canonical_template
+from backend.services.canonical_schedule import canonical_group_grade, canonical_version, read_canonical_template
 from backend.services.schedule_activities import list_activities, validate_activity_lessons
 
 
@@ -30,6 +30,74 @@ def _canonical_time(value: Any) -> str:
     text = str(value or "")
     match = re.fullmatch(r"(\d{1,2}):(\d{2})(?::00)?", text)
     return f"{int(match.group(1)):02d}:{match.group(2)}" if match else text
+
+
+def _clean_grade_modes(value: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(value, Mapping):
+        if value in (None, {}):
+            return {}
+        raise ValueError("grade_modes must map canonical grade numbers to weekdays")
+    result: dict[str, dict[str, str]] = {}
+    for raw_grade, modes in value.items():
+        grade_match = re.fullmatch(r"\s*(\d{1,2})\s*", str(raw_grade))
+        if not grade_match:
+            raise ValueError("grade_modes keys must be canonical grade numbers 5..11")
+        grade = str(int(grade_match.group(1)))
+        if int(grade) not in range(5, 12) or not isinstance(modes, Mapping):
+            raise ValueError("grade_modes support grades 5..11 and weekday maps")
+        clean: dict[str, str] = {}
+        for raw_day, raw_mode in modes.items():
+            day = int(raw_day)
+            mode = str(raw_mode or "normal").strip().lower()
+            if day < 0 or day > 6 or mode not in {"normal", "online", "sdep"}:
+                raise ValueError("grade_modes weekdays must be 0..6 and modes normal, online or sdep")
+            if mode == "sdep" and int(grade) not in {9, 10, 11}:
+                raise ValueError("SDEP is available only for grades 9–11")
+            if mode != "normal":
+                clean[str(day)] = mode
+        if clean:
+            result[grade] = clean
+    return result
+
+
+def _class_grade_map(database: Database, payload: Mapping[str, Any]) -> dict[str, str]:
+    class_ids = sorted({str(value) for value in payload.get("classes") or []})
+    if not class_ids:
+        return {}
+    placeholders = ",".join("?" for _ in class_ids)
+    with database.connection() as connection:
+        rows = database.execute(connection,
+            f"SELECT id,name,display_name,base_class_name,group_type,role FROM groups WHERE id IN ({placeholders})",
+            tuple(class_ids)).fetchall()
+    return {str(row["id"]): canonical_group_grade(dict(row)) for row in rows}
+
+
+def resolve_payload_day_mode(payload: Mapping[str, Any], grade: str, weekday: int,
+                             class_grades: Mapping[str, str]) -> tuple[str | None, list[str]]:
+    """Resolve grade mode; return a null mode and conflicting IDs instead of guessing."""
+    grade = str(grade or "")
+    day = str(weekday)
+    explicit = (payload.get("grade_modes") or {}).get(grade) or {}
+    if day in explicit:
+        return str(explicit[day]), []
+    legacy = payload.get("day_modes") or {}
+    class_ids = sorted(class_id for class_id, class_grade in class_grades.items() if class_grade == grade)
+    values = {str((legacy.get(class_id) or {}).get(day) or "normal") for class_id in class_ids}
+    if len(values) > 1:
+        return None, class_ids
+    return (next(iter(values)) if values else "normal"), []
+
+
+def payload_day_mode_conflicts(database: Database, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    class_grades = _class_grade_map(database, payload)
+    grades = sorted({grade for grade in class_grades.values() if grade}, key=int)
+    conflicts = []
+    for grade in grades:
+        for weekday in range(7):
+            _, class_ids = resolve_payload_day_mode(payload, grade, weekday, class_grades)
+            if class_ids:
+                conflicts.append({"grade": grade, "weekday": weekday, "class_ids": class_ids})
+    return conflicts
 
 
 def _canonical_provenance(value: Any) -> Any:
@@ -124,6 +192,9 @@ def _clean_payload(value: Mapping[str, Any] | None) -> dict[str, Any]:
             day_modes[str(class_id)] = clean_modes
     if day_modes:
         result["day_modes"] = day_modes
+    grade_modes = _clean_grade_modes(raw.get("grade_modes"))
+    if grade_modes:
+        result["grade_modes"] = grade_modes
     if raw.get("reference_date"):
         result["reference_date"] = date.fromisoformat(str(raw["reference_date"])).isoformat()
     if raw.get("week_start"):
@@ -148,6 +219,7 @@ def _clean_payload(value: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def _validate_day_modes(database: Database, payload: Mapping[str, Any]) -> None:
+    _clean_grade_modes(payload.get("grade_modes"))
     day_modes = payload.get("day_modes") or {}
     if not day_modes:
         return
@@ -161,14 +233,13 @@ def _validate_day_modes(database: Database, payload: Mapping[str, Any]) -> None:
     placeholders = ",".join("?" for _ in sdep_classes)
     with database.connection() as connection:
         rows = database.execute(connection,
-            f"SELECT id,name,base_class_name,group_type FROM groups WHERE id IN ({placeholders})",
+            f"SELECT id,name,display_name,base_class_name,group_type,role FROM groups WHERE id IN ({placeholders})",
             tuple(sorted(sdep_classes))).fetchall()
     found = {str(row["id"]): row for row in rows}
     for class_id in sdep_classes:
         group = found.get(class_id)
-        label = str((group["base_class_name"] or group["name"]) if group else "")
-        match = re.match(r"\s*(\d{1,2})", label)
-        if not group or group["group_type"] != "class" or not match or int(match.group(1)) not in {9, 10, 11}:
+        grade = canonical_group_grade(dict(group)) if group else ""
+        if not group or not grade or int(grade) not in {9, 10, 11}:
             raise ValueError("SDEP is available only for administrative classes 9–11")
 
 

@@ -342,7 +342,7 @@ class ConstructorPublicationTests(unittest.TestCase):
     def test_online_and_sdep_day_modes_publish_to_student_and_teacher_campus(self):
         online = self.draft([self.lesson(teacherId=str(self.teacher["id"]), room="")])
         online_payload = copy.deepcopy(online["payload"])
-        online_payload["day_modes"] = {str(self.group["id"]): {"0": "online"}}
+        online_payload["grade_modes"] = {"9": {"0": "online"}}
         online = save_experiment(self.database, online["id"], expected_revision=online["revision"], payload=online_payload)
         online_preview = preview_publication(self.database, online["id"], scope_kind="template", expected_revision=online["revision"])
         self.assertTrue(online_preview["can_publish"], online_preview["blockers"])
@@ -359,7 +359,7 @@ class ConstructorPublicationTests(unittest.TestCase):
             self.lesson(id="sdep-b", teacherId="", room="", subject="Science"),
         ])
         sdep_payload = copy.deepcopy(sdep["payload"])
-        sdep_payload["day_modes"] = {str(self.group["id"]): {"0": "sdep"}}
+        sdep_payload["grade_modes"] = {"9": {"0": "sdep"}}
         sdep = save_experiment(self.database, sdep["id"], expected_revision=sdep["revision"], payload=sdep_payload)
         sdep_preview = preview_publication(self.database, sdep["id"], scope_kind="template", expected_revision=sdep["revision"])
         diagnostic_codes = [item["code"] for item in sdep_preview["diagnostics"]]
@@ -377,7 +377,7 @@ class ConstructorPublicationTests(unittest.TestCase):
             self.lesson(id="conducted-b", room="102", subject="Science"),
         ])
         conducted_payload = copy.deepcopy(conducted["payload"])
-        conducted_payload["day_modes"] = {str(self.group["id"]): {"0": "sdep"}}
+        conducted_payload["grade_modes"] = {"9": {"0": "sdep"}}
         conducted = save_experiment(self.database, conducted["id"], expected_revision=conducted["revision"], payload=conducted_payload)
         conducted_preview = preview_publication(self.database, conducted["id"], scope_kind="template", expected_revision=conducted["revision"])
         conducted_codes = {item["code"] for item in conducted_preview["diagnostics"]}
