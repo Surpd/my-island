@@ -222,6 +222,32 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
   await expect(inspector).toHaveAttribute('aria-hidden', 'true');
 });
 
+test('constructor edit preserves horizontal grid position', async ({ page }) => {
+  test.setTimeout(45_000);
+  await page.setViewportSize({ width: 900, height: 960 });
+  await openEmptyWeek(page);
+  await page.locator('[data-cell="0:0"]').click();
+  await page.locator('.constructor-drawer-tab').click();
+  await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
+  await page.getByRole('button', { name: 'Форма', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Название активности' }).fill('Геометрия прокрутки');
+  await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('8');
+  await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
+  const lesson = page.locator('.constructor-card').filter({ hasText: 'Геометрия прокрутки' });
+  await expect(lesson).toBeVisible();
+  await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+  const gridWrap = page.locator('.constructor-grid-wrap');
+  await gridWrap.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+  await expect.poll(() => gridWrap.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+  await lesson.dblclick();
+  const room = page.locator('.constructor-inspector').getByLabel('Кабинет', { exact: true });
+  await room.fill('9');
+  const beforeClose = await gridWrap.evaluate((element) => element.scrollLeft);
+  await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
+  expect(await gridWrap.evaluate((element) => element.scrollLeft)).toBe(beforeClose);
+  await expect(lesson).toContainText('9');
+});
+
 test('constructor electives: parallel courses use class availability without student rosters', async ({ page }) => {
   const suffix = Date.now().toString(36).slice(-5);
   const class5 = await createClass(page, `5-А elective ${suffix}`);
@@ -343,6 +369,8 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await openEmptyWeek(page);
   await filterClass(page, first);
   await page.locator('[data-cell="0:0"]').click();
+  await page.locator('.constructor-drawer-tab').click();
+  await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('button', { name: 'Кружок', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Айкидо без каталога');
@@ -353,7 +381,7 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await screenshot(page, 'club-aikido-no-catalog-before-add');
   await page.getByRole('button', { name: 'Добавить кружок' }).click();
   const club = page.locator('.constructor-card').filter({ hasText: 'Айкидо без каталога' });
-  await expect(club).toContainText('Участники не назначены');
+  await expect(club).not.toContainText('Участники не назначены');
   await expect(club).toHaveAttribute('title', /Без учителя.*Зал/u);
   await expect(club).toContainText('Зал');
   await screenshot(page, 'club-no-participants-source');
@@ -365,7 +393,7 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await page.keyboard.press('Control+v');
   const pasted = page.locator('[data-cell="1:0"] .constructor-card').filter({ hasText: 'Айкидо без каталога' });
   await expect(pasted).toBeVisible();
-  await expect(pasted).toContainText('Участники не назначены');
+  await expect(pasted).not.toContainText('Участники не назначены');
   await screenshot(page, 'club-no-participants-pasted');
 });
 

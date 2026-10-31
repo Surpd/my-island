@@ -4,6 +4,7 @@
 import {
   Fragment,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -139,6 +140,31 @@ type Payload = {
   day_modes?: Record<string, Record<string, DayMode>>;
   grade_modes?: Record<string, Record<string, DayMode>>;
 };
+function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleActivity[]) {
+  const problems: string[] = [];
+  const lessons = payload.lessons.map((lesson) => {
+    if (lesson.activityType !== 'club' && lesson.activityType !== 'elective') return lesson;
+    const typeLabel = lesson.activityType === 'club' ? 'Кружок' : 'Курс по выбору';
+    const catalog = lesson.activityCatalogId
+      ? activities.find((item) => item.id === lesson.activityCatalogId)
+      : undefined;
+    if (lesson.activityCatalogId && !catalog) {
+      problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): запись каталога не найдена. Снимите привязку или выберите существующую.`);
+      return lesson;
+    }
+    if (catalog && catalog.type !== lesson.activityType) {
+      problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): тип не совпадает с записью каталога «${catalog.name}».`);
+      return lesson;
+    }
+    const snapshot = String(lesson.activityNameSnapshot || lesson.subject || catalog?.name || '').trim();
+    if (!snapshot) {
+      problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): нет названия. Введите название или выберите запись каталога.`);
+      return lesson;
+    }
+    return lesson.activityNameSnapshot === snapshot ? lesson : { ...lesson, activityNameSnapshot: snapshot };
+  });
+  return { payload: lessons.some((lesson, index) => lesson !== payload.lessons[index]) ? { ...payload, lessons } : payload, problems };
+}
 type Draft = {
   id: string;
   name: string;
@@ -652,6 +678,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   } | null>(null);
   const columnHeaders = useRef<Record<string, HTMLDivElement | null>>({});
   const gridWrap = useRef<HTMLDivElement | null>(null);
+  const gridScroll = useRef({ left: 0, top: 0 });
+  const restoringGridScroll = useRef(false);
+  useLayoutEffect(() => {
+    const grid = gridWrap.current;
+    if (!grid) return;
+    const { left, top } = gridScroll.current;
+    restoringGridScroll.current = true;
+    if (Math.abs(grid.scrollLeft - left) > 1) grid.scrollLeft = left;
+    if (Math.abs(grid.scrollTop - top) > 1) grid.scrollTop = top;
+    requestAnimationFrame(() => { restoringGridScroll.current = false; });
+  }, [panelOpen, draft?.payload]);
   const columnResize = useRef<{ pointerId: number; key: string; startX: number; startWidth: number; scale: number; widths: Record<string, number> } | null>(null);
   const [resizePreview, setResizePreview] = useState<Record<string, number> | null>(null);
   const revision = useRef(0);
@@ -903,8 +940,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     savingRef.current = true;
     setSaving(true);
     try {
+      const prepared = prepareOptionalActivityPayload(base.payload, activities);
+      if (prepared.problems.length) {
+        setRenameError(`Сначала исправьте: ${prepared.problems.join(' ')}`);
+        return;
+      }
       const updated = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`), {
-        method: 'PUT', body: JSON.stringify({ expected_revision: revision.current, name, payload: base.payload }),
+        method: 'PUT', body: JSON.stringify({ expected_revision: revision.current, name, payload: prepared.payload }),
       });
       revision.current = updated.revision;
       baseDraftRef.current = updated;
@@ -987,6 +1029,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const save = async () => {
     const current = draftRef.current;
     if (!current || savingRef.current || !dirty) return !dirty;
+    const prepared = prepareOptionalActivityPayload(current.payload, activities);
+    if (prepared.problems.length) {
+      setSaveFailed(true);
+      setStatus(`Сохранение остановлено. ${prepared.problems.join(' ')}`);
+      return false;
+    }
+    const localCurrent = prepared.payload === current.payload ? current : { ...current, payload: prepared.payload };
     const savedVersion = changeVersion.current;
     const expectedRevision = revision.current;
     const acceptSaved = (value: Draft) => {
@@ -1006,10 +1055,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       const mergeBase = base || unknownConflictBase(server);
       const merged = mergeScheduleDrafts(mergeBase, local, server);
       if (merged.conflicts.length) return { server, conflicts: merged.conflicts };
+      const preparedMerge = prepareOptionalActivityPayload(merged.draft.payload, activities);
+      if (preparedMerge.problems.length) throw new Error(`Сохранение остановлено. ${preparedMerge.problems.join(' ')}`);
       try {
         const saved = await api<Draft>(schedulePath(`/${encodeURIComponent(server.id)}`), {
           method: 'PUT',
-          body: JSON.stringify({ expected_revision: server.revision, name: merged.draft.name, payload: merged.draft.payload }),
+          body: JSON.stringify({ expected_revision: server.revision, name: merged.draft.name, payload: preparedMerge.payload }),
         });
         return { saved, server, conflicts: [] };
       } catch (mergeError) {
@@ -1033,7 +1084,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           body: JSON.stringify({
             expected_revision: expectedRevision,
             name: current.name,
-            payload: current.payload,
+            payload: prepared.payload,
           }),
         },
       );
@@ -1046,7 +1097,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       if (failure.status === 409) {
         try {
           const server = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`));
-          const localNow = draftRef.current?.id === current.id ? draftRef.current : current;
+          const localNowRaw = draftRef.current?.id === current.id ? draftRef.current : current;
+          const preparedLocal = prepareOptionalActivityPayload(localNowRaw.payload, activities);
+          if (preparedLocal.problems.length) throw new Error(`Сохранение остановлено. ${preparedLocal.problems.join(' ')}`);
+          const localNow = preparedLocal.payload === localNowRaw.payload ? localNowRaw : { ...localNowRaw, payload: preparedLocal.payload };
           if (sameDraftContent(localNow, server)) {
             revision.current = server.revision;
             baseDraftRef.current = server;
@@ -1087,7 +1141,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       if (!failure.status) {
         try {
           const persisted = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`));
-          if (persisted.revision > expectedRevision && sameDraftContent(current, persisted)) {
+          if (persisted.revision > expectedRevision && sameDraftContent(localCurrent, persisted)) {
             acceptSaved(persisted);
             setStatus('Черновик сохранён: сервер подтвердил запись при повторном чтении.');
             return true;
@@ -1721,8 +1775,22 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         if (item.id !== id) return item;
         const next: Lesson = { ...item, ...patch,
           ...(workspace === 'school' && item.source ? { source: { ...item.source, manual_override: true } } : {}) };
-        if (patch.subject !== undefined && patch.activityNameSnapshot === undefined && (next.activityType === 'club' || next.activityType === 'elective'))
-          next.activityNameSnapshot = patch.subject;
+        const optionalActivity = next.activityType === 'club' || next.activityType === 'elective';
+        if (patch.activityType !== undefined && patch.activityType !== item.activityType) {
+          if (optionalActivity) next.activityCatalogId = '';
+          else delete next.activityCatalogId;
+          if (optionalActivity && patch.subject === undefined && patch.activityNameSnapshot === undefined)
+            next.activityNameSnapshot = String(item.activityNameSnapshot || item.subject || '').trim() || undefined;
+        }
+        if (optionalActivity) {
+          const name = patch.subject !== undefined
+            ? patch.subject.trim()
+            : patch.activityNameSnapshot !== undefined
+              ? String(patch.activityNameSnapshot || '').trim()
+              : String(next.activityNameSnapshot || next.subject || '').trim();
+          if (name) next.activityNameSnapshot = name;
+          else delete next.activityNameSnapshot;
+        }
         if (!patch.audience && patch.groupId !== undefined) {
           const group = groups.find((entry) => entry.id === patch.groupId);
           if (group?.group_type === 'class') {
@@ -2574,7 +2642,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </details>
           ) : null}
           <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
-            <div ref={gridWrap} className={`constructor-grid-wrap ${density}`}>
+            <div ref={gridWrap} className={`constructor-grid-wrap ${density}`} onScroll={(event) => {
+              if (!restoringGridScroll.current) gridScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
+            }}>
               <div
                 className="constructor-grid"
                 style={{
@@ -2764,10 +2834,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     <strong>
                                       {item.kind === 'event' ? <>◆ {item.subject}{item.period !== period ? ' ↳' : ''}</> : <><span className="constructor-subject-short">{item.period !== period ? '↳ ' : ''}{englishCaption?.short || shortSubject(item.subject || 'Новый урок')}</span><span className="constructor-subject-full">{item.period !== period ? '↳ ' : ''}{englishCaption?.full || subjectLabel(item.subject) || 'Новый урок'}</span></>}
                                     </strong>
-                                    <small>
-                                      {item.activityType === 'club' ? 'Участники не назначены' : <>{lessonClasses(item).length > 1 ? <span title="Совместное занятие">↔ </span> : null}{isAvailableSlot ? 'Все остальные' : localGroups.length ? localGroups.map((group) => audienceShortLabel(group)).join(', ') : classCaption || 'Участники требуют уточнения'}</>}
-                                    </small>
-                                    <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || '—')}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small>
+                                    {item.activityType !== 'club' ? <small>{lessonClasses(item).length > 1 ? <span title="Совместное занятие">↔ </span> : null}{isAvailableSlot ? 'Все остальные' : localGroups.length ? localGroups.map((group) => audienceShortLabel(group)).join(', ') : classCaption || 'Участники требуют уточнения'}</small> : null}
+                                    {item.activityType !== 'club' || item.teacherId || item.room || item.place || item.teacherIds?.length ? <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || (item.activityType === 'club' ? '' : '—'))}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small> : null}
                                   </span>
                                   {conflictsOpen && issues.some(
                                     (issue) => issue.lessonId === item.id || issue.related === item.id,
@@ -2978,7 +3046,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                       <label>Тип активности <select value={selected.activityType || (selected.kind === 'event' ? 'event' : 'lesson')} onChange={(event) => { const type = event.target.value as Lesson['activityType']; const explicitOnly = type === 'club'; const participants = selected.confirmedParticipantIds || []; updateLesson(selected.id, { activityType: type, kind: type === 'event' ? 'event' : 'lesson', ...(explicitOnly ? { audience: { kind: 'students', student_ids: type === 'club' ? [] : participants }, groupId: '', groupIds: [], ...(type === 'club' ? { confirmedParticipantIds: undefined, displayClassIds: visualClasses(selected, groups), classIds: [], classId: '' } : {}) } : {}) }); }}><option value="lesson">Урок</option><option value="club">Кружок</option><option value="elective">Курс по выбору</option><option value="event">Событие</option></select></label>
                       </>}
                       {(selected.activityType === 'club' || selected.activityType === 'elective') ? <>
-                        <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || undefined, activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selected.activityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
+                      <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selected.activityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
                         {selected.activityType === 'elective' ? <ElectiveClassFields groups={groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id))} classIds={lessonClasses(selected)} eligibleGrades={selected.eligibleGrades || []} onClassIdsChange={(classIds) => updateLesson(selected.id, { classIds, classId: classIds[0] || '' })} onEligibleGradesChange={(eligibleGrades) => updateLesson(selected.id, { eligibleGrades })} /> : null}
                         {selected.activityType === 'elective' ? <><label>Направление <select value={selected.electiveDirection || ''} onChange={(event) => updateLesson(selected.id, { electiveDirection: event.target.value === 'digital' ? 'digital' : undefined })}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label></> : null}
                       </> : null}
