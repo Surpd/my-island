@@ -655,6 +655,31 @@ class ScheduleExperimentTests(unittest.TestCase):
         self.assertEqual(updated["payload"]["reference_date"], "2026-10-13")
         self.assertEqual(canonical_version(self.database), baseline)
 
+    def test_day_modes_round_trip_into_detached_weeks_and_remain_week_scoped(self):
+        from backend.services.schedule_experiments import create_experiment_week
+        grade6 = self.database.create_group("6A", "class")
+        grade10 = self.database.create_group("10A", "class")
+        payload = {"classes": [grade6["id"], grade10["id"]], "lessons": [],
+                   "day_modes": {str(grade6["id"]): {"2": "online"}, str(grade10["id"]): {"4": "sdep"}}}
+        template = create_experiment(self.database, name="Mode template", source="empty", payload=payload)
+        saved = save_experiment(self.database, template["id"], expected_revision=template["revision"], payload=template["payload"])
+        reopened = get_experiment(self.database, template["id"])
+        self.assertEqual(reopened["payload"]["day_modes"], payload["day_modes"])
+        week = create_experiment_week(self.database, template["id"], week_start="2026-10-19", expected_revision=saved["revision"])
+        self.assertEqual(week["payload"]["day_modes"], payload["day_modes"])
+        week_modes = {**week["payload"]["day_modes"], str(grade6["id"]): {"1": "online"}}
+        updated_week = save_experiment(self.database, week["id"], expected_revision=week["revision"],
+                                       payload={**week["payload"], "day_modes": week_modes})
+        self.assertEqual(updated_week["payload"]["day_modes"][str(grade6["id"])], {"1": "online"})
+        self.assertEqual(get_experiment(self.database, template["id"])["payload"]["day_modes"], payload["day_modes"])
+
+    def test_sdep_day_mode_rejects_non_upper_school_classes(self):
+        grade6 = self.database.create_group("6A", "class")
+        with self.assertRaisesRegex(ValueError, "SDEP is available only"):
+            create_experiment(self.database, name="Invalid SDEP", source="empty",
+                              payload={"classes": [grade6["id"]], "lessons": [],
+                                       "day_modes": {grade6["id"]: {"4": "sdep"}}})
+
     def test_draft_catalog_separates_explicit_demo_and_unclassified_without_losing_content(self):
         user = create_experiment(self.database, name="Моя неделя", source="empty", payload={"draft_kind": "user"})
         demo = create_experiment(self.database, name="ДЕМО · Полная тестовая неделя", source="empty",

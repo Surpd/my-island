@@ -4,7 +4,7 @@ import { normalizeRoomDisplay } from './schedule-rooms.ts';
 type RawLesson = Record<string, unknown>;
 export type CampusLesson = { lesson_date: string; start_time: string; end_time?: string; subject: string; teacher?: string; room?: string; audience?: string; lesson_type?: string; activity_format?: string; physical_presence?: boolean; responsible_teacher?: string };
 type CampusItem = { date: string; slot: { start: string; end?: string }; state: 'lesson' | 'no_lesson' | 'conflict' | 'special_event'; canonical_title?: string; teacher?: string; room?: string; activity_format?: string; responsible_teacher?: string; no_lesson?: { reason?: 'break' }; conflict?: { state: string; label: string; alternatives: Array<{ title: string }> }; special_event?: { kind: string; title: string } };
-export type CampusDay = { date: string; state: 'scheduled'; items: CampusItem[] };
+export type CampusDay = { date: string; state: 'scheduled'; items: CampusItem[]; mode?: 'online' | 'sdep' };
 const string = (value: unknown) => typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 const list = (value: unknown) => Array.isArray(value) ? value.map(string).filter(Boolean).join(' · ') : string(value);
 const rows = (value: unknown): RawLesson[] => Array.isArray(value) ? value.filter((row): row is RawLesson => Boolean(row) && typeof row === 'object') : [];
@@ -29,8 +29,13 @@ export function campusLessons(value: unknown): CampusLesson[] {
   });
 }
 
-export function campusStudentDays(value: unknown): CampusDay[] {
+export function campusStudentDays(value: unknown, dayModes: unknown = []): CampusDay[] {
   const days = new Map<string, CampusDay>();
+  for (const mode of rows(dayModes)) {
+    const date = string(mode.date);
+    const kind = string(mode.mode);
+    if (date && (kind === 'online' || kind === 'sdep')) days.set(date, { date, state: 'scheduled', items: [], mode: kind });
+  }
   for (const row of rows(value)) {
     const date = string(row.lesson_date || row.date);
     if (!date) continue;

@@ -339,6 +339,39 @@ class ConstructorPublicationTests(unittest.TestCase):
             preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
             self.assertNotIn("missing_teacher", [item["code"] for item in preview["diagnostics"]])
 
+    def test_online_and_sdep_day_modes_publish_to_student_and_teacher_campus(self):
+        online = self.draft([self.lesson(teacherId=str(self.teacher["id"]), room="")])
+        online_payload = copy.deepcopy(online["payload"])
+        online_payload["day_modes"] = {str(self.group["id"]): {"0": "online"}}
+        online = save_experiment(self.database, online["id"], expected_revision=online["revision"], payload=online_payload)
+        online_preview = preview_publication(self.database, online["id"], scope_kind="template", expected_revision=online["revision"])
+        self.assertTrue(online_preview["can_publish"], online_preview["blockers"])
+        self.assertNotIn("missing_room", [item["code"] for item in online_preview["diagnostics"]])
+        self.publish(online)
+        self.publish(online, "week", week_start="2026-10-19")
+        student_online = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        self.assertEqual(student_online["day_modes"], [{"date": "2026-10-19", "mode": "online"}])
+        teacher_online = canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")
+        self.assertEqual(teacher_online["day_modes"][0]["mode"], "online")
+
+        sdep = self.draft([
+            self.lesson(id="sdep-a", teacherId="", room=""),
+            self.lesson(id="sdep-b", teacherId="", room="", subject="Science"),
+        ])
+        sdep_payload = copy.deepcopy(sdep["payload"])
+        sdep_payload["day_modes"] = {str(self.group["id"]): {"0": "sdep"}}
+        sdep = save_experiment(self.database, sdep["id"], expected_revision=sdep["revision"], payload=sdep_payload)
+        sdep_preview = preview_publication(self.database, sdep["id"], scope_kind="template", expected_revision=sdep["revision"])
+        diagnostic_codes = [item["code"] for item in sdep_preview["diagnostics"]]
+        self.assertTrue(sdep_preview["can_publish"], sdep_preview["blockers"])
+        self.assertNotIn("missing_teacher", diagnostic_codes)
+        self.assertNotIn("missing_room", diagnostic_codes)
+        self.assertNotIn("student_overlap", diagnostic_codes)
+        self.publish(sdep)
+        self.publish(sdep, "week", week_start="2026-10-19")
+        student_sdep = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        self.assertEqual(student_sdep["day_modes"], [{"date": "2026-10-19", "mode": "sdep"}])
+
     def test_lunch_scope_advisory_publishes_only_known_class(self):
         lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", needsClarification=True,
             clarificationReason="Уточните охват обеда: класс или отдельная группа")

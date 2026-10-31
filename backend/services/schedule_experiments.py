@@ -105,6 +105,25 @@ def _clean_payload(value: Mapping[str, Any] | None) -> dict[str, Any]:
                                            "resolved_at": str(snapshot.get("resolved_at") or "")}
         clean_lessons.append(lesson)
     result = {"days": days, "slots": slots, "classes": classes, "lessons": clean_lessons}
+    raw_day_modes = raw.get("day_modes") or {}
+    if not isinstance(raw_day_modes, Mapping):
+        raise ValueError("day_modes must map administrative class ids to weekdays")
+    day_modes: dict[str, dict[str, str]] = {}
+    for class_id, modes in raw_day_modes.items():
+        if not isinstance(modes, Mapping):
+            raise ValueError("Each day_modes class entry must map weekdays to modes")
+        clean_modes: dict[str, str] = {}
+        for raw_day, raw_mode in modes.items():
+            day = int(raw_day)
+            mode = str(raw_mode or "normal").strip().lower()
+            if day < 0 or day > 6 or mode not in {"normal", "online", "sdep"}:
+                raise ValueError("day_modes weekdays must be 0..6 and modes normal, online or sdep")
+            if mode != "normal":
+                clean_modes[str(day)] = mode
+        if clean_modes:
+            day_modes[str(class_id)] = clean_modes
+    if day_modes:
+        result["day_modes"] = day_modes
     if raw.get("reference_date"):
         result["reference_date"] = date.fromisoformat(str(raw["reference_date"])).isoformat()
     if raw.get("week_start"):
@@ -126,6 +145,31 @@ def _clean_payload(value: Mapping[str, Any] | None) -> dict[str, Any]:
     if isinstance(raw.get("source_template"), Mapping):
         result["source_template"] = dict(raw["source_template"])
     return result
+
+
+def _validate_day_modes(database: Database, payload: Mapping[str, Any]) -> None:
+    day_modes = payload.get("day_modes") or {}
+    if not day_modes:
+        return
+    class_ids = set(str(value) for value in payload.get("classes") or [])
+    if set(day_modes) - class_ids:
+        raise ValueError("Day modes may only target administrative classes in this template")
+    sdep_classes = {class_id for class_id, modes in day_modes.items()
+                    if any(mode == "sdep" for mode in modes.values())}
+    if not sdep_classes:
+        return
+    placeholders = ",".join("?" for _ in sdep_classes)
+    with database.connection() as connection:
+        rows = database.execute(connection,
+            f"SELECT id,name,base_class_name,group_type FROM groups WHERE id IN ({placeholders})",
+            tuple(sorted(sdep_classes))).fetchall()
+    found = {str(row["id"]): row for row in rows}
+    for class_id in sdep_classes:
+        group = found.get(class_id)
+        label = str((group["base_class_name"] or group["name"]) if group else "")
+        match = re.match(r"\s*(\d{1,2})", label)
+        if not group or group["group_type"] != "class" or not match or int(match.group(1)) not in {9, 10, 11}:
+            raise ValueError("SDEP is available only for administrative classes 9–11")
 
 
 def _ids(value: Any) -> list[str]:
@@ -779,6 +823,7 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     now = datetime.now(timezone.utc).isoformat()
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
+    _validate_day_modes(database, clean_payload)
     if not _trusted_resolution_history:
         for lesson in clean_payload['lessons']:lesson.pop('resolution_history',None)
     provenance = clean_payload.get("school_source")
@@ -930,6 +975,7 @@ def delete_experiment(database: Database, experiment_id: str) -> None:
 
 def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
     clean = _clean_payload(payload)
+    _validate_day_modes(database, clean)
     clean["lessons"] = validate_activity_lessons(clean["lessons"], list_activities(database, include_archived=True))
     normalized_name = str(name or "").strip() if name is not None else None
     if name is not None and not normalized_name:

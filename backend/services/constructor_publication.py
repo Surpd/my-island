@@ -76,6 +76,22 @@ def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: 
     return True
 
 
+def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any]) -> set[str]:
+    class_ids = lesson.get("classIds") or ([lesson.get("classId")] if lesson.get("classId") else [])
+    modes = payload.get("day_modes") or {}
+    return {str((modes.get(str(class_id)) or {}).get(str(lesson.get("day", lesson.get("weekday", -1))), "normal"))
+            for class_id in class_ids}
+
+
+def _sdep_independent_lesson(payload: Mapping[str, Any], lesson: Mapping[str, Any], teacher_ids: set[str]) -> bool:
+    class_modes = _lesson_day_modes(payload, lesson)
+    if not class_modes or class_modes != {"sdep"}:
+        return False
+    if isinstance(lesson.get("sdepIndependent"), bool):
+        return bool(lesson["sdepIndependent"])
+    return not teacher_ids and not str(lesson.get("room") or "").strip() and lesson.get("format") != "offline" and lesson.get("kind") != "event"
+
+
 def initialize_publication_schema(database: Any) -> None:
     """Explicit local fixture setup; production migrations must be approved."""
     with database.connection() as connection:
@@ -335,6 +351,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
         display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
+        class_modes = _lesson_day_modes(payload, lesson)
+        online_only = bool(class_modes) and class_modes == {"online"}
+        sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids))
         if needs_review:
             # Imported staffing checks do not make an explicit student audience
             # ambiguous. Keep the diagnostic without inventing any teacher.
@@ -350,7 +369,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 block("review_required", review_reason)
         if teacher_evidence - teachers.keys():
             block("unknown_teacher", "An assigned teacher is missing or inactive")
-        if not teacher_ids and _requires_physical_teacher(lesson, practice):
+        if not teacher_ids and not sdep_independent and _requires_physical_teacher(lesson, practice):
             blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
                              "message": "Преподаватель занятия не подтверждён", "severity": "info"})
         if practice:
@@ -358,7 +377,8 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
-                              "subject": subject, "room": room_key(lesson.get("room"))})
+                              "subject": subject, "room": room_key(lesson.get("room")),
+                              "sdep_independent": sdep_independent})
         rule = _lesson_audience(lesson)
         grade = str(rule.get("grade") or lesson.get("grade_scope") or "")
         class_ids = rule.get("class_ids") or []
@@ -426,7 +446,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             "class_ids": display_class_ids, "assignment_kind": kind or special or "unspecified",
             "teachers": [teachers[t] for t in teacher_ids if t in teachers],
             "groups": [str(groups[g]["name"]) for g in (group_ids or class_ids or display_class_ids) if g in groups]}
-        if not str(lesson.get("room") or "").strip():
+        if not online_only and not sdep_independent and not str(lesson.get("room") or "").strip():
             blockers.append({"code": "missing_room", "lesson_id": lesson_id,
                              "message": "Кабинет не указан", "severity": "info"})
         role = "explicit_no_lesson" if special == "no_lesson" else "residual" if special == "lunch" or kind in {"available_slot", "legacy_remaining"} else "primary"
@@ -439,7 +459,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         constructor_details = {**deepcopy(preserved_metadata.get("constructor_details") or {}), **{k: deepcopy(lesson[k]) for k in (
             "description", "place", "format", "activityCatalogId", "activityNameSnapshot",
             "eligibleGrades", "confirmedParticipantIds", "electiveDirection", "audience_snapshot",
-            "kind", "informational") if k in lesson}}
+            "kind", "informational", "sdepIndependent") if k in lesson}}
         assignment = {"activity": "NO_LESSON" if special == "no_lesson" else subject or "Обед",
                       "role": role, "audience": {"type": "canonical_groups", "canonical_group_ids": group_ids},
                       "canonical_group_ids": group_ids, "teacher_ids": teacher_ids,
@@ -502,6 +522,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                     and (not left["room"] or not right["room"] or left["room"] == right["room"])):
                 continue
             if left["id"] in joint_by_lesson and joint_by_lesson.get(left["id"]) == joint_by_lesson.get(right["id"]):
+                continue
+            both_independent_sdep = left["sdep_independent"] and right["sdep_independent"]
+            if both_independent_sdep:
                 continue
             if left["students"] & right["students"]:
                 blockers.append({"code": "student_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],

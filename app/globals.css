@@ -3373,6 +3373,11 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .student-schedule-sdep { display: grid; gap: 5px; padding: 18px 15px; border: 1px solid #d9e5df; border-radius: 17px; background: #edf6ef; }
 .student-schedule-sdep strong { color: #315c52; font-family: Georgia, serif; font-size: 21px; }
 .student-schedule-sdep span { color: #5b756f; font-size: 11px; }
+.campus-day-mode { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 10px 12px; border: 1px solid #c8d9dc; border-radius: 10px; background: #f0f8fa; color: #265b6a; }
+.campus-day-mode strong { font-size: 13px; }
+.campus-day-mode span { font-size: 12px; }
+.campus-day-mode.sdep { border-color: #d8c9ed; background: #f7f3fc; color: #684391; }
+.campus-day-mode.online { border-color: #b9d9e8; background: #eef8fc; color: #12648a; }
 .panel-intro h2 {
   font-size: 25px;
 }
@@ -3517,6 +3522,21 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-grid { display: grid; min-width: max-content; }
 .constructor-corner, .constructor-head { position: sticky; top: 0; z-index: 3; display: flex; min-height: 43px; align-items: center; justify-content: center; border-right: 1px solid #dce3dd; border-bottom: 1px solid #dce3dd; background: #eaf1ee; font-weight: 800; }
 .constructor-corner { left: 0; z-index: 4; }
+.constructor-day-mode-list { display: grid; gap: 2px; width: 100%; padding: 2px 11px 4px 4px; }
+.constructor-day-mode-class { position: relative; display: flex; align-items: center; justify-content: center; gap: 3px; min-width: 0; }
+.constructor-day-mode-list.week .constructor-day-mode-class { flex-wrap: wrap; }
+.constructor-day-mode-class-name { max-width: 72px; overflow: hidden; color: #587071; font-size: 9px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.constructor-day-mode-list.week .constructor-day-mode-class-name { width: 100%; text-align: center; }
+.constructor-day-mode-control { position: relative; display: inline-flex; }
+.constructor-day-mode-button { display: inline-flex; align-items: center; justify-content: center; gap: 2px; min-width: 20px; min-height: 19px; padding: 1px 3px; border: 1px solid #cad8d3; border-radius: 5px; background: #fff; color: #45605f; cursor: pointer; }
+.constructor-day-mode-button small { font-size: 8px; line-height: 1; }
+.constructor-day-mode-button.online { border-color: #8ab9d4; background: #eaf6fb; color: #12648a; }
+.constructor-day-mode-button.sdep { border-color: #b5a0d6; background: #f3effb; color: #684391; }
+.constructor-day-mode-button:hover, .constructor-day-mode-button:focus-visible { outline: 2px solid #417c81; outline-offset: 1px; }
+.constructor-day-mode-popover { position: absolute; top: calc(100% + 5px); left: 50%; z-index: 30; display: grid; gap: 6px; min-width: 168px; padding: 9px; border: 1px solid #c8d6d1; border-radius: 8px; background: #fff; box-shadow: 0 8px 22px #233b3526; text-align: left; transform: translateX(-50%); }
+.constructor-day-mode-popover strong { color: #385657; font-size: 11px; }
+.constructor-day-mode-popover select { width: 100%; min-height: 30px; padding: 4px 6px; border: 1px solid #bdceca; border-radius: 5px; background: white; color: #243d43; font-size: 12px; }
+.constructor-sdep-independent-toggle { display: flex; grid-column: 1 / -1; align-items: flex-start; gap: 7px; padding: 8px; border: 1px solid #d8c9ed; border-radius: 7px; background: #f8f5fc; color: #5f477b; font-size: 12px; line-height: 1.4; }
 .constructor-row { display: contents; }
 .constructor-time { position: sticky; left: 0; z-index: 2; display: grid; align-content: center; gap: 3px; padding: 8px; border-right: 1px solid #dce3dd; border-bottom: 1px solid #dce3dd; background: #f5f7f3; }
 .constructor-time span { font-size: 11px; color: #74898b; }
@@ -3617,7 +3637,7 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-card.event-continuation { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
 .constructor-inspector label.constructor-informational, .constructor-create-form label.constructor-informational { display: flex; align-items: center; gap: 7px; }
 .constructor-inspector label.constructor-informational input[type="checkbox"], .constructor-create-form label.constructor-informational input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; }
-.constructor-head { justify-content: center; gap: 2px; padding-inline: 4px; }
+.constructor-head { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 4px 3px; }
 .constructor-column-resizer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: 10px; cursor: col-resize; touch-action: none; }
 .constructor-column-resizer::after { content: ''; position: absolute; top: 5px; bottom: 5px; left: 4px; width: 2px; border-radius: 2px; background: transparent; }
 .constructor-head:hover .constructor-column-resizer::after, .constructor-column-resizer:hover::after, .constructor-column-resizer:active::after { background: #39838e; }

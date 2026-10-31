@@ -120,12 +120,14 @@ type StudentScheduleDay = {
   date: string;
   state: 'scheduled' | 'special';
   items: StudentScheduleItem[];
+  mode?: 'online' | 'sdep';
   special?: { kind: 'sdep'; title: string; description?: string };
 };
 type StudentScheduleProjection = {
   days: StudentScheduleDay[];
   items: Lesson[];
   day_blocks: StudentDayBlock[];
+  day_modes?: Array<{ date: string; mode: 'online' | 'sdep' }>;
   identity_id?: string;
   start_day?: string;
 };
@@ -209,6 +211,7 @@ type TeacherGroupDetail = {
 type TeacherData = {
   courses: Array<Record<string, unknown>>;
   schedule: Lesson[];
+  dayModes: Array<{ date: string; mode: 'online' | 'sdep'; class_name?: string }>;
   today: Lesson[];
   groups: Group[];
   information: Information[];
@@ -630,7 +633,9 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
         <strong>{formatDate(selectedDay, true)}</strong>
         <span>{hasLessons ? `${day?.items.filter((item) => item.state === 'lesson').length || 0} занятий` : 'Учебный день'}</span>
       </div>
-      {day?.special?.kind === 'sdep' ? <div className="student-schedule-sdep"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : hasLessons ? (
+      {day?.mode === 'online' ? <div className="campus-day-mode online"><strong>Онлайн</strong><span>Занятия проходят дистанционно.</span></div> : null}
+      {day?.mode === 'sdep' || day?.special?.kind === 'sdep' ? <div className="student-schedule-sdep"><strong>SDEP</strong><span>Самостоятельная работа по расписанию.</span></div> : null}
+      {hasLessons ? (
         <div className="student-schedule-stack">
           {visibleItems.map((item) => { const index = day?.items.indexOf(item) ?? 0; return item.state === 'no_lesson' ? <div className="student-schedule-gap" key={`${item.date}-${item.slot.start}-${index}`}><span />Перерыв</div> : <ScheduleItemRow item={item} index={index} onOpen={key => { const scrollTop = document.querySelector<HTMLElement>('.sheet-full')?.scrollTop || 0; onSaveScroll?.(scrollTop); onOpenLesson?.(key, scrollTop); }} key={`${item.date}-${item.slot.start}-${item.state}-${index}`} />;})}
         </div>
@@ -645,13 +650,14 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
   );
 }
 
-function SchedulePanel({ schedule, dayBlocks = [], initialDay }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[]; initialDay?: string }) {
-  const initial = initialDay || schedule.map((lesson) => lesson.lesson_date).sort()[0] || dayBlocks.map((block) => block.lesson_date).sort()[0] || isoDate(new Date());
+function SchedulePanel({ schedule, dayBlocks = [], dayModes = [], initialDay }: { schedule: Lesson[]; dayBlocks?: StudentDayBlock[]; dayModes?: Array<{ date: string; mode: 'online' | 'sdep'; class_name?: string }>; initialDay?: string }) {
+  const initial = initialDay || schedule.map((lesson) => lesson.lesson_date).sort()[0] || dayModes.map((item) => item.date).sort()[0] || dayBlocks.map((block) => block.lesson_date).sort()[0] || isoDate(new Date());
   const [selectedDay, setSelectedDay] = useState(initial);
   const monday = weekStart(new Date(`${selectedDay}T12:00:00`));
   const days = Array.from({ length: 7 }, (_, index) => isoDate(addDays(monday, index)));
   const entries = schedule.filter((lesson) => lesson.lesson_date === selectedDay).sort((a, b) => a.start_time.localeCompare(b.start_time));
-  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{dayBlocks.some((block) => block.lesson_date === selectedDay) ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." />}</div>;
+  const modes = [...new Map(dayModes.filter((item) => item.date === selectedDay).map((item) => [`${item.mode}:${item.class_name || ''}`, item])).values()];
+  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{modes.map((item) => <div key={`${item.mode}:${item.class_name || ''}`} className={`campus-day-mode ${item.mode}`}><strong>{item.mode === 'sdep' ? 'SDEP' : 'Онлайн'}</strong><span>{item.mode === 'sdep' ? 'Самостоятельная работа по расписанию' : 'Занятия проходят дистанционно'}{item.class_name ? ` · ${item.class_name}` : ''}</span></div>)}{dayBlocks.some((block) => block.lesson_date === selectedDay) && !modes.some((item) => item.mode === 'sdep') ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : null}{entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : !modes.length && !dayBlocks.some((block) => block.lesson_date === selectedDay) ? <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." /> : null}</div>;
 }
 
 function ScheduleFocusPeek({ projection, referenceDay, scheduleState }: { projection: StudentScheduleProjection; referenceDay?: string; scheduleState?: string }) {
@@ -1808,7 +1814,7 @@ function TeacherApp({
     >
       {selectedId === 'schedule' ? <CampusPeriod day={day} onChange={onDayChange} /> : null}
       {selectedId === 'schedule' ? (
-        scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : <SchedulePanel key={day} schedule={data.schedule} initialDay={day} />
+        scheduleWarning ? <ScheduleNotice message={scheduleWarning} /> : <SchedulePanel key={day} schedule={data.schedule} dayModes={data.dayModes} initialDay={day} />
       ) : selectedId === 'groups' ? (
         <TeacherGroups
           groups={data.groups.filter((group) => !group.is_homeroom)}
@@ -3717,17 +3723,17 @@ export default function Home() {
           ]);
           scheduleState = schedule.state || '';
           scheduleSource = [scheduleState, schedule.identity_id, schedule.start_day].filter(Boolean).join(':');
-          if (current()) setData({ today: { ...today, schedule: campusLessons(today.schedule) }, schedule: campusLessons(schedule.items), scheduleProjection: { ...schedule, items: campusLessons(schedule.items), days: Array.isArray(schedule.days) ? schedule.days : campusStudentDays(schedule.items) }, scheduleState, scheduleDayBlocks: schedule.day_blocks || [], homework: homework.items, profile });
+          if (current()) setData({ today: { ...today, schedule: campusLessons(today.schedule) }, schedule: campusLessons(schedule.items), scheduleProjection: { ...schedule, items: campusLessons(schedule.items), days: Array.isArray(schedule.days) ? schedule.days : campusStudentDays(schedule.items, schedule.day_modes) }, scheduleState, scheduleDayBlocks: schedule.day_blocks || [], homework: homework.items, profile });
         } else {
           const [home, schedule, courses, profile] = await Promise.all([
             api<{ schedule: Lesson[]; groups: Group[]; information: Information[] }>(`/api/teacher/home?day=${chosenDay}`),
-            api<{ items: Lesson[]; state?: string; identity_id?: string; start_day?: string }>(`/api/teacher/schedule?start_day=${period.start}&end_day=${period.end}`),
+            api<{ items: Lesson[]; state?: string; identity_id?: string; start_day?: string; day_modes?: Array<{ date: string; mode: 'online' | 'sdep'; class_name?: string }> }>(`/api/teacher/schedule?start_day=${period.start}&end_day=${period.end}`),
             api<{ items: Array<Record<string, unknown>> }>('/api/teacher/courses'), api<Profile & { state: string }>('/api/teacher/profile'),
           ]);
           scheduleState = schedule.state || '';
           scheduleSource = [scheduleState, schedule.identity_id, schedule.start_day].filter(Boolean).join(':');
           if (!profile.user) throw new ApiError('api_error', 'К роли преподавателя ещё не привязана школьная личность.', 403);
-          if (current()) setTeacherData({ today: campusLessons(home.schedule), groups: home.groups, information: home.information, schedule: campusLessons(schedule.items), courses: courses.items, profile: profile.user ? profile : null });
+          if (current()) setTeacherData({ today: campusLessons(home.schedule), groups: home.groups, information: home.information, schedule: campusLessons(schedule.items), dayModes: schedule.day_modes || [], courses: courses.items, profile: profile.user ? profile : null });
         }
         if (!current()) return;
         if (scheduleState === 'canonical_backend_disabled') { setScheduleWarningSource(scheduleSource); setScheduleWarning('Источник расписания ещё не активирован. Это не подтверждение отсутствия занятий.'); }

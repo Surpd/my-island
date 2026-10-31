@@ -18,6 +18,9 @@ import {
   Clipboard,
   Copy,
   Expand,
+  BookOpenCheck,
+  School,
+  Wifi,
   Plus,
   Palette,
   Pencil,
@@ -119,7 +122,9 @@ type Lesson = {
   confirmedParticipantIds?: string[];
   electiveDirection?: 'digital';
   displayClassIds?: string[];
+  sdepIndependent?: boolean;
 };
+type DayMode = 'online' | 'sdep';
 type ScheduleActivity = { id: string; name: string; type: 'club' | 'elective' | 'event'; aliases: string[]; teacher_ids: string[]; room: string; eligible_grades: number[]; status: 'active' | 'archived'; revision: number };
 type Payload = {
   days: number[];
@@ -131,6 +136,7 @@ type Payload = {
   column_widths?: Record<string, number>;
   column_width_mode?: 'auto' | 'manual';
   import_review?: Raw;
+  day_modes?: Record<string, Record<string, DayMode>>;
 };
 type Draft = {
   id: string;
@@ -255,6 +261,23 @@ function freshId() {
 function lessonClasses(lesson: Lesson) {
   if (lesson.activityType === 'club') return [];
   return lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
+}
+function lessonDayMode(payload: Payload, lesson: Lesson, classId: string): DayMode | null {
+  return payload.day_modes?.[classId]?.[String(lesson.day)] || null;
+}
+function allLessonClassesHaveMode(payload: Payload, lesson: Lesson, mode: DayMode): boolean {
+  const classIds = lessonClasses(lesson);
+  return classIds.length > 0 && classIds.every((classId) => lessonDayMode(payload, lesson, classId) === mode);
+}
+function isSdepIndependentLesson(payload: Payload, lesson: Lesson): boolean {
+  if (!allLessonClassesHaveMode(payload, lesson, 'sdep')) return false;
+  if (typeof lesson.sdepIndependent === 'boolean') return lesson.sdepIndependent;
+  const assignedTeacher = Boolean(lesson.teacherId || lesson.teacherIds?.length);
+  return !assignedTeacher && !String(lesson.room || '').trim() && lesson.format !== 'offline' && lesson.kind !== 'event';
+}
+function lessonNeedsPhysicalRoom(payload: Payload, lesson: Lesson): boolean {
+  if (allLessonClassesHaveMode(payload, lesson, 'online')) return false;
+  return !isSdepIndependentLesson(payload, lesson);
 }
 function visualClasses(lesson: Lesson, groups: Group[]) {
   if (lesson.activityType !== 'club') return lessonClasses(lesson);
@@ -423,10 +446,12 @@ function issuesFor(
     if (lesson.kind === 'event' && (!lesson.start || !lesson.end || minutes(lesson.end) <= minutes(lesson.start)))
       add(lesson.id, 'error', 'У события некорректный временной диапазон.', undefined, 'critical');
     if (!isSpecialMark(lesson) && !lesson.subject.trim()) add(lesson.id, 'error', lesson.kind === 'event' ? 'Не указано название события.' : 'Не указан предмет.');
+    if (!isSpecialMark(lesson) && lessonNeedsPhysicalRoom(payload, lesson) && !String(lesson.room || '').trim())
+      add(lesson.id, 'warning', 'Для очного занятия не указан кабинет.');
     if (lesson.activityType !== 'elective' && audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
       result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: audience.reason || 'Невозможно точно определить участников.' });
     }
-    if (!isSpecialMark(lesson) && shouldWarnMissingTeacher(lesson, independentPractice.has(lesson.id)))
+    if (!isSpecialMark(lesson) && shouldWarnMissingTeacher(lesson, independentPractice.has(lesson.id) || isSdepIndependentLesson(payload, lesson)))
       add(lesson.id, 'warning', 'Преподаватель пока не назначен.');
   }
   for (let i = 0; i < payload.lessons.length; i++)
@@ -443,13 +468,16 @@ function issuesFor(
       const pair = (message: string) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id);
       const teacherIdsA = new Set([...(a.teacherIds || []), a.teacherId].filter(Boolean));
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
-      if ([...teacherIdsA].some((id) => teacherIdsB.has(id)))
+      const independentA = isSdepIndependentLesson(payload, a);
+      const independentB = isSdepIndependentLesson(payload, b);
+      const bothIndependentSdep = independentA && independentB;
+      if (!bothIndependentSdep && [...teacherIdsA].some((id) => teacherIdsB.has(id)))
         pair('Преподаватель уже ведёт урок');
-      if (normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
+      if (!bothIndependentSdep && lessonNeedsPhysicalRoom(payload, a) && lessonNeedsPhysicalRoom(payload, b) && normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
       const studentIdsA = new Set(previews[a.id]?.status === 'ok' ? previews[a.id].student_ids || [] : []);
       const studentIdsB = new Set(previews[b.id]?.status === 'ok' ? previews[b.id].student_ids || [] : []);
       const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
-      if (overlappingStudents.length && a.activityType !== 'elective' && b.activityType !== 'elective') {
+      if (!bothIndependentSdep && overlappingStudents.length && a.activityType !== 'elective' && b.activityType !== 'elective') {
         const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || studentId);
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
         pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
@@ -518,6 +546,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [newAudienceSnapshot, setNewAudienceSnapshot] = useState<{ key: string; preview: AudiencePreview } | null>(null);
   const [day, setDay] = useState(0);
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day');
+  const [dayModeEditor, setDayModeEditor] = useState<{ classId: string; day: number } | null>(null);
   const [weekTarget, setWeekTarget] = useState('');
   const [targetClassId, setTargetClassId] = useState('');
   const [panelMode, setPanelMode] = useState<'lesson' | 'settings'>('lesson');
@@ -894,6 +923,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setFuture([]);
       setDirty(true);
       return { ...current, payload: next };
+    });
+  };
+  const updateDayMode = (classId: string, selectedDay: number, mode: DayMode | 'normal') => {
+    mutate((state) => {
+      const dayModes = { ...(state.day_modes || {}) };
+      const classModes = { ...(dayModes[classId] || {}) };
+      if (mode === 'normal') delete classModes[String(selectedDay)];
+      else classModes[String(selectedDay)] = mode;
+      if (Object.keys(classModes).length) dayModes[classId] = classModes;
+      else delete dayModes[classId];
+      return { ...state, day_modes: Object.keys(dayModes).length ? dayModes : undefined };
     });
   };
   const undo = () => {
@@ -2465,6 +2505,36 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 {gridColumns.map((item) => (
                   <div className="constructor-head" key={item.key} ref={(element) => { columnHeaders.current[item.key] = element; }}>
                     <span>{item.label}</span>
+                    <div className={`constructor-day-mode-list ${viewMode}`} aria-label={`Режимы дней для ${item.label}`}>
+                      {item.classIds.map((classId) => {
+                        const classItem = groups.find((entry) => entry.id === classId);
+                        if (!classItem) return null;
+                        const shownDays = viewMode === 'week' ? payload.days : [day];
+                        const grade = Number(gradeOf(classItem.name));
+                        return <div className="constructor-day-mode-class" key={classId}>
+                          <span className="constructor-day-mode-class-name">{classItem.name}</span>
+                          {shownDays.map((modeDay) => {
+                            const mode = payload.day_modes?.[classId]?.[String(modeDay)] || 'normal';
+                            const modeLabel = mode === 'online' ? 'Онлайн' : mode === 'sdep' ? 'SDEP' : 'Обычный';
+                            const editing = dayModeEditor?.classId === classId && dayModeEditor.day === modeDay;
+                            return <span className="constructor-day-mode-control" key={`${classId}:${modeDay}`}>
+                              <button type="button" className={`constructor-day-mode-button ${mode}`} aria-label={`${classItem.name}, ${DAYS[modeDay]}: ${modeLabel}. Изменить режим дня`} title={`${DAYS[modeDay]} · ${modeLabel}`} onClick={(event) => { event.stopPropagation(); setDayModeEditor(editing ? null : { classId, day: modeDay }); }}>
+                                {viewMode === 'week' ? <small>{DAYS[modeDay]?.slice(0, 2)}</small> : null}
+                                {mode === 'online' ? <Wifi size={13} aria-hidden="true" /> : mode === 'sdep' ? <BookOpenCheck size={13} aria-hidden="true" /> : <School size={13} aria-hidden="true" />}
+                              </button>
+                              {editing ? <span className="constructor-day-mode-popover" onClick={(event) => event.stopPropagation()}>
+                                <strong>{classItem.name} · {DAYS[modeDay]}</strong>
+                                <select aria-label={`Режим дня ${classItem.name} ${DAYS[modeDay]}`} autoFocus value={mode} onChange={(event) => { updateDayMode(classId, modeDay, (event.target.value || 'normal') as DayMode | 'normal'); setDayModeEditor(null); }}>
+                                  <option value="normal">Обычный</option>
+                                  <option value="online">Онлайн</option>
+                                  <option value="sdep" disabled={grade < 9 || grade > 11}>SDEP{grade < 9 || grade > 11 ? ' · только 9–11' : ''}</option>
+                                </select>
+                              </span> : null}
+                            </span>;
+                          })}
+                        </div>;
+                      })}
+                    </div>
                     <span
                       className="constructor-column-resizer"
                       role="separator"
@@ -2910,6 +2980,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           }
                         />
                       </label>
+                      {allLessonClassesHaveMode(payload, selected, 'sdep') ? <label className="constructor-sdep-independent-toggle"><input type="checkbox" checked={isSdepIndependentLesson(payload, selected)} onChange={(event) => updateLesson(selected.id, { sdepIndependent: event.target.checked })} /> Самостоятельная работа: без обычных конфликтов кабинета, преподавателя и учеников</label> : null}
                       <datalist id="constructor-rooms">
                         {[...new Map(rooms.map((room) => [normalizeRoomKey(room), normalizeRoomDisplay(room)])).values()].map((item) => (
                           <option key={item} value={item} />

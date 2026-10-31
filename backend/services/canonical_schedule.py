@@ -1653,6 +1653,95 @@ def _published_unresolved_items(database: Database, effective: Mapping[str, Any]
     return list(grouped.values())
 
 
+def _published_source_for_effective(database: Database, effective: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Read the integrity-checked authored source paired with the selected runtime version."""
+    with database.connection() as connection:
+        query=("SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schedule_constructor_publications'" if database.database_url else "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_constructor_publications'")
+        if not database.execute(connection,query).fetchone():
+            return None
+        row=database.execute(connection,"SELECT metadata,payload_fingerprint FROM schedule_constructor_publications WHERE published_id=? ORDER BY created_at DESC LIMIT 1",(effective.get('effective_week_id'),)).fetchone()
+        if not row:
+            patched=database.execute(connection,"SELECT 1 FROM canonical_effective_blocks WHERE effective_week_id=? AND change_kind NOT IN ('unchanged','base') LIMIT 1",(effective.get('effective_week_id'),)).fetchone()
+            if not patched:
+                row=database.execute(connection,"SELECT metadata,payload_fingerprint FROM schedule_constructor_publications WHERE published_id=? AND scope_kind='template' ORDER BY created_at DESC LIMIT 1",(effective.get('version_id'),)).fetchone()
+    if not row:
+        return None
+    metadata=row['metadata'] if isinstance(row['metadata'],Mapping) else json.loads(row['metadata'])
+    from backend.services.constructor_publication import _checked_published_source
+    try:
+        return _checked_published_source(metadata,row['payload_fingerprint'])
+    except ValueError:
+        return None
+
+
+def _student_day_modes(database: Database, context: StudentProjectionContext, student: Mapping[str, Any], effective: Mapping[str, Any], week_start: str) -> list[dict[str, Any]]:
+    source=_published_source_for_effective(database,effective)
+    payload=(source or {}).get('payload') or {}
+    modes=payload.get('day_modes') or {}
+    class_ids={str(value) for value in payload.get('classes') or []}
+    if not modes or not class_ids:
+        return []
+    student_id=str(student.get('id') or '')
+    class_name=' '.join(str(student.get('class_name') or '').casefold().replace('ё','е').split())
+    start=date.fromisoformat(week_start)
+    result=[]
+    for weekday in range(7):
+        day=(start+timedelta(days=weekday)).isoformat()
+        memberships=_student_memberships(context,student_id,day)
+        matching=[]
+        for class_id in class_ids & set(modes):
+            group=context.groups.get(class_id) or {}
+            if group.get('group_type')!='class':
+                continue
+            labels={" ".join(str(group.get(key) or '').casefold().replace('ё','е').split()) for key in ('name','display_name','base_class_name')}
+            if class_id in memberships or class_name and class_name in labels:
+                mode=str((modes.get(class_id) or {}).get(str(weekday)) or 'normal')
+                if mode in {'online','sdep'}:
+                    matching.append(mode)
+        unique=set(matching)
+        if len(unique)==1:
+            result.append({'date':day,'mode':next(iter(unique))})
+    return result
+
+
+def _teacher_day_modes(database: Database, effective: Mapping[str, Any], teacher_id: str, week_start: str) -> list[dict[str, Any]]:
+    source=_published_source_for_effective(database,effective)
+    payload=(source or {}).get('payload') or {}
+    modes=payload.get('day_modes') or {}
+    if not modes:
+        return []
+    rows=[lesson for lesson in payload.get('lessons') or [] if isinstance(lesson,Mapping)]
+    class_names={}
+    ids=sorted(set(modes))
+    if ids:
+        placeholders=','.join('?' for _ in ids)
+        with database.connection() as connection:
+            found=database.execute(connection,f"SELECT id,name,display_name FROM groups WHERE id IN ({placeholders})",tuple(ids)).fetchall()
+        class_names={str(row['id']):str(row['display_name'] or row['name']) for row in found}
+    start=date.fromisoformat(week_start)
+    result=set()
+    for lesson in rows:
+        teachers={str(value) for value in lesson.get('teacherIds') or []}
+        if lesson.get('teacherId'):
+            teachers.add(str(lesson['teacherId']))
+        teachers.update(str(value) for value in lesson.get('responsibleTeacherIds') or lesson.get('responsible_teacher_ids') or [])
+        if teacher_id not in teachers:
+            continue
+        try:
+            weekday=int(lesson.get('day',lesson.get('weekday')))
+        except (TypeError,ValueError):
+            continue
+        if weekday not in range(7):
+            continue
+        for class_id in lesson.get('classIds') or ([lesson.get('classId')] if lesson.get('classId') else []):
+            class_id=str(class_id)
+            mode=str((modes.get(class_id) or {}).get(str(weekday)) or 'normal')
+            if mode in {'online','sdep'}:
+                result.add(((start+timedelta(days=weekday)).isoformat(),mode,class_id,class_names.get(class_id,class_id)))
+    return [{'date':day,'mode':mode,'class_id':class_id,'class_name':class_name}
+            for day,mode,class_id,class_name in sorted(result)]
+
+
 def project_student(
     database: Database,
     identity_id: Any,
@@ -1668,6 +1757,8 @@ def project_student(
     student = context.students.get(student_id)
     if not student or student.get("status") != "active":
         return {"identity_id": student_id, "week_start": week_start, "status": "student_not_found", "items": [], "issues": []}
+    day_modes=_student_day_modes(database,context,student,effective,week_start)
+    day_modes_by_date={item['date']:item['mode'] for item in day_modes}
     items, issues = [], []
     seen_joint_activities: set[tuple[str,str,str,str]] = set()
     start = date.fromisoformat(week_start)
@@ -1686,13 +1777,13 @@ def project_student(
             if joint_key in seen_joint_activities:
                 continue
             seen_joint_activities.add(joint_key)
-        items.append({"block_key": block["block_key"], "date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **state})
+        items.append({"block_key": block["block_key"], "date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), **({"day_mode":day_modes_by_date[day]} if day in day_modes_by_date else {}), **state})
     unresolved=_published_unresolved_items(database,effective,student_id,week_start,'student')
     if unresolved:
         intervals={(i['date'],i['start_time'],i['end_time']) for i in unresolved}
         items=[i for i in items if not (i['state']=='NO_LESSON' and (i['date'],i['start_time'],i['end_time']) in intervals)]
         items.extend(unresolved)
-    return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
+    return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes}
 
 
 def _week_start(day: str) -> str:
@@ -1715,12 +1806,14 @@ def project_student_range(database: Database, identity_id: Any, start_day: str, 
     approved = {"approved_baseline", "approved_with_exceptions", "authoritative"}
     items = [item for projection in projections.values() if projection["status"] in approved
              for item in projection["items"] if start_day <= str(item.get("date")) <= finish]
+    day_modes = [item for projection in projections.values() if projection["status"] in approved
+                 for item in projection.get("day_modes", []) if start_day <= str(item.get("date")) <= finish]
     issues = [issue for projection in projections.values() if projection["status"] in approved for issue in projection["issues"]]
     statuses = [projection["status"] for projection in projections.values()]
     status = next((item for item in statuses if item not in approved), statuses[0] if statuses else "canonical_not_materialized")
     if status in {"draft", "superseded"}:
         status = "not_published"
-    return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues}
+    return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues, "day_modes":day_modes}
 
 
 def project_teacher(database: Database, identity_id: Any, week_start: str) -> dict[str, Any]:
@@ -1798,7 +1891,8 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
         if len(values) > 1:
             issues.append({"date": key[0], "start_time": key[1], "reason": "teacher has simultaneous canonical assignments", "items": values})
     items.extend(_published_unresolved_items(database,effective,teacher_id,week_start,'teacher'))
-    return {"identity_id": teacher_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues}
+    day_modes=_teacher_day_modes(database,effective,teacher_id,week_start)
+    return {"identity_id": teacher_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes}
 
 
 def project_teacher_range(database: Database, identity_id: Any, start_day: str, end_day: str | None = None) -> dict[str, Any]:
@@ -1813,6 +1907,7 @@ def project_teacher_range(database: Database, identity_id: Any, start_day: str, 
     projection["end_day"] = finish
     projection["items"] = [item for item in projection.get("items", []) if start_day <= str(item.get("date")) <= finish]
     projection["issues"] = [issue for issue in projection.get("issues", []) if start_day <= str(issue.get("date", start_day)) <= finish]
+    projection["day_modes"] = [item for item in projection.get("day_modes", []) if start_day <= str(item.get("date")) <= finish]
     return projection
 
 
