@@ -19,8 +19,8 @@ import {
   Copy,
   Expand,
   BookOpenCheck,
+  Monitor,
   School,
-  Wifi,
   Plus,
   Palette,
   Pencil,
@@ -547,6 +547,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [day, setDay] = useState(0);
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day');
   const [dayModeEditor, setDayModeEditor] = useState<{ classId: string; day: number } | null>(null);
+  const [dayModesOpen, setDayModesOpen] = useState(false);
   const [weekTarget, setWeekTarget] = useState('');
   const [targetClassId, setTargetClassId] = useState('');
   const [panelMode, setPanelMode] = useState<'lesson' | 'settings'>('lesson');
@@ -1264,6 +1265,26 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     (item) => !classFilter || item.id === classFilter,
   );
   const gradeOf = (name: string) => name.match(/^\s*(\d{1,2})/)?.[1] || '';
+  const dayModeLabel = (mode: DayMode | 'normal') => mode === 'online' ? 'Онлайн' : mode === 'sdep' ? 'SDEP' : 'Обычный';
+  const dayModeIcon = (mode: DayMode | 'normal') => mode === 'online'
+    ? <Monitor size={14} aria-hidden="true" />
+    : mode === 'sdep'
+      ? <BookOpenCheck size={14} aria-hidden="true" />
+      : <School size={14} aria-hidden="true" />;
+  const renderDayModeChoices = (classItem: Group, selectedDay: number, mode: DayMode | 'normal') => {
+    const grade = Number(gradeOf(classItem.name));
+    return <span className="constructor-day-mode-popover" role="group" aria-label={`Выбор режима ${classItem.name} · ${DAYS[selectedDay]}`} onClick={(event) => event.stopPropagation()}>
+      <strong>{classItem.name} · {DAYS[selectedDay]}</strong>
+      {(['normal', 'online', 'sdep'] as const).map((option) => <button
+        type="button"
+        key={option}
+        className={`constructor-day-mode-option ${mode === option ? 'active' : ''} ${option}`}
+        disabled={option === 'sdep' && (grade < 9 || grade > 11)}
+        aria-pressed={mode === option}
+        onClick={() => { updateDayMode(classItem.id, selectedDay, option); setDayModeEditor(null); }}
+      >{dayModeIcon(option)}<span>{dayModeLabel(option)}</span></button>)}
+    </span>;
+  };
   const classColumns: GridColumn[] = [...new Set(visibleClasses.map((item) => gradeOf(item.name) || item.name))].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b, 'ru')).map((grade) => {
         const matching = visibleClasses.filter(
           (item) => (gradeOf(item.name) || item.name) === grade,
@@ -2268,8 +2289,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           <div className="constructor-toolbar constructor-command-bar">
             <div className="constructor-primary-tools" role="group" aria-label="Вид расписания и инструменты">
             <div className="constructor-view-tabs" role="group" aria-label="Режим просмотра">
-              <button className={viewMode === 'day' ? 'active' : ''} onClick={() => { setViewMode('day'); setAnchor(null); setFocus(null); setSelectedId(''); }}>День</button>
-              <button className={viewMode === 'week' ? 'active' : ''} onClick={() => { setViewMode('week'); setAnchor(null); setFocus(null); setSelectedId(''); }}>Неделя</button>
+              <button className={viewMode === 'day' ? 'active' : ''} onClick={() => { setViewMode('day'); setDayModesOpen(false); setDayModeEditor(null); setAnchor(null); setFocus(null); setSelectedId(''); }}>День</button>
+              <button className={viewMode === 'week' ? 'active' : ''} onClick={() => { setViewMode('week'); setDayModeEditor(null); setAnchor(null); setFocus(null); setSelectedId(''); }}>Неделя</button>
             </div>
             {viewMode === 'day' ? (
               <div className="constructor-day-tabs">
@@ -2287,6 +2308,34 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               {groups.filter((item) => item.group_type !== 'class' && !item.archived_at).map((item) => <option key={`group:${item.id}`} value={`group:${item.id}`}>Группа · {item.name}</option>)}
               {teachers.map((item) => <option key={`teacher:${item.id}`} value={`teacher:${item.id}`}>Преподаватель · {item.name}</option>)}
             </select> : null}
+            {viewMode === 'week' ? <span className="constructor-week-modes">
+              <button type="button" className={dayModesOpen ? 'active' : ''} aria-expanded={dayModesOpen} aria-controls="constructor-day-modes-matrix" onClick={() => { setDayModesOpen((open) => !open); setDayModeEditor(null); }}>
+                <BookOpenCheck size={14} aria-hidden="true" /> Режимы дней
+              </button>
+              {dayModesOpen ? <section id="constructor-day-modes-matrix" className="constructor-day-modes-matrix" role="dialog" aria-label="Режимы дней по классам">
+                <header><div><strong>Режимы дней</strong><small>Настройки отдельных административных классов</small></div><button type="button" aria-label="Закрыть матрицу режимов" onClick={() => { setDayModesOpen(false); setDayModeEditor(null); }}><X size={15} /></button></header>
+                <div className="constructor-day-modes-table-wrap"><table>
+                  <thead><tr><th scope="col">Класс</th>{[0, 1, 2, 3, 4].map((weekday) => <th key={weekday} scope="col">{['Пн', 'Вт', 'Ср', 'Чт', 'Пт'][weekday]}</th>)}</tr></thead>
+                  <tbody>{classes.map((classItem) => <tr key={classItem.id}>
+                    <th scope="row">{classItem.name}</th>
+                    {[0, 1, 2, 3, 4].map((weekday) => {
+                      const mode = payload.day_modes?.[classItem.id]?.[String(weekday)] || 'normal';
+                      const editing = dayModeEditor?.classId === classItem.id && dayModeEditor.day === weekday;
+                      const modeLabel = dayModeLabel(mode);
+                      return <td key={`${classItem.id}:${weekday}`}>
+                        <span className="constructor-day-mode-control">
+                          <button type="button" className={`constructor-day-mode-button ${mode}`} aria-label={`${classItem.name}, ${DAYS[weekday]}: ${modeLabel}. Изменить режим дня`} title={`${classItem.name} · ${DAYS[weekday]} · ${modeLabel}`} aria-expanded={editing} onClick={(event) => { event.stopPropagation(); setDayModeEditor(editing ? null : { classId: classItem.id, day: weekday }); }}>
+                            {dayModeIcon(mode)}
+                          </button>
+                          {editing ? renderDayModeChoices(classItem, weekday, mode) : null}
+                        </span>
+                      </td>;
+                    })}
+                  </tr>)}</tbody>
+                </table></div>
+                <footer className="constructor-day-modes-legend"><span><School size={12} /> Обычный</span><span><Monitor size={12} /> Онлайн</span><span><BookOpenCheck size={12} /> SDEP · 9–11</span></footer>
+              </section> : null}
+            </span> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <button className="constructor-issue-count" onClick={() => setConflictsOpen((open) => !open)} aria-expanded={conflictsOpen}>
               <AlertTriangle size={14} /><span className="desktop-label">Проверка · {conflictLessons.size} занятий · {conflictPairs.size} парных совпадений</span><span className="mobile-label">Проверка · {conflictLessons.size}</span>
@@ -2504,37 +2553,23 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 <div className="constructor-corner">Время</div>
                 {gridColumns.map((item) => (
                   <div className="constructor-head" key={item.key} ref={(element) => { columnHeaders.current[item.key] = element; }}>
-                    <span>{item.label}</span>
-                    <div className={`constructor-day-mode-list ${viewMode}`} aria-label={`Режимы дней для ${item.label}`}>
+                    <span className="constructor-head-title">{item.label}</span>
+                    {viewMode === 'day' ? <div className="constructor-day-mode-list day" aria-label={`Режим выбранного дня для ${item.label}`}>
                       {item.classIds.map((classId) => {
-                        const classItem = groups.find((entry) => entry.id === classId);
+                        const classItem = classes.find((entry) => entry.id === classId);
                         if (!classItem) return null;
-                        const shownDays = viewMode === 'week' ? payload.days : [day];
-                        const grade = Number(gradeOf(classItem.name));
-                        return <div className="constructor-day-mode-class" key={classId}>
-                          <span className="constructor-day-mode-class-name">{classItem.name}</span>
-                          {shownDays.map((modeDay) => {
-                            const mode = payload.day_modes?.[classId]?.[String(modeDay)] || 'normal';
-                            const modeLabel = mode === 'online' ? 'Онлайн' : mode === 'sdep' ? 'SDEP' : 'Обычный';
-                            const editing = dayModeEditor?.classId === classId && dayModeEditor.day === modeDay;
-                            return <span className="constructor-day-mode-control" key={`${classId}:${modeDay}`}>
-                              <button type="button" className={`constructor-day-mode-button ${mode}`} aria-label={`${classItem.name}, ${DAYS[modeDay]}: ${modeLabel}. Изменить режим дня`} title={`${DAYS[modeDay]} · ${modeLabel}`} onClick={(event) => { event.stopPropagation(); setDayModeEditor(editing ? null : { classId, day: modeDay }); }}>
-                                {viewMode === 'week' ? <small>{DAYS[modeDay]?.slice(0, 2)}</small> : null}
-                                {mode === 'online' ? <Wifi size={13} aria-hidden="true" /> : mode === 'sdep' ? <BookOpenCheck size={13} aria-hidden="true" /> : <School size={13} aria-hidden="true" />}
-                              </button>
-                              {editing ? <span className="constructor-day-mode-popover" onClick={(event) => event.stopPropagation()}>
-                                <strong>{classItem.name} · {DAYS[modeDay]}</strong>
-                                <select aria-label={`Режим дня ${classItem.name} ${DAYS[modeDay]}`} autoFocus value={mode} onChange={(event) => { updateDayMode(classId, modeDay, (event.target.value || 'normal') as DayMode | 'normal'); setDayModeEditor(null); }}>
-                                  <option value="normal">Обычный</option>
-                                  <option value="online">Онлайн</option>
-                                  <option value="sdep" disabled={grade < 9 || grade > 11}>SDEP{grade < 9 || grade > 11 ? ' · только 9–11' : ''}</option>
-                                </select>
-                              </span> : null}
-                            </span>;
-                          })}
-                        </div>;
+                        const mode = payload.day_modes?.[classId]?.[String(day)] || 'normal';
+                        const editing = dayModeEditor?.classId === classId && dayModeEditor.day === day;
+                        return <span className="constructor-day-mode-control" key={classId}>
+                          <button type="button" className={`constructor-day-mode-button ${mode}`} aria-label={`${classItem.name}, ${DAYS[day]}: ${dayModeLabel(mode)}. Изменить режим дня`} title={`${classItem.name} · ${DAYS[day]} · ${dayModeLabel(mode)}`} aria-expanded={editing} onClick={(event) => { event.stopPropagation(); setDayModeEditor(editing ? null : { classId, day }); }}>
+                            {dayModeIcon(mode)}
+                          </button>
+                          {editing ? renderDayModeChoices(classItem, day, mode) : null}
+                        </span>;
                       })}
-                    </div>
+                    </div> : item.classIds.length > 1 ? <span className="constructor-week-class-labels" title={item.classIds.map((classId) => classes.find((entry) => entry.id === classId)?.name).filter(Boolean).join(' · ')}>
+                      {item.classIds.map((classId) => classes.find((entry) => entry.id === classId)?.name).filter(Boolean).join(' · ')}
+                    </span> : null}
                     <span
                       className="constructor-column-resizer"
                       role="separator"
