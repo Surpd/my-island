@@ -3591,17 +3591,17 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-footer { justify-content: space-between; margin-top: 12px; color: #698084; font-size: 11px; }.constructor-footer > div { display: flex; gap: 5px; }.constructor-footer button { display: inline-flex; align-items: center; gap: 4px; }
 .constructor-context { position: fixed; z-index: 50; display: grid; min-width: 150px; padding: 4px; border: 1px solid #d5ded9; border-radius: 8px; background: #fffefa; box-shadow: 0 12px 25px #143c4026; }.constructor-context button { padding: 7px 9px; border: 0; border-radius: 5px; background: transparent; color: #20444d; text-align: left; }.constructor-context button:hover { background: #e9f3ef; }
 /* Dense, school-wide constructor board. */
-.admin-console--constructor { grid-template-columns: 58px minmax(0, 1fr); }
-.admin-console--constructor:has(.constructor-sidebar.is-pinned) { grid-template-columns: 188px minmax(0, 1fr); }
-.admin-console--constructor .constructor-sidebar { z-index: 30; width: 188px; transition: width .15s ease; }
-.admin-console--constructor .constructor-sidebar.is-collapsed { width: 58px; padding-inline: 9px; overflow: hidden; }
-.admin-console--constructor .constructor-sidebar.is-collapsed .admin-console-brand { padding-inline: 0; justify-content: center; }
-.admin-console--constructor .constructor-sidebar.is-collapsed .admin-console-brand > div:nth-child(2),
-.admin-console--constructor .constructor-sidebar.is-collapsed .constructor-sidebar-pin,
-.admin-console--constructor .constructor-sidebar.is-collapsed nav span,
-.admin-console--constructor .constructor-sidebar.is-collapsed nav svg:last-child,
-.admin-console--constructor .constructor-sidebar.is-collapsed .admin-console-sidebar__footer { display: none; }
-.admin-console--constructor .constructor-sidebar.is-collapsed nav button { justify-content: center; padding-inline: 0; }
+:is(.admin-console--constructor, .admin-console--journals) { grid-template-columns: 58px minmax(0, 1fr); }
+:is(.admin-console--constructor, .admin-console--journals):has(.constructor-sidebar.is-pinned) { grid-template-columns: 188px minmax(0, 1fr); }
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar { z-index: 30; width: 188px; transition: width .15s ease; }
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed { width: 58px; padding-inline: 9px; overflow: hidden; }
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed .admin-console-brand { padding-inline: 0; justify-content: center; }
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed .admin-console-brand > div:nth-child(2),
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed .constructor-sidebar-pin,
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed nav span,
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed nav svg:last-child,
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed .admin-console-sidebar__footer { display: none; }
+:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed nav button { justify-content: center; padding-inline: 0; }
 .constructor-sidebar-pin { display: grid; width: 26px; height: 26px; margin-left: auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #526d70; cursor: pointer; }
 .constructor-sidebar-pin:hover { background: #e4eced; }
 .constructor { padding: 14px 18px 28px; }
