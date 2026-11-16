@@ -482,7 +482,7 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
           <caption className="journal-table-caption">{detail?.source.subject} · {teams ? 'Командные результаты' : 'Результаты учеников'}. Баллы работ показаны без цветовой шкалы; цветом выделена итоговая отметка 1–5 из источника.</caption>
           <thead><tr>
             <th scope="col" className="journal-student-column">{teams ? 'Команда' : 'Ученик'}</th>
-            {detail?.assessments.map((assessment) => <th scope="col" id={`${tableId}-work-${assessment.id}`} className="journal-assessment-column" key={assessment.id}><strong>{assessment.title}</strong><small>{assessmentDateText(assessment.assessed_on)}</small><small>вес {assessment.weight ?? '—'} · макс. {assessment.max_score ?? '—'}</small></th>)}
+            {detail?.assessments.map((assessment) => <th scope="col" id={`${tableId}-work-${assessment.id}`} className="journal-assessment-column" key={assessment.id}><strong title={assessment.title}>{assessment.title}</strong><small>{assessmentDateText(assessment.assessed_on)}</small><small>вес {assessment.weight ?? '—'} · макс. {assessment.max_score ?? '—'}</small></th>)}
             {core.map((item) => <th scope="col" id={`${tableId}-${item.kind}`} className={`journal-summary-column journal-summary--${item.kind}`} key={item.kind}>{item.label}</th>)}
           </tr></thead>
           <tbody>{rows.map((student) => <tr key={student.id}>

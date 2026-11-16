@@ -153,3 +153,68 @@ test('journal selectors keep existing navigation and matching actions', async ({
     .click();
   await expect(page.locator('.journal-table')).toHaveCount(0);
 });
+
+test('compact journal menu shares layout space and can be pinned', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const sidebar = page.locator('.admin-console-sidebar');
+  const wrap = page.locator('.journal-table-wrap');
+  const assertLayout = async (width: number) => {
+    await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(width);
+    const menu = (await sidebar.boundingBox())!;
+    const main = (await page.locator('.admin-console-main').boundingBox())!;
+    expect(main.x).toBeGreaterThanOrEqual(menu.x + menu.width - 1);
+    const name = (await page.locator('.journal-table tbody th').first().boundingBox())!;
+    const summary = (await page.locator('tbody .journal-summary--average_grade').first().boundingBox())!;
+    expect(summary.x - name.x - name.width).toBeGreaterThan(300);
+  };
+  await page.mouse.move(800, 200);
+  await assertLayout(58);
+  await expect(sidebar.getByRole('button', { name: 'Журналы и оценки', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(sidebar.locator('.admin-legacy-nav summary').first()).toHaveAttribute('title', 'Обслуживание');
+  await wrap.scrollIntoViewIfNeeded();
+  const screenshot = async (name: string) => page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
+  const countVisible = async () => page.locator('.journal-table').evaluate(table => {
+    const first = table.querySelector('tbody tr')!;
+    const left = first.querySelector('th')!.getBoundingClientRect().right;
+    const right = first.querySelector('.journal-summary--average_grade')!.getBoundingClientRect().left;
+    return [...table.querySelectorAll('.journal-assessment-column')].filter(cell => { const r = cell.getBoundingClientRect(); return r.left >= left && r.right <= right; }).length;
+  });
+  console.log('Fully visible assessment columns, compact:', await countVisible());
+  await screenshot('compact-1440');
+  await sidebar.hover();
+  await assertLayout(188);
+  console.log('Fully visible assessment columns, expanded:', await countVisible());
+  await screenshot('expanded-1440');
+  await sidebar.getByRole('button', { name: 'Закрепить меню', exact: true }).click();
+  await page.mouse.move(800, 200);
+  await assertLayout(188);
+  await screenshot('pinned-1440');
+  await wrap.evaluate(element => { element.scrollLeft = 1200; });
+  await assertLayout(188);
+  await screenshot('pinned-scrolled-1440');
+  await sidebar.getByRole('button', { name: 'Открепить меню', exact: true }).click();
+  await page.mouse.move(800, 200);
+  await assertLayout(58);
+  const title = page.locator('.journal-assessment-column strong').first();
+  await expect(title).toHaveAttribute('title', assessments[0].title);
+  expect(await title.evaluate(e => e.clientHeight / parseFloat(getComputedStyle(e).lineHeight))).toBeLessThanOrEqual(4.1);
+  await page.setViewportSize({ width: 390, height: 1000 });
+  await page.mouse.move(380, 900);
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(390);
+  await screenshot('mobile-390');
+});
+
+test('other routes retain their sidebar mode', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/admin/people?role=admin');
+  await expect(page.locator('.admin-console-sidebar')).not.toHaveClass(/constructor-sidebar/);
+  await expect(page.locator('.admin-console-sidebar')).not.toHaveClass(/is-collapsed/);
+  await page.goto('/admin/schedule/constructor?role=admin');
+  const sidebar = page.locator('.admin-console-sidebar');
+  await page.mouse.move(800, 200);
+  await expect(sidebar).toHaveClass(/is-collapsed/);
+  await sidebar.hover();
+  await expect(sidebar).not.toHaveClass(/is-collapsed/);
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(188);
+  expect((await page.locator('.admin-console-main').boundingBox())!.x).toBeGreaterThanOrEqual(187);
+});

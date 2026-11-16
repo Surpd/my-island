@@ -1045,7 +1045,7 @@
 .campus-shell .journal-table .journal-student-name { display: block; font-size: 13px; line-height: 1.45; font-weight: 650; overflow-wrap: anywhere; }
 .campus-shell .journal-table .journal-student-meta { display: block; margin-top: 5px; font-size: 11px; line-height: 1.45; font-weight: 400; overflow-wrap: anywhere; }
 .campus-shell .journal-table .journal-row-action { display: flex; gap: 4px; margin-top: 6px; font-size: 11px; line-height: 1.4; text-align: left; white-space: normal; }
-.campus-shell .journal-table .journal-assessment-column { width: 156px; min-width: 156px; max-width: 156px; padding: 12px; }
+.campus-shell .journal-table .journal-assessment-column { width: 132px; min-width: 132px; max-width: 132px; padding: 12px; }
 .campus-shell .journal-table .journal-assessment-column strong { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .campus-shell .journal-table .journal-assessment-column small { font-size: 11px; line-height: 1.4; }
 .campus-shell .journal-table tbody td { background: var(--cp-paper); }
@@ -1083,3 +1083,20 @@
 }
 
 .campus-shell .journal-table tbody .journal-student-column { top: auto; }
+
+.campus-shell .journal-table .journal-assessment-column strong { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+@media (min-width: 901px) {
+  .campus-shell:is(.admin-console--constructor, .admin-console--journals) { grid-template-columns: 58px minmax(0, 1fr); transition: grid-template-columns .15s ease; }
+  .campus-shell:is(.admin-console--constructor, .admin-console--journals):has(.constructor-sidebar:not(.is-collapsed)) { grid-template-columns: 188px minmax(0, 1fr); }
+  .campus-shell:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar { width: 188px; box-sizing: border-box; }
+  .campus-shell:is(.admin-console--constructor, .admin-console--journals) .constructor-sidebar.is-collapsed { width: 58px; }
+  .campus-shell .constructor-sidebar.is-collapsed nav svg:first-child { display: block; flex-shrink: 0; }
+  .campus-shell .constructor-sidebar.is-collapsed .admin-legacy-nav summary { justify-content: center; padding-inline: 0; }
+}
+@media (max-width: 900px) {
+  .campus-shell.admin-console--journals .constructor-sidebar,
+  .campus-shell.admin-console--journals .constructor-sidebar.is-collapsed { position: relative; width: 100%; height: auto; padding: 14px 14px 0; overflow: visible; }
+}
+@media (max-width: 900px) {
+  .campus-shell.admin-console--journals .constructor-sidebar.is-collapsed > nav > button > svg:first-child { display: block; }
+}

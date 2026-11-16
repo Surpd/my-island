@@ -1,5 +1,7 @@
 # Admin journal readability
 
+[Compact menu and 132px columns follow-up: new screenshots and results](compact/README.md)
+
 Synthetic browser evidence: 30 pupils, 18 assessments, long names/titles, points, zero, absent result and special statuses. No production pupil records are included.
 
 ## Before and after
