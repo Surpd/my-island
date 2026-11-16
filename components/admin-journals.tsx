@@ -71,6 +71,12 @@ function candidateGrade(candidate?: Candidate | null): number | null {
 }
 
 export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: string }) {
+  const technicalPanelRef = useRef<HTMLElement | null>(null);
+  const technicalTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [technicalStudent, setTechnicalStudent] = useState<JournalStudent | null>(null);
+  useEffect(() => {
+    if (technicalStudent) technicalPanelRef.current?.focus();
+  }, [technicalStudent]);
   const [sources, setSources] = useState<JournalSource[]>([]);
   const [canonicalGroups, setCanonicalGroups] = useState<CanonicalGroup[]>([]);
   const [knownSources, setKnownSources] = useState<KnownJournalSource[]>([]);
@@ -132,6 +138,7 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
 
   const loadDetail = useCallback(async (id: string | number, marker = '') => {
     setDetail(null);
+    setTechnicalStudent(null);
     setSyncHistory([]);
     setSelectedId(id);
     setGroupMarker(marker);
@@ -466,7 +473,45 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
 
   function resultTable(rows: JournalStudent[], teams = false) {
     const core = [{ kind: 'average_grade', label: 'Средняя' }, { kind: 'admission', label: 'Допуск' }, { kind: 'term_grade', label: 'Итоговая' }];
-    return <section className="admin-panel admin-table-panel journal-table-panel"><div className="admin-table-meta"><span>{rows.length} {teams ? 'команд' : 'учеников'} · {detail?.assessments.length || 0} работ</span><span>Ноль — оценка, «н» — отметка о пропуске</span></div><div className="admin-table-wrap journal-table-wrap"><table className="admin-table journal-table"><thead><tr><th className="journal-student-column">{teams ? 'Команда' : 'Ученик'}</th>{detail?.assessments.map((assessment) => <th className="journal-assessment-column" key={assessment.id}><strong>{assessment.title}</strong><small>{assessmentDateText(assessment.assessed_on)}</small><small>вес {assessment.weight ?? '—'} · макс. {assessment.max_score ?? '—'}</small></th>)}{core.map((item) => <th className="journal-summary-column" key={item.kind}>{item.label}</th>)}</tr></thead><tbody>{rows.map((student) => <tr key={student.id}><th className="journal-student-column"><strong>{student.display_name}</strong><small>{teams ? `Участники: ${(student.members || []).map((member) => member.display_name).join(', ') || 'не указаны'}` : <>{student.group_marker === 'all' ? `${detail?.source.grade || ''} класс` : `группа ${student.group_marker}`}{student.match_status === 'linked' ? '' : ' · не сопоставлен'}</>}</small>{student.summaries.some((item) => !['average_grade','admission','term_grade'].includes(item.summary_type || '')) ? <details className="journal-match"><summary>Технические показатели</summary><small>{student.summaries.filter((item) => !['average_grade','admission','term_grade'].includes(item.summary_type || '')).map((item) => `${item.label}: ${item.numeric_value ?? item.text_value ?? '—'}`).join(' · ')}</small></details> : null}{!teams && student.match_status !== 'linked' ? <details className="journal-match"><summary>Не сопоставлен</summary><div><button className="admin-link" onClick={() => { setDetail(null); setSelectedId(null); setMatchingOpen(true); if (detail?.source.spreadsheet_id) void openMatching(detail.source.spreadsheet_id); }}><Search size={13} /> Открыть панель сопоставлений</button></div></details> : null}</th>{detail?.assessments.map((assessment) => <td className="journal-score-cell" key={assessment.id}>{scoreText(student.results[String(assessment.id)] || null)}</td>)}{core.map((item) => <td className="journal-score-cell journal-score-cell--summary" key={item.kind}>{summaryDisplay(student, item.kind)}</td>)}</tr>)}</tbody></table></div></section>;
+    const tableId = `journal-${detail?.source.id}-${teams ? 'teams' : 'students'}`;
+    return <section className="admin-panel admin-table-panel journal-table-panel">
+      <div className="admin-table-meta"><span>{rows.length} {teams ? 'команд' : 'учеников'} · {detail?.assessments.length || 0} работ</span><span>0 — нулевой результат · — нет результата · «н» — пропуск</span></div>
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The horizontal scroll region must be keyboard reachable. */}
+      <section className="admin-table-wrap journal-table-wrap" tabIndex={0} aria-label={teams ? 'Результаты команд, прокрутка таблицы' : 'Результаты учеников, прокрутка таблицы'}>
+        <table className="admin-table journal-table">
+          <caption className="journal-table-caption">{detail?.source.subject} · {teams ? 'Командные результаты' : 'Результаты учеников'}. Баллы работ показаны без цветовой шкалы; цветом выделена итоговая отметка 1–5 из источника.</caption>
+          <thead><tr>
+            <th scope="col" className="journal-student-column">{teams ? 'Команда' : 'Ученик'}</th>
+            {detail?.assessments.map((assessment) => <th scope="col" id={`${tableId}-work-${assessment.id}`} className="journal-assessment-column" key={assessment.id}><strong>{assessment.title}</strong><small>{assessmentDateText(assessment.assessed_on)}</small><small>вес {assessment.weight ?? '—'} · макс. {assessment.max_score ?? '—'}</small></th>)}
+            {core.map((item) => <th scope="col" id={`${tableId}-${item.kind}`} className={`journal-summary-column journal-summary--${item.kind}`} key={item.kind}>{item.label}</th>)}
+          </tr></thead>
+          <tbody>{rows.map((student) => <tr key={student.id}>
+            <th scope="row" id={`${tableId}-student-${student.id}`} className="journal-student-column">
+              <strong className="journal-student-name">{student.display_name}</strong>
+              <small className="journal-student-meta">{teams ? `Участники: ${(student.members || []).map((member) => member.display_name).join(', ') || 'не указаны'}` : <>{student.group_marker === 'all' ? `${detail?.source.grade || ''} класс` : `группа ${student.group_marker}`}{student.match_status === 'linked' ? '' : ' · не сопоставлен'}</>}</small>
+              {student.summaries.some((item) => !['average_grade', 'admission', 'term_grade'].includes(item.summary_type || '')) ? <button className="admin-link journal-row-action" onClick={(event) => { technicalTriggerRef.current = event.currentTarget; setTechnicalStudent(student); }}>Технические показатели</button> : null}
+              {!teams && student.match_status !== 'linked' ? <button className="admin-link journal-row-action" onClick={() => { setDetail(null); setSelectedId(null); setMatchingOpen(true); if (detail?.source.spreadsheet_id) void openMatching(detail.source.spreadsheet_id); }}><Search size={13} /> Сопоставить ученика</button> : null}
+            </th>
+            {detail?.assessments.map((assessment) => {
+              const result = student.results[String(assessment.id)] || null;
+              const text = scoreText(result);
+              const status = result?.numeric_score != null && result.status != null && String(result.status).toLowerCase() !== 'graded' ? scoreText({ numeric_score: null, status: result.status }) : '';
+              return <td className="journal-score-cell" headers={`${tableId}-student-${student.id} ${tableId}-work-${assessment.id}`} key={assessment.id}><span className={`journal-result ${text === '—' ? 'journal-result--empty' : ''}`} title={`${student.display_name} · ${assessment.title}: ${text}${assessment.max_score != null ? ` / ${assessment.max_score}` : ''}`}>
+                {text}{result?.numeric_score != null && assessment.max_score != null ? <small className="journal-result-maximum"> / {assessment.max_score}</small> : null}
+              </span>{status ? <small className="journal-result-status">{status}</small> : null}</td>;
+            })}
+            {core.map((item) => {
+              const value = summaryDisplay(student, item.kind);
+              // The API exposes no grading-scale metadata for individual works.
+              // Only the explicit term_grade summary identifies an ordinary mark.
+              const mark = item.kind === 'term_grade' && /^[1-5]$/.test(value) ? value : '';
+              return <td className={`journal-score-cell journal-score-cell--summary journal-summary--${item.kind}`} headers={`${tableId}-student-${student.id} ${tableId}-${item.kind}`} key={item.kind}><span className={`journal-result ${mark ? `journal-mark journal-mark--${mark}` : ''}`}>{value}</span></td>;
+            })}
+          </tr>)}</tbody>
+        </table>
+      </section>
+      {technicalStudent && rows.some((row) => row.id === technicalStudent.id) ? <section ref={technicalPanelRef} tabIndex={-1} className="journal-technical-panel" aria-label={`Технические показатели: ${technicalStudent.display_name}`}><div><strong>{technicalStudent.display_name}</strong><button className="admin-link" onClick={() => { setTechnicalStudent(null); technicalTriggerRef.current?.focus(); }}>Закрыть показатели</button></div><dl>{technicalStudent.summaries.filter((item) => !['average_grade', 'admission', 'term_grade'].includes(item.summary_type || '')).map((item, index) => <div key={index}><dt>{item.label}</dt><dd>{item.numeric_value ?? item.text_value ?? '—'}</dd></div>)}</dl></section> : null}
+    </section>;
   }
 
   if (loading) return <div className="admin-loading"><LoaderCircle size={17} className="admin-spin" /> Загружаем журналы…</div>;

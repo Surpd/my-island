@@ -1034,3 +1034,52 @@
 .constructor-issue-open { align-self:flex-start; text-align:left; min-height:44px; font-weight:650; }
 .constructor-room-suggestions [aria-pressed=true] { outline:2px solid currentColor; outline-offset:2px; }
 @media(max-width:600px) { .constructor-resolution-panel { width:calc(100vw - 16px); max-height:calc(100dvh - 16px); padding:16px; }.constructor-resolution-context { grid-template-columns:1fr; }.constructor-resolution-actions { flex-direction:column; }.constructor-resolution-actions button { width:100%; text-align:left; } }
+
+/* Journal readability: one scroll surface, opaque sticky cells and explicit row labels. */
+.campus-shell .journal-table-wrap { container-type: inline-size; isolation: isolate; }
+.campus-shell .journal-table { --journal-name-width: 260px; --journal-summary-width: 112px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.campus-shell .journal-table :is(th, td) { box-sizing: border-box; border-right: 1px solid var(--cp-line); border-bottom: 1px solid var(--cp-line); vertical-align: middle; }
+.campus-shell .journal-table thead th { top: 0; z-index: 3; vertical-align: bottom; }
+.campus-shell .journal-table .journal-student-column { width: var(--journal-name-width); min-width: var(--journal-name-width); max-width: var(--journal-name-width); text-align: left; }
+.campus-shell .journal-table thead .journal-student-column { z-index: 5; }
+.campus-shell .journal-table .journal-student-name { display: block; font-size: 13px; line-height: 1.45; font-weight: 650; overflow-wrap: anywhere; }
+.campus-shell .journal-table .journal-student-meta { display: block; margin-top: 5px; font-size: 11px; line-height: 1.45; font-weight: 400; overflow-wrap: anywhere; }
+.campus-shell .journal-table .journal-row-action { display: flex; gap: 4px; margin-top: 6px; font-size: 11px; line-height: 1.4; text-align: left; white-space: normal; }
+.campus-shell .journal-table .journal-assessment-column { width: 156px; min-width: 156px; max-width: 156px; padding: 12px; }
+.campus-shell .journal-table .journal-assessment-column strong { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.campus-shell .journal-table .journal-assessment-column small { font-size: 11px; line-height: 1.4; }
+.campus-shell .journal-table tbody td { background: var(--cp-paper); }
+.campus-shell .journal-table tbody tr:nth-child(even) :is(td, .journal-student-column) { background: color-mix(in srgb, var(--cp-bg) 55%, var(--cp-paper)); }
+.campus-shell .journal-table tbody tr:is(:hover, :focus-within) :is(td, .journal-student-column) { background: var(--cp-bg); }
+.campus-shell .journal-table .journal-score-cell { padding: 12px 8px; font-size: 14px !important; text-align: center; }
+.campus-shell .journal-table .journal-result { display: inline-flex; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 3px; min-width: 30px; padding: 5px 7px; border-radius: 6px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.campus-shell .journal-table .journal-result-maximum { display: inline; margin: 0; font-size: 11px; color: var(--cp-muted); }
+.campus-shell .journal-table .journal-result-status { display: block; white-space: normal; overflow-wrap: anywhere; }
+.campus-shell .journal-table .journal-result--empty { color: var(--cp-muted); }
+.campus-shell .journal-table :is(.journal-summary-column, .journal-score-cell--summary) { width: var(--journal-summary-width); min-width: var(--journal-summary-width); max-width: var(--journal-summary-width); background: var(--cp-bg); text-align: center; white-space: normal; font-weight: 650; }
+.campus-shell .journal-table .journal-summary--average_grade { border-left: 2px solid var(--cp-muted); }
+.campus-shell .journal-table .journal-mark--5 { background: #e0f2e7; color: #205c37; }
+.campus-shell .journal-table .journal-mark--4 { background: #e3effb; color: #224f7b; }
+.campus-shell .journal-table .journal-mark--3 { background: #fff0ce; color: #71500b; }
+.campus-shell .journal-table :is(.journal-mark--1, .journal-mark--2) { background: #fbe5e4; color: #8b3034; }
+.campus-shell .journal-table-caption { text-align: left; padding: 10px 14px; font-size: 11px; color: var(--cp-muted); background: var(--cp-paper); }
+.campus-shell .journal-technical-panel { padding: 16px; border-top: 1px solid var(--cp-line); overflow-wrap: anywhere; }
+.campus-shell .journal-technical-panel > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.campus-shell .journal-technical-panel dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 0; }
+.campus-shell .journal-technical-panel dt { color: var(--cp-muted); font-size: 11px; }
+.campus-shell .journal-technical-panel dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+.campus-shell .journal-table-wrap:focus-visible { outline: 2px solid var(--cp-blue); outline-offset: -2px; }
+@container (min-width: 1000px) {
+  .campus-shell .journal-table :is(.journal-summary-column, .journal-score-cell--summary) { position: sticky; z-index: 2; }
+  .campus-shell .journal-table .journal-summary--term_grade { right: 0; }
+  .campus-shell .journal-table .journal-summary--admission { right: var(--journal-summary-width); }
+  .campus-shell .journal-table .journal-summary--average_grade { right: calc(2 * var(--journal-summary-width)); }
+  .campus-shell .journal-table thead .journal-summary-column { z-index: 4; }
+}
+@media (max-width: 600px) {
+  .campus-shell .journal-table { --journal-name-width: 148px; --journal-summary-width: 100px; }
+  .campus-shell .journal-table .journal-student-column { padding: 10px; }
+  .campus-shell .journal-table .journal-student-name { font-size: 12px; }
+}
+
+.campus-shell .journal-table tbody .journal-student-column { top: auto; }
