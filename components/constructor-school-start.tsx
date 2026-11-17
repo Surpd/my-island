@@ -12,6 +12,15 @@ export type SchoolWeekIndex = { effective_weeks?: EffectiveWeekSummary[]; week_p
 type WeekHistoryAssignment = { activity?: string; groups?: string[]; teachers?: string[]; room?: string | null };
 type WeekHistoryBlock = { block_key: string; weekday: number; start_time: string; end_time: string; change_kind?: string; grade_scope?: string | null; effective_assignments?: WeekHistoryAssignment[] };
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
+type SelectionPreview = {
+  current: { id: string; name: string; revision: number } | null;
+  candidate: { id: string; name: string; revision: number };
+  current_hash: string | null; candidate_hash: string;
+  added: { id: string; subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; problems: string[] }[];
+  removed: { id: string; subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; problems: string[] }[];
+  changed: { id: string; before: { subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; problems: string[] }; after: { subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; problems: string[] } }[];
+  problems: { lesson_id: string; details: string[] }[];
+};
 
 export function nearestMonday(today = new Date()) {
   const date = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -40,6 +49,10 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const [weekStart, setWeekStart] = useState(nearestMonday);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
+  const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
+  const [selectionBusy, setSelectionBusy] = useState(false);
+  const [acknowledgeProblems, setAcknowledgeProblems] = useState(false);
+  const [selectionHistory, setSelectionHistory] = useState<{ id: string; previous_draft_id?: string; previous_revision?: number; next_draft_id: string; next_revision: number; created_at: string }[]>([]);
   const [restoredTests, setRestoredTests] = useState<string[]>([]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -80,6 +93,46 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
       setHistory({ title: primary.name, publications: result.items, drafts: [primary] });
     } catch (error) { setMessage((error as Error).message); }
   };
+  const previewTemplateSelection = async (item: SchoolDraftSummary) => {
+    setSelectionBusy(true); setMessage('');
+    try {
+      const result = await api<SelectionPreview>('/api/admin/schedule/experiments/school/' + encodeURIComponent(item.id) + '/selection-preview', { method: 'POST' });
+      setSelectionPreview(result); setAcknowledgeProblems(false);
+    } catch (error) { setMessage((error as Error).message); } finally { setSelectionBusy(false); }
+  };
+  const confirmTemplateSelection = async () => {
+    if (!selectionPreview || selectionBusy) return;
+    setSelectionBusy(true);
+    try {
+      await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(selectionPreview.candidate.id) + '/select-primary', {
+        method: 'POST', body: JSON.stringify({
+          expected_revision: selectionPreview.candidate.revision,
+          expected_current_id: selectionPreview.current?.id || null,
+          expected_current_revision: selectionPreview.current?.revision || null,
+          expected_candidate_hash: selectionPreview.candidate_hash,
+          acknowledge_problems: acknowledgeProblems,
+        }),
+      });
+      setSelectionPreview(null);
+      setMessage('Основной шаблон переключён. Уже созданные недели не изменены.');
+      window.dispatchEvent(new Event('school-directory-updated'));
+    } catch (error) { setMessage((error as Error).message); } finally { setSelectionBusy(false); }
+  };
+  const loadSelectionHistory = async () => {
+    try {
+      const result = await api<{ items: typeof selectionHistory }>('/api/admin/schedule/experiments/school/template-selection-history');
+      setSelectionHistory(result.items);
+    } catch (error) { setMessage((error as Error).message); }
+  };
+  const rollbackSelection = async (id: string) => {
+    if (!window.confirm('Вернуть снимок предыдущего основного шаблона отдельной версией?')) return;
+    try {
+      await api('/api/admin/schedule/experiments/school/template-selection-rollback', { method: 'POST', body: JSON.stringify({ history_id: id }) });
+      setSelectionHistory([]);
+      setMessage('Предыдущий шаблон восстановлен отдельной версией.');
+      window.dispatchEvent(new Event('school-directory-updated'));
+    } catch (error) { setMessage((error as Error).message); }
+  };
   const createWeek = async () => {
     if (!primary || creating || readOnly || weekExists) return;
     if (new Date(`${weekStart}T12:00:00`).getDay() !== 1) { setMessage('Выберите понедельник для начала недели.'); return; }
@@ -105,7 +158,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   };
   const draftCard = (item: SchoolDraftSummary, archive = false) => <article className="constructor-draft" key={item.id}>
     <button className="constructor-draft-open" onClick={() => void onOpen(item.id)}><strong>{item.name}</strong><span>{item.lesson_count} занятий · ревизия {item.revision} · {changedAt(item.updated_at)}</span></button>
-    <div className="constructor-draft-actions"><button disabled={readOnly} onClick={() => onCopy(item)}>Создать копию</button>{item.is_primary_template ? null : archive ? <button onClick={() => restore(item)}>Вернуть в список</button> : <button onClick={() => onHide(item.id)}>Скрыть</button>}</div>
+    <div className="constructor-draft-actions">{item.draft_kind === 'school' && !item.week_start && !item.is_primary_template && !archive ? <button disabled={readOnly || selectionBusy} onClick={() => void previewTemplateSelection(item)}>Сделать основным шаблоном</button> : null}<button disabled={readOnly} onClick={() => onCopy(item)}>Создать копию</button>{item.is_primary_template ? null : archive ? <button onClick={() => restore(item)}>Вернуть в список</button> : <button onClick={() => onHide(item.id)}>Скрыть</button>}</div>
   </article>;
   return <section className="constructor-start constructor-school-start">
     <nav className="constructor-draft-filters" aria-label="Разделы расписания"><button aria-current={section === 'template' ? 'page' : undefined} className={section === 'template' ? 'active' : ''} onClick={() => setSection('template')}>Основной шаблон</button><button aria-current={section === 'weeks' ? 'page' : undefined} className={section === 'weeks' ? 'active' : ''} onClick={() => setSection('weeks')}>Недели <small>{weeks.length}</small></button></nav>
@@ -113,7 +166,8 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     {section === 'template' ? <section className="constructor-template-overview">
       <small className="constructor-section-caption">РЕДАКТОРСКАЯ ВЕРСИЯ</small>
       <h2>{primary?.name || 'Основной шаблон не назначен'}</h2>
-      {primary ? <><p>{primary.lesson_count} занятий · ревизия {primary.revision} · изменён {changedAt(primary.updated_at)}</p><div className="constructor-version-status"><div><strong>Сохранён в редакторе</strong><span>Из этой ревизии создаются независимые недели.</span></div><div><strong>{index.canonical ? 'Опубликованная основа' : 'Опубликованная основа не получена'}</strong><span>{index.canonical ? `${({ authoritative: 'Подтверждена', approved: 'Подтверждена', approved_with_exceptions: 'Подтверждена с исключениями', superseded: 'Историческая версия' } as Record<string, string>)[index.canonical.status] || index.canonical.status}. Сохранённый редакторский шаблон учитывается отдельно.` : 'Проверьте подключение к школьной базе.'}</span>{index.canonical ? <code>{index.canonical.version_id}</code> : null}</div></div><div className="constructor-start-primary-actions"><button className="admin-button admin-button--primary" onClick={() => void onOpen(primary.id)}>Открыть и редактировать</button><button onClick={() => void templateHistory()}>История версий</button><button disabled={readOnly} onClick={() => onCopy(primary)}>Создать отдельную копию</button>{!readOnly ? <button onClick={() => void onPublication(primary.id)}>Проверить публикацию</button> : null}</div><p className="constructor-muted">Публикация выполняется после проверки и отдельного подтверждения.</p></> : <p>Назначьте проверенный редакторский шаблон. Автоматическая замена canonical-копией не выполняется.</p>}
+      {primary ? <><p>{primary.lesson_count} занятий · ревизия {primary.revision} · изменён {changedAt(primary.updated_at)}</p><div className="constructor-version-status"><div><strong>Сохранён в редакторе</strong><span>Из этой ревизии создаются независимые недели.</span></div><div><strong>{index.canonical ? 'Опубликованная основа' : 'Опубликованная основа не получена'}</strong><span>{index.canonical ? `${({ authoritative: 'Подтверждена', approved: 'Подтверждена', approved_with_exceptions: 'Подтверждена с исключениями', superseded: 'Историческая версия' } as Record<string, string>)[index.canonical.status] || index.canonical.status}. Сохранённый редакторский шаблон учитывается отдельно.` : 'Проверьте подключение к школьной базе.'}</span>{index.canonical ? <code>{index.canonical.version_id}</code> : null}</div></div><div className="constructor-start-primary-actions"><button className="admin-button admin-button--primary" onClick={() => void onOpen(primary.id)}>Открыть и редактировать</button><button onClick={() => void templateHistory()}>История версий</button><button onClick={() => void loadSelectionHistory()}>История переключений</button><button disabled={readOnly} onClick={() => onCopy(primary)}>Создать отдельную копию</button>{!readOnly ? <button onClick={() => void onPublication(primary.id)}>Проверить публикацию</button> : null}</div><p className="constructor-muted">Публикация выполняется после проверки и отдельного подтверждения.</p></> : <p>Назначьте проверенный редакторский шаблон. Автоматическая замена canonical-копией не выполняется.</p>}
+      {selectionHistory.length ? <section aria-label="История переключений шаблона"><h3>История переключений</h3>{selectionHistory.map(item => <article className="constructor-draft" key={item.id}><div className="constructor-draft-open"><strong>Снимок {item.previous_draft_id || 'первого шаблона'} · ревизия {item.previous_revision || '—'}</strong><span>{changedAt(item.created_at)}</span></div><div className="constructor-draft-actions"><button disabled={readOnly} onClick={() => void rollbackSelection(item.id)}>Вернуть предыдущую версию</button></div></article>)}</section> : null}
       {others.length ? <details className="constructor-secondary-actions"><summary>Другие черновики шаблона · {others.length}</summary>{others.map(item => draftCard(item))}</details> : null}
     </section> : <>
       <div className="constructor-section-heading"><div><h2>Недели</h2><p>Сохранённые черновики и история недель по датам.</p></div><a href="#constructor-create-week">Создать неделю</a></div>
@@ -128,5 +182,6 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     <details className="constructor-secondary-actions"><summary>Дополнительно</summary><button disabled={readOnly} onClick={onCreateEmpty}>Создать пустое расписание</button></details>
     {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.map(item => draftCard(item)) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span><code>{item.version_id}</code></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
     {view ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-view-title" onCancel={() => setView(null)}><header><div><small>Только просмотр сохранённой версии</small><h2 id="week-view-title">{view.title}</h2></div><button aria-label="Закрыть просмотр недели" onClick={() => setView(null)}><X size={20} /></button></header>{view.loading ? <p>Загружаем занятия…</p> : view.error ? <p role="alert">{view.error}</p> : view.blocks?.map((block, position) => <article className="constructor-history-lesson" key={`${block.block_key}:${position}`}><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][block.weekday]} · {formatLessonTimeRange(block.start_time, block.end_time)}</strong>{block.change_kind === 'cancelled' ? <p>Занятие отменено в этой версии</p> : (block.effective_assignments || []).map((item, i) => <p key={i}>{item.activity} · {item.groups?.join(', ') || `${block.grade_scope || ''} параллель`} · {item.teachers?.join(', ') || 'Преподаватель не указан'}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : ''}</p>)}</article>)}</dialog></div> : null}
+    {selectionPreview ? <div className="constructor-conflict-backdrop"><dialog open className="constructor-conflict-dialog constructor-week-history" aria-labelledby="template-selection-title"><header><div><small>Сравнение редакторских шаблонов</small><h2 id="template-selection-title">Сделать «{selectionPreview.candidate.name}» основным?</h2></div><button aria-label="Закрыть сравнение" onClick={() => setSelectionPreview(null)}><X size={20} /></button></header><p>Текущий: {selectionPreview.current ? selectionPreview.current.name + ' · ревизия ' + selectionPreview.current.revision : 'не назначен'}. Новый: ревизия {selectionPreview.candidate.revision}. Созданные недели останутся без изменений.</p><p>Добавлено: {selectionPreview.added.length} · удалено: {selectionPreview.removed.length} · изменено: {selectionPreview.changed.length} · проблемных сопоставлений: {selectionPreview.problems.length}</p>{[...selectionPreview.added.map(item => ({ kind: 'Добавлено', item })), ...selectionPreview.removed.map(item => ({ kind: 'Удалено', item })), ...selectionPreview.changed.map(item => ({ kind: 'Изменено', item: { ...item.after, id: item.id } }))].slice(0, 100).map(({ kind, item }) => <article className="constructor-history-lesson" key={kind + item.id}><strong>{kind} · {item.subject} · {item.start}–{item.end}</strong><p>Группы: {item.groups.join(', ') || '—'} · участники: {item.members.length} · преподаватели: {item.teachers.join(', ') || '—'} · кабинет: {item.room || '—'}</p></article>)}{selectionPreview.changed.length ? <details><summary>Сравнить значения до и после · {selectionPreview.changed.length}</summary>{selectionPreview.changed.slice(0, 100).map(item => <article className="constructor-history-lesson" key={'delta-' + item.id}><strong>{item.id}</strong><p>Было: {item.before.subject} · {item.before.groups.join(', ') || '—'} · участников {item.before.members.length} · {item.before.teachers.join(', ') || '—'} · кабинет {item.before.room || '—'} · {item.before.start}–{item.before.end}</p><p>Стало: {item.after.subject} · {item.after.groups.join(', ') || '—'} · участников {item.after.members.length} · {item.after.teachers.join(', ') || '—'} · кабинет {item.after.room || '—'} · {item.after.start}–{item.after.end}</p></article>)}</details> : null}{selectionPreview.problems.length ? <><h3>Проблемные сопоставления</h3><ul>{selectionPreview.problems.slice(0, 100).map(item => <li key={item.lesson_id}>{item.lesson_id}: {item.details.join(', ')}</li>)}</ul><label><input type="checkbox" checked={acknowledgeProblems} onChange={event => setAcknowledgeProblems(event.target.checked)} />Я просмотрел проблемы и подтверждаю назначение шаблона с ними.</label></> : null}<footer><button disabled={selectionBusy} onClick={() => setSelectionPreview(null)}>Отмена</button><button className="is-primary" disabled={selectionBusy || Boolean(selectionPreview.problems.length && !acknowledgeProblems)} onClick={() => void confirmTemplateSelection()}>{selectionBusy ? 'Сохраняем…' : 'Подтвердить основной шаблон'}</button></footer></dialog></div> : null}
   </section>;
 }

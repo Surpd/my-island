@@ -30,7 +30,10 @@ from backend.services.google_live import GoogleApiError, GoogleLiveClient, Googl
 from backend.services.google_oauth import build_google_authorization_url, google_config
 from backend.services.google_contract import CLASSROOM_READ_SCOPES, SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE
 from backend.services.schedule_sheet_publishing import export_saved_week
-from backend.services.school_template_selection import open_active_school_template
+from backend.services.school_template_selection import (
+    open_active_school_template, preview_school_template_selection,
+    select_school_template, rollback_school_template,
+)
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
 from backend.services.google_sync_service import CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability
@@ -327,6 +330,18 @@ class ScheduleExportPayload(BaseModel):
 
 class ScheduleWeekPayload(ScheduleExportPayload):
     week_start: str
+
+
+class SchoolTemplateSelectPayload(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_current_id: str | None = None
+    expected_current_revision: int | None = Field(default=None, ge=1)
+    expected_candidate_hash: str
+    acknowledge_problems: bool = False
+
+
+class SchoolTemplateRollbackPayload(BaseModel):
+    history_id: str
 
 
 class ScheduleAudiencePreviewPayload(BaseModel):
@@ -1581,6 +1596,67 @@ def create_router(database: Database) -> APIRouter:
         if selected["id"] != experiment_id:
             raise HTTPException(status_code=409, detail="Создавать недели можно только из текущего основного шаблона")
         return new_week(store, experiment_id, payload, actor)
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/selection-preview")
+    def admin_school_template_selection_preview(experiment_id: str, init_data: str | None = None,
+            x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        _, store = school_stores()
+        try:
+            return preview_school_template_selection(store, experiment_id)
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/select-primary")
+    def admin_school_select_primary_template(experiment_id: str, payload: SchoolTemplateSelectPayload,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        _, store = school_stores()
+        try:
+            preview = preview_school_template_selection(store, experiment_id)
+            if preview["problems"] and not payload.acknowledge_problems:
+                raise HTTPException(status_code=409, detail="Проблемные сопоставления требуют явного подтверждения после просмотра")
+            return select_school_template(store, experiment_id, expected_revision=payload.expected_revision,
+                expected_current_id=payload.expected_current_id,
+                expected_current_revision=payload.expected_current_revision,
+                expected_candidate_hash=payload.expected_candidate_hash, actor_user_id=actor["id"])
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.get("/admin/schedule/experiments/school/template-selection-history")
+    def admin_school_template_selection_history(init_data: str | None = None,
+            x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        _, store = school_stores()
+        with store.connection() as connection:
+            rows = store.execute(connection, "SELECT id,previous_draft_id,previous_revision,next_draft_id,next_revision,created_at FROM school_template_selection_history ORDER BY created_at DESC,id DESC LIMIT 20").fetchall()
+        return {"items": [dict(row) for row in rows]}
+
+    @router.post("/admin/schedule/experiments/school/template-selection-rollback")
+    def admin_school_template_selection_rollback(payload: SchoolTemplateRollbackPayload,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        _, store = school_stores()
+        try:
+            return rollback_school_template(store, history_id=payload.history_id, actor_user_id=actor["id"])
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     def saved_week_export(store: Database, source: Database, experiment_id: str, revision: int):
         try:

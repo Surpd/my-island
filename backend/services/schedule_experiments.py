@@ -23,6 +23,7 @@ DEFAULT_SLOTS = [
 ]
 
 _school_template_open_lock = Lock()
+_week_creation_lock = Lock()
 
 
 def _canonical_time(value: Any) -> str:
@@ -1014,6 +1015,19 @@ def duplicate_experiment(database: Database, experiment_id: str, *, name: str | 
 
 def create_experiment_week(database: Database, experiment_id: str, *, week_start: str,
                            expected_revision: int, actor_user_id: Any = None) -> dict[str, Any]:
+    with _week_creation_lock:
+        if database.database_url:
+            key = f"my-island:week:{week_start}"
+            with database.connection() as connection:
+                database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
+                return _create_experiment_week_locked(database, experiment_id, week_start=week_start,
+                    expected_revision=expected_revision, actor_user_id=actor_user_id)
+        return _create_experiment_week_locked(database, experiment_id, week_start=week_start,
+            expected_revision=expected_revision, actor_user_id=actor_user_id)
+
+
+def _create_experiment_week_locked(database: Database, experiment_id: str, *, week_start: str,
+                                   expected_revision: int, actor_user_id: Any = None) -> dict[str, Any]:
     """Create a detached week draft copied from a template at a known revision."""
     start = date.fromisoformat(str(week_start))
     if start.weekday() != 0:
@@ -1033,6 +1047,7 @@ def create_experiment_week(database: Database, experiment_id: str, *, week_start
                 and int(provenance.get("revision") or 0) == int(source["revision"])):
             existing["already_exists"] = True
             return existing
+        raise ValueError(f"Неделя с {start.isoformat()} уже сохранена. Откройте существующий черновик или историю, чтобы не создавать дубликат.")
     payload = json.loads(json.dumps(source["payload"], ensure_ascii=False))
     payload["week_start"] = start.isoformat()
     payload["reference_date"] = start.isoformat()

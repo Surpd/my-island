@@ -3,6 +3,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,7 +16,10 @@ from backend.services.schedule_experiments import (
     get_experiment,
     save_experiment,
 )
-from backend.services.school_template_selection import open_active_school_template
+from backend.services.school_template_selection import (
+    open_active_school_template, preview_school_template_selection,
+    select_school_template, rollback_school_template,
+)
 from backend.scripts.restore_school_editor_template import digest, restore
 
 
@@ -197,7 +201,25 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
             "id": active["id"], "revision": active["revision"],
         })
 
-    def test_new_template_revision_gets_a_distinct_week_draft(self):
+    def test_concurrent_week_creation_returns_one_draft_and_keeps_manual_edits(self):
+        active = self.create_draft("Основной шаблон", self.school_payload())
+        self.activate(active)
+        def create():
+            return create_experiment_week(self.database, active["id"],
+                week_start="2026-10-19", expected_revision=active["revision"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = list(pool.map(lambda _: create(), range(2)))
+        self.assertEqual(first["id"], second["id"])
+        edited_payload = dict(first["payload"])
+        edited_payload["lessons"] = list(edited_payload["lessons"])
+        edited_payload["lessons"][0] = {**edited_payload["lessons"][0], "subject": "Ручная правка"}
+        edited = save_experiment(self.database, first["id"], expected_revision=first["revision"],
+                                 payload=edited_payload)
+        reopened = create()
+        self.assertEqual(reopened["id"], edited["id"])
+        self.assertEqual(reopened["payload"]["lessons"][0]["subject"], "Ручная правка")
+
+    def test_new_template_revision_cannot_create_duplicate_calendar_week(self):
         active = self.create_draft("Основной шаблон", self.school_payload())
         self.activate(active)
         first = create_experiment_week(
@@ -208,13 +230,43 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
             self.database, active["id"], expected_revision=active["revision"],
             payload=active["payload"],
         )
-        second = create_experiment_week(
-            self.database, revised["id"], week_start="2026-10-19",
-            expected_revision=revised["revision"],
-        )
-        self.assertNotEqual(first["id"], second["id"])
+        with self.assertRaisesRegex(ValueError, "уже сохранена"):
+            create_experiment_week(self.database, revised["id"], week_start="2026-10-19",
+                expected_revision=revised["revision"])
         self.assertEqual(get_experiment(self.database, first["id"])["payload"]["source_template"]["revision"], 1)
-        self.assertEqual(second["payload"]["source_template"]["revision"], 2)
+
+    def test_template_switch_compares_and_rolls_back_a_saved_snapshot(self):
+        first = self.create_draft("Основной A", self.school_payload())
+        self.activate(first)
+        second_payload = self.school_payload(subject="Другой предмет")
+        second = self.create_draft("Шаблон B", second_payload)
+
+        preview = preview_school_template_selection(self.database, second["id"])
+        self.assertEqual(len(preview["changed"]), 386)
+        self.assertEqual(preview["changed"][0]["before"]["teachers"], [])
+        switched = select_school_template(
+            self.database, second["id"], expected_revision=second["revision"],
+            expected_current_id=first["id"], expected_current_revision=first["revision"],
+            expected_candidate_hash=preview["candidate_hash"],
+        )
+        self.assertEqual(open_active_school_template(self.database)["id"], second["id"])
+        self.assertEqual(switched["selected"]["revision"], second["revision"])
+
+        restored = rollback_school_template(self.database, history_id=switched["history_id"])
+        selected = open_active_school_template(self.database)
+        self.assertEqual(selected["payload"], first["payload"])
+        self.assertNotEqual(selected["id"], first["id"])
+        self.assertEqual(restored["draft"]["payload"], first["payload"])
+
+    def test_template_comparison_reports_overlapping_teacher_and_group(self):
+        payload = self.school_payload()
+        payload["lessons"] = payload["lessons"][:2]
+        payload["lessons"][0].update({"day": 0, "start": "09:00", "end": "10:00", "teacherIds": ["teacher-1"]})
+        payload["lessons"][1].update({"day": 0, "start": "09:30", "end": "10:30", "teacherIds": ["teacher-1"]})
+        draft = self.create_draft("С конфликтом", payload)
+        preview = preview_school_template_selection(self.database, draft["id"])
+        self.assertTrue(preview["requires_explicit_problem_acknowledgement"])
+        self.assertTrue(any("Конфликт преподавателя" in detail for item in preview["problems"] for detail in item["details"]))
 
     def test_foreign_key_prevents_deleting_the_active_draft(self):
         active = self.create_draft("Активный шаблон", self.school_payload())
