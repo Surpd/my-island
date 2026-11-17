@@ -1,10 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 
-const API = 'http://localhost:8011';
-const admin = { 'X-Dev-Auth': 'admin:1' };
-
-test('weekday modes remain saved after reopening the constructor draft', async ({ page, request }) => {
+test('weekday modes remain saved after reopening the constructor draft', async ({ page }) => {
   await mkdir('.local-test', { recursive: true });
   await page.goto('/admin/schedule?role=admin');
   const createdDraftResponse = page.waitForResponse(response => response.url().endsWith('/api/admin/schedule/experiments') && response.request().method() === 'POST');

@@ -16,6 +16,8 @@ test.beforeEach(async ({ page }) => {
     let data: unknown = { items: [] };
     if (url.pathname.endsWith('/detail'))
       data = { source: selected, assessments, students, groups: ['A', 'B'] };
+    else if (url.pathname === '/api/admin/journals/matching')
+      data = { individuals: [], teams: [] };
     else if (url.pathname === '/api/admin/journals')
       data = {
         items: sources,
