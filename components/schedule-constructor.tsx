@@ -669,6 +669,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const root = useRef<HTMLDivElement>(null);
   useConstructorLayout(root, draft?.id);
   const quickInput = useRef<HTMLInputElement>(null);
+  const quickFocusTimeout = useRef<number | null>(null);
+  const scheduleQuickFocus = (target?: HTMLElement | null) => {
+    if (quickFocusTimeout.current !== null) window.clearTimeout(quickFocusTimeout.current);
+    quickFocusTimeout.current = window.setTimeout(() => {
+      quickFocusTimeout.current = null;
+      if (target) target.focus();
+      else quickInput.current?.focus();
+    }, 0);
+  };
   const clip = useRef<Clip | null>(null);
   const dragging = useRef<{
     id: string;
@@ -1665,10 +1674,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setTargetClassId(gridColumns[col].classIds[0]);
     else if (gridColumns[col]?.classIds.length > 1)
       setTargetClassId('');
-    setTimeout(() => {
-      if (focusEditor) quickInput.current?.focus();
-      else root.current?.querySelector<HTMLElement>(`[data-cell="${keyOf(cell)}"]`)?.focus();
-    }, 0);
+    if (focusEditor) scheduleQuickFocus();
+    else window.setTimeout(() => root.current?.querySelector<HTMLElement>(`[data-cell="${keyOf(cell)}"]`)?.focus(), 0);
   };
   const editCell = (initial?: string) => {
     if (!focus || !payload) return;
@@ -1688,7 +1695,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setQuick(initial || '');
       setQuickChoice({});
     }
-    setTimeout(() => quickInput.current?.focus(), 0);
+    scheduleQuickFocus();
   };
   const addStructured = (fields: { subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; specialMark?: 'lunch' | 'no_lesson'; day?: number; period?: number; kind?: 'lesson' | 'event'; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; raw?: string; activityType?: Lesson['activityType']; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }) => {
     if (!payload || !selectedCell) return;
@@ -2055,6 +2062,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     }
     if (key === 'escape') {
       event.stopPropagation();
+      if (quickFocusTimeout.current !== null && focus) {
+        window.clearTimeout(quickFocusTimeout.current);
+        quickFocusTimeout.current = null;
+        root.current?.querySelector<HTMLElement>(`[data-cell="${keyOf(focus)}"]`)?.focus();
+      }
       const menus = root.current?.querySelectorAll<HTMLDetailsElement>('details[data-ui-menu][open]');
       if (menus?.length) { menus.forEach(menu => { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); }); return; }
       if (panelOpen && window.matchMedia('(max-width: 900px)').matches) { setPanelOpen(false); return; }
@@ -2109,6 +2121,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   useEffect(() => {
     const handleGridShortcut = (event: KeyboardEvent) => {
       if (!root.current?.contains(document.activeElement) || editable(event.target))
+        return;
+      if (event.key === 'Enter' && event.target instanceof Element && event.target.closest('button, a, [role="button"]'))
         return;
       onKeyDown(event);
     };
@@ -2232,6 +2246,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       onClick={() => context && setContext(null)}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
+          if (quickFocusTimeout.current !== null && focus) {
+            window.clearTimeout(quickFocusTimeout.current);
+            quickFocusTimeout.current = null;
+            root.current?.querySelector<HTMLElement>(`[data-cell="${keyOf(focus)}"]`)?.focus();
+          }
           if (context) setContext(null);
           root.current?.querySelectorAll<HTMLDetailsElement>('details[data-ui-menu][open]').forEach((menu) => { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); });
           if (conflictsOpen) setConflictsOpen(false);
@@ -2732,7 +2751,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             if (event.key === 'Enter') {
                               event.preventDefault();
                               selectCell(row, col);
-                              setTimeout(() => quickInput.current?.focus(), 0);
+                              scheduleQuickFocus();
                             }
                           }}
                           aria-label={`${column.label}, ${DAYS[cellDay]}, ${payload.slots[period].start}`}
@@ -2743,8 +2762,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                               !(event.target as Element).closest(
                                 '.constructor-card',
                               )
-                            )
-                              selectCell(row, col, event.shiftKey);
+                              )
+                              selectCell(row, col, event.shiftKey, !event.shiftKey);
                           }}
                           onDoubleClick={() => {
                             selectCell(row, col);
@@ -2858,7 +2877,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                 onKeyDown={(event) => {
                                   event.stopPropagation();
                                   if (event.key === 'Enter') { event.preventDefault(); addLesson(); }
-                                  if (event.key === 'Escape') { setQuick(''); setQuickChoice({}); event.currentTarget.closest<HTMLElement>('[data-cell]')?.focus(); }
+                                  if (event.key === 'Escape') {
+                                    setQuick('');
+                                    setQuickChoice({});
+                                    const cell = event.currentTarget.closest<HTMLElement>('[data-cell]');
+                                    scheduleQuickFocus(cell);
+                                  }
                                 }}
                                 placeholder="Введите урок…"
                               /> : null}
@@ -2872,7 +2896,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   setCreationMode('quick');
                                   setPanelMode('lesson');
                                   setPanelOpen(true);
-                                  setTimeout(() => quickInput.current?.focus(), 0);
+                                  scheduleQuickFocus();
                                 }}
                               ><Plus size={13} /> Урок</button>
                             </div>

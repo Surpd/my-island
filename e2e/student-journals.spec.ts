@@ -384,14 +384,14 @@ test('student displays seconds-bearing synthetic lesson times as HH:MM in Today 
   await page.getByRole('button', { name: 'Расписание', exact: true }).first().click();
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
   const fullScheduleTime = page.locator('.student-schedule-lesson time');
-  await expect(fullScheduleTime).toHaveText('09:05');
+  await expect(fullScheduleTime).toHaveText('09:05–09:45');
   await expect(page.getByText('09:05:00', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Подробности урока: Синтетическая математика' }).click();
   await expect(page.getByRole('heading', { name: 'Синтетическая математика', level: 2 })).toBeVisible();
   await expect(page.locator('.student-lesson-detail')).toContainText('Педагог E2E');
   await expect(page.locator('.student-lesson-detail')).toContainText('Кабинет');
   await page.getByRole('button', { name: 'Назад к расписанию' }).click();
-  await expect(page.locator('.student-schedule-lesson time')).toHaveText('09:05');
+  await expect(page.locator('.student-schedule-lesson time')).toHaveText('09:05–09:45');
   await page.getByLabel('Дата расписания').fill('2026-11-02');
   await expect(page.locator('.student-lesson-detail')).toHaveCount(0);
   await expect(page.locator('.spatial-sheet.is-full')).toBeVisible();
