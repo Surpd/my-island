@@ -40,6 +40,8 @@ type LinkedLesson = {
 type LinkedGroup = { id: string; group_type: string };
 type MembershipStudent = { groups?: string[]; classes?: string[] };
 
+const compareStrings = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+
 /**
  * Return linked instructional groups appropriate to the current class column.
  * Narrow only when canonical student memberships prove a class match; when the
@@ -93,7 +95,7 @@ export function isWholeClassAudience(lesson: object): boolean {
   if (audience?.kind && audience.kind !== 'classes') return false;
   if (audience && (['student_ids', 'include_student_ids', 'exclude_student_ids'].some((key) =>
     Array.isArray(audience[key]) && (audience[key] as unknown[]).length > 0))) return false;
-  if (Array.isArray(audience?.class_ids) && JSON.stringify([...new Set(audience.class_ids)].sort()) !== JSON.stringify(classes.slice().sort())) return false;
+  if (Array.isArray(audience?.class_ids) && JSON.stringify([...new Set(audience.class_ids as string[])].sort(compareStrings)) !== JSON.stringify(classes.slice().sort())) return false;
   const groupIds = [
     ...(Array.isArray(source.groupIds) ? source.groupIds.filter((id): id is string => typeof id === 'string') : []),
     ...(typeof source.groupId === 'string' && source.groupId ? [source.groupId] : []),

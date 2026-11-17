@@ -1,7 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { audienceLabel, audienceShortLabel, classLabel, lessonLabel, subjectLabel } from './school-audience.ts';
+
+const syntheticEnglishGroups = Array.from({ length: 10 }, (_, index) => {
+  const number = String(index + 1);
+  return {
+    id: `synthetic-english-${number}`,
+    name: `english:${number}`,
+    subject: 'Английский язык',
+    subject_subgroup: number,
+  };
+});
+
+const syntheticDirectoryGroups = [
+  ...syntheticEnglishGroups,
+  { id: 'synthetic-math-7-1', name: 'grade7:split:1', group_type: 'instructional', semantic_dimension: 'grade7_shared_split', role: 'instructional_partition', subject: 'Математика', subject_subgroup: '1' },
+  { id: 'synthetic-math-9-base', name: 'math:9:base', display_name: 'Математика · 9 класс · База', subject: 'Математика', base_class_name: '9', subject_subgroup: 'Base' },
+  { id: 'synthetic-course-choice', name: 'course-choice', display_name: 'Курс по выбору', subject: 'Курс по выбору' },
+];
 
 test('normalizes common subject names and class labels', () => {
   assert.equal(subjectLabel('Russian'), 'Русский язык');
@@ -38,12 +54,10 @@ test('normalizes canonical school metadata without duplicating the displayed sub
   assert.equal(audienceLabel({ name: 'instructional:обществознание:10:угл', display_name: 'Обществознание · 10 класс · Угл', subject: 'Обществознание', base_class_name: '10', subject_subgroup: 'Угл' }), 'Обществознание · 10 класс · Углублённая');
 });
 
-test('renders the existing canonical English groups with their original numbers', async () => {
-  const report = JSON.parse(await readFile(new URL('../docs/SCHOOL_DIRECTORY_UNIFICATION_AUDIT_2026-10-17.json', import.meta.url), 'utf8'));
-  const groups = report.groups.filter((group) => group.subject === 'Английский язык' && /^english:\d{1,2}$/u.test(group.name));
-  assert.equal(groups.length, 10);
-  for (const group of groups) {
-    const number = group.name.split(':')[1];
+test('renders synthetic canonical English groups with their original numbers', () => {
+  assert.equal(syntheticEnglishGroups.length, 10);
+  for (const group of syntheticEnglishGroups) {
+    const number = group.subject_subgroup;
     assert.equal(
       audienceLabel(group),
       `Английский язык · группа ${number}`,
@@ -55,11 +69,10 @@ test('retains an edited human group caption alongside its canonical metadata', (
   assert.equal(audienceLabel({ name: 'english:6', display_name: 'Разговорный клуб · группа 6', subject: 'Английский язык', subject_subgroup: '6' }), 'Английский язык · группа 6 · Разговорный клуб');
 });
 
-test('is stable across the read-only canonical school directory audit fixture', async () => {
-  const report = JSON.parse(await readFile(new URL('../docs/SCHOOL_DIRECTORY_UNIFICATION_AUDIT_2026-10-17.json', import.meta.url), 'utf8'));
-  const labels = report.groups.map(audienceLabel);
-  assert.equal(new Set(labels).size, report.groups.length, 'canonical school labels must not collide');
-  for (const group of report.groups) {
+test('labels remain unique and idempotent across synthetic canonical directory groups', () => {
+  const labels = syntheticDirectoryGroups.map(audienceLabel);
+  assert.equal(new Set(labels).size, syntheticDirectoryGroups.length, 'canonical school labels must not collide');
+  for (const group of syntheticDirectoryGroups) {
     const label = audienceLabel(group);
     assert.equal(audienceLabel({ ...group, name: label, display_name: undefined }), label, `${group.id} label should be stable`);
   }

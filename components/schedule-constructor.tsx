@@ -991,15 +991,15 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const updateDayMode = (grade: string, selectedDay: number, mode: DayMode | 'normal') => {
     mutate((state) => {
       const affectedClassIds = classes.filter((item) => canonicalGradeOfGroup(item) === grade).map((item) => item.id);
-      const dayModes = { ...(state.day_modes || {}) };
+      const dayModes = { ...state.day_modes };
       for (const classId of affectedClassIds) {
-        const classModes = { ...(dayModes[classId] || {}) };
+        const classModes = { ...dayModes[classId] };
         delete classModes[String(selectedDay)];
         if (Object.keys(classModes).length) dayModes[classId] = classModes;
         else delete dayModes[classId];
       }
-      const gradeModes = { ...(state.grade_modes || {}) };
-      const gradeMode = { ...(gradeModes[grade] || {}) };
+      const gradeModes = { ...state.grade_modes };
+      const gradeMode = { ...gradeModes[grade] };
       if (mode === 'normal') delete gradeMode[String(selectedDay)];
       else gradeMode[String(selectedDay)] = mode;
       if (Object.keys(gradeMode).length) gradeModes[grade] = gradeMode;
@@ -1347,7 +1347,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const visibleClasses = classes.filter(
     (item) => !classFilter || item.id === classFilter,
   );
-  const gradeOf = (name: string) => name.match(/^\s*(\d{1,2})/)?.[1] || '';
   const dayModeLabel = (mode: DayModeState) => mode === 'conflict' ? 'Нужно выбрать общий режим' : mode === 'online' ? 'Онлайн' : mode === 'sdep' ? 'SDEP' : 'Обычный';
   const dayModeIcon = (mode: DayModeState) => mode === 'conflict'
     ? <AlertTriangle size={14} aria-hidden="true" />
@@ -1358,7 +1357,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       : <School size={14} aria-hidden="true" />;
   const renderDayModeChoices = (grade: string, selectedDay: number, mode: DayModeState) => {
     const gradeNumber = Number(grade);
-    return <span className="constructor-day-mode-popover" role="group" aria-label={`Выбор режима ${grade} класс · ${DAYS[selectedDay]}`} onClick={(event) => event.stopPropagation()}>
+    return <span className="constructor-day-mode-popover" role="group" aria-label={`Выбор режима ${grade} класс · ${DAYS[selectedDay]}`} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
       <strong>{grade} класс · {DAYS[selectedDay]}</strong>
       {mode === 'conflict' ? <small>Старые значения классов параллели различаются. Выберите общий режим.</small> : null}
       {(['normal', 'online', 'sdep'] as const).map((option) => <button
