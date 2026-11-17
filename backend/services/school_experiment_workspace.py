@@ -139,6 +139,15 @@ def school_drafts() -> Database:
             revision INTEGER NOT NULL DEFAULT 1, payload TEXT NOT NULL DEFAULT '{}',
             created_by TEXT, updated_by TEXT, created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL)""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS school_template_selection (
+            scope TEXT PRIMARY KEY CHECK(scope='school'),draft_id TEXT NOT NULL,
+            source_draft_id TEXT NOT NULL,source_revision INTEGER NOT NULL,
+            source_payload_sha256 TEXT NOT NULL,activated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS school_template_selection_history (
+            id TEXT PRIMARY KEY,previous_draft_id TEXT,previous_revision INTEGER,previous_payload TEXT,
+            previous_payload_sha256 TEXT,next_draft_id TEXT NOT NULL,next_revision INTEGER NOT NULL,
+            next_payload TEXT NOT NULL,next_payload_sha256 TEXT NOT NULL,actor_user_id TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
         # The school workspace keeps all editable schedule state locally; no
         # catalog or export-tracking writes go to the read-only school source.
         connection.execute("""CREATE TABLE IF NOT EXISTS schedule_activity_catalog (

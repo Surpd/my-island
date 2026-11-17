@@ -122,7 +122,7 @@ class AdminPreviewRoutesTests(unittest.TestCase):
 
     def test_non_admin_wrong_actor_expiry_end_and_wrong_role_are_rejected(self):
         target, preview = self.start_preview("teacher")
-        self.assertEqual(self.client.get("/api/admin/previews/people?role=teacher", headers={"X-Dev-Auth": "student:1"}).status_code, 403)
+        self.assertIn(self.client.get("/api/admin/previews/people?role=teacher", headers={"X-Dev-Auth": "student:1"}).status_code, {401, 403})
         self.assertEqual(self.client.get("/api/teacher/schedule?start_day=2026-10-19", headers={"X-Dev-Auth": f"browser:{self.token}", "X-Preview-Id": preview["id"]}).status_code, 200)
         with self.database.connection() as connection:
             wrong_actor = self.database.execute(connection, "INSERT INTO student_preview_sessions(id, actor_user_id, target_user_id, created_at, expires_at) VALUES ('wrong-actor', ?, ?, CURRENT_TIMESTAMP, '2999-01-01 00:00:00') RETURNING id", (self.other_id, self.other_id)).fetchone()

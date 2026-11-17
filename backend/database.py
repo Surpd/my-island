@@ -319,6 +319,19 @@ CREATE TABLE IF NOT EXISTS school_template_selection (
   source_payload_sha256 TEXT NOT NULL,
   activated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS school_template_selection_history (
+  id TEXT PRIMARY KEY,
+  previous_draft_id TEXT,
+  previous_revision INTEGER,
+  previous_payload TEXT,
+  previous_payload_sha256 TEXT,
+  next_draft_id TEXT NOT NULL,
+  next_revision INTEGER NOT NULL,
+  next_payload TEXT NOT NULL,
+  next_payload_sha256 TEXT NOT NULL,
+  actor_user_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS schedule_activity_catalog (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

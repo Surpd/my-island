@@ -13,15 +13,120 @@ from backend.services.constructor_publication import (
     initialize_publication_schema, preview_publication, publish_publication,
     PublicationConflict, PublicationBlocked, list_publications, restore_publication, preview_restore,
 )
-from backend.services.schedule_experiments import create_experiment, get_experiment, save_experiment
+from backend.services.schedule_experiments import create_experiment, create_experiment_week, get_experiment, save_experiment
 from backend.services.canonical_weekly_refresh import refresh_current_week
-from backend.services.school_template_selection import open_active_school_template
+from backend.services.school_template_selection import open_active_school_template, preview_school_template_selection, select_school_template
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from backend.handlers.api import create_router
 
 
 class ConstructorPublicationTests(unittest.TestCase):
+    def test_template_publication_archive_preserves_selection_baseline_for_later_review(self):
+        payload = self.draft().get("payload")
+        payload["draft_kind"] = "school"
+        template = create_experiment(self.database, name="Published school template", source="import", payload=payload)
+        self.publish(template, "template")
+        # Publishing can make a draft primary directly, with no earlier
+        # selection-history row; its immutable publication source is the
+        # fallback snapshot for reviewing later edits.
+        with self.database.connection() as connection:
+            connection.execute("DELETE FROM school_template_selection_history")
+        changed = copy.deepcopy(get_experiment(self.database, template["id"])["payload"])
+        changed["lessons"][0]["confirmedParticipantIds"] = ["synthetic-student-2"]
+        updated = save_experiment(self.database, template["id"], expected_revision=template["revision"], payload=changed)
+        active = open_active_school_template(self.database)
+        self.assertTrue(active["selection_stale"])
+        preview = preview_school_template_selection(self.database, updated["id"])
+        self.assertTrue(preview["current"]["snapshot_available"])
+        self.assertIn("confirmed_members", {item["field"] for item in preview["changed"][0]["changes"]})
+
+    def test_selected_template_week_is_hidden_until_canonical_publication_and_preview_is_personalized(self):
+        """Campus and admin identity previews both read only the published canonical week."""
+        template_payload = self.draft().get("payload")
+        template_payload["draft_kind"] = "school"
+        template = create_experiment(self.database, name="Primary synthetic template", source="import", payload=template_payload)
+        comparison = preview_school_template_selection(self.database, template["id"])
+        selected = select_school_template(self.database, template["id"], expected_revision=template["revision"],
+            expected_current_id=None, expected_current_revision=None,
+            expected_candidate_hash=comparison["candidate_hash"])
+        self.assertEqual(selected["selected"]["id"], template["id"])
+        self.publish(template, "template")
+        active = open_active_school_template(self.database)
+        week = create_experiment_week(self.database, active["id"], week_start="2026-10-19",
+                                      expected_revision=active["revision"])
+        self.assertEqual(week["payload"]["source_template"], {"id": active["id"], "revision": active["revision"]})
+        changed = copy.deepcopy(week["payload"])
+        changed["lessons"][0]["subject"] = "Synthetic changed Math"
+        changed["lessons"].append(self.lesson(id="conflict", period=0, subject="Synthetic overlap"))
+        week = save_experiment(self.database, week["id"], expected_revision=week["revision"], payload=changed,
+                               _preserve_unconfirmed_rosters=True)
+        check = preview_publication(self.database, week["id"], scope_kind="week", week_start="2026-10-19",
+                                    expected_revision=week["revision"])
+        self.assertTrue(check["can_publish"], check["blockers"])
+        self.assertTrue(check["diagnostics"], "overlapping synthetic lessons must be surfaced before publication")
+        clean = copy.deepcopy(week["payload"])
+        clean["lessons"] = [lesson for lesson in clean["lessons"] if lesson.get("id") != "conflict"]
+        week = save_experiment(self.database, week["id"], expected_revision=week["revision"], payload=clean,
+                               _preserve_unconfirmed_rosters=True)
+        check = preview_publication(self.database, week["id"], scope_kind="week", week_start="2026-10-19",
+                                    expected_revision=week["revision"])
+        self.assertTrue(check["can_publish"], check["blockers"])
+
+        # Prepare actual admin identity previews, then prove their Campus routes
+        # return no data from the constructor draft before publication.
+        admin = self.database.get_or_create_user(990002, "admin")
+        with self.database.connection() as connection:
+            self.database.execute(connection, "INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test') ON CONFLICT(user_id,role) DO NOTHING", (admin["id"],))
+        challenge, _ = self.database.create_admin_login_challenge(admin["id"])
+        token, _ = self.database.consume_admin_login_challenge(challenge)
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        admin_headers = {"X-Dev-Auth": f"browser:{token}"}
+        previews = {}
+        for role, identity in (("student", self.student), ("teacher", self.teacher)):
+            response = client.post("/api/admin/previews", headers=admin_headers,
+                json={"target_identity_id": str(identity["id"]), "role": role})
+            self.assertEqual(response.status_code, 200, response.text)
+            previews[role] = response.json()["id"]
+        student_headers = {**admin_headers, "X-Preview-Id": previews["student"]}
+        teacher_headers = {**admin_headers, "X-Preview-Id": previews["teacher"]}
+        with patch.dict(os.environ, {"SCHEDULE_BACKEND": "canonical"}):
+            for path, headers in (("/api/student/schedule?start_day=2026-10-19&end_day=2026-10-25", student_headers),
+                                  ("/api/teacher/schedule?start_day=2026-10-19&end_day=2026-10-25", teacher_headers)):
+                response = client.get(path, headers=headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertNotIn("Synthetic changed Math", response.text)
+                self.assertNotIn("Synthetic overlap", response.text)
+
+        # Publish through the existing canonical publication service, then the
+        # real Campus routes and admin identity-preview routes expose only each
+        # target's own canonical projection.
+        published = publish_publication(self.database, week["id"], scope_kind="week", week_start="2026-10-19",
+            expected_revision=week["revision"], preview_token=check["preview_token"], confirmed=True)
+        self.assertTrue(published["runtime_readback"]["verified"])
+        with patch.dict(os.environ, {"SCHEDULE_BACKEND": "canonical"}):
+            student_response = client.get("/api/student/schedule?start_day=2026-10-19&end_day=2026-10-25", headers=student_headers)
+            teacher_response = client.get("/api/teacher/schedule?start_day=2026-10-19&end_day=2026-10-25", headers=teacher_headers)
+        self.assertEqual(student_response.status_code, 200, student_response.text)
+        self.assertEqual(teacher_response.status_code, 200, teacher_response.text)
+        student_items, teacher_items = student_response.json()["items"], teacher_response.json()["items"]
+        self.assertTrue(any(item.get("activity") == "Synthetic changed Math" for item in student_items), student_response.json())
+        self.assertTrue(any(item.get("activity") == "Synthetic changed Math" for item in teacher_items), teacher_response.json())
+        self.assertFalse(any(item.get("activity") == "Synthetic overlap" for item in student_items))
+        self.assertFalse(any(item.get("activity") == "Synthetic overlap" for item in teacher_items))
+        outsider = self.database.create_identity("student", "Synthetic unrelated student", "10B")
+        other_preview = client.post("/api/admin/previews", headers=admin_headers,
+            json={"target_identity_id": str(outsider["id"]), "role": "student"}).json()["id"]
+        with patch.dict(os.environ, {"SCHEDULE_BACKEND": "canonical"}):
+            other_response = client.get("/api/student/schedule?start_day=2026-10-19&end_day=2026-10-25",
+                headers={**admin_headers, "X-Preview-Id": other_preview})
+        self.assertEqual(other_response.status_code, 200, other_response.text)
+        self.assertFalse(any(item.get("activity") == "Synthetic changed Math" for item in other_response.json()["items"]))
+        self.assertEqual(client.get("/api/teacher/schedule?start_day=2026-10-19", headers=student_headers).status_code, 403)
+        self.assertIn(client.get("/api/student/schedule?start_day=2026-10-19", headers={"X-Dev-Auth": "student:1"}).status_code, {401, 403})
+
     def test_damaged_archive_cannot_create_a_runtime_conflict_owner(self):
         draft = self.draft([self.lesson(review_required=True)])
         self.publish(draft)
