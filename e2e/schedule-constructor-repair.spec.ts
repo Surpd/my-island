@@ -30,6 +30,12 @@ async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(shots, `${name}.png`), fullPage: true });
 }
 
+async function openScheduleInspector(page: Page) {
+  const drawer = page.locator('.constructor-drawer-tab');
+  if (await drawer.getAttribute('aria-expanded') !== 'true') await drawer.click();
+  await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
+}
+
 async function createClass(page: Page, name: string) {
   const response = await page.request.post(`${API}/api/admin/groups`, { headers: ADMIN, data: { name, group_type: 'class' } });
   expect(response.ok()).toBeTruthy();
@@ -102,6 +108,7 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
   await expect(drawerTab).toHaveAttribute('aria-expanded', 'false');
   await drawerTab.click();
   await expect(inspector).toHaveAttribute('aria-hidden', 'false');
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Русский язык');
   await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('каб. 8');
@@ -229,6 +236,7 @@ test('constructor edit preserves horizontal grid position', async ({ page }) => 
   await page.locator('[data-cell="0:0"]').click();
   await page.locator('.constructor-drawer-tab').click();
   await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Геометрия прокрутки');
   await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('8');
@@ -301,6 +309,7 @@ test('constructor repair: lunch for a selected group remains editable through in
   await openEmptyWeek(page);
   await filterClass(page, classId);
   await page.locator('[data-cell="0:0"]').click();
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('button', { name: 'Обед', exact: true }).click();
   const lunchPicker = page.getByRole('region', { name: 'Участники занятия' });
@@ -371,6 +380,7 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await page.locator('[data-cell="0:0"]').click();
   await page.locator('.constructor-drawer-tab').click();
   await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('button', { name: 'Кружок', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Айкидо без каталога');
@@ -415,6 +425,7 @@ test('constructor repair: local multi-class captions, bulk audience preview and 
   await filterClass(page, physicsIds[0]);
   await expect.poll(() => gridWrap.evaluate((element) => (element as HTMLElement).scrollLeft)).toBe(0);
   await page.locator('[data-cell="0:0"]').click();
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Физика');
   const picker = page.getByRole('region', { name: 'Участники занятия' });
@@ -436,6 +447,7 @@ test('constructor repair: local multi-class captions, bulk audience preview and 
 
   await filterClass(page, coworkingIds[0]);
   await page.locator('[data-cell="1:0"]').click();
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Коворкинг');
   const coworkingPicker = page.getByRole('region', { name: 'Участники занятия' });
@@ -454,6 +466,7 @@ test('constructor repair: local multi-class captions, bulk audience preview and 
   await expect(localCoworking).toContainText('7');
   await expect(localCoworking).not.toContainText('5-А');
 
+  await page.locator('.constructor-drawer-tab').click();
   await page.getByRole('button', { name: 'Сохранить черновик', exact: true }).click();
   await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await addStudentToClass(page, physicsIds[0], physicsNames[0], `Repair physics roster B ${suffix}`);
@@ -481,6 +494,7 @@ test('constructor repair: grade nine all-others audience displays a live class s
   await openEmptyWeek(page);
   await filterClass(page, classId);
   await page.locator('[data-cell="0:0"]').click();
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('button', { name: 'Обед', exact: true }).click();
   const picker = page.getByRole('region', { name: 'Участники занятия' });

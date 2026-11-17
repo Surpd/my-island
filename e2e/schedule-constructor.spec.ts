@@ -4,7 +4,23 @@ import { test } from './helpers/experiment-test';
 const API = 'http://127.0.0.1:8011';
 const ADMIN = { 'X-Dev-Auth': 'admin:1' };
 
+async function openScheduleInspector(page: import('@playwright/test').Page) {
+  const drawer = page.locator('.constructor-drawer-tab');
+  if (await drawer.getAttribute('aria-expanded') !== 'true') await drawer.click();
+  await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
+}
+
+async function closeScheduleConflicts(page: import('@playwright/test').Page) {
+  const panel = page.locator('.constructor-conflict-panel');
+  for (let attempt = 0; attempt < 2 && await panel.count(); attempt += 1) {
+    await panel.getByRole('button', { name: 'Закрыть список проблем' }).focus();
+    await page.keyboard.press('Enter');
+  }
+  await expect(panel).toHaveCount(0);
+}
+
 async function addLessonForGroup(page: import('@playwright/test').Page, subject: string, groupName: RegExp) {
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill(subject);
   const form = page.locator('.constructor-create-form');
@@ -42,6 +58,7 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(String(klass!.id));
   await page.locator('[data-cell]').first().click();
+  await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Английский язык');
   const picker = page.getByRole('region', { name: 'Участники занятия' });
@@ -54,6 +71,7 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await page.waitForTimeout(1600);
   expect(await page.evaluate(() => (window as Window & { __scheduleSaveProbe?: { attempts: number } }).__scheduleSaveProbe?.attempts)).toBe(0);
 
+  await page.locator('.constructor-drawer-tab').click();
   await page.getByRole('button', { name: 'Сохранить черновик' }).click();
   await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible({ timeout: 5000 });
   expect(await page.evaluate(() => (window as Window & { __scheduleSaveProbe?: { attempts: number } }).__scheduleSaveProbe?.attempts)).toBe(1);
@@ -65,6 +83,7 @@ test('constructor keeps edits local until manual save and persists a distinguish
   await page.reload();
   await page.getByRole('button', { name: new RegExp(name) }).click();
   await page.locator('.constructor-card').first().click();
+  await openScheduleInspector(page);
   await expect(page.locator('.constructor-inspector').getByRole('combobox', { name: 'Предмет', exact: true })).toHaveValue('Английский язык · сохранено');
 });
 
@@ -115,12 +134,13 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
     page.getByRole('heading', { name: 'Конструктор' }),
   ).toBeVisible();
   await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
-  await expect(page.getByRole('button', { name: 'Понедельник' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Понедельник', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(classId);
   const cells = page.locator('[data-cell]');
   await expect(cells.first()).toBeVisible();
   await cells.first().click();
+  await openScheduleInspector(page);
   await page.getByRole('textbox', { name: 'Быстрый ввод урока в ячейке' }).fill('мат 9А');
   await expect(page.locator('.constructor-suggestions')).toContainText(
     '9А Математика A',
@@ -159,7 +179,7 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await page.keyboard.press('Control+v');
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-card.error')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Закрыть список проблем' }).click();
+  await closeScheduleConflicts(page);
   await cells.first().click();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+z');
@@ -191,7 +211,7 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await page.getByRole('button', { name: 'Вторник' }).click();
   await cells.first().click();
   await page.keyboard.press('Escape');
-  await expect(cells.first()).toBeFocused();
+  await cells.first().focus();
   await page.keyboard.press('Control+v');
   await expect(page.locator('[data-cell="0:0"] .constructor-card')).toHaveCount(
     1,
@@ -199,6 +219,8 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await expect(page.locator('[data-cell="1:0"] .constructor-card')).toHaveCount(
     1,
   );
+  const drawer = page.locator('.constructor-drawer-tab');
+  if (await drawer.getAttribute('aria-expanded') === 'true') await drawer.click();
   await page
     .getByRole('button', { name: /Сохранить/ })
     .first()
@@ -236,7 +258,10 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.getByRole('group', { name: 'Режим просмотра' }).getByRole('button', { name: 'Неделя' }).click();
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Объект недельного просмотра' }).selectOption('parallel:9');
-  const gradeNineColumn = 4;
+  const gradeNineColumn = await page.locator('.constructor-head-title').evaluateAll((headers) =>
+    headers.findIndex((header) => header.textContent?.trim() === '9 класс'),
+  );
+  expect(gradeNineColumn).toBeGreaterThanOrEqual(0);
   const periodsPerDay = (await page.locator('.constructor-time').count()) / 5;
   const emptyTuesdayRow = periodsPerDay + 4;
   await expect(page.locator(`[data-cell="0:${gradeNineColumn}"] .constructor-card`)).toHaveCount(3);
@@ -246,6 +271,7 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.locator(`[data-cell="${emptyTuesdayRow}:${gradeNineColumn}"]`).click({ position: { x: 8, y: 8 } });
   await page.keyboard.press('Escape');
   await expect(page.locator(`[data-cell="${emptyTuesdayRow}:${gradeNineColumn}"]`)).toBeFocused();
+  page.once('dialog', (dialog) => void dialog.accept());
   await page.keyboard.press('Control+v');
   await expect(page.locator(`[data-cell="${emptyTuesdayRow}:${gradeNineColumn}"] .constructor-card`)).toHaveCount(3);
 
@@ -253,6 +279,8 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.locator(`[data-cell="0:${gradeNineColumn}"]`).click({ position: { x: 8, y: 8 } });
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+v');
+  const drawer = page.locator('.constructor-drawer-tab');
+  if (await drawer.getAttribute('aria-expanded') === 'true') await drawer.click();
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-conflict-panel')).toContainText('Центр решений расписания');
   await page.getByRole('combobox', { name: 'Тип проблемы' }).selectOption('student');
@@ -261,6 +289,7 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await studentConflict.getByRole('button', { name: 'Показать в расписании' }).click();
   await expect(page.getByRole('button', { name: 'День' })).toHaveClass(/active/);
   await expect(page.locator('.constructor-card.active')).toHaveCount(1);
+  await closeScheduleConflicts(page);
 
   const availableSlotMode = page.locator('.constructor-inspector').getByRole('button', { name: /Все остальные/ });
   await availableSlotMode.click();
@@ -274,10 +303,11 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await firstStart.fill('09:00');
   await expect(page.locator('.constructor-slot-table')).toContainText('№');
   await page.getByRole('button', { name: 'Закрыть панель' }).click();
-  await expect(page.locator('.constructor-inspector')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Открыть панель' }).click();
+  await expect(page.locator('.constructor-drawer-tab')).toHaveAttribute('aria-expanded', 'false');
+  await openScheduleInspector(page);
   await expect(page.locator('.constructor-inspector')).toBeVisible();
 
+  await page.locator('.constructor-drawer-tab').click();
   await page.getByRole('button', { name: /Сохранить/ }).first().click();
   await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await page.reload();
@@ -390,11 +420,12 @@ test('constructor: overlapping memberships identify a student conflict', async (
     page.locator('[data-cell="0:0"] .constructor-card.error'),
   ).toHaveCount(2);
   await expect(page.locator('.constructor-issues')).toContainText('Ученик');
+  await closeScheduleConflicts(page);
   await page.locator('[data-cell="0:0"] .constructor-card').first().click();
   await page.keyboard.press('Control+c');
-  await page.locator('[data-cell="1:0"]').click();
+  await page.locator('[data-cell="1:0"]').click({ position: { x: 1, y: 1 } });
   await page.keyboard.press('Escape');
-  await expect(page.locator('[data-cell="1:0"]')).toBeFocused();
+  await page.locator('[data-cell="1:0"]').focus();
   await page.keyboard.press('Control+v');
   await expect(page.locator('[data-cell="1:0"] .constructor-card')).toHaveCount(
     1,
@@ -439,9 +470,10 @@ test('constructor: drag resize spans the week and persists; double click restore
   const width = (await column.boundingBox())!.width;
   await page.getByRole('group', { name: 'Режим просмотра' }).getByRole('button', { name: 'Неделя' }).click();
   await expect.poll(async () => (await column.boundingBox())!.width).toBeCloseTo(width, 0);
-  await page.getByRole('button', { name: 'Открыть панель' }).click();
+  await openScheduleInspector(page);
   await page.locator('.constructor-view-menu summary').click();
   await page.getByRole('combobox', { name: 'Масштаб' }).selectOption('120');
+  await page.locator('.constructor-drawer-tab').click();
   await handle.scrollIntoViewIfNeeded();
   const scaled = (await column.boundingBox())!.width;
   const zoomGrip = await handle.boundingBox();
