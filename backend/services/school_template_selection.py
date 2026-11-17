@@ -20,21 +20,353 @@ def _digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(_encoded(payload).encode("utf-8")).hexdigest()
 
 
-def _lesson_summary(lesson: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "subject": lesson.get("subject") or lesson.get("activity") or "",
+def _ids(*values: Any) -> list[str]:
+    result: set[str] = set()
+    for value in values:
+        if isinstance(value, (list, tuple, set)):
+            result.update(str(item) for item in value if item not in (None, ""))
+        elif value not in (None, ""):
+            result.add(str(value))
+    return sorted(result)
+
+
+def _lesson_semantics(lesson: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    audience = lesson.get("audience") if isinstance(lesson.get("audience"), dict) else {}
+    snapshot = lesson.get("audience_snapshot") if isinstance(lesson.get("audience_snapshot"), dict) else {}
+    canonical = lesson.get("canonical") if isinstance(lesson.get("canonical"), dict) else {}
+    assignment = canonical.get("assignment") if isinstance(canonical.get("assignment"), dict) else {}
+    metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), dict) else {}
+    canonical_rule = metadata.get("audience_rule") if isinstance(metadata.get("audience_rule"), dict) else {}
+    groups = _ids(lesson.get("classId"), lesson.get("classIds"), lesson.get("groupId"), lesson.get("groupIds"),
+                  audience.get("class_ids"), audience.get("classIds"), audience.get("group_ids"), audience.get("groupIds"),
+                  assignment.get("canonical_group_ids"))
+    confirmed_members = _ids(lesson.get("confirmedParticipantIds"))
+    members = _ids(lesson.get("studentIds"), lesson.get("student_ids"), snapshot.get("student_ids"),
+                   confirmed_members, audience.get("student_ids"), audience.get("studentIds"),
+                   audience.get("include_student_ids"), canonical_rule.get("include_student_ids"))
+    excluded_members = _ids(audience.get("exclude_student_ids"), canonical_rule.get("exclude_student_ids"))
+    excluded_groups = _ids(lesson.get("excludedGroupIds"), audience.get("partition_group_ids"),
+                           audience.get("excludedGroupIds"), canonical_rule.get("partition_group_ids"))
+    teachers = _ids(lesson.get("teacherId"), lesson.get("teacherIds"), lesson.get("responsible_teacher_ids"),
+                    lesson.get("responsibleTeacherIds"), assignment.get("teacher_ids"), metadata.get("responsible_teacher_ids"))
+    responsible_teachers = _ids(lesson.get("responsible_teacher_ids"), lesson.get("responsibleTeacherIds"),
+                                metadata.get("responsible_teacher_ids"))
+    slots = payload.get("slots") if isinstance(payload.get("slots"), list) else []
+    period = lesson.get("period")
+    try:
+        period_index = int(period)
+    except (TypeError, ValueError):
+        period_index = -1
+    slot = slots[period_index] if 0 <= period_index < len(slots) and isinstance(slots[period_index], dict) else {}
+    explicit_start, explicit_end = lesson.get("start"), lesson.get("end")
+    is_event = lesson.get("kind") == "event" or lesson.get("canonicalRole") == "special_event"
+    if is_event or (explicit_start and explicit_end and (explicit_start != slot.get("start") or explicit_end != slot.get("end"))):
+        start, end = explicit_start or slot.get("start") or "", explicit_end or slot.get("end") or ""
+    else:
+        start, end = slot.get("start") or explicit_start or "", slot.get("end") or explicit_end or ""
+    activity_type = lesson.get("activityType") or metadata.get("activity_type") or "lesson"
+    special_mark = lesson.get("specialMark") or metadata.get("special_mark") or ""
+    audience_mode = lesson.get("audienceMode") or ""
+    audience_kind = audience.get("kind") or canonical_rule.get("kind") or assignment.get("audience_kind") or ""
+    canonical_role = lesson.get("canonicalRole") or assignment.get("role") or assignment.get("assignment_kind") or ""
+    # This allowlist mirrors fields consumed by constructor publication and
+    # canonical projections. Import coordinates, resolution history, snapshot
+    # fingerprints and timestamps are deliberately excluded as service data.
+    values: dict[str, Any] = {
+        "subject": str(lesson.get("subject") or lesson.get("activity") or ""),
+        "activity_type": str(activity_type),
+        "activity_catalog_id": str(lesson.get("activityCatalogId") or ""),
+        "activity_name": str(lesson.get("activityNameSnapshot") or ""),
+        "elective_direction": str(lesson.get("electiveDirection") or ""),
+        "eligible_grades": _ids(lesson.get("eligibleGrades")),
+        "grade_scope": str(lesson.get("grade_scope") or audience.get("grade") or canonical_rule.get("grade") or ""),
         "day": lesson.get("day", lesson.get("weekday")),
-        "start": lesson.get("start") or lesson.get("start_time") or "",
-        "end": lesson.get("end") or lesson.get("end_time") or "",
-        "groups": sorted(set(map(str, lesson.get("groupIds") or lesson.get("classIds") or ([lesson.get("groupId")] if lesson.get("groupId") else [])))),
-        "members": sorted(set(map(str, lesson.get("studentIds") or (lesson.get("audience_snapshot") or {}).get("student_ids") or []))),
-        "teachers": sorted(set(map(str, lesson.get("teacherIds") or ([lesson.get("teacherId")] if lesson.get("teacherId") else [])))),
-        "room": str(lesson.get("room") or ""),
-        "problems": sorted(str(v) for v in (lesson.get("clarificationReason"),) if v) + (["importError"] if lesson.get("importError") else []) + (["needsClarification"] if lesson.get("needsClarification") else []),
+        "period": period,
+        "start": str(start), "end": str(end),
+        "class_id": _ids(lesson.get("classId")), "class_ids": _ids(lesson.get("classIds")),
+        "group_id": _ids(lesson.get("groupId")), "group_ids": _ids(lesson.get("groupIds")),
+        "groups": groups,
+        "audience_kind": str(audience_kind), "audience_mode": str(audience_mode),
+        "audience_type": str(audience.get("type") or ""),
+        "audience_classes": _ids(audience.get("class_ids"), audience.get("classIds")),
+        "audience_groups": _ids(audience.get("group_ids"), audience.get("groupIds"), canonical_rule.get("class_group_id")),
+        "members": members, "confirmed_members": confirmed_members,
+        "excluded_members": excluded_members,
+        "excluded_groups": excluded_groups,
+        "partition_dimension": str(audience.get("partition_dimension") or canonical_rule.get("partition_dimension") or ""),
+        "audience_snapshot_members": _ids(snapshot.get("student_ids")),
+        "teachers": teachers, "responsible_teachers": responsible_teachers,
+        "room": str(lesson.get("room") or metadata.get("room") or ""),
+        "special_mark": str(special_mark), "kind": str(lesson.get("kind") or ""),
+        "canonical_role": str(canonical_role),
+        "activity_format": str(metadata.get("activity_format") or lesson.get("activity_format") or ""),
+        "informational": bool(lesson.get("informational")),
+        "sdep_independent": bool(lesson.get("sdepIndependent")),
+        "format": str(lesson.get("format") or ""), "description": str(lesson.get("description") or ""),
+        "place": str(lesson.get("place") or ""), "note": str(lesson.get("note") or ""),
+        "protected": bool(lesson.get("protected")), "deferred": bool(lesson.get("deferred")),
+        "needs_clarification": bool(lesson.get("needsClarification")),
+        "clarification_reason": str(lesson.get("clarificationReason") or ""),
+        "import_error": str(lesson.get("importError") or ""),
+    }
+    return values
+
+
+_FIELD_LABELS = {
+    "subject": ("Предмет или занятие", "Меняется название занятия в расписании."),
+    "activity_type": ("Тип занятия", "Может изменить правила участия, отображения и проверки конфликтов."),
+    "activity_catalog_id": ("Карточка занятия", "Меняется связь с каталогом специальных занятий."),
+    "activity_name": ("Название занятия из каталога", "Меняется отображаемое название специального занятия."),
+    "elective_direction": ("Направление курса по выбору", "Меняется направление доступности курса."),
+    "eligible_grades": ("Параллели курса", "Меняется круг учеников, которым доступен курс."),
+    "grade_scope": ("Параллель", "Меняется параллель, для которой назначено занятие."),
+    "day": ("День недели", "Занятие переносится на другой день."),
+    "period": ("Номер урока", "Меняется место занятия в сетке."),
+    "start": ("Начало", "Меняется время занятия."), "end": ("Окончание", "Меняется время занятия."),
+    "class_id": ("Основной класс", "Может измениться охват класса."),
+    "class_ids": ("Классы", "Меняется круг классов, для которых строится расписание."),
+    "group_id": ("Основная группа", "Может измениться охват учебной группы."),
+    "group_ids": ("Учебные группы", "Меняется круг групп, которым назначено занятие."),
+    "groups": ("Классы и группы", "Меняется круг учеников, которым назначено занятие."),
+    "audience_kind": ("Правило охвата", "Меняется способ назначения участников."),
+    "audience_mode": ("Режим охвата", "Меняются правила распределения учеников между занятиями."),
+    "audience_type": ("Тип назначения участников", "Меняется способ, которым canonical связывает занятие с аудиторией."),
+    "audience_classes": ("Классы в правиле охвата", "Меняется круг классов-участников."),
+    "audience_groups": ("Группы в правиле охвата", "Меняется круг групп-участников."),
+    "partition_dimension": ("Измерение распределения", "Меняются правила распределения участников между группами."),
+    "members": ("Участники", "Меняется персональный список учеников на занятии."),
+    "confirmed_members": ("Подтверждённые участники", "Меняется явно подтверждённый список учеников."),
+    "excluded_members": ("Исключённые ученики", "Эти ученики больше не входят в занятие."),
+    "excluded_groups": ("Исключённые группы", "Меняется остаточный охват занятия."),
+    "audience_snapshot_members": ("Состав по подтверждённому снимку", "Меняется сохранённый состав учеников."),
+    "teachers": ("Преподаватели", "Меняется персональное расписание преподавателей."),
+    "responsible_teachers": ("Ответственные преподаватели", "Меняется, кому назначается ответственность за занятие."),
+    "room": ("Кабинет", "Меняется место проведения занятия."),
+    "special_mark": ("Специальный статус", "Меняются правила занятия, например обед или отсутствие урока."),
+    "kind": ("Формат записи", "Меняется обработка события или урока."),
+    "canonical_role": ("Роль занятия", "Меняется роль занятия при canonical-публикации."),
+    "activity_format": ("Формат активности", "Меняется вид активности, назначаемый в canonical-расписании."),
+    "informational": ("Информационный статус", "Меняется, считается ли запись занятием для участников."),
+    "sdep_independent": ("Независимое занятие СДЭП", "Меняется участие в расписании СДЭП."),
+    "format": ("Формат проведения", "Меняются сведения о формате занятия."),
+    "description": ("Описание", "Меняется описание, которое увидят участники."),
+    "place": ("Место проведения", "Меняется место, указанное участникам."),
+    "note": ("Примечание", "Меняются дополнительные сведения о занятии."),
+    "protected": ("Защищённое занятие", "Меняется необходимость отдельного согласования."),
+    "deferred": ("Отложенное занятие", "Меняется, попадёт ли занятие в текущую публикацию."),
+    "needs_clarification": ("Требуется уточнение", "Меняется готовность занятия к публикации."),
+    "clarification_reason": ("Причина уточнения", "Меняется предупреждение администратору."),
+    "import_error": ("Ошибка сопоставления", "Меняется проблема переноса исходных данных."),
+}
+
+
+def _display_names(database: Database, table: str, ids: list[str], known: dict[str, str] | None = None) -> list[str]:
+    if not ids:
+        return []
+    if known is not None:
+        return [known.get(value, value) for value in ids]
+    try:
+        with database.connection() as connection:
+            placeholders = ",".join("?" for _ in ids)
+            columns = "id,display_name" if table == "identities" else "id,display_name,name"
+            rows = database.execute(connection, f"SELECT {columns} FROM {table} WHERE id IN ({placeholders})", tuple(ids)).fetchall()
+        names = {str(row["id"]): str(row["display_name"] or dict(row).get("name") or row["id"]) for row in rows}
+        return [names.get(value, value) for value in ids]
+    except Exception:
+        return ids
+
+
+def _name_maps(database: Database, *payloads: dict[str, Any]) -> dict[str, dict[str, str]]:
+    group_ids: set[str] = set()
+    identity_ids: set[str] = set()
+    for payload in payloads:
+        for index, lesson in enumerate(payload.get("lessons") or []):
+            if not isinstance(lesson, dict):
+                continue
+            semantic = _lesson_semantics(lesson, payload)
+            for key in ("groups", "audience_classes", "audience_groups", "excluded_groups"):
+                group_ids.update(semantic[key])
+            for key in ("members", "confirmed_members", "excluded_members", "audience_snapshot_members", "teachers", "responsible_teachers"):
+                identity_ids.update(semantic[key])
+    result: dict[str, dict[str, str]] = {"groups": {}, "identities": {}}
+    for table, ids in (("groups", group_ids), ("identities", identity_ids)):
+        if not ids:
+            continue
+        try:
+            values = sorted(ids)
+            with database.connection() as connection:
+                placeholders = ",".join("?" for _ in values)
+                columns = "id,display_name" if table == "identities" else "id,display_name,name"
+                rows = database.execute(connection, f"SELECT {columns} FROM {table} WHERE id IN ({placeholders})", tuple(values)).fetchall()
+            result[table] = {str(row["id"]): str(row["display_name"] or dict(row).get("name") or row["id"]) for row in rows}
+        except Exception:
+            pass
+    return result
+
+
+def _lesson_summary(database: Database, lesson: dict[str, Any], payload: dict[str, Any],
+                    names: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+    semantic = _lesson_semantics(lesson, payload)
+    day = semantic["day"]
+    day_label = _WEEKDAYS[day] if isinstance(day, int) and 0 <= day < 7 else day
+    return {"subject": semantic["subject"], "day": day_label, "period": semantic["period"],
+        "start": semantic["start"], "end": semantic["end"], "groups": _display_names(database, "groups", semantic["groups"], (names or {}).get("groups")),
+        "members": semantic["members"], "teachers": _display_names(database, "identities", semantic["teachers"], (names or {}).get("identities")), "room": semantic["room"],
+        "activity_type": semantic["activity_type"], "special_mark": semantic["special_mark"],
+        "audience_kind": semantic["audience_kind"], "audience_mode": semantic["audience_mode"],
+        "excluded_groups": semantic["excluded_groups"],
+        "problems": sorted(str(v) for v in (lesson.get("clarificationReason"),) if v)
+            + (["importError"] if lesson.get("importError") else [])
+            + (["needsClarification"] if lesson.get("needsClarification") else [])}
+
+
+def _lesson_changes(before: dict[str, Any], after: dict[str, Any], before_payload: dict[str, Any],
+                    after_payload: dict[str, Any], database: Database,
+                    names: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    left, right = _lesson_semantics(before, before_payload), _lesson_semantics(after, after_payload)
+    name_fields = {"class_id", "class_ids", "group_id", "group_ids", "groups", "audience_classes", "audience_groups", "excluded_groups"}
+    person_fields = {"members", "confirmed_members", "excluded_members", "audience_snapshot_members", "teachers", "responsible_teachers"}
+    changes = []
+    for key in _FIELD_LABELS:
+        if left[key] == right[key]:
+            continue
+        name_table = "groups" if key in name_fields else "identities" if key in person_fields else ""
+        before_text = ", ".join(_display_names(database, name_table, left[key], names.get(name_table))) if name_table else display_value(left[key])
+        after_text = ", ".join(_display_names(database, name_table, right[key], names.get(name_table))) if name_table else display_value(right[key])
+        changes.append({"field": key, "label": _FIELD_LABELS[key][0], "impact": _FIELD_LABELS[key][1],
+             "before": left[key], "after": right[key], "before_text": before_text or "нет", "after_text": after_text or "нет"})
+    return changes
+
+
+def display_value(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value) or "нет"
+    if value in (None, ""):
+        return "нет"
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    return str(value)
+
+
+_WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+_MODE_LABELS = {"normal": "Обычный день", "online": "Онлайн", "sdep": "СДЭП"}
+
+
+def _payload_semantics(payload: dict[str, Any]) -> dict[str, Any]:
+    def modes(value: Any) -> dict[str, dict[str, str]]:
+        if not isinstance(value, dict):
+            return {}
+        result = {}
+        for key, days in value.items():
+            if isinstance(days, dict):
+                normalized = {str(day): str(mode) for day, mode in days.items() if mode not in (None, "", "normal")}
+                if normalized:
+                    result[str(key)] = dict(sorted(normalized.items(), key=lambda pair: int(pair[0])))
+        return dict(sorted(result.items()))
+    slots = payload.get("slots") if isinstance(payload.get("slots"), list) else []
+    return {
+        "days": sorted(set(int(day) for day in payload.get("days", []) if str(day).isdigit())),
+        "slots": [{"start": str(slot.get("start") or ""), "end": str(slot.get("end") or "")}
+                  for slot in slots if isinstance(slot, dict)],
+        "classes": _ids(payload.get("classes")),
+        "day_modes": modes(payload.get("day_modes")),
+        "grade_modes": modes(payload.get("grade_modes")),
+        "lessons": {str(lesson.get("id") or index): _lesson_semantics(lesson, payload)
+                    for index, lesson in enumerate(payload.get("lessons") or []) if isinstance(lesson, dict)},
     }
 
 
-def _conflicts(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _human_modes(database: Database, values: dict[str, dict[str, str]], *, grades: bool) -> str:
+    scope_labels: dict[str, str] = {}
+    if not grades:
+        ids = sorted(values)
+        if ids:
+            try:
+                with database.connection() as connection:
+                    placeholders = ",".join("?" for _ in ids)
+                    rows = database.execute(connection,
+                        f"SELECT id,name,display_name FROM groups WHERE id IN ({placeholders})", tuple(ids)).fetchall()
+                scope_labels = {str(row["id"]): str(row["display_name"] or row["name"] or row["id"]) for row in rows}
+            except Exception:
+                scope_labels = {}
+    rows = []
+    for scope, days in values.items():
+        for day, mode in days.items():
+            day_name = _WEEKDAYS[int(day)] if day.isdigit() and 0 <= int(day) < 7 else day
+            target = f"{scope} класс" if grades else scope_labels.get(scope, f"класс/группа {scope}")
+            rows.append(f"{target}, {day_name}: {_MODE_LABELS.get(mode, mode)}")
+    return "; ".join(rows) or "Обычный режим"
+
+
+def _payload_changes(database: Database, before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, str]]:
+    left, right = _payload_semantics(before), _payload_semantics(after)
+    changes = []
+    for key, label, impact in (
+        ("days", "Учебные дни", "Меняются дни недели, для которых формируется расписание."),
+        ("slots", "Звонки и интервалы", "Меняются фактическое время и порядок занятий."),
+        ("classes", "Классы шаблона", "Меняется набор классов, входящих в шаблон."),
+        ("day_modes", "Режимы дней по классам", "Меняется обычный, онлайн или СДЭП режим для затронутых классов и учеников."),
+        ("grade_modes", "Режимы дней по параллелям", "Меняется обычный, онлайн или СДЭП режим для затронутых учеников."),
+    ):
+        if left[key] == right[key]:
+            continue
+        if key in {"day_modes", "grade_modes"}:
+            old_text = _human_modes(database, left[key], grades=key == "grade_modes")
+            new_text = _human_modes(database, right[key], grades=key == "grade_modes")
+        elif key == "slots":
+            old_text = "; ".join(f"{index + 1}: {slot['start']}–{slot['end']}" for index, slot in enumerate(left[key])) or "Нет интервалов"
+            new_text = "; ".join(f"{index + 1}: {slot['start']}–{slot['end']}" for index, slot in enumerate(right[key])) or "Нет интервалов"
+        elif key == "days":
+            old_text = ", ".join(_WEEKDAYS[day] for day in left[key]) or "Нет учебных дней"
+            new_text = ", ".join(_WEEKDAYS[day] for day in right[key]) or "Нет учебных дней"
+        else:
+            old_text = ", ".join(_display_names(database, "groups", left[key])) or "Нет классов"
+            new_text = ", ".join(_display_names(database, "groups", right[key])) or "Нет классов"
+        changes.append({"field": key, "label": label, "impact": impact,
+                        "before": old_text, "after": new_text})
+    return changes
+
+
+def _selected_snapshot(database: Database, selection: Any, active: dict[str, Any]) -> dict[str, Any] | None:
+    active_payload = active["payload"]
+    active_hash = _digest(active_payload)
+    if active_hash == str(selection["source_payload_sha256"]):
+        return {"id": str(selection["draft_id"]), "revision": int(selection["source_revision"]),
+                "name": active["name"], "payload": active_payload, "payload_hash": active_hash}
+    with database.connection() as connection:
+        row = database.execute(connection, """SELECT next_payload,next_revision,next_payload_sha256
+            FROM school_template_selection_history
+            WHERE next_draft_id=? AND next_payload_sha256=?
+            ORDER BY created_at DESC,id DESC LIMIT 1""",
+            (str(selection["draft_id"]), str(selection["source_payload_sha256"]))).fetchone()
+    if row:
+        payload = row["next_payload"]
+        payload = json.loads(payload) if isinstance(payload, str) else payload
+        return {"id": str(selection["draft_id"]), "revision": int(selection["source_revision"]),
+                "name": active["name"], "payload": payload,
+                "payload_hash": str(selection["source_payload_sha256"])}
+    # Template publication also advances the selection pointer, without
+    # changing the editor payload or the canonical publication protocol. Its
+    # immutable source archive is a second valid place to recover that exact
+    # selected payload when a later edit creates semantic drift.
+    try:
+        from backend.services.constructor_publication import get_published_source
+        with database.connection() as connection:
+            rows = database.execute(connection, """SELECT id FROM schedule_constructor_publications
+                WHERE draft_id=? ORDER BY created_at DESC,id DESC""", (str(selection["draft_id"]),)).fetchall()
+        for publication in rows:
+            source = get_published_source(database, str(publication["id"])).get("published_source")
+            if source and source.get("payload_fingerprint") == str(selection["source_payload_sha256"]):
+                return {"id": str(selection["draft_id"]), "revision": int(selection["source_revision"]),
+                        "name": active["name"], "payload": source["payload"],
+                        "payload_hash": str(selection["source_payload_sha256"])}
+    except Exception:
+        pass
+    return None
+
+
+def _conflicts(lessons: list[dict[str, Any]], payload: dict[str, Any],
+               names: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     def minutes(value: str) -> int | None:
         try:
             hour, minute = map(int, value.split(":")[:2])
@@ -42,7 +374,7 @@ def _conflicts(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             return None
     issues = []
-    rows = [(item, _lesson_summary(item)) for item in lessons]
+    rows = [(item, _lesson_semantics(item, payload)) for item in lessons]
     for index, (first, a) in enumerate(rows):
         if a["day"] is None or first.get("informational") or first.get("specialMark") in {"lunch", "no_lesson"}:
             continue
@@ -60,8 +392,8 @@ def _conflicts(lessons: list[dict[str, Any]]) -> list[dict[str, Any]]:
             shared_teachers = sorted(set(a["teachers"]) & set(b["teachers"]))
             if shared_groups or shared_teachers:
                 issues.append({"lesson_id": str(first.get("id") or ""), "details": [
-                    *( ["Конфликт группы: " + ", ".join(shared_groups)] if shared_groups else []),
-                    *( ["Конфликт преподавателя: " + ", ".join(shared_teachers)] if shared_teachers else []),
+                    *( ["Конфликт группы: " + ", ".join(names.get("groups", {}).get(value, value) for value in shared_groups)] if shared_groups else []),
+                    *( ["Конфликт преподавателя: " + ", ".join(names.get("identities", {}).get(value, value) for value in shared_teachers)] if shared_teachers else []),
                 ]})
     return issues
 
@@ -72,29 +404,51 @@ def preview_school_template_selection(database: Database, draft_id: str) -> dict
     if payload.get("draft_kind") != "school" or payload.get("week_start") or payload.get("source_template"):
         raise ValueError("Выбрать основным можно только сохранённый шаблон школы")
     try:
-        current = open_active_school_template(database)
+        active = open_active_school_template(database)
     except ValueError as error:
         if "не назначен" not in str(error):
             raise
-        current = None
-    before = {str(item.get("id")): item for item in (current or {}).get("payload", {}).get("lessons", []) if isinstance(item, dict)}
+        active = None
+    selection = None
+    if active:
+        with database.connection() as connection:
+            selection = database.execute(connection, "SELECT * FROM school_template_selection WHERE scope='school'").fetchone()
+    baseline = _selected_snapshot(database, selection, active) if selection and active else None
+    baseline_available = baseline is not None if active else True
+    baseline_payload = baseline["payload"] if baseline else (active or {}).get("payload", {})
+    before = {str(item.get("id")): item for item in baseline_payload.get("lessons", []) if isinstance(item, dict)}
     after = {str(item.get("id")): item for item in payload.get("lessons", []) if isinstance(item, dict)}
+    names = _name_maps(database, baseline_payload, payload)
     added = [after[key] for key in sorted(after.keys() - before.keys())]
     removed = [before[key] for key in sorted(before.keys() - after.keys())]
     changed = [{"before": before[key], "after": after[key]} for key in sorted(before.keys() & after.keys())
-               if _lesson_summary(before[key]) != _lesson_summary(after[key])]
-    problems = [{"lesson_id": str(item.get("id") or ""), "details": _lesson_summary(item)["problems"]}
-                for item in after.values() if _lesson_summary(item)["problems"]]
-    problems.extend(_conflicts(list(after.values())))
-    return {"current": {"id": current["id"], "name": current["name"], "revision": current["revision"]} if current else None,
+               if _lesson_semantics(before[key], baseline_payload) != _lesson_semantics(after[key], payload)]
+    lesson_changes = [{"id": str(item["after"].get("id") or ""),
+        "before": _lesson_summary(database, item["before"], baseline_payload, names),
+        "after": _lesson_summary(database, item["after"], payload, names),
+        "changes": _lesson_changes(item["before"], item["after"], baseline_payload, payload, database, names)}
+        for item in changed]
+    problems = [{"lesson_id": str(item.get("id") or ""), "details": _lesson_summary(database, item, payload, names)["problems"]}
+                for item in after.values() if _lesson_summary(database, item, payload, names)["problems"]]
+    problems.extend(_conflicts(list(after.values()), payload, names))
+    if active and not baseline_available:
+        problems.append({"lesson_id": "selected-template", "details": [
+            "Снимок выбранной ревизии недоступен; нельзя надёжно сравнить изменения или сохранить корректный возврат."]})
+    settings_changes = _payload_changes(database, baseline_payload, payload) if baseline_available else []
+    return {"current": {"id": active["id"], "name": active["name"],
+                         "revision": int(selection["source_revision"]) if selection else active["revision"],
+                         "draft_revision": active["revision"],
+                         "has_unreviewed_changes": bool(active.get("selection_stale")),
+                         "snapshot_available": baseline_available} if active else None,
             "candidate": {"id": candidate["id"], "name": candidate["name"], "revision": candidate["revision"]},
-            "current_hash": _digest(current["payload"]) if current else None,
+            "current_hash": baseline["payload_hash"] if baseline else None,
             "candidate_hash": _digest(payload),
-            "added": [{"id": str(item.get("id") or ""), **_lesson_summary(item)} for item in added],
-            "removed": [{"id": str(item.get("id") or ""), **_lesson_summary(item)} for item in removed],
-            "changed": [{"id": str(item["after"].get("id") or ""), "before": _lesson_summary(item["before"]), "after": _lesson_summary(item["after"])} for item in changed],
+            "added": [{"id": str(item.get("id") or ""), **_lesson_summary(database, item, payload, names)} for item in added],
+            "removed": [{"id": str(item.get("id") or ""), **_lesson_summary(database, item, baseline_payload, names)} for item in removed],
+            "changed": lesson_changes, "settings_changes": settings_changes,
+            "requires_explicit_problem_acknowledgement": bool(problems),
             "problems": problems,
-            "requires_explicit_problem_acknowledgement": bool(problems)}
+            "has_semantic_changes": bool(added or removed or changed or settings_changes)}
 
 
 def select_school_template(database: Database, draft_id: str, *, expected_revision: int,
@@ -126,14 +480,17 @@ def _select_school_template_locked(database: Database, draft_id: str, *, expecte
     now = datetime.now(timezone.utc).isoformat()
     history_id = str(uuid4())
     candidate_payload = candidate["payload"]
-    previous = get_experiment(database, expected_current_id) if expected_current_id else None
+    previous = None
     json_parameter = "?::jsonb" if database.database_url else "?"
     with database.connection() as connection:
         locked = database.execute(connection,
-            "SELECT draft_id FROM school_template_selection WHERE scope='school'" + (" FOR UPDATE" if database.database_url else "")).fetchone()
+            "SELECT * FROM school_template_selection WHERE scope='school'" + (" FOR UPDATE" if database.database_url else "")).fetchone()
         locked_id = str(locked["draft_id"]) if locked else None
         if locked_id != expected_current_id:
             raise ValueError("Основной шаблон уже изменился. Обновите сравнение и повторите подтверждение.")
+        if locked and (int(locked["source_revision"]) != int(expected_current_revision or 0)
+                       or str(locked["source_payload_sha256"]) != str(preview["current_hash"] or "")):
+            raise ValueError("Снимок основного шаблона изменился. Обновите сравнение и повторите подтверждение.")
         suffix = " FOR UPDATE" if database.database_url else ""
         locked_candidate_row = database.execute(connection,
             "SELECT * FROM schedule_experiment_drafts WHERE id=?" + suffix, (draft_id,)).fetchone()
@@ -146,10 +503,10 @@ def _select_school_template_locked(database: Database, draft_id: str, *, expecte
         if expected_current_id:
             previous_row = database.execute(connection,
                 "SELECT * FROM schedule_experiment_drafts WHERE id=?" + suffix, (expected_current_id,)).fetchone()
-            previous = _item(previous_row) if previous_row else None
-            if (not previous or int(previous["revision"]) != int(expected_current_revision or 0)
-                    or _digest(previous["payload"]) != preview["current_hash"]):
-                raise ValueError("Текущий шаблон изменился после сравнения. Обновите различия перед переключением.")
+            current_draft = _item(previous_row) if previous_row else None
+            previous = _selected_snapshot(database, locked, current_draft) if current_draft and locked else None
+            if not previous:
+                raise ValueError("Снимок выбранной версии не найден; безопасное переключение остановлено.")
         history_sql = ("INSERT INTO school_template_selection_history "
             "(id,previous_draft_id,previous_revision,previous_payload,previous_payload_sha256,next_draft_id,next_revision,next_payload,next_payload_sha256,actor_user_id,created_at) "
             f"VALUES (?,?,?,{json_parameter},?,?,{json_parameter},?,?,?,?)")
@@ -183,7 +540,7 @@ def rollback_school_template(database: Database, *, history_id: str, actor_user_
         current = None
     result = select_school_template(database, restored["id"], expected_revision=restored["revision"],
         expected_current_id=current["id"] if current else None,
-        expected_current_revision=current["revision"] if current else None,
+        expected_current_revision=current["selected_revision"] if current else None,
         expected_candidate_hash=_digest(restored["payload"]),
         actor_user_id=actor_user_id)
     return {"draft": restored, **result}
@@ -193,7 +550,8 @@ def open_active_school_template(database: Database) -> dict[str, Any]:
     # One statement observes the pointer and its draft in the same DB snapshot.
     # Opening never imports, normalizes, creates, or rewrites a template.
     with database.connection() as connection:
-        row = database.execute(connection, """SELECT d.*
+        row = database.execute(connection, """SELECT d.*,s.source_revision AS selected_revision,
+                s.source_payload_sha256 AS selected_payload_sha256
             FROM school_template_selection s
             JOIN schedule_experiment_drafts d ON d.id=s.draft_id
             WHERE s.scope='school'""").fetchone()
@@ -203,5 +561,11 @@ def open_active_school_template(database: Database) -> dict[str, Any]:
     if (draft["payload"].get("draft_kind") != "school"
             or draft["payload"].get("week_start") or draft["payload"].get("source_template")):
         raise ValueError("Активный школьный шаблон указывает на неподходящий черновик")
+    selection = {"draft_id": draft["id"], "source_revision": draft["selected_revision"],
+                 "source_payload_sha256": draft["selected_payload_sha256"]}
+    snapshot = _selected_snapshot(database, selection, draft)
+    draft["selection_snapshot_available"] = snapshot is not None
+    draft["selection_stale"] = snapshot is None or _payload_semantics(snapshot["payload"]) != _payload_semantics(draft["payload"])
+    draft["selected_revision"] = int(draft["selected_revision"])
     draft["already_exists"] = True
     return draft

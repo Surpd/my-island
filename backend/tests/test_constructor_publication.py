@@ -22,6 +22,25 @@ from backend.handlers.api import create_router
 
 
 class ConstructorPublicationTests(unittest.TestCase):
+    def test_template_publication_archive_preserves_selection_baseline_for_later_review(self):
+        payload = self.draft().get("payload")
+        payload["draft_kind"] = "school"
+        template = create_experiment(self.database, name="Published school template", source="import", payload=payload)
+        self.publish(template, "template")
+        # Publishing can make a draft primary directly, with no earlier
+        # selection-history row; its immutable publication source is the
+        # fallback snapshot for reviewing later edits.
+        with self.database.connection() as connection:
+            connection.execute("DELETE FROM school_template_selection_history")
+        changed = copy.deepcopy(get_experiment(self.database, template["id"])["payload"])
+        changed["lessons"][0]["confirmedParticipantIds"] = ["synthetic-student-2"]
+        updated = save_experiment(self.database, template["id"], expected_revision=template["revision"], payload=changed)
+        active = open_active_school_template(self.database)
+        self.assertTrue(active["selection_stale"])
+        preview = preview_school_template_selection(self.database, updated["id"])
+        self.assertTrue(preview["current"]["snapshot_available"])
+        self.assertIn("confirmed_members", {item["field"] for item in preview["changed"][0]["changes"]})
+
     def test_selected_template_week_is_hidden_until_canonical_publication_and_preview_is_personalized(self):
         """Campus and admin identity previews both read only the published canonical week."""
         template_payload = self.draft().get("payload")

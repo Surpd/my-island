@@ -3,8 +3,10 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from backend.database import Database
@@ -267,6 +269,115 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
         preview = preview_school_template_selection(self.database, draft["id"])
         self.assertTrue(preview["requires_explicit_problem_acknowledgement"])
         self.assertTrue(any("Конфликт преподавателя" in detail for item in preview["problems"] for detail in item["details"]))
+
+    def test_template_diff_reports_roster_and_day_mode_changes_with_same_lesson_details(self):
+        selected_payload = self.school_payload()
+        selected_payload["lessons"] = selected_payload["lessons"][:1]
+        lesson = selected_payload["lessons"][0]
+        lesson["audience_snapshot"] = {"student_ids": ["student-a"], "fingerprint": "old", "resolved_at": "2026-01-01"}
+        selected_payload["grade_modes"] = {"9": {"0": "online"}}
+        selected = self.create_draft("Выбранный шаблон", selected_payload)
+        self.activate(selected)
+
+        candidate_payload = deepcopy(selected_payload)
+        candidate_payload["lessons"][0]["audience_snapshot"] = {
+            "student_ids": ["student-a", "student-b"], "fingerprint": "new", "resolved_at": "2026-02-01"}
+        candidate_payload["lessons"][0]["confirmedParticipantIds"] = ["student-a", "student-b"]
+        candidate_payload["day_modes"] = {candidate_payload["lessons"][0]["classId"]: {"0": "online"}}
+        candidate_payload["grade_modes"] = {"9": {"0": "sdep"}}
+        candidate = self.create_draft("Кандидат с новым составом", candidate_payload)
+
+        preview = preview_school_template_selection(self.database, candidate["id"])
+        self.assertEqual(len(preview["changed"]), 1)
+        labels = {change["field"] for change in preview["changed"][0]["changes"]}
+        self.assertIn("members", labels)
+        self.assertIn("audience_snapshot_members", labels)
+        self.assertIn("grade_modes", {change["field"] for change in preview["settings_changes"]})
+        self.assertIn("day_modes", {change["field"] for change in preview["settings_changes"]})
+        self.assertEqual(preview["changed"][0]["before"]["subject"], preview["changed"][0]["after"]["subject"])
+        self.assertEqual(preview["changed"][0]["before"]["teachers"], preview["changed"][0]["after"]["teachers"])
+        self.assertEqual(preview["changed"][0]["before"]["room"], preview["changed"][0]["after"]["room"])
+
+    def test_service_metadata_and_snapshot_fingerprints_do_not_create_template_change_notice(self):
+        payload = self.school_payload()
+        payload["lessons"] = payload["lessons"][:1]
+        payload["lessons"][0]["audience_snapshot"] = {
+            "student_ids": ["student-a"], "fingerprint": "same-roster-old-fingerprint", "resolved_at": "2026-01-01"}
+        selected = self.create_draft("Выбранный шаблон", payload)
+        selected_preview = preview_school_template_selection(self.database, selected["id"])
+        select_school_template(self.database, selected["id"], expected_revision=selected["revision"],
+            expected_current_id=None, expected_current_revision=None,
+            expected_candidate_hash=selected_preview["candidate_hash"])
+        candidate_payload = deepcopy(payload)
+        candidate_payload["lessons"][0]["audience_snapshot"]["fingerprint"] = "same-roster-new-fingerprint"
+        candidate_payload["lessons"][0]["audience_snapshot"]["resolved_at"] = "2026-08-10"
+        candidate_payload["lessons"][0]["source"]["raw_text"] = "Другие исходные ячейки"
+        candidate_payload["lessons"][0]["resolution_history"] = [{"service_event": "rechecked"}]
+        candidate_payload["import_review"] = {"status": "refreshed", "run_id": "run-2"}
+        candidate = save_experiment(self.database, selected["id"], expected_revision=selected["revision"], payload=candidate_payload)
+
+        preview = preview_school_template_selection(self.database, candidate["id"])
+        self.assertEqual(preview["changed"], [])
+        self.assertEqual(preview["added"], [])
+        self.assertEqual(preview["removed"], [])
+        self.assertEqual(preview["settings_changes"], [])
+        self.assertFalse(preview["has_semantic_changes"])
+        self.assertFalse(open_active_school_template(self.database)["selection_stale"])
+
+    def test_editing_selected_template_requires_review_before_weeks_can_use_it(self):
+        from backend.services.school_template_selection import select_school_template
+
+        payload = self.school_payload()
+        payload["lessons"] = payload["lessons"][:1]
+        selected = self.create_draft("Выбранный шаблон", payload)
+        preview = preview_school_template_selection(self.database, selected["id"])
+        select_school_template(self.database, selected["id"], expected_revision=selected["revision"],
+            expected_current_id=None, expected_current_revision=None,
+            expected_candidate_hash=preview["candidate_hash"])
+        changed = deepcopy(selected["payload"])
+        changed["lessons"][0]["confirmedParticipantIds"] = ["new-student"]
+        updated = save_experiment(self.database, selected["id"], expected_revision=selected["revision"], payload=changed)
+        active = open_active_school_template(self.database)
+        self.assertTrue(active["selection_stale"])
+        self.assertEqual(active["selected_revision"], selected["revision"])
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.handlers.api import create_router
+        admin = self.database.get_or_create_user(975310, "admin")
+        with self.database.connection() as connection:
+            self.database.execute(connection, "INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test') ON CONFLICT(user_id,role) DO NOTHING", (admin["id"],))
+        challenge, _ = self.database.create_admin_login_challenge(admin["id"])
+        token, _ = self.database.consume_admin_login_challenge(challenge)
+        app = FastAPI()
+        with patch.dict("os.environ", {"MY_ISLAND_CONSOLIDATED_SCHEDULE": "1"}), \
+                patch("backend.services.consolidated_workspace.isolated_consolidation_enabled", return_value=True), \
+                patch("backend.services.consolidated_workspace.require_consolidated_admin", return_value=(self.database, str(admin["id"]))):
+            app.include_router(create_router(self.database))
+        client = TestClient(app)
+        admin_headers = {"X-Dev-Auth": f"browser:{token}", "X-School-Admin-Session": token}
+        listed = client.get("/api/admin/schedule/experiments/school", headers=admin_headers)
+        self.assertEqual(listed.status_code, 200, listed.text)
+        active_summary = next(item for item in listed.json()["items"] if item["id"] == updated["id"])
+        self.assertTrue(active_summary["selection_stale"])
+        blocked = client.post(f"/api/admin/schedule/experiments/school/{updated['id']}/week",
+            headers=admin_headers,
+            json={"week_start": "2026-10-19", "expected_revision": updated["revision"]})
+        self.assertEqual(blocked.status_code, 409, blocked.text)
+        self.assertIn("изменён после подтверждения", blocked.json()["detail"])
+
+        review = preview_school_template_selection(self.database, updated["id"])
+        self.assertTrue(review["current"]["has_unreviewed_changes"])
+        self.assertIn("members", {item["field"] for item in review["changed"][0]["changes"]})
+        selected_again = select_school_template(self.database, updated["id"], expected_revision=updated["revision"],
+            expected_current_id=updated["id"], expected_current_revision=selected["revision"],
+            expected_candidate_hash=review["candidate_hash"])
+        self.assertEqual(selected_again["selected"]["revision"], updated["revision"])
+        active_again = open_active_school_template(self.database)
+        self.assertFalse(active_again["selection_stale"])
+        week = create_experiment_week(self.database, active_again["id"], week_start="2026-10-19",
+                                      expected_revision=active_again["revision"])
+        self.assertEqual(week["payload"]["source_template"]["revision"], updated["revision"])
 
     def test_foreign_key_prevents_deleting_the_active_draft(self):
         active = self.create_draft("Активный шаблон", self.school_payload())

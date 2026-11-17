@@ -1595,6 +1595,8 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(error)) from error
         if selected["id"] != experiment_id:
             raise HTTPException(status_code=409, detail="Создавать недели можно только из текущего основного шаблона")
+        if selected.get("selection_stale"):
+            raise HTTPException(status_code=409, detail="Основной шаблон изменён после подтверждения. Сначала сравните изменения и подтвердите новую ревизию.")
         return new_week(store, experiment_id, payload, actor)
 
     @router.post("/admin/schedule/experiments/school/{experiment_id}/selection-preview")
@@ -1690,7 +1692,17 @@ def create_router(database: Database) -> APIRouter:
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         require_real_school_admin(x_school_admin_session, principal)
         _, store = school_stores()
-        return {"items": list_experiments(store)}
+        items = list_experiments(store)
+        try:
+            active = open_active_school_template(store)
+        except ValueError:
+            active = None
+        if active:
+            for item in items:
+                if item.get("is_primary_template"):
+                    item["selection_stale"] = bool(active.get("selection_stale"))
+                    item["selected_revision"] = active.get("selected_revision")
+        return {"items": items}
 
     @router.get("/admin/schedule/experiments/school/directory")
     def admin_school_directory(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
