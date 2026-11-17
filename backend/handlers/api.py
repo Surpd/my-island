@@ -1572,7 +1572,15 @@ def create_router(database: Database) -> APIRouter:
                           x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
                           x_school_admin_session: str | None = Header(default=None)):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        return new_week(activity_store("school", x_school_admin_session, actor), experiment_id, payload, actor)
+        require_real_school_admin(x_school_admin_session, actor)
+        store = activity_store("school", x_school_admin_session, actor)
+        try:
+            selected = open_active_school_template(store)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if selected["id"] != experiment_id:
+            raise HTTPException(status_code=409, detail="Создавать недели можно только из текущего основного шаблона")
+        return new_week(store, experiment_id, payload, actor)
 
     def saved_week_export(store: Database, source: Database, experiment_id: str, revision: int):
         try:

@@ -1021,6 +1021,18 @@ def create_experiment_week(database: Database, experiment_id: str, *, week_start
     source = get_experiment(database, experiment_id)
     if int(source["revision"]) != expected_revision:
         raise ExperimentConflict(source)
+    # Treat the source template and calendar week as an idempotency key. A
+    # repeated request (for example after a lost response) must reopen the
+    # independent draft already created for that exact template revision.
+    for summary in list_experiments(database):
+        if summary.get("week_start") != start.isoformat():
+            continue
+        existing = get_experiment(database, summary["id"])
+        provenance = existing["payload"].get("source_template") or {}
+        if (str(provenance.get("id") or "") == str(source["id"])
+                and int(provenance.get("revision") or 0) == int(source["revision"])):
+            existing["already_exists"] = True
+            return existing
     payload = json.loads(json.dumps(source["payload"], ensure_ascii=False))
     payload["week_start"] = start.isoformat()
     payload["reference_date"] = start.isoformat()

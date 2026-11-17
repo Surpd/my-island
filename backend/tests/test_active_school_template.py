@@ -180,6 +180,42 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
         self.assertEqual(self.selection_row(), selected_before)
         self.assertEqual(edited["revision"], active["revision"] + 1)
 
+    def test_creating_same_week_from_same_template_revision_is_idempotent(self):
+        active = self.create_draft("Основной шаблон", self.school_payload())
+        self.activate(active)
+        first = create_experiment_week(
+            self.database, active["id"], week_start="2026-10-19",
+            expected_revision=active["revision"],
+        )
+        repeated = create_experiment_week(
+            self.database, active["id"], week_start="2026-10-19",
+            expected_revision=active["revision"],
+        )
+        self.assertEqual(repeated["id"], first["id"])
+        self.assertTrue(repeated["already_exists"])
+        self.assertEqual(repeated["payload"]["source_template"], {
+            "id": active["id"], "revision": active["revision"],
+        })
+
+    def test_new_template_revision_gets_a_distinct_week_draft(self):
+        active = self.create_draft("Основной шаблон", self.school_payload())
+        self.activate(active)
+        first = create_experiment_week(
+            self.database, active["id"], week_start="2026-10-19",
+            expected_revision=active["revision"],
+        )
+        revised = save_experiment(
+            self.database, active["id"], expected_revision=active["revision"],
+            payload=active["payload"],
+        )
+        second = create_experiment_week(
+            self.database, revised["id"], week_start="2026-10-19",
+            expected_revision=revised["revision"],
+        )
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(get_experiment(self.database, first["id"])["payload"]["source_template"]["revision"], 1)
+        self.assertEqual(second["payload"]["source_template"]["revision"], 2)
+
     def test_foreign_key_prevents_deleting_the_active_draft(self):
         active = self.create_draft("Активный шаблон", self.school_payload())
         self.activate(active)
