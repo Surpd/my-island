@@ -1,4 +1,6 @@
 import { expect, test, type Frame, type Page } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ADMIN_HEADERS, endPreview, expectNoHorizontalOverflow, openPreviewFromAdmin, PREVIEW_API, previewPeople, type PreviewPerson } from './helpers/miniapp-preview';
 
 const FIXTURE_MONDAY = '2026-09-21';
@@ -109,6 +111,9 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect(frame.getByRole('button', { name: 'Расписание', exact: true }).first()).toBeVisible();
     await expandSchedule(frame);
     await expect(frame.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
+    const campusShots = resolve(process.cwd(), 'artifacts/canonical-campus-proof');
+    mkdirSync(campusShots, { recursive: true });
+    await page.getByTitle('Предпросмотр My Island').screenshot({ path: resolve(campusShots, 'student-campus-published.png') });
     await expect.poll(async () => (await scoreFor(page, studentPreview)).includes(8)).toBe(true);
 
     // Duplicate config messages can arrive from both iframe onLoad and the ready handshake.
@@ -148,6 +153,7 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect(teacherFrame.getByText('09:00 · Математика', { exact: true })).toBeVisible();
     await expandSchedule(teacherFrame, true);
     await expect(teacherFrame.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
+    await page.getByTitle('Предпросмотр My Island').screenshot({ path: resolve(campusShots, 'teacher-campus-published.png') });
 
     for (const width of ['360', '390', '430']) {
       await page.getByLabel('Ширина').selectOption(width);
