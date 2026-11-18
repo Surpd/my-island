@@ -415,6 +415,7 @@ def preview_school_template_selection(database: Database, draft_id: str) -> dict
             selection = database.execute(connection, "SELECT * FROM school_template_selection WHERE scope='school'").fetchone()
     baseline = _selected_snapshot(database, selection, active) if selection and active else None
     baseline_available = baseline is not None if active else True
+    baseline_recovery_required = bool(active and selection and not baseline_available)
     baseline_payload = baseline["payload"] if baseline else (active or {}).get("payload", {})
     before = {str(item.get("id")): item for item in baseline_payload.get("lessons", []) if isinstance(item, dict)}
     after = {str(item.get("id")): item for item in payload.get("lessons", []) if isinstance(item, dict)}
@@ -433,8 +434,18 @@ def preview_school_template_selection(database: Database, draft_id: str) -> dict
     problems.extend(_conflicts(list(after.values()), payload, names))
     if active and not baseline_available:
         problems.append({"lesson_id": "selected-template", "details": [
-            "Снимок выбранной ревизии недоступен; нельзя надёжно сравнить изменения или сохранить корректный возврат."]})
+            "Историческая ревизия недоступна. Сначала администратор должен отдельно утвердить текущее состояние как новую базовую версию."]})
     settings_changes = _payload_changes(database, baseline_payload, payload) if baseline_available else []
+    if baseline_recovery_required:
+        # There is no truthful diff against the missing historical revision.
+        # Keep the candidate and its problems visible, and show the present
+        # editor contents in a separate recovery inventory instead.
+        added, removed, changed, settings_changes = [], [], [], []
+    recovery_inventory = []
+    if baseline_recovery_required and active:
+        active_payload = active.get("payload") or {}
+        recovery_inventory = [{"id": str(item.get("id") or ""), **_lesson_summary(database, item, active_payload, names)}
+                              for item in active_payload.get("lessons", []) if isinstance(item, dict)]
     return {"current": {"id": active["id"], "name": active["name"],
                          "revision": int(selection["source_revision"]) if selection else active["revision"],
                          "draft_revision": active["revision"],
@@ -448,7 +459,13 @@ def preview_school_template_selection(database: Database, draft_id: str) -> dict
             "changed": lesson_changes, "settings_changes": settings_changes,
             "requires_explicit_problem_acknowledgement": bool(problems),
             "problems": problems,
-            "has_semantic_changes": bool(added or removed or changed or settings_changes)}
+            "has_semantic_changes": bool(added or removed or changed or settings_changes),
+            "baseline_recovery_required": baseline_recovery_required,
+            "baseline_recovery": ({"draft_id": active["id"], "revision": int(active["revision"]),
+                "payload_hash": _digest(active["payload"]),
+                "missing_revision": int(selection["source_revision"]),
+                "missing_payload_hash": str(selection["source_payload_sha256"]),
+                "contents": recovery_inventory} if baseline_recovery_required and active and selection else None)}
 
 
 def select_school_template(database: Database, draft_id: str, *, expected_revision: int,
@@ -489,7 +506,8 @@ def _select_school_template_locked(database: Database, draft_id: str, *, expecte
         if locked_id != expected_current_id:
             raise ValueError("Основной шаблон уже изменился. Обновите сравнение и повторите подтверждение.")
         if locked and (int(locked["source_revision"]) != int(expected_current_revision or 0)
-                       or str(locked["source_payload_sha256"]) != str(preview["current_hash"] or "")):
+                       or (preview["current_hash"] is not None
+                           and str(locked["source_payload_sha256"]) != str(preview["current_hash"]))):
             raise ValueError("Снимок основного шаблона изменился. Обновите сравнение и повторите подтверждение.")
         suffix = " FOR UPDATE" if database.database_url else ""
         locked_candidate_row = database.execute(connection,
@@ -521,6 +539,64 @@ def _select_school_template_locked(database: Database, draft_id: str, *, expecte
             source_revision=excluded.source_revision,source_payload_sha256=excluded.source_payload_sha256,
             activated_at=excluded.activated_at""", (candidate["id"], candidate["id"], candidate["revision"], preview["candidate_hash"], now))
     return {"selected": {"id": candidate["id"], "revision": candidate["revision"]}, "history_id": history_id}
+
+
+def approve_legacy_template_baseline(database: Database, draft_id: str, *, expected_revision: int,
+                                    expected_payload_hash: str, expected_missing_revision: int,
+                                    expected_missing_payload_hash: str, actor_user_id: Any = None) -> dict[str, Any]:
+    """Explicitly establish the current editor state as baseline when legacy history is gone."""
+    with _selection_lock:
+        preview = preview_school_template_selection(database, draft_id)
+        recovery = preview.get("baseline_recovery") or {}
+        if not preview.get("baseline_recovery_required") or recovery.get("draft_id") != draft_id:
+            raise ValueError("Исторический снимок уже доступен или выбранный шаблон изменился. Обновите проверку.")
+        if int(recovery.get("revision") or 0) != expected_revision or recovery.get("payload_hash") != expected_payload_hash:
+            raise ValueError("Текущий шаблон изменился после проверки. Обновите данные.")
+        if int(recovery.get("missing_revision") or 0) != expected_missing_revision or recovery.get("missing_payload_hash") != expected_missing_payload_hash:
+            raise ValueError("Указатель исторической ревизии изменился. Обновите данные.")
+        now = datetime.now(timezone.utc).isoformat()
+        history_id = str(uuid4())
+        json_parameter = "?::jsonb" if database.database_url else "?"
+        with database.connection() as connection:
+            if database.database_url:
+                database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                    ("my-island:school-template-selection",))
+            selection = database.execute(connection,
+                "SELECT * FROM school_template_selection WHERE scope='school'" + (" FOR UPDATE" if database.database_url else "")).fetchone()
+            if not selection or str(selection["draft_id"]) != draft_id:
+                raise ValueError("Основной шаблон уже изменился. Обновите сравнение и повторите подтверждение.")
+            if (int(selection["source_revision"]) != expected_missing_revision
+                    or str(selection["source_payload_sha256"]) != expected_missing_payload_hash):
+                raise ValueError("Указатель исторической ревизии изменился. Обновите данные.")
+            draft_row = database.execute(connection,
+                "SELECT * FROM schedule_experiment_drafts WHERE id=?" + (" FOR UPDATE" if database.database_url else ""),
+                (draft_id,)).fetchone()
+            if not draft_row:
+                raise ValueError("Выбранный шаблон больше не существует.")
+            draft = _item(draft_row)
+            if int(draft["revision"]) != expected_revision or _digest(draft["payload"]) != expected_payload_hash:
+                raise ValueError("Текущий шаблон изменился после проверки. Обновите данные.")
+            existing = database.execute(connection,
+                "SELECT approved_payload_sha256 FROM school_template_baseline_approvals WHERE scope='school'" + (" FOR UPDATE" if database.database_url else "")).fetchone()
+            if existing:
+                raise ValueError("Новая базовая версия уже утверждена. Обновите сравнение.")
+            database.execute(connection, f"""INSERT INTO school_template_baseline_approvals
+                (scope,draft_id,approved_revision,approved_payload_sha256,missing_revision,missing_payload_sha256,provenance,actor_user_id,created_at)
+                VALUES ('school',?,?,?,?,?,'legacy_editor_state_explicitly_approved_without_historical_snapshot',?,?)""",
+                (draft_id, expected_revision, expected_payload_hash, expected_missing_revision,
+                 expected_missing_payload_hash, str(actor_user_id) if actor_user_id is not None else None, now))
+            history_sql = ("INSERT INTO school_template_selection_history "
+                "(id,previous_draft_id,previous_revision,previous_payload,previous_payload_sha256,next_draft_id,next_revision,next_payload,next_payload_sha256,actor_user_id,created_at) "
+                f"VALUES (?,?,?,NULL,?,?,?,{json_parameter},?,?,?)")
+            database.execute(connection, history_sql, (history_id, draft_id, expected_missing_revision,
+                expected_missing_payload_hash, draft_id, expected_revision, _encoded(draft["payload"]),
+                expected_payload_hash, str(actor_user_id) if actor_user_id is not None else None, now))
+            database.execute(connection, """UPDATE school_template_selection
+                SET source_draft_id=?,source_revision=?,source_payload_sha256=?,activated_at=? WHERE scope='school'""",
+                (draft_id, expected_revision, expected_payload_hash, now))
+        return {"approved": True, "selected": {"id": draft_id, "revision": expected_revision},
+            "missing_revision": expected_missing_revision, "history_id": history_id,
+            "provenance": "legacy_editor_state_explicitly_approved_without_historical_snapshot"}
 
 
 def rollback_school_template(database: Database, *, history_id: str, actor_user_id: Any = None) -> dict[str, Any]:

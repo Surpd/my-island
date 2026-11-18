@@ -19,6 +19,7 @@ from backend.services.schedule_experiments import (
     save_experiment,
 )
 from backend.services.school_template_selection import (
+    approve_legacy_template_baseline,
     open_active_school_template, preview_school_template_selection,
     select_school_template, rollback_school_template,
 )
@@ -259,6 +260,59 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
         self.assertEqual(selected["payload"], first["payload"])
         self.assertNotEqual(selected["id"], first["id"])
         self.assertEqual(restored["draft"]["payload"], first["payload"])
+
+    def test_legacy_baseline_requires_explicit_approval_and_records_missing_provenance(self):
+        payload = self.school_payload()
+        payload["lessons"] = payload["lessons"][:2]
+        selected = self.create_draft("Legacy primary", payload)
+        self.activate(selected)
+        changed_payload = deepcopy(payload)
+        changed_payload["lessons"][0]["subject"] = "Редакция 46"
+        changed = save_experiment(self.database, selected["id"], expected_revision=selected["revision"], payload=changed_payload)
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE school_template_selection SET source_revision=45,source_payload_sha256='missing-revision-45' WHERE scope='school'")
+
+        preview = preview_school_template_selection(self.database, changed["id"])
+        self.assertTrue(preview["baseline_recovery_required"])
+        self.assertFalse(preview["has_semantic_changes"])
+        self.assertEqual(preview["added"], [])
+        self.assertEqual(preview["removed"], [])
+        self.assertEqual(preview["changed"], [])
+        self.assertEqual(len(preview["baseline_recovery"]["contents"]), 2)
+        with self.assertRaisesRegex(ValueError, "Снимок выбранной версии не найден"):
+            select_school_template(self.database, changed["id"], expected_revision=changed["revision"],
+                expected_current_id=changed["id"], expected_current_revision=45,
+                expected_candidate_hash=preview["candidate_hash"])
+
+        result = approve_legacy_template_baseline(self.database, changed["id"],
+            expected_revision=changed["revision"], expected_payload_hash=preview["baseline_recovery"]["payload_hash"],
+            expected_missing_revision=45, expected_missing_payload_hash="missing-revision-45", actor_user_id="admin-1")
+        self.assertEqual(result["selected"]["revision"], changed["revision"])
+        self.assertFalse(open_active_school_template(self.database)["selection_stale"])
+        with self.database.connection() as connection:
+            approval = dict(self.database.execute(connection, "SELECT * FROM school_template_baseline_approvals WHERE scope='school'").fetchone())
+            history = dict(self.database.execute(connection, "SELECT * FROM school_template_selection_history WHERE id=?", (result["history_id"],)).fetchone())
+        self.assertEqual(approval["missing_revision"], 45)
+        self.assertEqual(approval["provenance"], "legacy_editor_state_explicitly_approved_without_historical_snapshot")
+        self.assertIsNone(history["previous_payload"])
+        self.assertEqual(history["next_revision"], changed["revision"])
+
+    def test_legacy_baseline_approval_rejects_a_concurrent_editor_change(self):
+        payload = self.school_payload()
+        payload["lessons"] = payload["lessons"][:1]
+        selected = self.create_draft("Legacy primary", payload)
+        self.activate(selected)
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE school_template_selection SET source_revision=45,source_payload_sha256='missing-revision-45' WHERE scope='school'")
+        preview = preview_school_template_selection(self.database, selected["id"])
+        changed_payload = deepcopy(selected["payload"])
+        changed_payload["lessons"][0]["subject"] = "Конкурентная редакция"
+        save_experiment(self.database, selected["id"], expected_revision=selected["revision"], payload=changed_payload)
+        with self.assertRaisesRegex(ValueError, "шаблон изменился после проверки"):
+            approve_legacy_template_baseline(self.database, selected["id"],
+                expected_revision=preview["baseline_recovery"]["revision"],
+                expected_payload_hash=preview["baseline_recovery"]["payload_hash"],
+                expected_missing_revision=45, expected_missing_payload_hash="missing-revision-45", actor_user_id="admin-1")
 
     def test_template_comparison_reports_overlapping_teacher_and_group(self):
         payload = self.school_payload()
