@@ -128,6 +128,7 @@ type StudentScheduleProjection = {
   items: Lesson[];
   day_blocks: StudentDayBlock[];
   day_modes?: Array<{ date: string; mode: 'online' | 'sdep' }>;
+  optional_activities?: Array<{ date: string; type: 'club' | 'elective'; title: string; start_time: string; end_time: string; room?: string | null; teachers?: string[] }>;
   identity_id?: string;
   start_day?: string;
 };
@@ -594,6 +595,7 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
   );
   const day = projection.days.find((item) => item.date === selectedDay);
   const visibleItems = day?.items.filter((item) => item.state !== 'no_lesson' || item.no_lesson?.reason === 'break') || [];
+  const optionalActivities = (projection.optional_activities || []).filter((item) => item.date === selectedDay);
   const hasLessons = day?.items.some((item) => item.state === 'lesson' || item.state === 'conflict' || item.state === 'special_event');
   const unavailable = /unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked|disabled/.test(scheduleState || '');
   const emptyTitle = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Неделя не опубликована' : unavailable ? 'Расписание недоступно' : 'Занятий нет';
@@ -655,6 +657,17 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
           detail={emptyDetail}
         />
       )}
+      {(['elective', 'club'] as const).map((type) => {
+        const activities = optionalActivities.filter((item) => item.type === type);
+        if (!activities.length) return null;
+        return <section className="student-optional-activities" key={type} aria-label={type === 'elective' ? 'Курсы по выбору' : 'Кружки'}>
+          <h3>{type === 'elective' ? 'Курсы по выбору' : 'Кружки'}</h3>
+          {activities.map((item) => <article key={`${item.type}:${item.title}:${item.start_time}`}>
+            <time>{formatLessonTimeRange(item.start_time, item.end_time)}</time>
+            <div><strong>{item.title}</strong><span>{[item.room ? normalizeRoomDisplay(item.room) : '', ...(item.teachers || [])].filter(Boolean).join(' · ') || 'Дополнительные сведения не указаны'}</span></div>
+          </article>)}
+        </section>;
+      })}
     </div>
   );
 }

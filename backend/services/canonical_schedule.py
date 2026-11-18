@@ -1292,6 +1292,9 @@ def _projection_issue(
 
 
 def _claim_priority(claim: Mapping[str, Any]) -> tuple[int, int]:
+    metadata = claim.get("assignment", {}).get("metadata") if isinstance(claim.get("assignment"), Mapping) else {}
+    if isinstance(metadata, Mapping) and metadata.get("activity_type") == "event":
+        return (100, 100)  # A confirmed event takes display priority for its audience.
     role = str(claim.get("role") or "primary")
     role_priority = {"primary": 40, "secondary": 30, "special": 20}.get(role, 10)
     group_roles = set(claim.get("group_roles") or [])
@@ -1487,6 +1490,7 @@ def _project_student_block(
             "membership_ids": trace["matched_membership_ids"],
             "source_cells": source_cells,
             "assignment": assignment,
+            "activity_type": (assignment.get("metadata") or {}).get("activity_type", "lesson"),
         }
         if unknown_group_ids:
             issue_trace = {
@@ -1611,6 +1615,7 @@ def _project_student_block(
             metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
             result = {
                 "state": "ACTIVITY", "activity": selected["activity"],
+                "activity_type": selected.get("activity_type") or "lesson",
                 "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [],
                 "room": display_room(metadata.get("room")),
                 "provenance": {**provenance, "source_cells": selected["source_cells"]},
@@ -1633,7 +1638,7 @@ def _project_student_block(
                 selected = sorted(non_no_lesson, key=lambda claim: (claim["activity"], claim["assignment_id"]))[0]
                 assignment = selected["assignment"]
                 metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
-                result = {"state": "ACTIVITY", "activity": selected["activity"], "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [], "room": display_room(metadata.get("room")), "provenance": {**provenance, "source_cells": selected["source_cells"]}}
+                result = {"state": "ACTIVITY", "activity": selected["activity"], "activity_type": selected.get("activity_type") or "lesson", "teacher_ids": assignment.get("teacher_ids") or [], "teacher_names": metadata.get("teachers") or [], "room": display_room(metadata.get("room")), "provenance": {**provenance, "source_cells": selected["source_cells"]}}
             else:
                 note = next((str(trace.get("note") or "") for trace in assignment_traces if trace["matched"] and trace["activity"] == _NO_LESSON and trace.get("note")), "")
                 result = {"state": "NO_LESSON", "activity": _NO_LESSON, "reason": "no applicable canonical activity", "note": note, "provenance": provenance}
@@ -1766,6 +1771,96 @@ def _teacher_day_modes(database: Database, effective: Mapping[str, Any], teacher
             for day,mode,class_id,class_name in sorted(result)]
 
 
+def _clock_minutes(value: Any) -> int | None:
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(value or ""))
+    if not match:
+        return None
+    hour, minute = map(int, match.groups())
+    return hour * 60 + minute if hour < 24 and minute < 60 else None
+
+
+def _event_priority_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Clip only the student's rendered lessons; never rewrite published blocks."""
+    events = [item for item in items if item.get("state") == "ACTIVITY" and item.get("activity_type") == "event"]
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if item in events or item.get("state") != "ACTIVITY" or item.get("activity_type") in {"club", "elective"}:
+            result.append(item)
+            continue
+        start, end = _clock_minutes(item.get("start_time")), _clock_minutes(item.get("end_time"))
+        if start is None or end is None:
+            result.append(item)
+            continue
+        segments = [(start, end)]
+        for event in events:
+            if event.get("date") != item.get("date"):
+                continue
+            event_start, event_end = _clock_minutes(event.get("start_time")), _clock_minutes(event.get("end_time"))
+            if event_start is None or event_end is None:
+                continue
+            remaining = []
+            for left, right in segments:
+                if left >= event_end or event_start >= right:
+                    remaining.append((left, right))
+                else:
+                    if left < event_start:
+                        remaining.append((left, event_start))
+                    if event_end < right:
+                        remaining.append((event_end, right))
+            segments = remaining
+        result.extend({**item, "start_time": f"{left // 60:02d}:{left % 60:02d}",
+                       "end_time": f"{right // 60:02d}:{right % 60:02d}"}
+                      for left, right in segments if left < right)
+    return sorted(result, key=lambda item: (str(item.get("date")), str(item.get("start_time")),
+                                             0 if item.get("activity_type") == "event" else 1))
+
+
+def _published_optional_activities(database: Database, effective: Mapping[str, Any], student: Mapping[str, Any],
+                                   context: StudentProjectionContext, week_start: str) -> list[dict[str, Any]]:
+    source = _published_source_for_effective(database, effective)
+    payload = (source or {}).get("payload") or {}
+    if not payload:
+        return []
+    student_id = str(student.get("id") or "")
+    grade = _grade(student.get("class_name"))
+    activities: list[dict[str, Any]] = []
+    for lesson in payload.get("lessons") or []:
+        if not isinstance(lesson, Mapping) or lesson.get("activityType") not in {"club", "elective"}:
+            continue
+        targets = {str(value) for value in (lesson.get("classIds") or lesson.get("displayClassIds") or [])}
+        grades = {str(value) for value in (lesson.get("eligibleGrades") or [])}
+        try:
+            weekday, period_index = int(lesson.get("day", -1)), int(lesson.get("period", -1))
+        except (TypeError, ValueError):
+            continue
+        if weekday not in range(7):
+            continue
+        activity_date = (date.fromisoformat(week_start) + timedelta(days=weekday)).isoformat()
+        student_groups = _student_memberships(context, student_id, activity_date)
+        class_match = not targets or bool(targets & student_groups)
+        grade_match = not grades or grade in grades
+        if not class_match or not grade_match:
+            continue
+        slots = payload.get("slots") or []
+        slot = slots[period_index] if 0 <= period_index < len(slots) and isinstance(slots[period_index], Mapping) else {}
+        start, end = str(lesson.get("start") or slot.get("start") or "")[:5], str(lesson.get("end") or slot.get("end") or "")[:5]
+        if _clock_minutes(start) is None or _clock_minutes(end) is None or _clock_minutes(start) >= _clock_minutes(end):
+            continue
+        teacher_ids = sorted({str(value) for value in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
+        teachers: dict[str, str] = {}
+        if teacher_ids:
+            with database.connection() as connection:
+                rows = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active' AND id IN (" + ",".join("?" for _ in teacher_ids) + ")", tuple(teacher_ids)).fetchall()
+            teachers = {str(row["id"]): str(row["display_name"]) for row in rows}
+        activities.append({"date": activity_date, "day": weekday, "start_time": start, "end_time": end,
+            "type": str(lesson["activityType"]),
+            "title": str(lesson.get("activityNameSnapshot") or lesson.get("subject") or "Дополнительное занятие"),
+            "room": display_room(lesson.get("room")) or None,
+            "teachers": [teachers[value] for value in teacher_ids if value in teachers],
+            "activity_catalog_id": lesson.get("activityCatalogId")})
+    return sorted(activities, key=lambda item: (item["date"], item["start_time"], item["type"], item["title"]))
+
+
 def project_student(
     database: Database,
     identity_id: Any,
@@ -1807,7 +1902,9 @@ def project_student(
         intervals={(i['date'],i['start_time'],i['end_time']) for i in unresolved}
         items=[i for i in items if not (i['state']=='NO_LESSON' and (i['date'],i['start_time'],i['end_time']) in intervals)]
         items.extend(unresolved)
-    return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes}
+    items = _event_priority_items(items)
+    optional_activities = _published_optional_activities(database, effective, student, context, week_start)
+    return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities}
 
 
 def _week_start(day: str) -> str:
@@ -1832,12 +1929,14 @@ def project_student_range(database: Database, identity_id: Any, start_day: str, 
              for item in projection["items"] if start_day <= str(item.get("date")) <= finish]
     day_modes = [item for projection in projections.values() if projection["status"] in approved
                  for item in projection.get("day_modes", []) if start_day <= str(item.get("date")) <= finish]
+    optional_activities = [item for projection in projections.values() if projection["status"] in approved
+                           for item in projection.get("optional_activities", []) if start_day <= str(item.get("date")) <= finish]
     issues = [issue for projection in projections.values() if projection["status"] in approved for issue in projection["issues"]]
     statuses = [projection["status"] for projection in projections.values()]
     status = next((item for item in statuses if item not in approved), statuses[0] if statuses else "canonical_not_materialized")
     if status in {"draft", "superseded"}:
         status = "not_published"
-    return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues, "day_modes":day_modes}
+    return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities}
 
 
 def project_teacher(database: Database, identity_id: Any, week_start: str) -> dict[str, Any]:

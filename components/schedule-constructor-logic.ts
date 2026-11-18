@@ -9,7 +9,7 @@ export function shouldWarnMissingTeacher(
   lesson: { activityType?: string; kind?: string; informational?: boolean; teacherId?: string; teacherIds?: string[] },
   independentPractice = false,
 ): boolean {
-  if (lesson.activityType === 'club' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
+  if (lesson.activityType === 'club' || lesson.activityType === 'elective' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
   return !lesson.teacherId && !(lesson.teacherIds || []).length;
 }
 
@@ -26,13 +26,6 @@ export function schedulePlacementClassIds(lesson: PlacementLesson, selectedColum
     ? lesson.displayClassIds
     : lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
   return [...new Set((ids?.length ? ids : selectedColumnClassIds).filter(Boolean))];
-}
-
-export function confirmedElectiveOverlapIds(a: { activityType?: string; confirmedParticipantIds?: string[] }, b: { activityType?: string; confirmedParticipantIds?: string[] }, knownStudentIds?: string[]): string[] {
-  const aIds = a.activityType === 'elective' ? new Set(a.confirmedParticipantIds || []) : new Set<string>();
-  const bIds = b.activityType === 'elective' ? new Set(b.confirmedParticipantIds || []) : new Set<string>();
-  const known = knownStudentIds ? new Set(knownStudentIds) : null;
-  return [...aIds].filter((id) => bIds.has(id) && (!known || known.has(id)));
 }
 
 export function confirmedClassLunchMarker(lesson: { specialMark?: string; classId?: string; classIds?: string[] }, groups: Pick<ScheduleGroup, 'id' | 'group_type'>[]): boolean {

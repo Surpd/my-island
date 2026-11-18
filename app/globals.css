@@ -3371,6 +3371,13 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 }
 .schedule-focus-peek__queue b { margin-right: 4px; color: #315650; }
 .student-schedule-stack { display: grid; gap: 8px; }
+.student-optional-activities { display: grid; gap: 7px; margin-top: 16px; padding: 12px; border: 1px solid #d9e5df; border-radius: 15px; background: #f6faf7; }
+.student-optional-activities h3 { margin: 0; color: #315c52; font-size: 13px; }
+.student-optional-activities article { display: flex; gap: 10px; align-items: flex-start; padding-top: 7px; border-top: 1px solid #e3ece6; }
+.student-optional-activities time { width: 82px; flex: 0 0 auto; color: #176f68; font-size: 10px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.student-optional-activities article div { display: grid; gap: 2px; min-width: 0; }
+.student-optional-activities strong { color: #304b45; font-size: 12px; }
+.student-optional-activities article span { color: #71827c; font-size: 10px; }
 .student-schedule-lesson time { width: 88px; flex: 0 0 auto; padding-top: 1px; color: #176f68; font-size: 10px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .student-schedule-conflict { border-color: #e6d9bf; background: #fff9ed; }
 .student-schedule-conflict__mark { background: #f4e7c8; color: #8b6334; font-weight: 900; }
@@ -3769,6 +3776,15 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-issue-reason,.constructor-source-week { margin: 8px 0; padding: 9px; border: 1px solid #e1e5e2; border-radius: 7px; background: #fff; }
 .constructor-issue-reason > summary,.constructor-source-week > summary { cursor: pointer; font-weight: 650; }
 .constructor-source-week-scroll { max-height: 55vh; margin-top: 8px; overflow: auto; }
+.constructor-source-week-backdrop { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 20px; background: rgb(18 25 39 / 48%); }
+.constructor-source-week-dialog { display: grid; grid-template-rows: auto minmax(0, 1fr); width: min(1500px, 96vw); max-height: min(90vh, 1000px); padding: 16px; border: 1px solid #dce2df; border-radius: 12px; background: #fff; box-shadow: 0 20px 70px rgb(0 0 0 / 22%); }
+.constructor-source-week-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.constructor-source-week-dialog > header div { display: grid; gap: 4px; }
+.constructor-source-week-dialog > header small,.constructor-source-week-dialog td small { display: block; color: #68746e; }
+.constructor-source-week-dialog .constructor-source-week-scroll { max-height: none; min-height: 0; margin: 0; overflow: auto; }
+.constructor-source-week-dialog table { min-width: 1100px; }
+.constructor-source-week-dialog th { position: sticky; top: 0; z-index: 1; }
+.constructor-source-week-dialog td strong { display: block; white-space: nowrap; }
 .constructor-source-week table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .constructor-source-week th,.constructor-source-week td { padding: 7px; border-bottom: 1px solid #e6e9e7; text-align: left; vertical-align: top; }
 .constructor-source-week th { position: sticky; top: 0; background: #f5f7f6; }

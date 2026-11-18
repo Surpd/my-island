@@ -45,7 +45,7 @@ import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
-import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedElectiveOverlapIds, confirmedClassLunchMarker, type ScheduleMergeConflict } from './schedule-constructor-logic';
+import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedClassLunchMarker, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
@@ -108,6 +108,7 @@ type Lesson = {
   weekday?: number;
   source?: Raw;
   kind?: 'lesson' | 'event';
+  allDay?: boolean;
   informational?: boolean;
   start?: string;
   end?: string;
@@ -487,7 +488,8 @@ function issuesFor(
     const audience = previews[lesson.id];
     if (lesson.kind !== 'event' && subjectLabel(lesson.subject) === 'Английский язык' && !linkedInstructionalGroups(lesson, groups).length)
       result.push({ lessonId: lesson.id, severity: 'warning', type: 'audience', category: 'import', message: 'Не определена группа английского урока в canonical-назначении.' });
-    if (audienceNeedsReview(lesson, audience)) add(lesson.id, 'warning', 'Состав учеников отличается от сохранённого или текущие данные требуют проверки. Сохранённый состав не заменён.', undefined, 'review');
+    const resolvedLunchScope = lesson.specialMark === 'lunch' && (audience?.status === 'ok' || confirmedClassLunchMarker(lesson, groups));
+    if (audienceNeedsReview(lesson, audience) && !resolvedLunchScope) add(lesson.id, 'warning', 'Состав учеников отличается от сохранённого или текущие данные требуют проверки. Сохранённый состав не заменён.', undefined, 'review');
     if (!payload.days.includes(lesson.day) || !payload.slots[lesson.period])
       add(lesson.id, 'error', 'День или время занятия не входят в шаблон.', undefined, 'critical');
     if (lesson.kind === 'event' && (!lesson.start || !lesson.end || minutes(lesson.end) <= minutes(lesson.start)))
@@ -495,7 +497,7 @@ function issuesFor(
     if (!isSpecialMark(lesson) && !lesson.subject.trim()) add(lesson.id, 'error', lesson.kind === 'event' ? 'Не указано название события.' : 'Не указан предмет.');
     if (!isSpecialMark(lesson) && lessonNeedsPhysicalRoom(payload, lesson, groups) && !String(lesson.room || '').trim())
       add(lesson.id, 'warning', 'Для очного занятия не указан кабинет.');
-    if (lesson.activityType !== 'elective' && audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
+    if (!['elective', 'club'].includes(lesson.activityType || '') && audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
       result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: audience.reason || 'Невозможно точно определить участников.' });
     }
     if (!isSpecialMark(lesson) && shouldWarnMissingTeacher(lesson, independentPractice.has(lesson.id) || isSdepIndependentLesson(payload, lesson, groups)))
@@ -523,19 +525,18 @@ function issuesFor(
       if (!bothIndependentSdep && lessonNeedsPhysicalRoom(payload, a, groups) && lessonNeedsPhysicalRoom(payload, b, groups) && normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
       const studentIdsA = new Set(previews[a.id]?.status === 'ok' ? previews[a.id].student_ids || [] : []);
       const studentIdsB = new Set(previews[b.id]?.status === 'ok' ? previews[b.id].student_ids || [] : []);
-      // Electives are parallel by default, but an explicit, confirmed roster
-      // remains evidence of a real participant collision in both validators.
-      const knownStudentIds = new Set(students.map((student) => student.id));
-      if (a.activityType === 'elective') for (const id of a.confirmedParticipantIds || []) if (knownStudentIds.has(id)) studentIdsA.add(id);
-      if (b.activityType === 'elective') for (const id of b.confirmedParticipantIds || []) if (knownStudentIds.has(id)) studentIdsB.add(id);
-      const overlappingStudents = [...new Set([...studentIdsA].filter((id) => studentIdsB.has(id)).concat(confirmedElectiveOverlapIds(a, b, [...knownStudentIds])))];
-      if (!bothIndependentSdep && overlappingStudents.length) {
+      // Clubs, electives, and events do not imply student participation.
+      // Events take display priority; their source lessons remain intact.
+      const optionalAudience = ['club', 'elective', 'event'].includes(a.activityType || '')
+        || ['club', 'elective', 'event'].includes(b.activityType || '');
+      const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
+      if (!bothIndependentSdep && !optionalAudience && overlappingStudents.length) {
         const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || studentId);
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
         pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
       }
     }
-  return result.concat(payload.lessons.filter((lesson) => lesson.needsClarification || lesson.importError).filter((lesson) => !confirmedClassLunchMarker(lesson, groups)).map((lesson) => {
+  return result.concat(payload.lessons.filter((lesson) => lesson.needsClarification || lesson.importError).filter((lesson) => !(lesson.specialMark === 'lunch' && !lesson.importError && (previews[lesson.id]?.status === 'ok' || confirmedClassLunchMarker(lesson, groups)))).map((lesson) => {
     const mismatchedMathGroups = lesson.clarificationReason?.includes('прежняя математическая группа удалена')
       ? linkedInstructionalGroups(lesson, groups).filter((group) => group.subject && subjectLabel(group.subject) !== subjectLabel(lesson.subject)) : [];
     const classNames = lessonClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name).filter(Boolean);
@@ -646,6 +647,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [fitWidth, setFitWidth] = useState(true);
   const [conflictsOpen, setConflictsOpen] = useState(false);
+  const [adminTableOpen, setAdminTableOpen] = useState(false);
   const [issueSeverity, setIssueSeverity] = useState('all');
   const [issueType, setIssueType] = useState('all');
   const [anchor, setAnchor] = useState<Cell | null>(null);
@@ -659,7 +661,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [recalculationOpen, setRecalculationOpen] = useState(false);
   const [quickChoice, setQuickChoice] = useState<{ subject?: string; groupId?: string; teacherId?: string; room?: string; classIds?: string[] }>({});
   const [newTeacherManuallySelected, setNewTeacherManuallySelected] = useState(false);
-  const [newLesson, setNewLesson] = useState<{ subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; day?: number; period?: number; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }>({ subject: '', groupId: '', teacherId: '', room: '', classIds: [] });
+  const [newLesson, setNewLesson] = useState<{ subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; allDay?: boolean; day?: number; period?: number; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }>({ subject: '', groupId: '', teacherId: '', room: '', classIds: [] });
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('');
   const [teacherFilter, setTeacherFilter] = useState('');
@@ -1538,7 +1540,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       : focus ? gridColumns[focus.col]?.classIds || [] : [];
   const previewDay = newLesson.day ?? selectedCell?.day ?? day;
   const previewPeriod = creationMode === 'event' && newLesson.start && newLesson.end
-    ? firstOverlappingSlot(newLesson.start, newLesson.end, payload?.slots || [])
+    ? Math.max(0, firstOverlappingSlot(newLesson.start, newLesson.end, payload?.slots || []))
     : newLesson.period ?? selectedCell?.period ?? 0;
   const rawPreviewAudience = activityType === 'club' ? { kind: 'students' as const, student_ids: [] as string[] } : newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups);
   const previewAudience = rawPreviewAudience.kind === 'available_slot' && !rawPreviewAudience.class_ids?.length && !rawPreviewAudience.grade && selectedCell?.gradeScope
@@ -1578,7 +1580,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       const candidate: Lesson = {
         id: '__new_audience_preview__', day: newLesson.day ?? selectedCell?.day ?? day,
         period: creationMode === 'event' && newLesson.start && newLesson.end
-          ? firstOverlappingSlot(newLesson.start, newLesson.end, payload.slots)
+          ? Math.max(0, firstOverlappingSlot(newLesson.start, newLesson.end, payload.slots))
           : newLesson.period ?? selectedCell?.period ?? 0,
         subject: newLesson.subject, teacherId: newLesson.teacherId, room: newLesson.room,
         groupId: mirror.groupId || '', classId: mirror.classId || '',
@@ -1711,19 +1713,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     }
     scheduleQuickFocus();
   };
-  const addStructured = (fields: { subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; specialMark?: 'lunch' | 'no_lesson'; day?: number; period?: number; kind?: 'lesson' | 'event'; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; raw?: string; activityType?: Lesson['activityType']; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }) => {
+  const addStructured = (fields: { subject: string; groupId: string; teacherId: string; teacherIds?: string[]; room: string; classIds: string[]; audience?: AudienceRule; informational?: boolean; specialMark?: 'lunch' | 'no_lesson'; day?: number; period?: number; kind?: 'lesson' | 'event'; allDay?: boolean; start?: string; end?: string; place?: string; description?: string; format?: string; blockId?: string; blockName?: string; raw?: string; activityType?: Lesson['activityType']; activityCatalogId?: string; activityNameSnapshot?: string; eligibleGrades?: number[]; confirmedParticipantIds?: string[]; electiveDirection?: 'digital' }) => {
     if (!payload || !selectedCell) return;
     setCreationError('');
     const fail = (message: string) => { setCreationError(message); setStatus(message); };
-    if (fields.kind === 'event' && (!fields.start || !fields.end || minutes(fields.end) <= minutes(fields.start))) {
+    const eventStart = fields.allDay ? '00:00' : fields.start;
+    const eventEnd = fields.allDay ? '23:59' : fields.end;
+    if (fields.kind === 'event' && (!eventStart || !eventEnd || minutes(eventEnd) <= minutes(eventStart))) {
       fail('У события время окончания должно быть позже начала.');
       return;
     }
-    const eventPeriod = fields.kind === 'event' ? firstOverlappingSlot(fields.start!, fields.end!, payload.slots) : -1;
-    if (fields.kind === 'event' && eventPeriod < 0) {
-      fail('Время события не пересекается с сеткой. Уточните диапазон или добавьте слот.');
-      return;
-    }
+    const eventPeriod = fields.kind === 'event' ? Math.max(0, firstOverlappingSlot(eventStart!, eventEnd!, payload.slots)) : -1;
     const explicitActivityAudience = fields.activityType === 'club' || fields.activityType === 'elective'
       ? { kind: 'students' as const, student_ids: [] as string[] }
       : undefined;
@@ -1759,8 +1759,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       ...(fields.specialMark ? { specialMark: fields.specialMark, canonicalRole: fields.specialMark === 'no_lesson' ? 'explicit_no_lesson' : 'lunch' } : {}),
       room: fields.room,
       kind: fields.kind || 'lesson',
-      ...(fields.start ? { start: fields.start } : {}),
-      ...(fields.end ? { end: fields.end } : {}),
+      ...(fields.kind === 'event' ? { start: eventStart, end: eventEnd, ...(fields.allDay ? { allDay: true } : {}) } : fields.start ? { start: fields.start } : {}),
       ...(fields.place ? { place: fields.place } : {}),
       ...(fields.description ? { description: fields.description } : {}),
       ...(fields.format ? { format: fields.format } : {}),
@@ -2424,6 +2423,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <div className="constructor-view-tabs" role="group" aria-label="Режим просмотра">
               <button className={viewMode === 'day' ? 'active' : ''} onClick={() => { setViewMode('day'); setDayModesOpen(false); setDayModeEditor(null); setAnchor(null); setFocus(null); setSelectedId(''); }}>День</button>
               <button className={viewMode === 'week' ? 'active' : ''} onClick={() => { setViewMode('week'); setDayModeEditor(null); setAnchor(null); setFocus(null); setSelectedId(''); }}>Неделя</button>
+              <button type="button" aria-expanded={adminTableOpen} onClick={() => setAdminTableOpen(true)}>Таблица недели</button>
             </div>
             {viewMode === 'day' ? (
               <div className="constructor-day-tabs">
@@ -2638,6 +2638,21 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                   ))
               : null}
           </div>
+          {adminTableOpen ? <div className="constructor-source-week-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdminTableOpen(false); }}>
+            <section className="constructor-source-week-dialog" role="dialog" aria-modal="true" aria-labelledby="constructor-source-week-title">
+              <header><div><strong id="constructor-source-week-title">Полная таблица исходной недели</strong><small>{payload.lessons.length} записей · полный административный источник</small></div><button type="button" aria-label="Закрыть таблицу недели" onClick={() => setAdminTableOpen(false)}><X size={16} /></button></header>
+              <div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Тип и занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус и проекция Campus</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{
+                const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);
+                const audience=audiencePreviews[lesson.id];
+                const blocker = lesson.specialMark === 'lunch' ? '' : lesson.importError ? lesson.clarificationReason || 'Импорт требует проверки' : lesson.needsClarification ? lesson.clarificationReason || 'Требуется подтверждение' : audience && audience.status !== 'ok' ? audience.reason || 'Аудитория не подтверждена' : rowIssues.some(issue=>issue.category==='conflict') ? 'Есть содержательный конфликт; Campus-проекция отложена' : '';
+                const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';
+                const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];
+                const lessonGroups=linkedInstructionalGroups(lesson,groups);
+                const type=lesson.specialMark==='lunch'?'Обед':lesson.activityType==='club'?'Кружок':lesson.activityType==='elective'?'Курс по выбору':lesson.activityType==='event'||lesson.kind==='event'?'Мероприятие':'Урок';
+                return <tr key={lesson.id}><td>{DAYS[lesson.day]||'—'} · {lesson.start||payload.slots[lesson.period]?.start||'—'}–{lesson.end||payload.slots[lesson.period]?.end||'—'}</td><td>{type}: {lesson.subject||'Обед'}</td><td>{displayedClasses(lesson).map(id=>groups.find(group=>group.id===id)?.name||id).join(', ')||'Не указаны'}</td><td>{lessonGroups.map(group=>group.name).join(', ')||'Не указаны'}</td><td>{teacherIds.map(id=>teachers.find(teacher=>teacher.id===id)?.name||'Требует проверки').join(', ')||'Не указан'}</td><td>{lesson.room||lesson.place||'Не указано'}</td><td><strong>{status}</strong>{blocker?<small>Campus: {blocker}</small>:null}</td><td><button type="button" onClick={()=>{openReviewLesson(lesson.id);setAdminTableOpen(false);}}>Открыть</button></td></tr>;
+              })}</tbody></table></div>
+            </section>
+          </div> : null}
           {conflictsOpen ? (
             <section className="constructor-conflict-panel">
               <header><strong>Центр решений расписания</strong><button onClick={() => setConflictsOpen(false)} aria-label="Закрыть список проблем"><X size={15} /></button></header>
@@ -3015,12 +3030,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         {creationMode === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(newLesson.informational)} onChange={(event) => setNewLesson((item) => ({ ...item, informational: event.target.checked }))} /> Информационное событие без назначенных учеников</label> : null}
                         {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>Преподаватель <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" value={normalizeRoomInput(newLesson.room)} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
                         {creationMode === 'lunch' ? <label>Место (необязательно)<input aria-label="Место обеда" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label> : null}
-                        {activityType === 'club' ? <><label>Размещение в сетке<select multiple aria-label="Классы размещения кружка" value={newAudienceContextClassIds} onChange={(event) => setNewLesson((item) => ({ ...item, classIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><p>Участники не назначены. Кружок виден в конструкторе; ученикам он появится после назначения участников.</p></> : null}
+                        {activityType === 'club' ? <><label>Размещение в сетке<select multiple aria-label="Классы размещения кружка" value={newAudienceContextClassIds} onChange={(event) => setNewLesson((item) => ({ ...item, classIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><p>Поимённый список не нужен. Ученики этих классов увидят кружок в отдельном разделе расписания.</p></> : null}
                         {activityType === 'elective' ? <p>Ученики и учебные группы отдельно не назначаются. Параллельные курсы доступны выбранным классам независимо друг от друга.</p> : !newLesson.informational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
-                        {creationMode === 'event' ? <div className="constructor-field-row"><label>День <select aria-label="День нового занятия" value={newLesson.day ?? selectedCell?.day ?? day} onChange={(event) => setNewLesson((item) => ({ ...item, day: Number(event.target.value) }))}>{payload.days.map((value) => <option key={value} value={value}>{DAYS[value]}</option>)}</select></label><label>Начало <input type="time" value={newLesson.start || ''} onChange={(event) => setNewLesson((item) => ({ ...item, start: event.target.value }))} /></label></div> : null}
+                        {creationMode === 'event' ? <><div className="constructor-field-row"><label>День <select aria-label="День нового занятия" value={newLesson.day ?? selectedCell?.day ?? day} onChange={(event) => setNewLesson((item) => ({ ...item, day: Number(event.target.value) }))}>{payload.days.map((value) => <option key={value} value={value}>{DAYS[value]}</option>)}</select></label><label>Начало <input type="time" disabled={Boolean(newLesson.allDay)} value={newLesson.allDay ? '00:00' : newLesson.start || ''} onChange={(event) => setNewLesson((item) => ({ ...item, start: event.target.value }))} /></label></div><label className="constructor-informational"><input type="checkbox" checked={Boolean(newLesson.allDay)} onChange={(event) => setNewLesson((item) => ({ ...item, allDay: event.target.checked, start: event.target.checked ? '00:00' : payload.slots[selectedCell?.period ?? 0]?.start || '09:00', end: event.target.checked ? '23:59' : payload.slots[selectedCell?.period ?? 0]?.end || '09:45' }))} /> На весь день</label></> : null}
                         {creationMode === 'form' && newLesson.blockId ? <label>Название параллельного блока <input value={newLesson.blockName || ''} onChange={(event) => setNewLesson((item) => ({ ...item, blockName: event.target.value }))} placeholder="Например, курсы по выбору 5–6" /></label> : null}
                         {creationMode === 'event' ? <>
-                          <label>Конец <input type="time" value={newLesson.end || ''} onChange={(event) => setNewLesson((item) => ({ ...item, end: event.target.value }))} /></label>
+                          <label>Конец <input type="time" disabled={Boolean(newLesson.allDay)} value={newLesson.allDay ? '23:59' : newLesson.end || ''} onChange={(event) => setNewLesson((item) => ({ ...item, end: event.target.value }))} /></label>
                           {newLesson.start && newLesson.end && minutes(newLesson.end) > minutes(newLesson.start) ? <p className="constructor-affected-slots">Затронуты уроки: {affectedSlots(newLesson.start, newLesson.end, payload.slots).join(', ') || 'нет пересечений с сеткой'}</p> : null}
                           <label>Сопровождающие <select multiple aria-label="Сопровождающие нового события" value={newLesson.teacherIds || []} onChange={(event) => setNewLesson((item) => ({ ...item, teacherIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{rankedTeachers.map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ' · занят' : ''}</option>)}</select></label>
                           <label>Место <input value={newLesson.place || ''} onChange={(event) => setNewLesson((item) => ({ ...item, place: event.target.value }))} /></label>
@@ -3181,11 +3196,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             ))}
                           </select>
                         </label>
-                        {selected.kind === 'event' ? <label>Начало <input type="time" value={selected.start || payload.slots[selected.period]?.start || ''} onChange={(event) => updateLesson(selected.id, { start: event.target.value })} /></label> : <label>Время <select value={selected.period} onChange={(event) => updateLesson(selected.id, { period: Number(event.target.value) })}>{payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {formatLessonTimeRange(slot.start, slot.end)}</option>)}</select></label>}
+                        {selected.kind === 'event' ? <label>Начало <input type="time" disabled={Boolean(selected.allDay)} value={selected.allDay ? '00:00' : selected.start || payload.slots[selected.period]?.start || ''} onChange={(event) => updateLesson(selected.id, { start: event.target.value })} /></label> : <label>Время <select value={selected.period} onChange={(event) => updateLesson(selected.id, { period: Number(event.target.value) })}>{payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {formatLessonTimeRange(slot.start, slot.end)}</option>)}</select></label>}
                       </div>
                       {selected.kind !== 'event' && selected.end && selected.end !== payload.slots[selected.period]?.end ? <label>Конец многослотового занятия <input type="time" value={selected.end} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label> : null}
                       {selected.kind === 'event' ? <fieldset className="constructor-event-fields"><legend>Событие · время и сопровождение</legend>
-                        <label>Конец <input type="time" value={selected.end || payload.slots[selected.period]?.end || ''} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label>
+                        <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.allDay)} onChange={(event) => updateLesson(selected.id, { allDay: event.target.checked, start: event.target.checked ? '00:00' : payload.slots[selected.period]?.start || '09:00', end: event.target.checked ? '23:59' : payload.slots[selected.period]?.end || '09:45' })} /> На весь день</label>
+                        <label>Конец <input type="time" disabled={Boolean(selected.allDay)} value={selected.allDay ? '23:59' : selected.end || payload.slots[selected.period]?.end || ''} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label>
                         {selected.start && selected.end && minutes(selected.end) > minutes(selected.start) ? <p className="constructor-affected-slots">Затронуты уроки: {affectedSlots(selected.start, selected.end, payload.slots).join(', ') || 'нет пересечений с сеткой'}</p> : null}
                         <label>Место <input value={selected.place || ''} onChange={(event) => updateLesson(selected.id, { place: event.target.value })} /></label>
                         <label>Формат <select value={selected.format || ''} onChange={(event) => updateLesson(selected.id, { format: event.target.value })}><option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option></select></label>
