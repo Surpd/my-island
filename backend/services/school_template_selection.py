@@ -440,10 +440,14 @@ def preview_school_template_selection(database: Database, draft_id: str) -> dict
         # There is no truthful diff against the missing historical revision.
         # Keep the candidate and its problems visible, and show the present
         # editor contents in a separate recovery inventory instead.
-        added, removed, changed, settings_changes = [], [], [], []
+        added, removed, changed, lesson_changes, settings_changes = [], [], [], [], []
     recovery_inventory = []
+    recovery_problems = []
     if baseline_recovery_required and active:
         active_payload = active.get("payload") or {}
+        active_lessons = [item for item in active_payload.get("lessons", []) if isinstance(item, dict)]
+        recovery_problems = [{"lesson_id": str(item.get("id") or ""), "details": summary["problems"]} for item in active_lessons if (summary := _lesson_summary(database, item, active_payload, names))["problems"]]
+        recovery_problems.extend(_conflicts(active_lessons, active_payload, names))
         recovery_inventory = [{"id": str(item.get("id") or ""), **_lesson_summary(database, item, active_payload, names)}
                               for item in active_payload.get("lessons", []) if isinstance(item, dict)]
     return {"current": {"id": active["id"], "name": active["name"],
@@ -465,7 +469,7 @@ def preview_school_template_selection(database: Database, draft_id: str) -> dict
                 "payload_hash": _digest(active["payload"]),
                 "missing_revision": int(selection["source_revision"]),
                 "missing_payload_hash": str(selection["source_payload_sha256"]),
-                "contents": recovery_inventory} if baseline_recovery_required and active and selection else None)}
+                "contents": recovery_inventory, "problems": recovery_problems} if baseline_recovery_required and active and selection else None)}
 
 
 def select_school_template(database: Database, draft_id: str, *, expected_revision: int,
@@ -543,7 +547,7 @@ def _select_school_template_locked(database: Database, draft_id: str, *, expecte
 
 def approve_legacy_template_baseline(database: Database, draft_id: str, *, expected_revision: int,
                                     expected_payload_hash: str, expected_missing_revision: int,
-                                    expected_missing_payload_hash: str, actor_user_id: Any = None) -> dict[str, Any]:
+                                    expected_missing_payload_hash: str, actor_user_id: Any = None, acknowledge_problems: bool = False) -> dict[str, Any]:
     """Explicitly establish the current editor state as baseline when legacy history is gone."""
     with _selection_lock:
         preview = preview_school_template_selection(database, draft_id)
@@ -554,6 +558,8 @@ def approve_legacy_template_baseline(database: Database, draft_id: str, *, expec
             raise ValueError("Текущий шаблон изменился после проверки. Обновите данные.")
         if int(recovery.get("missing_revision") or 0) != expected_missing_revision or recovery.get("missing_payload_hash") != expected_missing_payload_hash:
             raise ValueError("Указатель исторической ревизии изменился. Обновите данные.")
+        if recovery.get("problems") and not acknowledge_problems:
+            raise ValueError("Подтвердите проблемы и конфликты текущего шаблона.")
         now = datetime.now(timezone.utc).isoformat()
         history_id = str(uuid4())
         json_parameter = "?::jsonb" if database.database_url else "?"

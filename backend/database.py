@@ -665,6 +665,8 @@ CREATE TABLE IF NOT EXISTS journal_sources (
   last_error TEXT,
   last_error_code TEXT,
   last_error_details TEXT,
+  classification TEXT,
+  classification_reason TEXT,
   UNIQUE(spreadsheet_id, sheet_title)
 );
 CREATE TABLE IF NOT EXISTS journal_assessments (
@@ -996,7 +998,7 @@ class Database:
             connection.executescript(SCHEMA)
             self._ensure_sqlite_schema_parity(connection)
             for table, columns in {
-                "journal_sources": {"academic_year": "TEXT NOT NULL DEFAULT '2026/27'", "term_number": "INTEGER", "period_status": "TEXT NOT NULL DEFAULT 'current'", "last_error_code": "TEXT", "last_error_details": "TEXT"},
+                "journal_sources": {"academic_year": "TEXT NOT NULL DEFAULT '2026/27'", "term_number": "INTEGER", "period_status": "TEXT NOT NULL DEFAULT 'current'", "last_error_code": "TEXT", "last_error_details": "TEXT", "classification": "TEXT", "classification_reason": "TEXT"},
                 "journal_student_summaries": {"summary_type": "TEXT NOT NULL DEFAULT 'technical'"},
                 "journal_summary_history": {"summary_type": "TEXT NOT NULL DEFAULT 'technical'"},
             }.items():
@@ -4093,7 +4095,7 @@ class Database:
             if source_row:
                 source_id = source_row["id"]
                 self.execute(connection, """UPDATE journal_sources SET spreadsheet_title = ?, grade = ?, subject = ?, sheet_title = ?,
-                    sheet_id = COALESCE(?, sheet_id), academic_year = ?, term_number = COALESCE(term_number, ?), period_status = ?, source_hash = ?, status = 'ready', last_synced_at = CURRENT_TIMESTAMP, last_error = NULL, last_error_code = NULL, last_error_details = NULL
+                    sheet_id = COALESCE(?, sheet_id), academic_year = ?, term_number = COALESCE(term_number, ?), period_status = ?, source_hash = ?, status = 'ready', last_synced_at = CURRENT_TIMESTAMP, last_error = NULL, last_error_code = NULL, last_error_details = NULL, classification = NULL, classification_reason = NULL
                     WHERE id = ?""", (source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["academic_year"], term_number, period_status, source["source_hash"], source_id))
             else:
                 source_id = self.execute(connection, """INSERT INTO journal_sources(spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, source_hash, status, last_synced_at, last_error)
@@ -4158,11 +4160,11 @@ class Database:
                     score = 68
                 else:
                     score = 0
-                if item.get("value_signature") and row.get("value_signature") == item.get("value_signature"):
+                if same_title and item.get("value_signature") and row.get("value_signature") == item.get("value_signature"):
                     score = max(score, 78 if same_title else 72)
                 # Results are a strong tie-breaker for undated repeated titles.
                 # Require enough overlap and a clear agreement before using it.
-                if comparable >= 4 and similarity >= 0.70:
+                if (same_title or same_metadata) and comparable >= 4 and similarity >= 0.70:
                     score = max(score, 58 + round(similarity * 30))
                 if comparable >= 2 and similarity == 1.0 and (same_title or same_metadata):
                     score = max(score, 82)
@@ -4736,7 +4738,7 @@ class Database:
                 connection,
                 """SELECT js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                           js.academic_year, js.term_number, js.period_status,
-                          js.status, js.last_synced_at, js.last_error, js.last_error_code, js.last_error_details, js.auto_sync_enabled, js.excluded_from_journals,
+                          js.status, js.last_synced_at, js.last_error, js.last_error_code, js.last_error_details, js.classification, js.classification_reason, js.auto_sync_enabled, js.excluded_from_journals,
                           (SELECT run.id FROM journal_sync_runs run WHERE run.spreadsheet_id = js.spreadsheet_id AND run.status = 'running' ORDER BY run.started_at DESC LIMIT 1) AS active_run_id,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE THEN ja.id END) AS assessment_count,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE AND jr.is_current IS TRUE THEN jr.id END) AS result_count,
@@ -4750,7 +4752,7 @@ class Database:
                      LEFT JOIN journal_students result_student ON result_student.id=jr.journal_student_id
                     GROUP BY js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                       js.academic_year, js.term_number, js.period_status,
-                      js.status, js.last_synced_at, js.last_error, js.last_error_code, js.last_error_details, js.auto_sync_enabled, js.excluded_from_journals
+                      js.status, js.last_synced_at, js.last_error, js.last_error_code, js.last_error_details, js.classification, js.classification_reason, js.auto_sync_enabled, js.excluded_from_journals
                     ORDER BY js.grade, js.subject""",
             ).fetchall()
             items: list[dict[str, Any]] = []
@@ -4826,7 +4828,7 @@ class Database:
             return True
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
-            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, last_error_code, last_error_details, auto_sync_enabled, excluded_from_journals FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
+            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, last_error_code, last_error_details, classification, classification_reason, auto_sync_enabled, excluded_from_journals FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
             if not source:
                 return None
             params: tuple[Any, ...] = (source_id,)
@@ -5159,6 +5161,17 @@ class Database:
             self.execute(connection, "UPDATE journal_students SET identity_id = ?, match_status = 'linked', match_method = 'admin_selected', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND source_id = ?", (identity_id, journal_student_id, source_id))
             self.execute(connection, "UPDATE journal_results SET identity_id = ? WHERE journal_student_id = ?", (identity_id, journal_student_id))
             return True
+
+    def record_journal_classification(self, spreadsheet_id: str, spreadsheet_title: str, grade: int,
+                                      sheet_title: str, sheet_id: Any, kind: str, reason: str) -> None:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id=? AND sheet_id=?", (spreadsheet_id, str(sheet_id))).fetchone()
+            if row:
+                self.execute(connection, "UPDATE journal_sources SET status='skipped', classification=?, classification_reason=?, last_error=NULL, last_error_code=NULL, last_error_details=NULL WHERE id=?", (kind, reason, row["id"]))
+            else:
+                self.execute(connection, """INSERT INTO journal_sources (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, classification, classification_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, 'skipped', ?, ?)
+                    ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status='skipped', classification=excluded.classification, classification_reason=excluded.classification_reason, last_error=NULL, last_error_code=NULL, last_error_details=NULL""", (spreadsheet_id, spreadsheet_title, grade, sheet_title.strip(), sheet_title, str(sheet_id), kind, reason))
 
     def record_journal_failure(self, spreadsheet_id: str, subject: str, error: str, *, code: str | None = None, details: str | None = None, grade: int | None = None,
                                spreadsheet_title: str = "", sheet_title: str = "", sheet_id: Any = None) -> None:

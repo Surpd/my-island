@@ -80,6 +80,29 @@ class JournalSchoolRolloutTests(unittest.TestCase):
                 sync(changed)
             self.assertEqual(state(),before)
 
+    def test_different_works_with_similar_scores_and_moved_columns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / 'identity.db')
+            database.initialize()
+            def sync(rows):
+                sync_journal_values(database, rows, spreadsheet_id='book', spreadsheet_title='Synthetic', grade=5, subject='Math', sheet_title='Math', sheet_id=1)
+            rows = [['Дата','01.09','02.09'], ['Задание','First','Second'], ['Вес',1,1], ['Оценка',10,10]] + [[f'Student {n}', 8, 8] for n in range(5)]
+            sync(rows)
+            with database.connection() as connection:
+                initial = {row['title']: row['id'] for row in connection.execute('SELECT id,title FROM journal_assessments WHERE active=1')}
+            moved = [[row[0], row[2], row[1]] for row in rows]
+            moved[-1][1] = 9
+            sync(moved)
+            with database.connection() as connection:
+                self.assertEqual(initial, {row['title']: row['id'] for row in connection.execute('SELECT id,title FROM journal_assessments WHERE active=1')})
+            replaced = [row[:] for row in moved]
+            replaced[1][1] = 'Completely different'
+            sync(replaced)
+            with database.connection() as connection:
+                current = {row['title']: row['id'] for row in connection.execute('SELECT id,title FROM journal_assessments WHERE active=1')}
+                self.assertNotEqual(current['Completely different'], initial['Second'])
+                self.assertEqual(current['First'], initial['First'])
+
     def test_explicit_correction_requires_preview_and_retains_grade_values(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / 'correction.db')

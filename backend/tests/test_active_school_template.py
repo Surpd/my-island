@@ -297,6 +297,29 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
         self.assertIsNone(history["previous_payload"])
         self.assertEqual(history["next_revision"], changed["revision"])
 
+    def test_missing_baseline_has_no_diff_and_requires_current_conflict_acknowledgement(self):
+        payload = self.school_payload()
+        payload['lessons'] = payload['lessons'][:2]
+        payload['lessons'][0].update({'day': 0, 'start': '09:00', 'end': '10:00', 'teacherIds': ['teacher-1']})
+        payload['lessons'][1].update({'day': 0, 'start': '09:30', 'end': '10:30', 'teacherIds': ['teacher-1']})
+        selected = self.create_draft('Selected', payload)
+        self.activate(selected)
+        candidate_payload = deepcopy(payload)
+        candidate_payload['lessons'][0]['subject'] = 'Different'
+        candidate = self.create_draft('Candidate', candidate_payload)
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE school_template_selection SET source_revision=45,source_payload_sha256='missing' WHERE scope='school'")
+        preview = preview_school_template_selection(self.database, candidate['id'])
+        self.assertEqual(preview['changed'], [])
+        self.assertEqual(preview['added'], [])
+        self.assertEqual(preview['removed'], [])
+        recovery = preview['baseline_recovery']
+        self.assertTrue(recovery['problems'])
+        kwargs = dict(expected_revision=recovery['revision'], expected_payload_hash=recovery['payload_hash'], expected_missing_revision=45, expected_missing_payload_hash='missing')
+        with self.assertRaisesRegex(ValueError, 'Подтвердите проблемы'):
+            approve_legacy_template_baseline(self.database, selected['id'], **kwargs)
+        self.assertTrue(approve_legacy_template_baseline(self.database, selected['id'], acknowledge_problems=True, **kwargs)['approved'])
+
     def test_legacy_baseline_approval_rejects_a_concurrent_editor_change(self):
         payload = self.school_payload()
         payload["lessons"] = payload["lessons"][:1]

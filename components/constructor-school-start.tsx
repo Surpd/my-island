@@ -24,7 +24,7 @@ type SelectionPreview = {
   problems: { lesson_id: string; details: string[] }[];
   has_semantic_changes: boolean;
   baseline_recovery_required?: boolean;
-  baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: SelectionPreview['added'] } | null;
+  baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: SelectionPreview['added']; problems: SelectionPreview['problems'] } | null;
 };
 
 export function nearestMonday(today = new Date()) {
@@ -109,7 +109,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   };
   const approveLegacyBaseline = async () => {
     const baseline = selectionPreview?.baseline_recovery;
-    if (!baseline || selectionBusy || !acknowledgeBaseline) return;
+    if (!baseline || selectionBusy || !acknowledgeBaseline || (baseline.problems?.length && !acknowledgeProblems)) return;
     setSelectionBusy(true); setSelectionError('');
     try {
       await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(baseline.draft_id) + '/approve-legacy-baseline', {
@@ -119,6 +119,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
           expected_missing_revision: baseline.missing_revision,
           expected_missing_payload_hash: baseline.missing_payload_hash,
           acknowledge_missing_history: true,
+          acknowledge_problems: acknowledgeProblems,
         }),
       });
       setSelectionPreview(null);

@@ -15,7 +15,7 @@ type Preview = {
   problems: { lesson_id: string; details: string[] }[];
   has_semantic_changes: boolean;
   baseline_recovery_required?: boolean;
-  baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: Lesson[] } | null;
+  baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: Lesson[]; problems: { lesson_id: string; details: string[] }[] } | null;
 };
 
 const labels: Record<string, string> = { lesson: 'Урок', club: 'Клуб', elective: 'Курс по выбору', event: 'Событие', lunch: 'Обед', no_lesson: 'Нет урока' };
@@ -55,6 +55,7 @@ export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, 
         {recoveryRequired ? <section className="constructor-selection-recovery" aria-labelledby="legacy-baseline-title">
           <h3 id="legacy-baseline-title">Историческая ревизия недоступна</h3>
           <p>Подтверждённый снимок ревизии {preview.baseline_recovery!.missing_revision} и архив публикации не найдены. Ревизия {preview.baseline_recovery!.revision} не является восстановленной копией старой версии. Ниже показан текущий состав, который администратор может отдельно утвердить как новую базу.</p>
+          {(preview.baseline_recovery!.problems || []).length ? <div><h4>Проблемы текущего шаблона</h4>{preview.baseline_recovery!.problems.map((item, index) => <p key={`${item.lesson_id}-${index}`}>{item.lesson_id}: {item.details.join('; ')}</p>)}</div> : null}
           <details><summary>Текущий состав · {preview.baseline_recovery!.contents.length} занятий</summary>{changeList(preview.baseline_recovery!.contents, 'Сейчас')}</details>
         </section> : null}
         <details className="constructor-selection-details"><summary>Добавленные занятия · {preview.added.length}</summary>{changeList(preview.added, 'Добавлено')}</details>
@@ -70,9 +71,10 @@ export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, 
       <footer>
         <div className="constructor-selection-confirmations">
           {recoveryRequired ? <label><input type="checkbox" checked={acknowledgeBaseline} onChange={event => onAcknowledgeBaseline(event.target.checked)} />Я понимаю, что историческая ревизия {preview.baseline_recovery!.missing_revision} недоступна, и утверждаю текущую ревизию {preview.baseline_recovery!.revision} как новую базовую версию.</label> : preview.problems.length ? <label><input type="checkbox" checked={acknowledgeProblems} onChange={event => onAcknowledgeProblems(event.target.checked)} />Я просмотрел проблемы и подтверждаю шаблон с ними.</label> : <span>{blockedReason || 'Проверьте сводку перед подтверждением.'}</span>}
+          {recoveryRequired && (preview.baseline_recovery!.problems || []).length ? <label><input type="checkbox" checked={acknowledgeProblems} onChange={event => onAcknowledgeProblems(event.target.checked)} />Я просмотрел проблемы текущего шаблона и подтверждаю их.</label> : null}
         </div>
         <div className="constructor-selection-actions"><button disabled={busy} onClick={onCancel}>Отмена</button>
-          {recoveryRequired ? <button className="is-primary" disabled={busy || readOnly || !acknowledgeBaseline} onClick={onApproveBaseline}>{busy ? 'Сохраняем…' : 'Утвердить новую базовую версию'}</button> : <button className="is-primary" disabled={busy || readOnly || Boolean(preview.problems.length && !acknowledgeProblems)} onClick={onConfirm}>{busy ? 'Сохраняем…' : 'Подтвердить основным'}</button>}
+          {recoveryRequired ? <button className="is-primary" disabled={busy || readOnly || !acknowledgeBaseline || Boolean(preview.baseline_recovery?.problems?.length && !acknowledgeProblems)} onClick={onApproveBaseline}>{busy ? 'Сохраняем…' : 'Утвердить новую базовую версию'}</button> : <button className="is-primary" disabled={busy || readOnly || Boolean(preview.problems.length && !acknowledgeProblems)} onClick={onConfirm}>{busy ? 'Сохраняем…' : 'Подтвердить основным'}</button>}
         </div>
       </footer>
     </dialog>

@@ -227,6 +227,10 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
             raise JournalSourceExcluded("Эта вкладка исключена из журналов и не может быть обновлена.")
         escaped_title = sheet_title.replace("'", "''")
         values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
+        auxiliary = classify_journal_values(values, sheet_title=sheet_title)
+        if auxiliary:
+            database.record_journal_classification(spreadsheet_id, title, grade, sheet_title, selected.get("sheetId"), auxiliary["kind"], auxiliary["reason"])
+            return {"spreadsheet_id": spreadsheet_id, "subject": sheet_title, "status": "skipped", "classification": auxiliary["kind"], "reason": auxiliary["reason"]}
         counts = sync_journal_values(
             database,
             values,
@@ -296,6 +300,7 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
             auxiliary = classify_journal_values(values, sheet_title=sheet_title)
             if auxiliary:
+                database.record_journal_classification(target_id, title, grade, sheet_title, sheet_id, auxiliary["kind"], auxiliary["reason"])
                 outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "skipped",
                     "classification": auxiliary["kind"], "reason": auxiliary["reason"]})
                 skipped_count += 1

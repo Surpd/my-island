@@ -346,6 +346,7 @@ class SchoolTemplateBaselineApprovalPayload(BaseModel):
     expected_missing_revision: int = Field(ge=1)
     expected_missing_payload_hash: str
     acknowledge_missing_history: bool = False
+    acknowledge_problems: bool = False
 
 
 class SchoolTemplateRollbackPayload(BaseModel):
@@ -1659,7 +1660,7 @@ def create_router(database: Database) -> APIRouter:
                 expected_payload_hash=payload.expected_payload_hash,
                 expected_missing_revision=payload.expected_missing_revision,
                 expected_missing_payload_hash=payload.expected_missing_payload_hash,
-                actor_user_id=actor["id"])
+                actor_user_id=actor["id"], acknowledge_problems=payload.acknowledge_problems)
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 

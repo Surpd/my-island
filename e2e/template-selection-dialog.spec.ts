@@ -105,7 +105,7 @@ test('legacy baseline approval identifies the missing revision and requires a se
     ...standardPreview(),
     current: { id: 'primary-old', name: 'Основной шаблон', revision: 45, draft_revision: 46, snapshot_available: false },
     baseline_recovery_required: true,
-    baseline_recovery: { draft_id: 'primary-old', revision: 46, payload_hash: 'current-hash', missing_revision: 45, missing_payload_hash: 'old-hash', contents: [lesson(1, 'Текущее занятие')] },
+    baseline_recovery: { draft_id: 'primary-old', revision: 46, payload_hash: 'current-hash', missing_revision: 45, missing_payload_hash: 'old-hash', contents: [lesson(1, 'Текущее занятие')], problems: [{ lesson_id: 'one', details: ['Конфликт преподавателя'] }] },
     added: [], removed: [], changed: [], settings_changes: [], problems: [{ lesson_id: 'selected-template', details: ['Историческая ревизия недоступна'] }],
   };
   await openWithPreview(page, preview);
@@ -115,6 +115,8 @@ test('legacy baseline approval identifies the missing revision and requires a se
   const approve = dialog.getByRole('button', { name: 'Утвердить новую базовую версию' });
   await expect(approve).toBeDisabled();
   await dialog.getByLabel(/Я понимаю, что историческая ревизия 45 недоступна/).check();
+  await expect(approve).toBeDisabled();
+  await dialog.getByLabel('Я просмотрел проблемы текущего шаблона и подтверждаю их.').check();
   await expect(approve).toBeEnabled();
   await approve.click();
   await expect(page.getByRole('alert')).toContainText('Историческая ревизия 45 не восстановлена');
