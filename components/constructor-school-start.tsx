@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { TemplateSelectionDialog } from './template-selection-dialog';
 import { formatLessonTimeRange } from './lesson-time';
 import { normalizeRoomDisplay } from './schedule-rooms';
 
@@ -22,6 +23,8 @@ type SelectionPreview = {
   settings_changes: { field: string; label: string; impact: string; before: string; after: string }[];
   problems: { lesson_id: string; details: string[] }[];
   has_semantic_changes: boolean;
+  baseline_recovery_required?: boolean;
+  baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: SelectionPreview['added'] } | null;
 };
 
 export function nearestMonday(today = new Date()) {
@@ -39,19 +42,6 @@ export function weekPeriod(value: string) {
 }
 const changedAt = (value?: string) => value ? new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'дата не указана';
 const isTest = (draft: SchoolDraftSummary) => draft.draft_kind === 'test' || /(?:^|[\s·])тест(?:[\s·]|$)/iu.test(draft.name);
-const changeLabels: Record<string, Record<string, string>> = {
-  activity_type: { lesson: 'Урок', club: 'Клуб', elective: 'Курс по выбору', event: 'Событие', lunch: 'Обед' },
-  special_mark: { lunch: 'Обед', no_lesson: 'Нет урока' },
-  kind: { lesson: 'Урок', event: 'Событие' },
-  canonical_role: { primary: 'Основное занятие', residual: 'Остаток доступных учеников', explicit_no_lesson: 'Нет урока', special_event: 'Событие' },
-  audience_kind: { classes: 'Весь класс', groups: 'Учебная группа', students: 'Выбранные ученики', available_slot: 'Доступные ученики', remaining: 'Оставшиеся ученики' },
-  audience_mode: { canonical: 'По сохранённому правилу', remainder: 'Остаток после распределения' },
-};
-const displayChangeValue = (value: string | string[] | number | boolean | null, field?: string) => {
-  if (typeof value === 'string' && field && changeLabels[field]?.[value]) return changeLabels[field][value];
-  return Array.isArray(value) ? value.join(', ') || 'нет' : value === null || value === '' ? 'нет' : typeof value === 'boolean' ? value ? 'да' : 'нет' : String(value);
-};
-
 export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly, initialSection = 'template', onOpen, onCopy, onHide, onRestore, onCreateEmpty, onCreated, onPublication }: {
   api: Api; drafts: SchoolDraftSummary[]; index: SchoolWeekIndex; hiddenIds: string[]; readOnly: boolean;
   initialSection?: 'template' | 'weeks';
@@ -65,7 +55,9 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const [message, setMessage] = useState('');
   const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
   const [selectionBusy, setSelectionBusy] = useState(false);
+  const [selectionError, setSelectionError] = useState('');
   const [acknowledgeProblems, setAcknowledgeProblems] = useState(false);
+  const [acknowledgeBaseline, setAcknowledgeBaseline] = useState(false);
   const [selectionHistory, setSelectionHistory] = useState<{ id: string; previous_draft_id?: string; previous_revision?: number; next_draft_id: string; next_revision: number; created_at: string }[]>([]);
   const [restoredTests, setRestoredTests] = useState<string[]>([]);
   useEffect(() => {
@@ -108,15 +100,35 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     } catch (error) { setMessage((error as Error).message); }
   };
   const previewTemplateSelection = async (item: SchoolDraftSummary) => {
-    setSelectionBusy(true); setMessage('');
+    setSelectionBusy(true); setMessage(''); setSelectionError('');
     try {
       const result = await api<SelectionPreview>('/api/admin/schedule/experiments/school/' + encodeURIComponent(item.id) + '/selection-preview', { method: 'POST' });
       setSelectionPreview(result); setAcknowledgeProblems(false);
-    } catch (error) { setMessage((error as Error).message); } finally { setSelectionBusy(false); }
+      setAcknowledgeBaseline(false);
+    } catch (error) { setSelectionError((error as Error).message); setMessage((error as Error).message); } finally { setSelectionBusy(false); }
+  };
+  const approveLegacyBaseline = async () => {
+    const baseline = selectionPreview?.baseline_recovery;
+    if (!baseline || selectionBusy || !acknowledgeBaseline) return;
+    setSelectionBusy(true); setSelectionError('');
+    try {
+      await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(baseline.draft_id) + '/approve-legacy-baseline', {
+        method: 'POST', body: JSON.stringify({
+          expected_revision: baseline.revision,
+          expected_payload_hash: baseline.payload_hash,
+          expected_missing_revision: baseline.missing_revision,
+          expected_missing_payload_hash: baseline.missing_payload_hash,
+          acknowledge_missing_history: true,
+        }),
+      });
+      setSelectionPreview(null);
+      setMessage(`Текущая ревизия ${baseline.revision} утверждена как новая базовая версия. Историческая ревизия ${baseline.missing_revision} не восстановлена.`);
+      window.dispatchEvent(new Event('school-directory-updated'));
+    } catch (error) { setSelectionError((error as Error).message); } finally { setSelectionBusy(false); }
   };
   const confirmTemplateSelection = async () => {
     if (!selectionPreview || selectionBusy) return;
-    setSelectionBusy(true);
+    setSelectionBusy(true); setSelectionError('');
     try {
       await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(selectionPreview.candidate.id) + '/select-primary', {
         method: 'POST', body: JSON.stringify({
@@ -130,7 +142,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
       setSelectionPreview(null);
       setMessage('Основной шаблон переключён. Уже созданные недели не изменены.');
       window.dispatchEvent(new Event('school-directory-updated'));
-    } catch (error) { setMessage((error as Error).message); } finally { setSelectionBusy(false); }
+    } catch (error) { setSelectionError((error as Error).message); } finally { setSelectionBusy(false); }
   };
   const loadSelectionHistory = async () => {
     try {
@@ -196,6 +208,18 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     <details className="constructor-secondary-actions"><summary>Дополнительно</summary><button disabled={readOnly} onClick={onCreateEmpty}>Создать пустое расписание</button></details>
     {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.map(item => draftCard(item)) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span><code>{item.version_id}</code></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
     {view ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-view-title" onCancel={() => setView(null)}><header><div><small>Только просмотр сохранённой версии</small><h2 id="week-view-title">{view.title}</h2></div><button aria-label="Закрыть просмотр недели" onClick={() => setView(null)}><X size={20} /></button></header>{view.loading ? <p>Загружаем занятия…</p> : view.error ? <p role="alert">{view.error}</p> : view.blocks?.map((block, position) => <article className="constructor-history-lesson" key={`${block.block_key}:${position}`}><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][block.weekday]} · {formatLessonTimeRange(block.start_time, block.end_time)}</strong>{block.change_kind === 'cancelled' ? <p>Занятие отменено в этой версии</p> : (block.effective_assignments || []).map((item, i) => <p key={i}>{item.activity} · {item.groups?.join(', ') || `${block.grade_scope || ''} параллель`} · {item.teachers?.join(', ') || 'Преподаватель не указан'}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : ''}</p>)}</article>)}</dialog></div> : null}
-    {selectionPreview ? <div className="constructor-conflict-backdrop"><dialog open className="constructor-conflict-dialog constructor-week-history" aria-labelledby="template-selection-title"><header><div><small>Сравнение редакторских шаблонов</small><h2 id="template-selection-title">{selectionPreview.current?.id === selectionPreview.candidate.id ? 'Подтвердить изменения основного шаблона?' : `Сделать «${selectionPreview.candidate.name}» основным?`}</h2></div><button aria-label="Закрыть сравнение" onClick={() => setSelectionPreview(null)}><X size={20} /></button></header><p>Текущая подтверждённая версия: {selectionPreview.current ? selectionPreview.current.name + ' · ревизия ' + selectionPreview.current.revision : 'не назначена'}. Новая редакторская ревизия: {selectionPreview.candidate.revision}. Созданные недели останутся без изменений.</p>{selectionPreview.current?.has_unreviewed_changes && selectionPreview.current.id !== selectionPreview.candidate.id ? <p role="alert">Текущий основной шаблон имеет неподтверждённые правки. Сравнение выполнено с последней подтверждённой ревизией {selectionPreview.current.revision}; правки останутся в сохранённом шаблоне и не станут основными.</p> : null}<p>Добавлено занятий: {selectionPreview.added.length} · удалено: {selectionPreview.removed.length} · изменено: {selectionPreview.changed.length} · изменений режима и календаря: {selectionPreview.settings_changes.length} · проблем: {selectionPreview.problems.length}</p>{selectionPreview.settings_changes.length ? <section aria-label="Изменения календаря и режимов"><h3>Календарь и режимы</h3>{selectionPreview.settings_changes.map(item => <article className="constructor-history-lesson" key={item.field}><strong>{item.label}</strong><p>Было: {item.before}</p><p>Стало: {item.after}</p><p>{item.impact}</p></article>)}</section> : null}{[...selectionPreview.added.map(item => ({ kind: 'Добавлено', item })), ...selectionPreview.removed.map(item => ({ kind: 'Удалено', item }))].slice(0, 100).map(({ kind, item }) => <article className="constructor-history-lesson" key={kind + item.id}><strong>{kind} · {item.subject || 'Без названия'} · {item.start}–{item.end}</strong><p>Тип: {displayChangeValue(item.activity_type || 'lesson', 'activity_type')}{item.special_mark ? ` · отметка: ${displayChangeValue(item.special_mark, 'special_mark')}` : ''} · группы: {item.groups.join(', ') || '—'} · участников: {item.members.length} · преподаватели: {item.teachers.join(', ') || '—'} · кабинет: {item.room || '—'}</p>{item.audience_mode || item.audience_kind ? <p>Охват: {displayChangeValue(item.audience_kind || 'не указан', 'audience_kind')}{item.audience_mode ? ` · режим ${displayChangeValue(item.audience_mode, 'audience_mode')}` : ''}{item.excluded_groups?.length ? ` · исключены группы ${item.excluded_groups.join(', ')}` : ''}</p> : null}</article>)}{selectionPreview.changed.slice(0, 100).map(item => <article className="constructor-history-lesson" key={'delta-' + item.id}><strong>Изменено · {item.after.subject || item.before.subject || 'Занятие'} · {item.after.start}–{item.after.end}</strong><p>Группы: {item.after.groups.join(', ') || '—'} · участников: {item.after.members.length} · преподаватели: {item.after.teachers.join(', ') || '—'} · кабинет: {item.after.room || '—'}</p><ul>{item.changes.map(change => <li key={change.field}><strong>{change.label}:</strong> {change.before_text || displayChangeValue(change.before, change.field)} → {change.after_text || displayChangeValue(change.after, change.field)}. {change.impact}</li>)}</ul></article>)}{selectionPreview.problems.length ? <><h3>Проблемные сопоставления и конфликты</h3><ul>{selectionPreview.problems.slice(0, 100).map(item => <li key={item.lesson_id}>{item.lesson_id}: {item.details.join(', ')}</li>)}</ul><label><input type="checkbox" checked={acknowledgeProblems} onChange={event => setAcknowledgeProblems(event.target.checked)} />Я просмотрел проблемы и подтверждаю шаблон с ними.</label></> : null}<footer><button disabled={selectionBusy} onClick={() => setSelectionPreview(null)}>Отмена</button><button className="is-primary" disabled={selectionBusy || selectionPreview.current?.snapshot_available === false || Boolean(selectionPreview.problems.length && !acknowledgeProblems)} onClick={() => void confirmTemplateSelection()}>{selectionBusy ? 'Сохраняем…' : 'Подтвердить просмотренную версию'}</button></footer></dialog></div> : null}
+    {selectionPreview ? <TemplateSelectionDialog
+      preview={selectionPreview}
+      busy={selectionBusy}
+      readOnly={readOnly}
+      actionError={selectionError}
+      acknowledgeProblems={acknowledgeProblems}
+      acknowledgeBaseline={acknowledgeBaseline}
+      onAcknowledgeProblems={setAcknowledgeProblems}
+      onAcknowledgeBaseline={setAcknowledgeBaseline}
+      onCancel={() => setSelectionPreview(null)}
+      onConfirm={() => void confirmTemplateSelection()}
+      onApproveBaseline={() => void approveLegacyBaseline()}
+    /> : null}
   </section>;
 }
