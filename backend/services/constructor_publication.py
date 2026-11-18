@@ -171,7 +171,6 @@ def _change_items(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[d
 
 
 _ISSUE_MESSAGES = {
-    "teacher_assignment_unverified": "Нагрузка преподавателя не подтверждена отдельно; сохранено явно указанное назначение",
     "joint_activity": "Совместное занятие подтверждено явной связью; исходные аудитории сохранены",
     "joint_activity_unconfirmed": "Возможно совместное занятие, но общий кабинет не подтверждён; нельзя автоматически объединить назначения преподавателя",
     "review_required": "Занятие требует проверки",
@@ -388,13 +387,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
                 "message": f"Ссылка ведёт в {', '.join(str(group.get('display_name') or group.get('name')) for group in stale_math_groups)} для математики, а предмет — {subject or 'не указан'}. Класс размещения: {', '.join(class_labels) or 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён."})
         elif needs_review:
-            # Imported staffing checks do not make an explicit student audience
-            # ambiguous. Keep the diagnostic without inventing any teacher.
+            # An explicit, active teacher is sufficient for publication. A
+            # separate workload row is not required evidence for the lesson.
             if review_reason == "Не подтверждён преподаватель" and not teacher_ids:
                 pass  # The missing_teacher diagnostic below records this once.
             elif (review_reason == "Нет подтверждённого назначения преподавателя группе"
                   and teacher_evidence and not teacher_evidence - teachers.keys()):
-                blockers.append({"code": "teacher_assignment_unverified", "lesson_id": lesson_id, "severity": "info"})
+                pass  # Routine workload metadata must not become a publication warning.
             elif is_lunch and lunch_scope_confirmed:
                 pass
             elif is_optional:

@@ -381,14 +381,17 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual([item["activity"] for item in student5_week["items"]], ["Math"])
         self.assertEqual(student7_week["items"], [])
 
-    def test_explicit_teacher_with_legacy_unverified_assignment_reason_is_informational(self):
+    def test_explicit_active_teacher_does_not_warn_about_missing_assignment_row(self):
         draft = self.draft([self.lesson(needsClarification=True,
             clarificationReason="Нет подтверждённого назначения преподавателя группе")])
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
         self.assertTrue(preview["can_publish"])
         self.assertEqual(preview["summary"]["ready_lessons"], 1)
         self.assertEqual(preview["summary"]["deferred_lessons"], 0)
-        self.assertIn("teacher_assignment_unverified", [item["code"] for item in preview["diagnostics"]])
+        diagnostic_codes = [item["code"] for item in preview["diagnostics"]]
+        self.assertNotIn("teacher_assignment_unverified", diagnostic_codes)
+        self.assertNotIn("review_required", diagnostic_codes)
+        self.assertEqual(preview["summary"]["info_count"], 0)
         unknown_teacher = self.lesson(id="unknown-teacher", teacherId="unknown",
             needsClarification=True, clarificationReason="Нет подтверждённого назначения преподавателя группе")
         unknown_draft = self.draft([unknown_teacher])
