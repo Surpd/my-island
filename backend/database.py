@@ -332,6 +332,17 @@ CREATE TABLE IF NOT EXISTS school_template_selection_history (
   actor_user_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS school_template_baseline_approvals (
+  scope TEXT PRIMARY KEY CHECK (scope = 'school'),
+  draft_id TEXT NOT NULL,
+  approved_revision INTEGER NOT NULL,
+  approved_payload_sha256 TEXT NOT NULL,
+  missing_revision INTEGER NOT NULL,
+  missing_payload_sha256 TEXT NOT NULL,
+  provenance TEXT NOT NULL,
+  actor_user_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS schedule_activity_catalog (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -652,6 +663,10 @@ CREATE TABLE IF NOT EXISTS journal_sources (
   status TEXT NOT NULL DEFAULT 'ready',
   last_synced_at TEXT,
   last_error TEXT,
+  last_error_code TEXT,
+  last_error_details TEXT,
+  classification TEXT,
+  classification_reason TEXT,
   UNIQUE(spreadsheet_id, sheet_title)
 );
 CREATE TABLE IF NOT EXISTS journal_assessments (
@@ -983,7 +998,7 @@ class Database:
             connection.executescript(SCHEMA)
             self._ensure_sqlite_schema_parity(connection)
             for table, columns in {
-                "journal_sources": {"academic_year": "TEXT NOT NULL DEFAULT '2026/27'", "term_number": "INTEGER", "period_status": "TEXT NOT NULL DEFAULT 'current'"},
+                "journal_sources": {"academic_year": "TEXT NOT NULL DEFAULT '2026/27'", "term_number": "INTEGER", "period_status": "TEXT NOT NULL DEFAULT 'current'", "last_error_code": "TEXT", "last_error_details": "TEXT", "classification": "TEXT", "classification_reason": "TEXT"},
                 "journal_student_summaries": {"summary_type": "TEXT NOT NULL DEFAULT 'technical'"},
                 "journal_summary_history": {"summary_type": "TEXT NOT NULL DEFAULT 'technical'"},
             }.items():
@@ -4080,7 +4095,7 @@ class Database:
             if source_row:
                 source_id = source_row["id"]
                 self.execute(connection, """UPDATE journal_sources SET spreadsheet_title = ?, grade = ?, subject = ?, sheet_title = ?,
-                    sheet_id = COALESCE(?, sheet_id), academic_year = ?, term_number = COALESCE(term_number, ?), period_status = ?, source_hash = ?, status = 'ready', last_synced_at = CURRENT_TIMESTAMP, last_error = NULL
+                    sheet_id = COALESCE(?, sheet_id), academic_year = ?, term_number = COALESCE(term_number, ?), period_status = ?, source_hash = ?, status = 'ready', last_synced_at = CURRENT_TIMESTAMP, last_error = NULL, last_error_code = NULL, last_error_details = NULL, classification = NULL, classification_reason = NULL
                     WHERE id = ?""", (source["spreadsheet_title"], source["grade"], source["subject"], source["sheet_title"], str(source.get("sheet_id")) if source.get("sheet_id") is not None else None, source["academic_year"], term_number, period_status, source["source_hash"], source_id))
             else:
                 source_id = self.execute(connection, """INSERT INTO journal_sources(spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, source_hash, status, last_synced_at, last_error)
@@ -4091,6 +4106,14 @@ class Database:
                 RETURNING id""", (source["spreadsheet_id"], source["spreadsheet_title"], f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}", json.dumps({"grade": source["grade"], "subject": source["subject"], "sheet_id": source.get("sheet_id")}, ensure_ascii=False))).fetchone()["id"]
 
             existing_assessments = [dict(row) for row in self.execute(connection, "SELECT * FROM journal_assessments WHERE source_id = ?", (source_id,)).fetchall()]
+            existing_result_vectors: dict[Any, list[tuple[str, Any]]] = {}
+            for result in self.execute(connection, """SELECT result.assessment_id, student.student_key,
+                    result.numeric_score, result.status
+                FROM journal_results result JOIN journal_students student ON student.id=result.journal_student_id
+                JOIN journal_assessments assessment ON assessment.id=result.assessment_id
+                WHERE assessment.source_id=? AND result.is_current IS TRUE""", (source_id,)).fetchall():
+                value = result["numeric_score"] if result["numeric_score"] is not None else str(result["status"] or "")
+                existing_result_vectors.setdefault(result["assessment_id"], []).append((str(result["student_key"]), value))
             def canonical_date(value: Any) -> str | None:
                 if value is None:
                     return None
@@ -4101,6 +4124,60 @@ class Database:
                         ' '.join(str(item.get('title') or '').casefold().replace('ё', 'е').split()),
                         numeric_key(item.get('weight')), numeric_key(item.get('max_score')))
 
+            def stored_score_vector(row: dict[str, Any]) -> dict[str, Any]:
+                raw = row.get("raw_source")
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except (TypeError, ValueError):
+                        raw = {}
+                vector = raw.get("score_vector") if isinstance(raw, dict) else None
+                if not isinstance(vector, list):
+                    vector = existing_result_vectors.get(row.get("id"))
+                try:
+                    return {str(key): value for key, value in vector} if isinstance(vector, list) else {}
+                except (TypeError, ValueError):
+                    return {}
+
+            def match_evidence(row: dict[str, Any], item: dict[str, Any]) -> tuple[int, int]:
+                """Return a conservative identity score and comparable result count."""
+                old_date = canonical_date(row.get("assessed_on"))
+                new_date = canonical_date(item.get("assessed_on"))
+                # Never reuse an assessment identity for two different known dates,
+                # even when a legacy external_key happens to match.
+                if old_date and new_date and old_date != new_date:
+                    return 0, 0
+                if row.get("external_key") == item.get("external_key"):
+                    return 100, 0
+                same_group = (row.get("group_marker") or "all") == (item.get("group_marker") or "all")
+                if not same_group:
+                    return 0, 0
+                same_metadata = row.get("metadata_signature") == assessment_metadata(item)
+                same_title = (" ".join(str(row.get("title") or "").casefold().replace("ё", "е").split())
+                              == " ".join(str(item.get("title") or "").casefold().replace("ё", "е").split()))
+                old_vector = stored_score_vector(row)
+                new_vector = stored_score_vector(item)
+                shared = set(old_vector) & set(new_vector)
+                comparable = len(shared)
+                similarity = (sum(old_vector[key] == new_vector[key] for key in shared) / comparable) if comparable else 0.0
+                if same_metadata:
+                    score = 82
+                elif same_title:
+                    score = 68
+                else:
+                    score = 0
+                if same_title and item.get("value_signature") and row.get("value_signature") == item.get("value_signature"):
+                    score = max(score, 78 if same_title else 72)
+                # Results are a strong tie-breaker for undated repeated titles.
+                # Require enough overlap and a clear agreement before using it.
+                if (same_title or same_metadata) and comparable >= 4 and similarity >= 0.70:
+                    score = max(score, 58 + round(similarity * 30))
+                if comparable >= 2 and similarity == 1.0 and (same_title or same_metadata):
+                    score = max(score, 82)
+                if (same_metadata or same_title) and row.get("source_column") == item.get("source_column"):
+                    score += 5
+                return score, comparable
+
             for row in existing_assessments:
                 row["metadata_signature"] = assessment_metadata(row)
             claimed: set[Any] = set()
@@ -4108,16 +4185,29 @@ class Database:
             raw_value = json_value
             for item in assessments:
                 group_marker = str(item.get("group_marker") or "all")
-                signature = assessment_metadata(item)
                 candidates = [row for row in existing_assessments if row["id"] not in claimed]
-                exact = [row for row in candidates if row.get("external_key") == item["external_key"]]
-                metadata = [row for row in candidates if row.get("metadata_signature") == signature]
-                value_matches = [row for row in candidates if item.get("value_signature") and row.get("value_signature") == item["value_signature"] and row.get("group_marker", "all") == group_marker and canonical_date(row.get("assessed_on")) == canonical_date(item.get("assessed_on"))]
-                same_title_group = [row for row in candidates if row.get("group_marker", "all") == group_marker and canonical_date(row.get("assessed_on")) == canonical_date(item.get("assessed_on")) and " ".join(str(row.get("title") or "").casefold().replace("ё", "е").split()) == " ".join(str(item["title"]).casefold().replace("ё", "е").split())]
-                choices = exact or metadata or value_matches or same_title_group
-                if len(choices) > 1:
-                    raise ValueError(f"{source['sheet_title']}: невозможно однозначно сопоставить работу «{item['title']}» после изменения структуры; прежние данные сохранены")
-                match = choices[0] if choices else None
+                same_metadata_rows = [row for row in existing_assessments if row["metadata_signature"] == assessment_metadata(item)]
+                if len(same_metadata_rows) > 1:
+                    old_vectors = [stored_score_vector(row) for row in same_metadata_rows]
+                    shared_old_vector = old_vectors[0] if old_vectors else {}
+                    incoming_vector = stored_score_vector(item)
+                    if shared_old_vector and all(vector == shared_old_vector for vector in old_vectors[1:]) and incoming_vector != shared_old_vector:
+                        raise ValueError("Неоднозначное сопоставление одинаковых колонок журнала: предыдущие оценки сохранены")
+                ranked = [(match_evidence(row, item), row) for row in candidates]
+                ranked = [(evidence, row) for evidence, row in ranked if evidence[0] >= 65]
+                ranked.sort(key=lambda pair: (pair[0][0], pair[0][1]), reverse=True)
+                match = None
+                if ranked:
+                    best_score = ranked[0][0][0]
+                    top = [row for evidence, row in ranked if evidence[0] == best_score]
+                    if len(top) > 1:
+                        raise ValueError(f"{source['sheet_title']}: конфликт сопоставления работы «{item['title']}»: несколько прежних работ имеют одинаковые метаданные и результаты; предыдущие оценки сохранены")
+                    # A weak title-only match may be a different work. Accept it
+                    # only when it is the sole candidate with that title.
+                    if best_score >= 72 or len(ranked) == 1:
+                        match = ranked[0][1]
+                    else:
+                        raise ValueError(f"{source['sheet_title']}: конфликт сопоставления работы «{item['title']}» после изменения структуры; предыдущие оценки сохранены")
                 raw_source = json.dumps(item.get("raw_source"), ensure_ascii=False)
                 if match:
                     assessment_id = match["id"]
@@ -4654,7 +4744,7 @@ class Database:
                 connection,
                 """SELECT js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                           js.academic_year, js.term_number, js.period_status,
-                          js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled, js.excluded_from_journals,
+                          js.status, js.last_synced_at, js.last_error, js.last_error_code, js.last_error_details, js.classification, js.classification_reason, js.auto_sync_enabled, js.excluded_from_journals,
                           (SELECT run.id FROM journal_sync_runs run WHERE run.spreadsheet_id = js.spreadsheet_id AND run.status = 'running' ORDER BY run.started_at DESC LIMIT 1) AS active_run_id,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE THEN ja.id END) AS assessment_count,
                           COUNT(DISTINCT CASE WHEN ja.active IS TRUE AND jr.is_current IS TRUE THEN jr.id END) AS result_count,
@@ -4668,7 +4758,7 @@ class Database:
                      LEFT JOIN journal_students result_student ON result_student.id=jr.journal_student_id
                     GROUP BY js.id, js.spreadsheet_id, js.sheet_id, js.spreadsheet_title, js.grade, js.subject, js.sheet_title,
                       js.academic_year, js.term_number, js.period_status,
-                      js.status, js.last_synced_at, js.last_error, js.auto_sync_enabled, js.excluded_from_journals
+                      js.status, js.last_synced_at, js.last_error, js.last_error_code, js.last_error_details, js.classification, js.classification_reason, js.auto_sync_enabled, js.excluded_from_journals
                     ORDER BY js.grade, js.subject""",
             ).fetchall()
             items: list[dict[str, Any]] = []
@@ -4744,7 +4834,7 @@ class Database:
             return True
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
-            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, auto_sync_enabled, excluded_from_journals FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
+            source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, last_error_code, last_error_details, classification, classification_reason, auto_sync_enabled, excluded_from_journals FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
             if not source:
                 return None
             params: tuple[Any, ...] = (source_id,)
@@ -4753,7 +4843,7 @@ class Database:
                 group_clause = " AND group_marker = ?"
                 params = (source_id, group_marker)
             assignments = self.execute(connection, "SELECT id, title, assessed_on, weight, max_score, group_marker FROM journal_assessments WHERE source_id = ? AND active IS TRUE ORDER BY assessed_on, id", (source_id,)).fetchall()
-            students = self.execute(connection, f"SELECT id, display_name, group_marker, identity_id, match_status, match_method, entry_kind, classification_method FROM journal_students WHERE source_id = ? AND active IS TRUE{group_clause} ORDER BY lower(display_name)", params).fetchall()
+            students = self.execute(connection, f"SELECT journal_student.id, journal_student.display_name, journal_student.group_marker, journal_student.identity_id, journal_student.match_status, journal_student.match_method, journal_student.entry_kind, journal_student.classification_method, identity.class_name FROM journal_students journal_student LEFT JOIN identities identity ON identity.id = journal_student.identity_id WHERE journal_student.source_id = ? AND journal_student.active IS TRUE{group_clause.replace('group_marker', 'journal_student.group_marker')} ORDER BY lower(journal_student.display_name)", params).fetchall()
             ids = [row["id"] for row in students]
             values: dict[tuple[Any, Any], dict[str, Any]] = {}
             summaries: dict[Any, list[dict[str, Any]]] = {}
@@ -4770,6 +4860,17 @@ class Database:
                     classroom_course_id, exam_track, source
                 FROM journal_group_mappings WHERE source_id = ? ORDER BY group_marker""", (source_id,)).fetchall()
             members: dict[Any, list[dict[str, Any]]] = {}
+            canonical_classes: dict[str, set[str]] = {}
+            identity_ids = sorted({str(row["identity_id"]) for row in students if row["identity_id"] is not None})
+            if identity_ids:
+                for row in self.execute(connection, f"""SELECT membership.identity_id, COALESCE(group_row.base_class_name,group_row.name) AS class_name
+                    FROM memberships membership JOIN groups group_row ON group_row.id=membership.group_id
+                    WHERE membership.identity_id IN ({','.join('?' for _ in identity_ids)})
+                      AND membership.active IS TRUE AND membership.member_role='student'
+                      AND (membership.valid_from IS NULL OR membership.valid_from<=CURRENT_DATE)
+                      AND (membership.valid_until IS NULL OR membership.valid_until>=CURRENT_DATE)
+                      AND group_row.group_type='class' AND group_row.canonical IS TRUE AND group_row.archived_at IS NULL""", tuple(identity_ids)).fetchall():
+                    canonical_classes.setdefault(str(row["identity_id"]), set()).add(str(row["class_name"]))
             if ids:
                 for member in self.execute(connection,f"SELECT member.journal_student_id,member.identity_id,i.display_name,i.class_name FROM journal_team_members member JOIN identities i ON i.id=member.identity_id WHERE member.journal_student_id IN ({','.join('?' for _ in ids)}) ORDER BY i.display_name",tuple(ids)).fetchall():
                     members.setdefault(member['journal_student_id'],[]).append(dict(member))
@@ -4778,7 +4879,7 @@ class Database:
                 "groups": [row["group_marker"] for row in marker_rows],
                 "mappings": [dict(row) for row in mappings],
                 "assessments": [{**dict(row), "group_marker": row["group_marker"]} for row in assignments if not group_marker or row["group_marker"] in {"all", group_marker}],
-                "students": [{**dict(row), "members": members.get(row['id'], []), "summaries": summaries.get(row["id"], []), "results": {str(item["id"]): values.get((row["id"], item["id"])) for item in assignments if not group_marker or item["group_marker"] in {"all", group_marker}}} for row in students],
+                "students": [{**dict(row), "canonical_classes": sorted(canonical_classes.get(str(row["identity_id"]), set())), "members": members.get(row['id'], []), "summaries": summaries.get(row["id"], []), "results": {str(item["id"]): values.get((row["id"], item["id"])) for item in assignments if not group_marker or item["group_marker"] in {"all", group_marker}}} for row in students],
             }
 
     def start_journal_sync(self, spreadsheet_id: str, grade: int, subject: str | None = None, trigger_kind: str = "manual") -> Any | None:
@@ -5067,23 +5168,35 @@ class Database:
             self.execute(connection, "UPDATE journal_results SET identity_id = ? WHERE journal_student_id = ?", (identity_id, journal_student_id))
             return True
 
-    def record_journal_failure(self, spreadsheet_id: str, subject: str, error: str, *, grade: int | None = None,
+    def record_journal_classification(self, spreadsheet_id: str, spreadsheet_title: str, grade: int,
+                                      sheet_title: str, sheet_id: Any, kind: str, reason: str) -> None:
+        with self.connection() as connection:
+            row = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id=? AND sheet_id=?", (spreadsheet_id, str(sheet_id))).fetchone()
+            if row:
+                self.execute(connection, "UPDATE journal_sources SET status='skipped', classification=?, classification_reason=?, last_error=NULL, last_error_code=NULL, last_error_details=NULL WHERE id=?", (kind, reason, row["id"]))
+            else:
+                self.execute(connection, """INSERT INTO journal_sources (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, classification, classification_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, 'skipped', ?, ?)
+                    ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status='skipped', classification=excluded.classification, classification_reason=excluded.classification_reason, last_error=NULL, last_error_code=NULL, last_error_details=NULL""", (spreadsheet_id, spreadsheet_title, grade, sheet_title.strip(), sheet_title, str(sheet_id), kind, reason))
+
+    def record_journal_failure(self, spreadsheet_id: str, subject: str, error: str, *, code: str | None = None, details: str | None = None, grade: int | None = None,
                                spreadsheet_title: str = "", sheet_title: str = "", sheet_id: Any = None) -> None:
         with self.connection() as connection:
             changed = self.execute(
                 connection,
                 """UPDATE journal_sources
-                      SET status = 'error', last_error = ?
+                      SET status = 'error', last_error = ?, last_error_code = ?, last_error_details = ?
                     WHERE spreadsheet_id = ? AND (subject = ? OR sheet_id = ?)""",
-                (error[:1000], spreadsheet_id, subject, str(sheet_id) if sheet_id is not None else None),
+                (error[:500], code, (details or "")[:1000] or None, spreadsheet_id, subject, str(sheet_id) if sheet_id is not None else None),
             )
             if not changed.rowcount and grade is not None:
                 self.execute(connection, """INSERT INTO journal_sources
-                    (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, last_error)
-                    VALUES (?, ?, ?, ?, ?, ?, 'error', ?)
-                    ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status = 'error', last_error = excluded.last_error""",
+                    (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, last_error, last_error_code, last_error_details)
+                    VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?, ?)
+                    ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status = 'error', last_error = excluded.last_error,
+                        last_error_code = excluded.last_error_code, last_error_details = excluded.last_error_details""",
                     (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title or subject,
-                     str(sheet_id) if sheet_id is not None else None, error[:1000]))
+                     str(sheet_id) if sheet_id is not None else None, error[:500], code, (details or "")[:1000] or None))
 
     def get_journal_sync_run(self, run_id: Any) -> dict[str, Any] | None:
         with self.connection() as connection:

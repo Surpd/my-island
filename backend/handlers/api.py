@@ -31,7 +31,7 @@ from backend.services.google_oauth import build_google_authorization_url, google
 from backend.services.google_contract import CLASSROOM_READ_SCOPES, SHEETS_READ_SCOPE, SHEETS_WRITE_SCOPE
 from backend.services.schedule_sheet_publishing import export_saved_week
 from backend.services.school_template_selection import (
-    open_active_school_template, preview_school_template_selection,
+    approve_legacy_template_baseline, open_active_school_template, preview_school_template_selection,
     select_school_template, rollback_school_template,
 )
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
@@ -337,6 +337,15 @@ class SchoolTemplateSelectPayload(BaseModel):
     expected_current_id: str | None = None
     expected_current_revision: int | None = Field(default=None, ge=1)
     expected_candidate_hash: str
+    acknowledge_problems: bool = False
+
+
+class SchoolTemplateBaselineApprovalPayload(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_payload_hash: str
+    expected_missing_revision: int = Field(ge=1)
+    expected_missing_payload_hash: str
+    acknowledge_missing_history: bool = False
     acknowledge_problems: bool = False
 
 
@@ -1632,6 +1641,26 @@ def create_router(database: Database) -> APIRouter:
                 expected_candidate_hash=payload.expected_candidate_hash, actor_user_id=actor["id"])
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/approve-legacy-baseline")
+    def admin_school_approve_legacy_baseline(experiment_id: str, payload: SchoolTemplateBaselineApprovalPayload,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        if not payload.acknowledge_missing_history:
+            raise HTTPException(status_code=409, detail="Явно подтвердите отсутствие исторического снимка.")
+        _, store = school_stores()
+        try:
+            return approve_legacy_template_baseline(store, experiment_id,
+                expected_revision=payload.expected_revision,
+                expected_payload_hash=payload.expected_payload_hash,
+                expected_missing_revision=payload.expected_missing_revision,
+                expected_missing_payload_hash=payload.expected_missing_payload_hash,
+                actor_user_id=actor["id"], acknowledge_problems=payload.acknowledge_problems)
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 

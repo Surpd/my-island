@@ -194,7 +194,24 @@ class JournalSyncResilienceTests(unittest.TestCase):
         self.assertEqual(run["counts"], {"completed_tabs": 2, "total_tabs": 2, "succeeded": 1, "failed": 1, "skipped": 0, "excluded": 0})
         with self.database.connection() as connection:
             source = self.database.execute(connection, "SELECT last_error FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", ("book-progress", "2")).fetchone()
-        self.assertEqual(source["last_error"], "Не удалось обновить вкладку. Предыдущие данные сохранены.")
+        self.assertEqual(source["last_error"], "Данные вкладки не прошли проверку. Предыдущие данные сохранены.")
+
+    def test_classified_auxiliary_clears_old_error_but_preserves_results(self):
+        from backend.services.journal_import import sync_journal_values
+        sync_journal_values(self.database, [['Дата','01.09'], ['Задание','Task'], ['Вес',1], ['Оценка',10], ['Student',8]], spreadsheet_id='book', spreadsheet_title='Synthetic', grade=9, subject='Art', sheet_title='Art', sheet_id=1)
+        self.database.record_journal_failure('book', 'Art', 'Old error', code='old', sheet_id=1)
+        client = Mock()
+        client.spreadsheet.return_value = {'properties': {'title':'Synthetic'}, 'sheets':[{'properties':{'title':'Art','sheetId':1}}]}
+        client.sheet_values.return_value = [['Фамилия','Имя','Практикум 1','Практикум 2','Итог (средний балл)'], ['Test','Student',8,9,8.5]]
+        with patch('backend.services.google_sync_service._client', return_value=(client, None)):
+            outcome = refresh_grade_journal(self.database, object(), 9, spreadsheet_id='book')
+        self.assertEqual(outcome['tabs'][0]['status'], 'skipped')
+        source = self.database.journal_status()[0]
+        self.assertEqual(source['classification'], 'derived_results')
+        self.assertTrue(source['classification_reason'])
+        self.assertIsNone(source['last_error'])
+        self.assertEqual(source['result_count'], 1)
+        self.assertFalse(source['excluded_from_journals'])
 
     def test_progress_updates_only_running_runs(self):
         run_id = self.database.start_journal_sync("book-progress", 9)

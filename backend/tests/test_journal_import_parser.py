@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.services.journal_import import parse_journal_values
+from backend.services.journal_import import classify_journal_values, parse_journal_values
 
 
 class JournalImportParserTests(unittest.TestCase):
@@ -64,6 +64,32 @@ class JournalImportParserTests(unittest.TestCase):
 
         self.assertEqual(parsed["assessments"][0]["assessed_on"], "2026-09-01")
         self.assertEqual(parsed["results"][0]["numeric_score"], 7.0)
+
+    def test_literature_layout_uses_horizontal_dates_even_with_term_marker_in_a1(self):
+        values = [
+            ["2", "02.09", "07.09", "08.09", "Итого", "Средняя отметка"],
+            ["Задание", "Рассказ", "Рассказ", "Письменная работа", "Сумма баллов за триместр", "Средняя отметка"],
+            ["Вес", None, "1", None, None, None],
+            ["Оценка", None, "5", None, None, None],
+            ["Иванов Иван", None, 4, 3, 7, 3.5],
+        ]
+        parsed = parse_journal_values(values, grade=9, subject="Литература", sheet_title="Литература")
+        self.assertEqual([item["assessed_on"] for item in parsed["assessments"]], ["2026-09-02", "2026-09-07", "2026-09-08"])
+        self.assertEqual(len(parsed["assessments"]), 3)
+        self.assertEqual(len(parsed["results"]), 2)
+
+    def test_derived_art_results_are_classified_by_headers(self):
+        values = [["Фамилия", "Имя", "Практикум 1 — Греция и Египет", "Практикум 2 — Портрет", "Итог (средний балл из 10)"]]
+        classification = classify_journal_values(values, sheet_title="Любое название")
+        self.assertEqual(classification["kind"], "derived_results")
+        self.assertIn("сводный итог", classification["reason"])
+
+    def test_external_key_stays_stable_when_result_values_change(self):
+        first = [["Дата", "01.09"], ["Задание", "Проверочная"], ["Вес", 1], ["Оценка", 10], ["Student One", 8]]
+        changed = [["Дата", "01.09"], ["Задание", "Проверочная"], ["Вес", 1], ["Оценка", 10], ["Student One", 9]]
+        first_key = parse_journal_values(first, grade=9, subject="История", sheet_title="История", sheet_id=4)["assessments"][0]["external_key"]
+        changed_key = parse_journal_values(changed, grade=9, subject="История", sheet_title="История", sheet_id=4)["assessments"][0]["external_key"]
+        self.assertEqual(first_key, changed_key)
 
     def test_projects_without_weight_headers_preserve_boolean_status_and_team_rows(self):
         values = [

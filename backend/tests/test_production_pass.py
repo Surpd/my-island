@@ -192,7 +192,9 @@ class JournalTests(unittest.TestCase):
             self.assertIn("Домашняя работа", titles)
             current_student_ids = {row["student_name"]: row["journal_student_id"] for row in student_rows}
             ids_after = {row["title"]: row["id"] for row in current}
-            self.assertEqual(ids_after["Домашняя работа"], initial["Входное тестирование"])
+            # Similar score vectors cannot prove that the renamed work is the
+            # same assignment; keep the new identity separate for review.
+            self.assertNotEqual(ids_after["Домашняя работа"], initial["Входное тестирование"])
             self.assertEqual(ids_after["ДЗ"], initial["ДЗ"])
             for name, identity in students.items():
                 self.assertEqual(current_student_ids[name], identity)
