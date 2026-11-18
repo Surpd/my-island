@@ -4149,6 +4149,13 @@ class Database:
                 same_metadata = row.get("metadata_signature") == assessment_metadata(item)
                 same_title = (" ".join(str(row.get("title") or "").casefold().replace("ё", "е").split())
                               == " ".join(str(item.get("title") or "").casefold().replace("ё", "е").split()))
+                old_date = canonical_date(row.get("assessed_on"))
+                new_date = canonical_date(item.get("assessed_on"))
+                # Two concrete, different dates are distinct identity evidence.
+                # Neither matching titles/coordinates nor matching score vectors
+                # may override them; doing so would transfer old grades to a new work.
+                if old_date and new_date and old_date != new_date:
+                    return 0, 0
                 old_vector = stored_score_vector(row)
                 new_vector = stored_score_vector(item)
                 shared = set(old_vector) & set(new_vector)
