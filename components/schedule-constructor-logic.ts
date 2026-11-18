@@ -9,7 +9,7 @@ export function shouldWarnMissingTeacher(
   lesson: { activityType?: string; kind?: string; informational?: boolean; teacherId?: string; teacherIds?: string[] },
   independentPractice = false,
 ): boolean {
-  if (lesson.activityType === 'club' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
+  if (lesson.activityType === 'club' || lesson.activityType === 'elective' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
   return !lesson.teacherId && !(lesson.teacherIds || []).length;
 }
 
@@ -26,6 +26,12 @@ export function schedulePlacementClassIds(lesson: PlacementLesson, selectedColum
     ? lesson.displayClassIds
     : lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
   return [...new Set((ids?.length ? ids : selectedColumnClassIds).filter(Boolean))];
+}
+
+export function confirmedClassLunchMarker(lesson: { specialMark?: string; classId?: string; classIds?: string[] }, groups: Pick<ScheduleGroup, 'id' | 'group_type'>[]): boolean {
+  if (lesson.specialMark !== 'lunch') return false;
+  const classIds = lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
+  return classIds.length > 0 && classIds.every((id) => groups.some((group) => group.id === id && group.group_type === 'class'));
 }
 
 type LinkedLesson = {

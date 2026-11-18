@@ -65,7 +65,7 @@ export async function createSyntheticFilledWeek(request: APIRequestContext, regi
   for (let index = 0; index < 10; index++) {
     const response = await request.post(`${API}/api/admin/identities`, {
       headers: ADMIN,
-      data: { display_name: `Синт ${index + 1}`, kind: 'teacher' },
+      data: { display_name: `Синт ${experiment.id.slice(0, 6)} ${index + 1}`, kind: 'teacher' },
     });
     if (!response.ok()) throw new Error(`Synthetic teacher creation failed: ${response.status()}`);
     teacherIds.push(String((await response.json()).id));

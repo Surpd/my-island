@@ -44,7 +44,7 @@ export function campusStudentDays(value: unknown, dayModes: unknown = []): Campu
     const item: CampusItem = { date, slot: { start: string(row.start_time), end: string(row.end_time) }, state: 'lesson', canonical_title: lesson?.subject, teacher: lesson?.teacher, room: lesson?.room, activity_format: lesson?.activity_format, responsible_teacher: lesson?.responsible_teacher };
     if (isNoLesson(row)) { item.state = 'no_lesson'; }
     else if (isConflict(row)) { item.state = 'conflict'; item.conflict = { state: 'unresolved', label: 'Расписание уточняется', alternatives: [] }; }
-    else if (['event', 'special_event'].includes(string(row.activity_kind || row.lesson_type))) { item.state = 'special_event'; item.special_event = { kind: string(row.activity_kind || row.lesson_type), title: lesson?.subject || 'Событие' }; }
+    else if (['event', 'special_event'].includes(string(row.activity_type || row.activity_kind || row.lesson_type))) { item.state = 'special_event'; item.special_event = { kind: string(row.activity_type || row.activity_kind || row.lesson_type), title: lesson?.subject || 'Событие' }; }
     day.items.push(item); days.set(date, day);
   }
   return [...days.values()].sort((a, b) => a.date.localeCompare(b.date)).map((day) => ({ ...day, items: day.items.sort((a, b) => a.slot.start.localeCompare(b.slot.start)) }));

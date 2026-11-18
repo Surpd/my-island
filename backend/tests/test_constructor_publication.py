@@ -367,7 +367,7 @@ class ConstructorPublicationTests(unittest.TestCase):
             classId=str(class5["id"]), classIds=[str(class5["id"])],
             audience={"kind": "available_slot", "grade": "5", "class_ids": [str(class5["id"])]})
         unresolved7 = self.lesson(id="unresolved7", classId=str(class7["id"]), classIds=[str(class7["id"])],
-            teacherId=str(self.other_teacher["id"]), audience={"kind": "classes", "class_ids": [str(class7["id"])]},
+            teacherId=str(self.other_teacher["id"]), room="702", audience={"kind": "classes", "class_ids": [str(class7["id"])]},
             audience_snapshot={"student_ids": []})
         draft = self.draft([confirmed5, unresolved7])
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
@@ -381,14 +381,17 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual([item["activity"] for item in student5_week["items"]], ["Math"])
         self.assertEqual(student7_week["items"], [])
 
-    def test_explicit_teacher_with_legacy_unverified_assignment_reason_is_informational(self):
+    def test_explicit_active_teacher_does_not_warn_about_missing_assignment_row(self):
         draft = self.draft([self.lesson(needsClarification=True,
             clarificationReason="Нет подтверждённого назначения преподавателя группе")])
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
         self.assertTrue(preview["can_publish"])
         self.assertEqual(preview["summary"]["ready_lessons"], 1)
         self.assertEqual(preview["summary"]["deferred_lessons"], 0)
-        self.assertIn("teacher_assignment_unverified", [item["code"] for item in preview["diagnostics"]])
+        diagnostic_codes = [item["code"] for item in preview["diagnostics"]]
+        self.assertNotIn("teacher_assignment_unverified", diagnostic_codes)
+        self.assertNotIn("review_required", diagnostic_codes)
+        self.assertEqual(preview["summary"]["info_count"], 0)
         unknown_teacher = self.lesson(id="unknown-teacher", teacherId="unknown",
             needsClarification=True, clarificationReason="Нет подтверждённого назначения преподавателя группе")
         unknown_draft = self.draft([unknown_teacher])
@@ -489,7 +492,7 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertIn("student_overlap", conducted_codes)
         self.assertIn("teacher_overlap", conducted_codes)
 
-    def test_lunch_scope_advisory_publishes_only_known_class(self):
+    def test_explicit_lunch_publishes_without_routine_scope_advisory(self):
         lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", needsClarification=True,
             clarificationReason="Уточните охват обеда: класс или отдельная группа")
         draft = self.draft([lunch])
@@ -497,7 +500,7 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertTrue(preview["can_publish"])
         self.assertEqual(preview["summary"]["ready_lessons"], 1)
         self.assertEqual(preview["summary"]["deferred_lessons"], 0)
-        self.assertIn("lunch_scope_advisory", [item["code"] for item in preview["diagnostics"]])
+        self.assertNotIn("lunch_scope_advisory", [item["code"] for item in preview["diagnostics"]])
 
         unknown = self.lesson(id="unknown-lunch", subject="Обед", specialMark="lunch", teacherId="",
             classId="unknown-class", classIds=["unknown-class"], needsClarification=True,
@@ -517,6 +520,37 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertFalse(any(item["code"] == "lunch_scope_advisory" for item in scope_preview["diagnostics"]))
         self.assertIn("missing_special_scope", [item["code"] for item in scope_preview["diagnostics"]])
 
+    def test_class_lunch_marker_ignores_teacher_room_and_instructional_audience_errors(self):
+        lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", teacherIds=[], room="",
+            classIds=[str(self.group["id"])], audience={"kind": "groups", "group_ids": ["removed-math-group"]},
+            needsClarification=True, clarificationReason="Уточните охват обеда: класс или отдельная группа")
+        draft = self.draft([lunch])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        codes = [item["code"] for item in preview["diagnostics"]]
+        self.assertEqual(preview["summary"]["ready_lessons"], 1)
+        self.assertEqual(preview["summary"]["deferred_lessons"], 0)
+        self.assertNotIn("lunch_scope_advisory", codes)
+        self.assertNotIn("audience_unresolved", codes)
+        self.assertNotIn("missing_teacher", codes)
+        self.assertNotIn("missing_room", codes)
+
+    def test_stale_math_group_for_another_subject_is_deferred_as_reference_review(self):
+        stale_math = self.database.create_group("Synthetic math split", "subject_group", subject="Математика",
+            subject_subgroup="1", base_class_name="9A")
+        self.database.create_membership(stale_math["id"], self.student["id"], "student", "synthetic")
+        lesson = self.lesson(subject="Биология", groupId=str(stale_math["id"]), groupIds=[str(stale_math["id"])],
+            audience={"kind": "groups", "group_ids": [str(stale_math["id"])]}, needsClarification=True,
+            clarificationReason="Для этого предмета не подтверждена учебная группа; прежняя математическая группа удалена")
+        draft = self.draft([lesson])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        issue = next(item for item in preview["diagnostics"] if item["code"] == "stale_group_subject_mismatch")
+        self.assertEqual(issue["severity"], "info")
+        self.assertIn("Биология", issue["message"])
+        self.assertIn("9A", issue["message"])
+        self.assertEqual(preview["summary"]["campus_lessons"], 0)
+        self.assertEqual(preview["summary"]["admin_only_lessons"], 1)
+        self.assertEqual(preview["deferred"][0]["cause_codes"], ["stale_group_subject_mismatch"])
+
     def test_explicit_groups_do_not_assert_exhaustive_coverage_of_other_pupils(self):
         first = self.database.create_group("english:1", "subject_group", base_class_name="9A")
         second = self.database.create_group("english:2", "subject_group", base_class_name="9A")
@@ -524,10 +558,11 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.database.create_membership(self.group["id"], third["id"], "student", "synthetic")
         self.database.create_membership(first["id"], self.student["id"], "student", "synthetic")
         self.database.create_membership(second["id"], self.other_student["id"], "student", "synthetic")
+        third_teacher = self.database.create_identity("teacher", "Third Synthetic Teacher")
         draft = self.draft([
             self.lesson(id="english1", subject="English", audience={"kind":"groups","group_ids":[str(first["id"])]}),
-            self.lesson(id="english2", subject="English", audience={"kind":"groups","group_ids":[str(second["id"])]}),
-            self.lesson(id="russian", subject="Russian", teacherId=str(self.other_teacher["id"]),
+            self.lesson(id="english2", subject="English", teacherId=str(self.other_teacher["id"]), room="902", audience={"kind":"groups","group_ids":[str(second["id"])]}),
+            self.lesson(id="russian", subject="Russian", teacherId=str(third_teacher["id"]), room="903",
                         audience={"kind":"students","student_ids":[str(third["id"])]}),
         ])
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
@@ -556,12 +591,14 @@ class ConstructorPublicationTests(unittest.TestCase):
     def test_lunch_does_not_capture_available_slot_or_adjacent_interval(self):
         draft = self.draft([
             self.lesson(id="grouped", audience={"kind":"groups","group_ids":[str(self.math["id"])]}),
-            self.lesson(id="other",subject="Other",teacherId=str(self.other_teacher["id"]),audience={"kind":"available_slot","class_ids":[str(self.group["id"])],"grade":"9"}),
-            self.lesson(id="lunch",subject="Lunch",specialMark="lunch",teacherId=""),
-            self.lesson(id="adjacent",subject="Adjacent",start="09:45",end="09:55",audience={"kind":"available_slot","class_ids":[str(self.group["id"])],"grade":"9"}),
+            self.lesson(id="other",subject="Other",teacherId=str(self.other_teacher["id"]),room="102",audience={"kind":"available_slot","class_ids":[str(self.group["id"])],"grade":"9"}),
+            self.lesson(id="lunch",subject="Lunch",specialMark="lunch",teacherId="stale-teacher",room="101",classId=str(self.group["id"]),classIds=[str(self.group["id"])]),
+            self.lesson(id="adjacent",subject="Adjacent",start="09:45",end="09:55",room="103",audience={"kind":"available_slot","class_ids":[str(self.group["id"])],"grade":"9"}),
         ])
         preview=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
         self.assertEqual(preview["summary"]["ready_lessons"],4)
+        self.assertNotIn("unknown_teacher",[item["code"] for item in preview["diagnostics"]])
+        self.assertNotIn("room_overlap",[item["code"] for item in preview["diagnostics"]])
         self.publish(draft)
         self.publish(draft,"week",week_start="2026-10-19")
         for student, expected in ((self.student,["Math","Adjacent"]),(self.other_student,["Other","Adjacent"])):
@@ -574,18 +611,33 @@ class ConstructorPublicationTests(unittest.TestCase):
         peer=self.database.create_identity("student","Synthetic 9B","9B")
         self.database.create_membership(other_class["id"],peer["id"],"student","synthetic")
         draft=self.draft([self.lesson(),self.lesson(id="review",classId=str(other_class["id"]),classIds=[str(other_class["id"])],
-            teacherId=str(self.other_teacher["id"]),audience={"kind":"classes","class_ids":[str(other_class["id"])]},needsClarification=True)])
+            teacherId=str(self.other_teacher["id"]),room="902",audience={"kind":"classes","class_ids":[str(other_class["id"])]},needsClarification=True)])
         preview=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
         self.assertEqual(preview["summary"]["ready_lessons"],1)
         self.assertEqual([d["lesson_id"] for d in preview["deferred"]],["review"])
 
-    def test_confirmed_joint_activity_preserves_students_and_is_one_teacher_item(self):
+    def test_matching_rows_are_not_joint_until_administrator_links_them(self):
         other_class=self.database.create_group("10A","class",base_class_name="10A")
         peer=self.database.create_identity("student","Synthetic 10A","10A")
         self.database.create_membership(other_class["id"],peer["id"],"student","synthetic")
         draft=self.draft([self.lesson(),self.lesson(id="joint",classId=str(other_class["id"]),classIds=[str(other_class["id"])],
             audience={"kind":"classes","class_ids":[str(other_class["id"])]})])
         p=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
+        self.assertEqual(p["summary"]["ready_lessons"],0)
+        self.assertIn("teacher_overlap",[i["code"] for i in p["diagnostics"]])
+
+    def test_explicit_joint_activity_link_preserves_each_class_audience(self):
+        from backend.services.constructor_resolution import apply_resolution, resolution_preview
+        other_class=self.database.create_group("10A","class",base_class_name="10A")
+        peer=self.database.create_identity("student","Synthetic 10A","10A")
+        self.database.create_membership(other_class["id"],peer["id"],"student","synthetic")
+        draft=self.draft([self.lesson(),self.lesson(id="joint",classId=str(other_class["id"]),classIds=[str(other_class["id"])],
+            audience={"kind":"classes","class_ids":[str(other_class["id"])]})])
+        ids=["l1","joint"]
+        resolution=resolution_preview(self.database,draft["id"],expected_revision=1,lesson_ids=ids)
+        draft=apply_resolution(self.database,draft["id"],expected_revision=1,preview_token=resolution["preview_token"],
+            lesson_ids=ids,action="joint",reason="Совместное занятие подтверждено администратором",actor_user_id="synthetic-admin")
+        p=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=draft["revision"])
         self.assertEqual(p["summary"]["ready_lessons"],2)
         self.assertIn("joint_activity",[i["code"] for i in p["diagnostics"]])
         self.publish(draft)
@@ -609,9 +661,10 @@ class ConstructorPublicationTests(unittest.TestCase):
             p=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
             self.assertEqual(p["summary"]["ready_lessons"],0)
             self.assertIn(code,[i["code"] for i in p["diagnostics"]])
-        draft=self.draft([self.lesson(),{**other,"needsClarification":True}])
+        draft=self.draft([self.lesson(),{**other,"teacherId":str(self.other_teacher["id"]),"room":"902","needsClarification":True}])
         p=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
-        self.assertEqual(p["summary"]["deferred_lessons"],2)
+        self.assertEqual(p["summary"]["ready_lessons"],1)
+        self.assertEqual(p["summary"]["deferred_lessons"],1)
         self.assertEqual({tuple(d["cause_codes"]) for d in p["deferred"]},{("review_required",)})
 
     def test_compile_backfills_details_without_mutating_authored_payload(self):
@@ -644,17 +697,92 @@ class ConstructorPublicationTests(unittest.TestCase):
         courses = [self.lesson(id=f"elective-{index}", subject=f"Elective {index}", activityType="elective",
                                activityNameSnapshot=f"Elective {index}",
                                classId=class_id, classIds=[class_id], eligibleGrades=[9],
-                               confirmedParticipantIds=[str(self.student["id"])],
+                               confirmedParticipantIds=[],
                                audience={"kind": "classes", "class_ids": [class_id]},
                                teacherId="", room=f"E-{index}") for index in range(3)]
         draft = self.draft(courses)
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
         self.assertNotIn("student_overlap", [item["code"] for item in preview["diagnostics"]])
 
+        confirmed_pair = self.draft([{**courses[0], "confirmedParticipantIds": [str(self.student["id"])]},
+            {**courses[1], "confirmedParticipantIds": [str(self.student["id"])]}])
+        confirmed_preview = preview_publication(self.database, confirmed_pair["id"], scope_kind="template", expected_revision=1)
+        self.assertNotIn("student_overlap", [item["code"] for item in confirmed_preview["diagnostics"]])
+        self.assertEqual(confirmed_pair["payload"]["lessons"][0]["confirmedParticipantIds"], [str(self.student["id"])])
+
         assigned = {**courses[0], "teacherId": str(self.teacher["id"])}
         conflicting = self.draft([assigned, {**courses[1], "teacherId": str(self.teacher["id"]), "room": "E-2"}])
         conflict_preview = preview_publication(self.database, conflicting["id"], scope_kind="template", expected_revision=1)
         self.assertIn("teacher_overlap", [item["code"] for item in conflict_preview["diagnostics"]])
+        room_conflict = self.draft([{**courses[0], "room": "shared"}, {**courses[1], "room": "shared"}])
+        room_preview = preview_publication(self.database, room_conflict["id"], scope_kind="template", expected_revision=1)
+        self.assertIn("room_overlap", [item["code"] for item in room_preview["diagnostics"]])
+
+    def test_optional_activities_are_available_without_personal_membership(self):
+        elective = self.lesson(id="shared-elective", subject="Проектная лаборатория", activityType="elective",
+            activityNameSnapshot="Проектная лаборатория", classId=str(self.group["id"]), classIds=[str(self.group["id"])],
+            audience={"kind": "students", "student_ids": []}, eligibleGrades=[9], confirmedParticipantIds=[str(self.student["id"])],
+            teacherId="", teacherIds=[], room="")
+        club = self.lesson(id="shared-club", day=1, subject="Творческая мастерская", activityType="club",
+            activityNameSnapshot="Творческая мастерская", classId="", classIds=[], displayClassIds=[],
+            audience={"kind": "students", "student_ids": []}, eligibleGrades=[9], teacherId="", teacherIds=[], room="")
+        draft = self.draft([elective, club])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertTrue(preview["can_publish"], preview["blockers"])
+        codes = [item["code"] for item in preview["diagnostics"]]
+        self.assertNotIn("audience_unresolved", codes)
+        self.assertNotIn("missing_teacher", codes)
+        self.assertNotIn("missing_room", codes)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        projection = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        self.assertFalse(any(item.get("activity") in {"Проектная лаборатория", "Творческая мастерская"} for item in projection["items"]))
+        self.assertEqual([(item["type"], item["title"]) for item in projection["optional_activities"]], [
+            ("elective", "Проектная лаборатория"), ("club", "Творческая мастерская")])
+        self.assertIn(str(self.student["id"]), preview["published_source"]["payload"]["lessons"][0]["confirmedParticipantIds"])
+
+    def test_event_has_projection_priority_without_mutating_overlapping_source_lesson(self):
+        event = self.lesson(id="museum", subject="Экскурсия в музей", kind="event", activityType="event",
+            day=0, period=0, start="09:15", end="10:15", teacherId="", teacherIds=[], room="", place="Музей",
+            audience={"kind": "classes", "class_ids": [str(self.group["id"])]}, classId=str(self.group["id"]),
+            classIds=[str(self.group["id"])])
+        draft = self.draft([self.lesson(), event])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertTrue(preview["can_publish"], preview["blockers"])
+        self.assertEqual(preview["summary"]["ready_lessons"], 2)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        projected = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        math = next(item for item in projected["items"] if item.get("activity") == "Math")
+        museum = next(item for item in projected["items"] if item.get("activity") == "Экскурсия в музей")
+        self.assertEqual((math["start_time"], math["end_time"]), ("09:00", "09:15"))
+        self.assertEqual((museum["start_time"], museum["end_time"]), ("09:15", "10:15"))
+        self.assertEqual(len(preview["published_source"]["records"]), 2)
+
+    def test_event_can_be_outside_the_regular_bell_grid(self):
+        event = self.lesson(id="evening-meeting", subject="Вечерняя встреча", kind="event", activityType="event",
+            day=0, period=0, start="18:00", end="19:30", teacherId="", teacherIds=[], room="",
+            audience={"kind": "classes", "class_ids": [str(self.group["id"])]}, classId=str(self.group["id"]),
+            classIds=[str(self.group["id"])])
+        draft = self.draft([event])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertTrue(preview["can_publish"], preview["blockers"])
+        self.assertNotIn("missing_teacher", [item["code"] for item in preview["diagnostics"]])
+        self.assertNotIn("missing_room", [item["code"] for item in preview["diagnostics"]])
+
+    def test_all_day_event_is_projected_for_its_confirmed_class(self):
+        event = self.lesson(id="all-day-event", subject="Школьный праздник", kind="event", activityType="event",
+            allDay=True, start="00:00", end="23:59", teacherId="", teacherIds=[], room="",
+            audience={"kind": "classes", "class_ids": [str(self.group["id"])]},
+            classId=str(self.group["id"]), classIds=[str(self.group["id"])])
+        draft = self.draft([event])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertEqual(preview["summary"]["ready_lessons"], 1)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        projected = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        self.assertEqual([(item["activity"], item["start_time"], item["end_time"])
+                          for item in projected["items"]], [("Школьный праздник", "00:00", "23:59")])
 
     def test_compatible_duplicate_without_teacher_uses_its_confirmed_source_copy(self):
         draft=self.draft([self.lesson(id="a-unknown",teacherId=""),self.lesson(id="z-known")])
@@ -666,7 +794,7 @@ class ConstructorPublicationTests(unittest.TestCase):
 
     def test_parallel_groups_and_remaining_memberships_runtime(self):
         grouped = self.lesson(audience={"kind": "groups", "group_ids": [str(self.math["id"])]})
-        remainder = self.lesson(id="remaining", subject="Other", teacherId=str(self.other_teacher["id"]),
+        remainder = self.lesson(id="remaining", subject="Other", teacherId=str(self.other_teacher["id"]), room="902",
             audience={"kind": "available_slot", "grade": "9", "class_ids": [str(self.group["id"])]})
         draft = self.draft([grouped, remainder])
         self.publish(draft)

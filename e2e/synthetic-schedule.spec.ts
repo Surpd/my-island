@@ -41,7 +41,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await expect(page.locator('.constructor-head')).toHaveCount(7);
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(experiment.grade5ClassId);
-  await page.getByRole('button', { name: 'Пятница' }).click();
+  await page.locator('.constructor-day-tabs').getByRole('button', { name: 'Пятница' }).click();
   await expect(page.locator('.constructor-card').filter({ hasText: 'Нет урока' })).toHaveCount(1);
   await expect(page.locator('.constructor-card').filter({ hasText: 'замена' })).toHaveCount(1);
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption('');
@@ -54,7 +54,13 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   const fitsViewport = await page.locator('.constructor-grid-wrap').evaluate((board) => board.scrollWidth <= board.clientWidth + 1);
   expect(fitsViewport).toBeTruthy();
   await page.locator('.constructor-issue-count').click();
+  await page.getByText(/Неизвестен состав групп или классов:/).first().click();
   await expect(page.locator('.constructor-conflict-panel').getByText(/Неизвестен состав групп или классов:/).first()).toBeVisible();
+  const sourceWeek = page.locator('.constructor-source-week');
+  await sourceWeek.getByText(/Полная таблица исходной недели/).click();
+  await expect(sourceWeek.locator('tbody tr')).toHaveCount(lessons.length);
+  await expect(sourceWeek.getByText('Пустая группа без участников')).toBeVisible();
+  await page.screenshot({ path: '.local-test/constructor-source-week.png', fullPage: true });
   await expect(page.locator('.constructor-unplaced')).toHaveCount(0);
   await page.getByRole('button', { name: 'Закрыть список проблем' }).click();
   await page.screenshot({ path: '.local-test/constructor-filled-week.png', fullPage: true });
@@ -76,6 +82,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await page.keyboard.press('Control+c');
   await page.locator(`[data-cell="${3 * periods + 4}:1"]`).click();
   await page.keyboard.press('Escape');
+  page.once('dialog', (dialog) => dialog.accept());
   await page.keyboard.press('Control+v');
   await expect(page.locator(`[data-cell="${3 * periods + 4}:1"] .constructor-card`).filter({ hasText: 'Англ' })).toHaveCount(1);
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -95,10 +102,31 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await page.screenshot({ path: '.local-test/constructor-1366-fit.png' });
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.getByRole('group', { name: 'Режим просмотра' }).getByRole('button', { name: 'День' }).click();
-  await page.getByRole('button', { name: 'Пятница' }).click();
+  await page.locator('.constructor-day-tabs').getByRole('button', { name: 'Пятница' }).click();
   await page.locator('[data-cell="4:2"] [data-lesson-id="e2e-event"]').click();
   await expect(page.locator('[data-cell="5:3"] [data-lesson-id="e2e-event"]')).toHaveCount(1);
   await page.screenshot({ path: '.local-test/constructor-event-1920.png' });
+});
+
+test('full admin source-week table lists every synthetic lesson and status', async ({ page, registerExperiment }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const experiment = await createSyntheticFilledWeek(page.request, registerExperiment);
+  const lessons = experiment.payload.lessons as { id: string; subject: string }[];
+  await page.goto('/admin/schedule/constructor?role=admin');
+  await page.getByRole('group', { name: 'Разделы черновиков' }).getByRole('button', { name: /Тестовые/ }).click();
+  await page.locator('.constructor-draft').filter({ hasText: experiment.name }).locator('.constructor-draft-open').click();
+  await page.getByRole('button', { name: 'Таблица недели' }).click();
+  const sourceWeek = page.getByRole('dialog', { name: 'Полная таблица исходной недели' });
+  await expect(sourceWeek.locator('tbody tr')).toHaveCount(lessons.length);
+  await expect(sourceWeek.getByRole('row').nth(1)).toContainText(lessons[0].subject);
+  await expect(sourceWeek.getByRole('columnheader', { name: 'Статус и проекция Campus' })).toBeVisible();
+  await sourceWeek.locator('tbody tr:nth-child(n+21)').evaluateAll((rows) => rows.forEach((row) => { (row as HTMLElement).style.display = 'none'; }));
+  await sourceWeek.locator('.constructor-source-week-scroll').evaluate((node) => {
+    (node as HTMLElement).style.maxHeight = 'none';
+    (node as HTMLElement).style.overflow = 'visible';
+  });
+  await sourceWeek.locator('table').screenshot({ path: '.local-test/constructor-source-week-focused.png' });
+  await sourceWeek.getByRole('button', { name: 'Закрыть таблицу недели' }).click();
 });
 
 test('form creates one mixed-class lesson and one multi-slot event that survive reopening', async ({ page }) => {
@@ -112,6 +140,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.goto('/admin/schedule/constructor?role=admin');
   await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
   await page.locator('[data-cell="0:0"]').click();
+  await page.getByRole('button', { name: 'Открыть редактор расписания' }).click();
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Английский язык');
   await page.locator('.constructor-create-form').getByRole('button', { name: /Учебные группы/ }).click();
@@ -127,8 +156,12 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await expect(page.locator(`[data-cell="0:0"] [data-lesson-id="${mixedId}"]`)).toContainText('практика');
 
   await page.locator('[data-cell="4:2"]').click();
-  await page.getByRole('group', { name: 'Способ создания' }).getByRole('button', { name: 'Событие', exact: true }).click();
+  await page.getByRole('group', { name: 'Что добавляем?' }).getByRole('button', { name: 'Событие', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Поездка в музей');
+  await page.locator('.constructor-create-form').getByLabel('На весь день').check();
+  await expect(page.locator('.constructor-create-form input[type="time"]').first()).toBeDisabled();
+  await expect(page.locator('.constructor-create-form input[type="time"]').first()).toHaveValue('00:00');
+  await page.locator('.constructor-create-form').getByLabel('На весь день').uncheck();
   // Preserve the event's multi-class audience instead of narrowing it to one class.
   await page.locator('.constructor-create-form').getByRole('checkbox', { name: '7 класс', exact: true }).check();
   await page.locator('.constructor-create-form').getByRole('checkbox', { name: '8 класс', exact: true }).check();
@@ -140,6 +173,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.getByRole('button', { name: 'Добавить событие' }).click();
   const eventId = await page.locator('[data-cell="4:2"] .constructor-card').getAttribute('data-lesson-id');
   for (const cell of ['4:2', '4:3', '5:2', '5:3']) await expect(page.locator(`[data-cell="${cell}"] [data-lesson-id="${eventId}"]`)).toHaveCount(1);
+  await page.getByRole('button', { name: 'Закрыть панель' }).click();
   await page.getByRole('button', { name: /Сохранить/ }).first().click();
   await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await page.reload();

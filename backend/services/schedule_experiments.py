@@ -290,7 +290,7 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     if lesson.get("activityType") == "elective":
         return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     mark = _lesson_special_mark(lesson)
-    if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True:
+    if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping):
         return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     if (_is_lunch_lesson(lesson) and lesson.get("needsClarification") is True
             and str(lesson.get("clarificationReason") or "").strip() == "Уточните охват обеда: класс или отдельная группа"):
@@ -521,7 +521,8 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         rule = _lesson_audience(lesson)
         interval = _lesson_interval(lesson, slots)
         base, reason = resolve_explicit(rule)
-        if not rule["kind"] and (lesson.get("kind") == "event" or _lesson_special_mark(lesson) == "no_lesson"
+        if not rule["kind"] and (_lesson_special_mark(lesson) == "no_lesson"
+                                  or lesson.get("kind") == "event" and lesson.get("informational") is True
                                   or _is_lunch_lesson(lesson) and lesson.get("needsClarification") is True):
             reason = None  # An informational event has no assigned students.
         if rule["kind"] == "available_slot" and not interval:

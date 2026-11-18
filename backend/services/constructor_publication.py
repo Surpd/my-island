@@ -68,7 +68,7 @@ class _TransactionDatabase:
 
 
 def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: bool = False) -> bool:
-    if independent_practice or lesson.get("activityType") in {"club", "event"}:
+    if independent_practice or lesson.get("activityType") in {"club", "elective", "event"}:
         return False
     if lesson.get("kind") == "event" or lesson.get("informational") is True:
         return False
@@ -171,15 +171,11 @@ def _change_items(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[d
 
 
 _ISSUE_MESSAGES = {
-    "teacher_assignment_unverified": "Нагрузка преподавателя не подтверждена отдельно; сохранено явно указанное назначение",
-    "lunch_scope_advisory": "Обед показан как информационная отметка указанного класса; состав отдельной группы не подтверждён",
-    "joint_activity": "Совместное занятие: совпадают предмет, преподаватели, точное время и кабинет; исходные аудитории сохранены",
+    "joint_activity": "Совместное занятие подтверждено явной связью; исходные аудитории сохранены",
     "joint_activity_unconfirmed": "Возможно совместное занятие, но общий кабинет не подтверждён; нельзя автоматически объединить назначения преподавателя",
     "review_required": "Занятие требует проверки",
     "audience_unresolved": "Состав участников не подтверждён или изменился",
     "unknown_teacher": "Указанный преподаватель отсутствует или неактивен",
-    "student_overlap": "У одних учеников одновременно несколько занятий",
-    "teacher_overlap": "Преподаватель одновременно назначен на несколько занятий",
     "unsupported_partial_cohort": "Нельзя безопасно определить оставшуюся часть параллели",
     "missing_runtime_grade": "Не определена параллель участников",
     "empty_activity": "Не указано название занятия",
@@ -194,6 +190,10 @@ _ISSUE_MESSAGES = {
     "stale_base": "Базовая версия изменилась: обновите черновик перед публикацией",
     "missing_base": "Перед публикацией недели нужен опубликованный базовый шаблон",
     "projection_mismatch": "Canonical-проекция не совпадает с подтверждённым составом занятия",
+    "teacher_overlap": "Конфликт: один преподаватель назначен одновременно на разные занятия; эти записи не входят в Campus-проекцию",
+    "student_overlap": "Конфликт: аудитория пересекается по времени; эти записи не входят в Campus-проекцию",
+    "room_overlap": "Конфликт: один кабинет назначен одновременно на разные занятия; эти записи не входят в Campus-проекцию",
+    "joint_activity_unconfirmed": "Конфликт: совместное занятие не подтверждено явной связью; эти записи не входят в Campus-проекцию",
 }
 
 
@@ -304,7 +304,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teachers = {str(r["id"]): str(r["display_name"]) for r in database.execute(connection,
             "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()}
         groups = {str(r["id"]): dict(r) for r in database.execute(connection,
-            "SELECT id,name,display_name,group_type,base_class_name,role FROM groups WHERE canonical IS TRUE").fetchall()}
+            "SELECT id,name,display_name,group_type,base_class_name,role,subject FROM groups WHERE canonical IS TRUE").fetchall()}
         students = {str(r["id"]): str(r["class_name"] or "") for r in database.execute(connection,
             "SELECT id,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
     class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()}
@@ -336,7 +336,21 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if lesson.get("deferred") or any(e["type"]=="defer" for e in exceptions):
             block("explicit_deferred", "Запись явно отложена администратором")
         result = audience.get(lesson_id) or {}
-        if result.get("status") != "ok" or result.get("needs_recalculation"):
+        special = lesson.get("specialMark")
+        activity_type = str(lesson.get("activityType") or "lesson")
+        is_lunch = special == "lunch" or activity_type == "lunch"
+        is_optional = activity_type in {"club", "elective"}
+        is_event = activity_type == "event" or lesson.get("kind") == "event"
+        informational_unassigned_event = is_event and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping)
+        display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
+        lunch_scope_confirmed = is_lunch and (
+            bool(display_classes) and all(str(group_id) in groups and groups[str(group_id)]["group_type"] == "class"
+                                          for group_id in display_classes)
+            or result.get("status") == "ok" and _lesson_audience(lesson).get("kind") in {"groups", "classes", "available_slot", "legacy_remaining"}
+        )
+        # Lunch is a visual marker in the class grid. Its audience is the
+        # displayed class, never a separately resolved instructional roster.
+        if not lunch_scope_confirmed and not is_optional and (result.get("status") != "ok" or result.get("needs_recalculation")):
             block("audience_unresolved", str(result.get("reason") or "Audience requires confirmation or recalculation"))
         interval = _lesson_interval(lesson, payload.get("slots") or [])
         try:
@@ -347,47 +361,62 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             block("invalid_slot", "Valid weekday and time interval required")
             continue
         subject = str(lesson.get("subject") or lesson.get("activity") or "").strip()
-        special = lesson.get("specialMark")
         if not subject and special not in {"lunch", "no_lesson"}:
             block("empty_activity", "Activity name is required")
         teacher_ids = sorted({str(x) for x in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
+        if is_lunch:
+            # Stale teacher data on an informational lunch mark has no staffing
+            # meaning and must not block the class-grid marker.
+            teacher_ids = []
         responsible_source = lesson.get("responsible_teacher_ids") or lesson.get("responsibleTeacherIds") or teacher_ids
         if not isinstance(responsible_source, (list, tuple, set)):
             responsible_source = teacher_ids
         responsible_teacher_ids = sorted({str(value) for value in responsible_source if value})
         teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
-        display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
+        rule_groups = _lesson_audience(lesson).get("group_ids") or []
+        stale_math_groups = [groups[str(group_id)] for group_id in rule_groups if str(group_id) in groups
+            and str(groups[str(group_id)].get("subject") or "").strip().casefold() == "математика"
+            and str(lesson.get("subject") or "").strip().casefold() != "математика"]
         class_modes = _lesson_day_modes(payload, lesson, class_grades)
         online_only = bool(class_modes) and class_modes == {"online"}
         sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids), class_grades)
-        if needs_review:
-            # Imported staffing checks do not make an explicit student audience
-            # ambiguous. Keep the diagnostic without inventing any teacher.
+        if stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
+            class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
+                            for group_id in display_classes if str(group_id) in groups]
+            blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
+                "message": f"Ссылка ведёт в {', '.join(str(group.get('display_name') or group.get('name')) for group in stale_math_groups)} для математики, а предмет — {subject or 'не указан'}. Класс размещения: {', '.join(class_labels) or 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён."})
+        elif needs_review:
+            # An explicit, active teacher is sufficient for publication. A
+            # separate workload row is not required evidence for the lesson.
             if review_reason == "Не подтверждён преподаватель" and not teacher_ids:
                 pass  # The missing_teacher diagnostic below records this once.
             elif (review_reason == "Нет подтверждённого назначения преподавателя группе"
                   and teacher_evidence and not teacher_evidence - teachers.keys()):
-                blockers.append({"code": "teacher_assignment_unverified", "lesson_id": lesson_id, "severity": "info"})
-            elif (special == "lunch" and review_reason == "Уточните охват обеда: класс или отдельная группа"
-                  and display_classes and all(str(g) in groups and groups[str(g)]["group_type"] == "class" for g in display_classes)):
-                blockers.append({"code": "lunch_scope_advisory", "lesson_id": lesson_id, "severity": "info"})
+                pass  # Routine workload metadata must not become a publication warning.
+            elif is_lunch and lunch_scope_confirmed:
+                pass
+            elif is_optional:
+                pass
             else:
                 block("review_required", review_reason)
         if teacher_evidence - teachers.keys():
             block("unknown_teacher", "An assigned teacher is missing or inactive")
-        if not teacher_ids and not sdep_independent and _requires_physical_teacher(lesson, practice):
+        if not teacher_ids and not sdep_independent and not is_optional and not is_event and _requires_physical_teacher(lesson, practice):
             blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
                              "message": "Преподаватель занятия не подтверждён", "severity": "info"})
         if practice:
             teacher_ids = []
-        if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
+        if not is_lunch and special != "no_lesson" and not informational_unassigned_event:
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
-                              "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
-                              "subject": subject, "room": room_key(lesson.get("room")),
+                              "teachers": set(teacher_ids), "students": set() if is_optional else set(result.get("student_ids") or []),
+                              "subject": subject, "room": "" if practice else room_key(lesson.get("room")),
+                              "activity_type": "event" if is_event else activity_type,
                               "sdep_independent": sdep_independent})
         rule = _lesson_audience(lesson)
         grade = str(rule.get("grade") or lesson.get("grade_scope") or "")
+        if not grade and is_optional:
+            grade = ",".join(sorted({str(value) for value in lesson.get("eligibleGrades") or []}, key=lambda value: int(value) if value.isdigit() else 99))
         class_ids = rule.get("class_ids") or []
         display_class_ids = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
         if not grade:
@@ -398,12 +427,26 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             grades = {m.group(1) for sid in result.get("student_ids") or []
                       for m in [re.match(r"\s*(\d+)", students.get(str(sid), ""))] if m}
             grade = ",".join(sorted(grades, key=int))
-        if not grade and result.get("student_ids"):
+        if not grade and result.get("student_ids") and not is_optional:
             block("missing_runtime_grade", "Student audience has no canonical grade scope")
         group_ids = list(rule.get("group_ids") or [])
         audience_rule: dict[str, Any]
         kind = rule.get("kind")
-        if kind in {"groups", "classes"}:
+        if is_lunch:
+            # A lunch marker is placed on the visible class, even when its
+            # saved audience rule names an instructional subgroup.
+            raw_lunch_classes = [str(value) for value in (display_classes or rule.get("class_ids") or [])]
+            if any(value not in groups for value in raw_lunch_classes):
+                block("unknown_class", "Lunch marker has an unknown canonical class")
+            lunch_classes = [value for value in raw_lunch_classes
+                             if str(value) in groups and groups[str(value)]["group_type"] == "class"]
+            group_ids = lunch_classes
+            audience_rule = {"kind": "groups", "group_ids": lunch_classes}
+            if not raw_lunch_classes and grade:
+                audience_rule = {"kind": "whole_grade", "grade": grade}
+            elif not lunch_classes and not grade:
+                block("missing_special_scope", "Lunch requires a canonical class or parallel")
+        elif kind in {"groups", "classes"}:
             group_ids = group_ids if kind == "groups" else class_ids
             audience_rule = {"kind": "groups", "group_ids": group_ids}
             if not group_ids and grade:
@@ -420,7 +463,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                     block("unsupported_partial_cohort", "Remaining audience spans only part of a parallel; confirm an explicit participant list")
         elif kind == "students":
             audience_rule = {"kind": "students", "include_student_ids": rule.get("student_ids") or []}
-        elif lesson.get("kind") == "event" and lesson.get("informational") is True:
+        elif informational_unassigned_event:
             audience_rule = {"kind": "students", "include_student_ids": []}
         else:
             # Informational events, lunch and explicit no-lesson have a grid
@@ -453,7 +496,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             "class_ids": display_class_ids, "assignment_kind": kind or special or "unspecified",
             "teachers": [teachers[t] for t in teacher_ids if t in teachers],
             "groups": [str(groups[g]["name"]) for g in (group_ids or class_ids or display_class_ids) if g in groups]}
-        if not online_only and not sdep_independent and not str(lesson.get("room") or "").strip():
+        if special not in {"lunch", "no_lesson"} and not is_optional and not is_event and not online_only and not sdep_independent and not str(lesson.get("room") or "").strip():
             blockers.append({"code": "missing_room", "lesson_id": lesson_id,
                              "message": "Кабинет не указан", "severity": "info"})
         role = "explicit_no_lesson" if special == "no_lesson" else "residual" if special == "lunch" or kind in {"available_slot", "legacy_remaining"} else "primary"
@@ -466,7 +509,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         constructor_details = {**deepcopy(preserved_metadata.get("constructor_details") or {}), **{k: deepcopy(lesson[k]) for k in (
             "description", "place", "format", "activityCatalogId", "activityNameSnapshot",
             "eligibleGrades", "confirmedParticipantIds", "electiveDirection", "audience_snapshot",
-            "kind", "informational", "sdepIndependent") if k in lesson}}
+            "kind", "informational", "sdepIndependent", "allDay") if k in lesson}}
         assignment = {"activity": "NO_LESSON" if special == "no_lesson" else subject or "Обед",
                       "role": role, "audience": {"type": "canonical_groups", "canonical_group_ids": group_ids},
                       "canonical_group_ids": group_ids, "teacher_ids": teacher_ids,
@@ -477,7 +520,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                                    "audience_coverage": "explicit",
                                    "teachers": [teachers[t] for t in teacher_ids if t in teachers],
                                    "constructor_lesson_id": lesson_id,
-                                   "activity_type": lesson.get("activityType") or "lesson",
+                                   "activity_type": "event" if is_event else activity_type,
                                    **({"activity_format":"independent_practice", "responsible_teacher_ids":responsible_teacher_ids,
                                        "responsible_teachers":[teachers[t] for t in responsible_teacher_ids if t in teachers]} if practice else {}),
                                    "special_mark": special}}
@@ -494,14 +537,26 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if len(target["assignments"]) > 1:
             target["mode"] = "PARALLEL"
     joint_rows: dict[str, list[str]] = {}
-    for row in occupancy:
-        if row["teachers"] and row["room"]:
-            joint_id = _hash([row["day"],row["interval"],row["subject"],sorted(row["teachers"]),row["room"]])
-            joint_rows.setdefault(joint_id, []).append(row["id"])
-    joint_by_lesson = {lid: joint for joint,lids in joint_rows.items() if len(lids)>1 for lid in lids}
-    for joint,lids in joint_rows.items():
-        if len(lids)>1:
-            blockers.append({"code":"joint_activity","severity":"info","lesson_id":lids[0],"related_lesson_ids":lids})
+    joint_by_lesson: dict[str, str] = {}
+    for lesson in lessons:
+        lesson_id = str(lesson.get("id") or "")
+        receipts = validated_exceptions(lessons, lesson, scope=reference_week or payload.get("week_start") or "template", slots=payload.get("slots") or [])
+        joint_receipt = next((item for item in receipts if item.get("type") == "joint"), None)
+        link = str(lesson.get("jointActivityId") or (joint_receipt or {}).get("id") or "")
+        if link:
+            joint_rows.setdefault(link, []).append(lesson_id)
+    occupancy_by_id = {row["id"]: row for row in occupancy}
+    for link, linked_ids in joint_rows.items():
+        joint_occupancy = [occupancy_by_id[lid] for lid in linked_ids if lid in occupancy_by_id]
+        signatures = {(row["day"], row["interval"], row["subject"], tuple(sorted(row["teachers"])), row["room"])
+                      for row in joint_occupancy}
+        explicitly_linked = len(linked_ids) == len(joint_occupancy) and len(linked_ids) > 1
+        if explicitly_linked and len(signatures) == 1 and joint_occupancy[0]["teachers"] and joint_occupancy[0]["room"]:
+            # A shared authored link or revision-bound administrator receipt is
+            # required. Matching names/time/teacher/room alone never merges work.
+            for lid in linked_ids:
+                joint_by_lesson[lid] = link
+            blockers.append({"code": "joint_activity", "severity": "info", "lesson_id": linked_ids[0], "related_lesson_ids": linked_ids})
     for value in blocks.values():
         for assignment in value["assignments"]:
             lid = assignment["metadata"]["constructor_lesson_id"]
@@ -533,13 +588,17 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             both_independent_sdep = left["sdep_independent"] and right["sdep_independent"]
             if both_independent_sdep:
                 continue
-            if left["students"] & right["students"]:
+            event_overlay = left.get("activity_type") == "event" or right.get("activity_type") == "event"
+            if left["students"] & right["students"] and not event_overlay:
                 blockers.append({"code": "student_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
                                  "message": f"Conflicting student audience overlaps lesson {left['id']}"})
             if left["teachers"] & right["teachers"]:
                 code = "joint_activity_unconfirmed" if left["subject"] == right["subject"] and left["interval"] == right["interval"] and left["teachers"] == right["teachers"] and (not left["room"] or not right["room"]) else "teacher_overlap"
                 blockers.append({"code": code, "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
                                  "message": f"Teacher is assigned to simultaneous different activities ({left['id']})"})
+            if left["room"] and left["room"] == right["room"]:
+                blockers.append({"code": "room_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
+                                 "message": f"Room is assigned to simultaneous different activities ({left['id']})"})
     # Defer complete destination blocks and all pieces of a moved origin block.
     # Both sides of a collision are excluded; ordering never picks a winner.
     critical_codes = {"duplicate_lesson_id", "missing_lesson_id", "missing_origin_block", "invalid_slot", "protected", "protected_base"}
@@ -549,7 +608,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         lid = issue.get("lesson_id")
         issue["context"] = contexts.get(lid, {})
         issue["block_key"] = lesson_keys.get(lid)
-        if issue["severity"] == "conflict":
+        if issue["severity"] == "conflict" or issue["code"] == "stale_group_subject_mismatch":
             excluded.update(lesson_keys[i] for i in issue.get("related_lesson_ids", [lid]) if i in lesson_keys)
     changed = True
     while changed:
@@ -568,13 +627,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     for lid, key in sorted(lesson_keys.items()):
         if key in excluded:
             connected_keys = connected_units({key})
-            causes = [issue for issue in blockers if issue["severity"]=="conflict" and
+            causes = [issue for issue in blockers if (issue["severity"]=="conflict" or issue["code"]=="stale_group_subject_mismatch") and
                       any(lesson_keys.get(i) in connected_keys for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]))]
             if not causes:
                 slot = (blocks[key]["weekday"],blocks[key]["slot"]["start"],blocks[key]["slot"]["end"])
                 unknown_keys = {k for k in excluded if not blocks[k].get("grade_scope") and
                                 (blocks[k]["weekday"],blocks[k]["slot"]["start"],blocks[k]["slot"]["end"])==slot}
-                causes = [issue for issue in blockers if issue["severity"]=="conflict" and issue.get("block_key") in unknown_keys]
+                causes = [issue for issue in blockers if (issue["severity"]=="conflict" or issue["code"]=="stale_group_subject_mismatch") and issue.get("block_key") in unknown_keys]
             deferred.append({"lesson_id": lid, "block_key": key, "action": "excluded", "context": contexts[lid],
                 "cause_codes": sorted({i["code"] for i in causes}),
                 "cause_lesson_ids": sorted({i for issue in causes for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]) if i}),
@@ -683,7 +742,12 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
                             "message": f"Режимы дня для {conflict['grade']} параллели различаются; выберите общий режим"})
     for entry in deferred:
         entry["action"]="retained_unresolved"
-        entry["reason"]="Связанный блок будет сохранён в опубликованном исходнике как нерешённый; безопасные назначения ожидают уточнения"
+        cause_codes = entry.get("cause_codes") or []
+        messages = [next((issue.get("message") for issue in diagnostics if issue.get("code") == code and issue.get("message")), None)
+                    or _ISSUE_MESSAGES.get(code) for code in cause_codes]
+        messages = [message for message in messages if message]
+        entry["reason"] = ("Не включено в персональный Campus: " + " · ".join(dict.fromkeys(messages))) if messages else (
+            "Не включено в персональный Campus: аудитория не подтверждена; запись сохранена в административном источнике")
     for issue in diagnostics:
         if issue.get("action")=="excluded":issue["action"]="retained_unresolved"
     if version and base_id != version["version_id"]:

@@ -120,8 +120,10 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
 test('publication preview filters remarks and shows readable lesson context and deferred actions', async ({ page }) => {
   const { dialog } = await openPublicationPanel(page, { critical: true });
   await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
-  await expect(dialog.getByText('Не подтверждена аудитория занятия.')).toBeVisible();
-  await expect(dialog.getByText('Пн · 09:00–09:45 · Математика · Преподаватели: Анна Учитель · Группы: 7 класс').first()).toBeVisible();
+  const criticalGroup = dialog.locator('.constructor-publication-diagnostics details').filter({ hasText: 'review_required' });
+  await criticalGroup.locator('summary').click();
+  await expect(criticalGroup.getByText('Не подтверждена аудитория занятия.', { exact: true })).toBeVisible();
+  await expect(criticalGroup.getByText('Пн · 09:00–09:45 · Математика · Преподаватели: Анна Учитель · Группы: 7 класс')).toBeVisible();
   await expect(dialog.getByText(/teacher-fixture|group-fixture|lesson-critical/)).toHaveCount(0);
 
   await dialog.getByRole('button', { name: /Замечания/ }).click();
@@ -132,6 +134,24 @@ test('publication preview filters remarks and shows readable lesson context and 
   await expect(dialog.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
   await expect(dialog.getByText('Назначение исключено из Campus этой исторической версии.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toBeDisabled();
+});
+
+test('diagnostics collapse by cause and copy a sanitized report with lesson links', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { document.documentElement.dataset.copiedReport = text; } } });
+  });
+  const { dialog } = await openPublicationPanel(page);
+  await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
+  await expect(dialog.getByRole('button', { name: 'Скопировать отчёт проверки' })).toBeVisible();
+  const group = dialog.getByText(/Конфликт · schedule_overlap · 1/);
+  await expect(group).toBeVisible();
+  await dialog.getByRole('button', { name: 'Скопировать отчёт проверки' }).click();
+  await expect(dialog.getByText(/Отчёт проверки скопирован/)).toBeVisible();
+  const copiedReport = await page.locator('html').getAttribute('data-copied-report');
+  expect(copiedReport).toContain('schedule_overlap\t1');
+  expect(copiedReport).toContain('#lesson-lesson-conflict');
+  expect(copiedReport).not.toContain('Нужно проверить пересечение занятий');
+  await page.screenshot({ path: 'test-results/schedule-publication-preview.png', fullPage: true });
 });
 
 test('read-only preview remains available and cannot publish', async ({ page }) => {
