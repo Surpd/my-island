@@ -531,7 +531,7 @@ def _select_school_template_locked(database: Database, draft_id: str, *, expecte
                 raise ValueError("Снимок выбранной версии не найден; безопасное переключение остановлено.")
         history_sql = ("INSERT INTO school_template_selection_history "
             "(id,previous_draft_id,previous_revision,previous_payload,previous_payload_sha256,next_draft_id,next_revision,next_payload,next_payload_sha256,actor_user_id,created_at) "
-            f"VALUES (?,?,?,{json_parameter},?,?,{json_parameter},?,?,?,?)")
+            f"VALUES (?,?,?,{json_parameter},?,?,?,{json_parameter},?,?,?)")
         database.execute(connection, history_sql, (history_id, previous["id"] if previous else None,
             previous["revision"] if previous else None, _encoded(previous["payload"]) if previous else None,
             _digest(previous["payload"]) if previous else None, candidate["id"], candidate["revision"],
