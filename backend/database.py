@@ -4141,6 +4141,12 @@ class Database:
 
             def match_evidence(row: dict[str, Any], item: dict[str, Any]) -> tuple[int, int]:
                 """Return a conservative identity score and comparable result count."""
+                old_date = canonical_date(row.get("assessed_on"))
+                new_date = canonical_date(item.get("assessed_on"))
+                # Never reuse an assessment identity for two different known dates,
+                # even when a legacy external_key happens to match.
+                if old_date and new_date and old_date != new_date:
+                    return 0, 0
                 if row.get("external_key") == item.get("external_key"):
                     return 100, 0
                 same_group = (row.get("group_marker") or "all") == (item.get("group_marker") or "all")
@@ -4149,13 +4155,6 @@ class Database:
                 same_metadata = row.get("metadata_signature") == assessment_metadata(item)
                 same_title = (" ".join(str(row.get("title") or "").casefold().replace("ё", "е").split())
                               == " ".join(str(item.get("title") or "").casefold().replace("ё", "е").split()))
-                old_date = canonical_date(row.get("assessed_on"))
-                new_date = canonical_date(item.get("assessed_on"))
-                # Two concrete, different dates are distinct identity evidence.
-                # Neither matching titles/coordinates nor matching score vectors
-                # may override them; doing so would transfer old grades to a new work.
-                if old_date and new_date and old_date != new_date:
-                    return 0, 0
                 old_vector = stored_score_vector(row)
                 new_vector = stored_score_vector(item)
                 shared = set(old_vector) & set(new_vector)
