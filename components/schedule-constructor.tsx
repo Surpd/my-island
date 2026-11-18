@@ -318,10 +318,9 @@ function allLessonClassesHaveMode(payload: Payload, lesson: Lesson, mode: DayMod
   return grades.length > 0 && grades.every((grade) => dayModeForGrade(payload, grade, classes, lesson.day) === mode);
 }
 function isSdepIndependentLesson(payload: Payload, lesson: Lesson, classes: Group[]): boolean {
-  if (!allLessonClassesHaveMode(payload, lesson, 'sdep', classes)) return false;
-  if (typeof lesson.sdepIndependent === 'boolean') return lesson.sdepIndependent;
-  const assignedTeacher = Boolean(lesson.teacherId || lesson.teacherIds?.length);
-  return !assignedTeacher && !String(lesson.room || '').trim() && lesson.format !== 'offline' && lesson.kind !== 'event';
+  // Existing grade/day mode is the complete rule; imported staffing and the
+  // legacy per-lesson switch must not turn a self-study plan into a lesson.
+  return allLessonClassesHaveMode(payload, lesson, 'sdep', classes);
 }
 function lessonNeedsPhysicalRoom(payload: Payload, lesson: Lesson, classes: Group[]): boolean {
   if (allLessonClassesHaveMode(payload, lesson, 'online', classes)) return false;
@@ -519,10 +518,9 @@ function issuesFor(
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
       const independentA = isSdepIndependentLesson(payload, a, groups);
       const independentB = isSdepIndependentLesson(payload, b, groups);
-      const bothIndependentSdep = independentA && independentB;
-      if (!bothIndependentSdep && [...teacherIdsA].some((id) => teacherIdsB.has(id)))
+      if (!independentA && !independentB && [...teacherIdsA].some((id) => teacherIdsB.has(id)))
         pair('Преподаватель уже ведёт урок');
-      if (!bothIndependentSdep && lessonNeedsPhysicalRoom(payload, a, groups) && lessonNeedsPhysicalRoom(payload, b, groups) && normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
+      if (!independentA && !independentB && lessonNeedsPhysicalRoom(payload, a, groups) && lessonNeedsPhysicalRoom(payload, b, groups) && normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
       const studentIdsA = new Set(previews[a.id]?.status === 'ok' ? previews[a.id].student_ids || [] : []);
       const studentIdsB = new Set(previews[b.id]?.status === 'ok' ? previews[b.id].student_ids || [] : []);
       // Clubs, electives, and events do not imply student participation.
@@ -530,7 +528,7 @@ function issuesFor(
       const optionalAudience = ['club', 'elective', 'event'].includes(a.activityType || '')
         || ['club', 'elective', 'event'].includes(b.activityType || '');
       const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
-      if (!bothIndependentSdep && !optionalAudience && overlappingStudents.length) {
+      if (!independentA && !independentB && !optionalAudience && overlappingStudents.length) {
         const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || studentId);
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
         pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
@@ -3171,7 +3169,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           }
                         />
                       </label>
-                      {allLessonClassesHaveMode(payload, selected, 'sdep', groups) ? <label className="constructor-sdep-independent-toggle"><input type="checkbox" checked={isSdepIndependentLesson(payload, selected, groups)} onChange={(event) => updateLesson(selected.id, { sdepIndependent: event.target.checked })} /> Самостоятельная работа: без обычных конфликтов кабинета, преподавателя и учеников</label> : null}
                       <datalist id="constructor-rooms">
                         {[...new Map(rooms.map((room) => [normalizeRoomKey(room), normalizeRoomDisplay(room)])).values()].map((item) => (
                           <option key={item} value={item} />
