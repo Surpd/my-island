@@ -143,7 +143,13 @@ def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list
         implicit_date = (not str(_cell(row, 0) or "").strip() and index + 1 < len(values)
                          and _header_kind(_cell(values[index + 1], 0)) == "title"
                          and any(_date(cell, 2026) for cell in row[1:]))
-        if _header_kind(_cell(row, 0)) != "date" and not implicit_date:
+        # A few real journals use a semester number (or another marker) in A1
+        # while dates run horizontally across the remaining columns. The next
+        # row still labels those same columns as assignment titles.
+        horizontal_date_header = (index + 1 < len(values)
+                                  and _header_kind(_cell(values[index + 1], 0)) == "title"
+                                  and any(_date(cell, 2026) for cell in row[1:]))
+        if _header_kind(_cell(row, 0)) != "date" and not implicit_date and not horizontal_date_header:
             continue
         found: dict[str, int] = {"date": index}
         for next_index in range(index + 1, min(index + 8, len(values))):
@@ -320,35 +326,52 @@ def parse_journal_values(
                     "source_coordinate": f"{column_name(column)}{row_index + 1}",
                     "raw_source": {"value": raw_value, "student_row": row_index + 1, "group_marker": student_marker},
                 })
-            identity_value = {**metadata, "score_vector": sorted(score_vector)}
-            external_key = f"{sheet_id or 'sheet'}:{_signature(identity_value)}"
+            column_identity = _signature(metadata)
+            external_key = f"{sheet_id or 'sheet'}:{column_identity}"
             assessment = {
                 "external_key": external_key, **metadata, "source_column": column_name(column),
                 "value_signature": _signature(sorted(score_vector)),
                 "raw_source": {"date": _cell(metadata_rows["date"], column), "title": metadata["title"],
                                "weight": _cell(metadata_rows.get("weight", []), column), "max_score": _cell(metadata_rows.get("max_score", []), column),
-                               "header_rows": {key: index + 1 for key, index in block.items()}, "group_marker": marker},
+                               "header_rows": {key: index + 1 for key, index in block.items()}, "group_marker": marker,
+                               "column_identity": column_identity, "score_vector": score_vector},
             }
             assessments.append(assessment)
             for result in pending:
                 result["assessment_key"] = external_key
                 results.append(result)
 
-    # Preserve distinct, initially identical populated source columns. Their
-    # occurrence only disambiguates an unchanged snapshot. Later non-identical
-    # edits still hit the database's ambiguous-match guard and retain history.
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    # Metadata fingerprints stay stable when a unique assessment column moves.
+    # Only repeated indistinguishable metadata needs a coordinate discriminator;
+    # result vectors then keep its stored assessment ID attached to the right work.
+    metadata_groups: dict[str, list[dict[str, Any]]] = {}
     for assessment in assessments:
-        grouped.setdefault(assessment["external_key"], []).append(assessment)
-    result_keys = {item["assessment_key"] for item in results}
-    for key, duplicates in grouped.items():
-        if len(duplicates) > 1 and key in result_keys:
-            for ordinal, item in enumerate(duplicates, 1):
-                item["external_key"] = f"{key}:occurrence:{ordinal}"
-                item["raw_source"]["identical_source_columns"] = len(duplicates)
+        identity = {key: assessment[key] for key in ("group_marker", "assessed_on", "title", "weight", "max_score")}
+        metadata_groups.setdefault(_signature(identity), []).append(assessment)
+    for metadata_identity, duplicates in metadata_groups.items():
+        if len(duplicates) < 2:
+            continue
+        has_any_result = any(any(value not in (None, "") for _, value in item["raw_source"]["score_vector"]) for item in duplicates)
+        if not has_any_result:
+            shared_key = f"{sheet_id or 'sheet'}:{metadata_identity}"
+            for item in duplicates:
+                prior_key = item["external_key"]
+                item["external_key"] = shared_key
                 for result in results:
-                    if result["assessment_key"] == key and re.match(r"[A-Z]+", result["source_coordinate"])[0] == item["source_column"]:
-                        result["assessment_key"] = item["external_key"]
+                    if result["assessment_key"] == prior_key:
+                        result["assessment_key"] = shared_key
+            continue
+        result_signatures = {_signature(item["raw_source"]["score_vector"]) for item in duplicates}
+        if len(result_signatures) == 1:
+            for item in duplicates:
+                item["raw_source"]["identical_source_columns"] = len(duplicates)
+        for item in duplicates:
+            prior_key = item["external_key"]
+            unique_key = f"{sheet_id or 'sheet'}:{metadata_identity}:column:{item['source_column']}"
+            item["external_key"] = unique_key
+            for result in results:
+                if result["assessment_key"] == prior_key and re.match(r"[A-Z]+", result["source_coordinate"])[0] == item["source_column"]:
+                    result["assessment_key"] = unique_key
     unique_assessments: list[dict[str, Any]] = []
     seen_signatures: set[str] = set()
     for assessment in assessments:
@@ -362,6 +385,25 @@ def parse_journal_values(
                "students": list(students_by_key.values()), "results": results, "summaries": summaries}
     payload["source_hash"] = _signature(payload)
     return payload
+
+
+def classify_journal_values(values: Sequence[Sequence[object]], *, sheet_title: str) -> dict[str, str] | None:
+    """Classify a recognizable derived results table without relying on its tab name."""
+    if not values:
+        return None
+    first_row = [_normalized(_cell(values[0], column)) for column in range(len(values[0]))]
+    has_name_parts = any(value in {"фамилия", "фамилия ученика"} for value in first_row) and any(
+        value in {"имя", "имя ученика"} for value in first_row)
+    assessment_columns = sum(bool(re.search(r"(?:практикум|работа|задание)", value)) for value in first_row)
+    has_derived_summary = any("итог" in value or "средн" in value for value in first_row)
+    has_gradebook_block = False
+    for index, row in enumerate(values[:-1]):
+        if _header_kind(_cell(row, 0)) == "date" and _header_kind(_cell(values[index + 1], 0)) == "title":
+            has_gradebook_block = True
+            break
+    if has_name_parts and assessment_columns >= 2 and has_derived_summary and not has_gradebook_block:
+        return {"kind": "derived_results", "reason": "Таблица содержит имена, результаты практикумов и сводный итог, но не структуру журнала с датами, весами и максимальными баллами."}
+    return None
 
 
 def sync_journal_values(

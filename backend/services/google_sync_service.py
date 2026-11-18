@@ -9,7 +9,7 @@ from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
-from backend.services.journal_import import sync_journal_values
+from backend.services.journal_import import classify_journal_values, sync_journal_values
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
@@ -240,8 +240,9 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
     except JournalSourceExcluded:
         raise
     except (GoogleLiveError, ValueError, RuntimeError) as error:
-        database.record_journal_failure(spreadsheet_id, subject, str(error))
-        database.record_audit_event("journal_sync.failed", "journal_sync", {"grade": grade, "subject": subject, "error": str(error)})
+        diagnostic = _journal_error_diagnostic(error)
+        database.record_journal_failure(spreadsheet_id, subject, diagnostic["message"], code=diagnostic["code"], details=diagnostic["details"])
+        database.record_audit_event("journal_sync.failed", "journal_sync", {"grade": grade, "subject": subject, "error_code": diagnostic["code"]})
         raise
     database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": spreadsheet_id, "subject": sheet_title, **counts})
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": sheet_title, "sheet_id": selected.get("sheetId"), "counts": counts}
@@ -293,20 +294,35 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
         escaped_title = sheet_title.replace("'", "''")
         try:
             values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
+            auxiliary = classify_journal_values(values, sheet_title=sheet_title)
+            if auxiliary:
+                outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "skipped",
+                    "classification": auxiliary["kind"], "reason": auxiliary["reason"]})
+                skipped_count += 1
+                if run_id is not None:
+                    database.update_journal_sync_progress(run_id, {
+                        "completed_tabs": len(outcomes), "total_tabs": total_tabs,
+                        "succeeded": sum(item["status"] == "success" for item in outcomes),
+                        "failed": sum(item["status"] == "error" for item in outcomes),
+                        "skipped": skipped_count, "excluded": excluded_count,
+                    })
+                continue
             counts = sync_journal_values(
                 database, values, spreadsheet_id=target_id, spreadsheet_title=title,
                 grade=grade, subject=sheet_title.strip(), sheet_title=sheet_title, sheet_id=sheet_id,
             )
             outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "success", "counts": counts})
         except Exception as error:
-            error_message = _safe_journal_error_message(error)
-            logging.getLogger(__name__).error("Journal tab import failed spreadsheet_id=%s sheet_id=%s error_type=%s error=%s", target_id, sheet_id, type(error).__name__, error_message)
+            diagnostic = _journal_error_diagnostic(error)
+            logging.getLogger(__name__).error("Journal tab import failed spreadsheet_id=%s sheet_id=%s error_type=%s category=%s", target_id, sheet_id, type(error).__name__, diagnostic["code"])
             try:
-                database.record_journal_failure(target_id, sheet_title.strip(), "Не удалось обновить вкладку. Предыдущие данные сохранены.",
+                database.record_journal_failure(target_id, sheet_title.strip(), diagnostic["message"],
+                    code=diagnostic["code"], details=diagnostic["details"],
                     grade=grade, spreadsheet_title=title, sheet_title=sheet_title, sheet_id=sheet_id)
             except Exception as record_error:
                 logging.getLogger(__name__).error("Failed to persist journal tab failure spreadsheet_id=%s sheet_id=%s error_type=%s", target_id, sheet_id, type(record_error).__name__)
-            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "error", "error": f"{type(error).__name__}: {error_message}"[:1000]})
+            outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "error",
+                "error_code": diagnostic["code"], "error": diagnostic["message"], "error_details": diagnostic["details"]})
         if run_id is not None:
             succeeded = sum(item["status"] == "success" for item in outcomes)
             failed = sum(item["status"] == "error" for item in outcomes)
@@ -326,11 +342,42 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             "skipped_tabs": skipped_count, "excluded_tabs": excluded_count, "tabs": outcomes}
 
 
-def _safe_journal_error_message(error: Exception) -> str:
+def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
+    """Return admin-safe diagnostics; never copy request URLs, tokens, or roster rows to logs."""
+    from backend.services.google_live import GoogleApiError
+    if isinstance(error, ValueError):
+        detail = str(error)[:700]
+        if "конфликт сопоставления" in detail.casefold() or "невозможно однозначно сопоставить" in detail.casefold():
+            return {"code": "assessment_mapping_conflict", "message": "Конфликт сопоставления работ. Предыдущие данные сохранены.", "details": detail}
+        if "не найден блок" in detail.casefold() or "неполный блок журнала" in detail.casefold():
+            return {"code": "unsupported_structure", "message": "Структура вкладки не распознана как журнал. Предыдущие данные сохранены.", "details": detail}
+        return {"code": "invalid_journal_data", "message": "Данные вкладки не прошли проверку. Предыдущие данные сохранены.", "details": detail}
+    if isinstance(error, GoogleApiError):
+        status = int(getattr(error, "status", 0) or 0)
+        reason = str(getattr(error, "reason", "") or "")
+        code = str(getattr(error, "error_code", "") or "")
+        if code == "invalid_grant":
+            return {"code": "google_authorization", "message": "Истекла или отозвана авторизация Google. Переподключите аккаунт.", "details": "Google OAuth: invalid_grant"}
+        if status == 403 or reason == "insufficientPermissions":
+            return {"code": "google_access", "message": "У подключённого аккаунта нет доступа к вкладке.", "details": f"Google Sheets API: HTTP {status or 'unknown'} ({reason or code or 'access denied'})"}
+        if status == 429 or status >= 500:
+            return {"code": "temporary_google_error", "message": "Google Sheets временно не ответил. Повторите синхронизацию.", "details": f"Google Sheets API: HTTP {status}"}
+        return {"code": "google_request_error", "message": "Google Sheets отклонил запрос. Проверьте подключение и права.", "details": f"Google Sheets API: HTTP {status or 'unknown'}"}
+    if isinstance(error, GoogleLiveError):
+        message = str(error).casefold()
+        if any(token in message for token in ("oauth", "authorization", "token", "аккаунт")):
+            return {"code": "google_authorization", "message": "Проблема авторизации Google. Переподключите аккаунт.", "details": type(error).__name__}
+        return {"code": "temporary_google_error", "message": "Google Sheets временно недоступен. Повторите синхронизацию.", "details": type(error).__name__}
+    if isinstance(error, (TimeoutError, ConnectionError, OSError)):
+        return {"code": "temporary_server_error", "message": "Временная ошибка сервера. Повторите синхронизацию.", "details": type(error).__name__}
     diagnostic = getattr(error, "diag", None)
     if diagnostic is not None:
-        return str(getattr(diagnostic, "message_primary", None) or type(error).__name__)[:1000]
-    return str(error)[:1000]
+        return {"code": "temporary_server_error", "message": "Временная ошибка сервера. Предыдущие данные сохранены.", "details": type(error).__name__}
+    return {"code": "unexpected_sync_error", "message": "Не удалось обновить вкладку. Предыдущие данные сохранены.", "details": type(error).__name__}
+
+
+def _safe_journal_error_message(error: Exception) -> str:
+    return _journal_error_diagnostic(error)["code"]
 
 
 def refresh_teacher_directory(database: Database, settings: Settings) -> dict[str, Any]:

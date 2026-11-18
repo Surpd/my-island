@@ -194,7 +194,7 @@ class JournalSyncResilienceTests(unittest.TestCase):
         self.assertEqual(run["counts"], {"completed_tabs": 2, "total_tabs": 2, "succeeded": 1, "failed": 1, "skipped": 0, "excluded": 0})
         with self.database.connection() as connection:
             source = self.database.execute(connection, "SELECT last_error FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", ("book-progress", "2")).fetchone()
-        self.assertEqual(source["last_error"], "Не удалось обновить вкладку. Предыдущие данные сохранены.")
+        self.assertEqual(source["last_error"], "Данные вкладки не прошли проверку. Предыдущие данные сохранены.")
 
     def test_progress_updates_only_running_runs(self):
         run_id = self.database.start_journal_sync("book-progress", 9)
