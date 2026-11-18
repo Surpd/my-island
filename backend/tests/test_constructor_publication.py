@@ -517,6 +517,37 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertFalse(any(item["code"] == "lunch_scope_advisory" for item in scope_preview["diagnostics"]))
         self.assertIn("missing_special_scope", [item["code"] for item in scope_preview["diagnostics"]])
 
+    def test_class_lunch_marker_ignores_teacher_room_and_instructional_audience_errors(self):
+        lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", teacherIds=[], room="",
+            classIds=[str(self.group["id"])], audience={"kind": "groups", "group_ids": ["removed-math-group"]},
+            needsClarification=True, clarificationReason="Уточните охват обеда: класс или отдельная группа")
+        draft = self.draft([lunch])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        codes = [item["code"] for item in preview["diagnostics"]]
+        self.assertEqual(preview["summary"]["ready_lessons"], 1)
+        self.assertEqual(preview["summary"]["deferred_lessons"], 0)
+        self.assertIn("lunch_scope_advisory", codes)
+        self.assertNotIn("audience_unresolved", codes)
+        self.assertNotIn("missing_teacher", codes)
+        self.assertNotIn("missing_room", codes)
+
+    def test_stale_math_group_for_another_subject_is_deferred_as_reference_review(self):
+        stale_math = self.database.create_group("Synthetic math split", "subject_group", subject="Математика",
+            subject_subgroup="1", base_class_name="9A")
+        self.database.create_membership(stale_math["id"], self.student["id"], "student", "synthetic")
+        lesson = self.lesson(subject="Биология", groupId=str(stale_math["id"]), groupIds=[str(stale_math["id"])],
+            audience={"kind": "groups", "group_ids": [str(stale_math["id"])]}, needsClarification=True,
+            clarificationReason="Для этого предмета не подтверждена учебная группа; прежняя математическая группа удалена")
+        draft = self.draft([lesson])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        issue = next(item for item in preview["diagnostics"] if item["code"] == "stale_group_subject_mismatch")
+        self.assertEqual(issue["severity"], "info")
+        self.assertIn("Биология", issue["message"])
+        self.assertIn("9A", issue["message"])
+        self.assertEqual(preview["summary"]["campus_lessons"], 0)
+        self.assertEqual(preview["summary"]["admin_only_lessons"], 1)
+        self.assertEqual(preview["deferred"][0]["cause_codes"], ["stale_group_subject_mismatch"])
+
     def test_explicit_groups_do_not_assert_exhaustive_coverage_of_other_pupils(self):
         first = self.database.create_group("english:1", "subject_group", base_class_name="9A")
         second = self.database.create_group("english:2", "subject_group", base_class_name="9A")
@@ -644,12 +675,17 @@ class ConstructorPublicationTests(unittest.TestCase):
         courses = [self.lesson(id=f"elective-{index}", subject=f"Elective {index}", activityType="elective",
                                activityNameSnapshot=f"Elective {index}",
                                classId=class_id, classIds=[class_id], eligibleGrades=[9],
-                               confirmedParticipantIds=[str(self.student["id"])],
+                               confirmedParticipantIds=[],
                                audience={"kind": "classes", "class_ids": [class_id]},
                                teacherId="", room=f"E-{index}") for index in range(3)]
         draft = self.draft(courses)
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
         self.assertNotIn("student_overlap", [item["code"] for item in preview["diagnostics"]])
+
+        confirmed_pair = self.draft([{**courses[0], "confirmedParticipantIds": [str(self.student["id"])]},
+            {**courses[1], "confirmedParticipantIds": [str(self.student["id"])]}])
+        confirmed_preview = preview_publication(self.database, confirmed_pair["id"], scope_kind="template", expected_revision=1)
+        self.assertIn("student_overlap", [item["code"] for item in confirmed_preview["diagnostics"]])
 
         assigned = {**courses[0], "teacherId": str(self.teacher["id"])}
         conflicting = self.draft([assigned, {**courses[1], "teacherId": str(self.teacher["id"]), "room": "E-2"}])

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { groupCourseContext, parseQuick, rankTeachersForAudience, shortGroup, shortSubject } from '../components/schedule-constructor-logic.ts';
+import { confirmedClassLunchMarker, confirmedElectiveOverlapIds, groupCourseContext, parseQuick, rankTeachersForAudience, shortGroup, shortSubject } from '../components/schedule-constructor-logic.ts';
 
 const groups = [
   { id: '5', name: '5 класс', group_type: 'class' },
@@ -26,6 +26,21 @@ test('compact labels preserve subject and instructional group', () => {
   assert.equal(shortSubject('Математика'), 'Мат');
   assert.equal(shortSubject('Английский язык'), 'Англ');
   assert.equal(shortGroup('9А Математика A', 'Математика', '9'), 'A');
+});
+
+test('parallel electives only report collisions for explicitly confirmed known participants', () => {
+  const first = { activityType: 'elective', confirmedParticipantIds: ['student-a', 'removed-student'] };
+  const second = { activityType: 'elective', confirmedParticipantIds: ['student-a', 'removed-student'] };
+  assert.deepEqual(confirmedElectiveOverlapIds(first, second, ['student-a']), ['student-a']);
+  assert.deepEqual(confirmedElectiveOverlapIds({ activityType: 'elective' }, { activityType: 'elective' }, ['student-a']), []);
+  assert.deepEqual(confirmedElectiveOverlapIds(first, { activityType: 'lesson', confirmedParticipantIds: ['student-a'] }, ['student-a']), []);
+});
+
+test('a lunch marker with a confirmed class is informational without a roster group', () => {
+  const classes = [{ id: '7a', group_type: 'class' }, { id: 'math-a', group_type: 'instructional' }];
+  assert.equal(confirmedClassLunchMarker({ specialMark: 'lunch', classId: '7a', classIds: ['7a'] }, classes), true);
+  assert.equal(confirmedClassLunchMarker({ specialMark: 'lunch', classIds: ['math-a'] }, classes), false);
+  assert.equal(confirmedClassLunchMarker({ specialMark: 'lunch', classIds: [] }, classes), false);
 });
 
 test('quick entry distinguishes class from mathematical group and retains ambiguity', () => {

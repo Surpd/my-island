@@ -54,7 +54,13 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   const fitsViewport = await page.locator('.constructor-grid-wrap').evaluate((board) => board.scrollWidth <= board.clientWidth + 1);
   expect(fitsViewport).toBeTruthy();
   await page.locator('.constructor-issue-count').click();
+  await page.getByText(/Неизвестен состав групп или классов:/).first().click();
   await expect(page.locator('.constructor-conflict-panel').getByText(/Неизвестен состав групп или классов:/).first()).toBeVisible();
+  const sourceWeek = page.locator('.constructor-source-week');
+  await sourceWeek.getByText(/Полная таблица исходной недели/).click();
+  await expect(sourceWeek.locator('tbody tr')).toHaveCount(lessons.length);
+  await expect(sourceWeek.getByText('Пустая группа без участников')).toBeVisible();
+  await page.screenshot({ path: '.local-test/constructor-source-week.png', fullPage: true });
   await expect(page.locator('.constructor-unplaced')).toHaveCount(0);
   await page.getByRole('button', { name: 'Закрыть список проблем' }).click();
   await page.screenshot({ path: '.local-test/constructor-filled-week.png', fullPage: true });
@@ -99,6 +105,28 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await page.locator('[data-cell="4:2"] [data-lesson-id="e2e-event"]').click();
   await expect(page.locator('[data-cell="5:3"] [data-lesson-id="e2e-event"]')).toHaveCount(1);
   await page.screenshot({ path: '.local-test/constructor-event-1920.png' });
+});
+
+test('full admin source-week table lists every synthetic lesson and status', async ({ page, registerExperiment }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const experiment = await createSyntheticFilledWeek(page.request, registerExperiment);
+  const lessons = experiment.payload.lessons as { id: string; subject: string }[];
+  await page.goto('/admin/schedule/constructor?role=admin');
+  await page.getByRole('group', { name: 'Разделы черновиков' }).getByRole('button', { name: /Тестовые/ }).click();
+  await page.locator('.constructor-draft').filter({ hasText: experiment.name }).locator('.constructor-draft-open').click();
+  await page.locator('.constructor-issue-count').click();
+  await page.getByText(/Неизвестен состав групп или классов:/).first().click();
+  const sourceWeek = page.locator('.constructor-source-week');
+  await sourceWeek.getByText(/Полная таблица исходной недели/).click();
+  await expect(sourceWeek.locator('tbody tr')).toHaveCount(lessons.length);
+  await expect(sourceWeek.getByText(lessons[0].subject, { exact: true }).first()).toBeVisible();
+  await expect(sourceWeek.getByRole('columnheader', { name: 'Статус' })).toBeVisible();
+  await sourceWeek.locator('tbody tr:nth-child(n+21)').evaluateAll((rows) => rows.forEach((row) => { (row as HTMLElement).style.display = 'none'; }));
+  await sourceWeek.locator('.constructor-source-week-scroll').evaluate((node) => {
+    (node as HTMLElement).style.maxHeight = 'none';
+    (node as HTMLElement).style.overflow = 'visible';
+  });
+  await sourceWeek.locator('table').screenshot({ path: '.local-test/constructor-source-week-focused.png' });
 });
 
 test('form creates one mixed-class lesson and one multi-slot event that survive reopening', async ({ page }) => {

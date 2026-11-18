@@ -304,7 +304,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         teachers = {str(r["id"]): str(r["display_name"]) for r in database.execute(connection,
             "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active'").fetchall()}
         groups = {str(r["id"]): dict(r) for r in database.execute(connection,
-            "SELECT id,name,display_name,group_type,base_class_name,role FROM groups WHERE canonical IS TRUE").fetchall()}
+            "SELECT id,name,display_name,group_type,base_class_name,role,subject FROM groups WHERE canonical IS TRUE").fetchall()}
         students = {str(r["id"]): str(r["class_name"] or "") for r in database.execute(connection,
             "SELECT id,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
     class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()}
@@ -336,7 +336,15 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if lesson.get("deferred") or any(e["type"]=="defer" for e in exceptions):
             block("explicit_deferred", "Запись явно отложена администратором")
         result = audience.get(lesson_id) or {}
-        if result.get("status") != "ok" or result.get("needs_recalculation"):
+        special = lesson.get("specialMark")
+        display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
+        lunch_scope_confirmed = special == "lunch" and bool(display_classes) and all(
+            str(group_id) in groups and groups[str(group_id)]["group_type"] == "class"
+            for group_id in display_classes
+        )
+        # Lunch is a visual marker in the class grid. Its audience is the
+        # displayed class, never a separately resolved instructional roster.
+        if not lunch_scope_confirmed and (result.get("status") != "ok" or result.get("needs_recalculation")):
             block("audience_unresolved", str(result.get("reason") or "Audience requires confirmation or recalculation"))
         interval = _lesson_interval(lesson, payload.get("slots") or [])
         try:
@@ -347,7 +355,6 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             block("invalid_slot", "Valid weekday and time interval required")
             continue
         subject = str(lesson.get("subject") or lesson.get("activity") or "").strip()
-        special = lesson.get("specialMark")
         if not subject and special not in {"lunch", "no_lesson"}:
             block("empty_activity", "Activity name is required")
         teacher_ids = sorted({str(x) for x in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
@@ -357,11 +364,21 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         responsible_teacher_ids = sorted({str(value) for value in responsible_source if value})
         teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
-        display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
+        rule_groups = _lesson_audience(lesson).get("group_ids") or []
+        stale_math_groups = [groups[str(group_id)] for group_id in rule_groups if str(group_id) in groups
+            and str(groups[str(group_id)].get("subject") or "").strip().casefold() == "математика"
+            and str(lesson.get("subject") or "").strip().casefold() != "математика"]
         class_modes = _lesson_day_modes(payload, lesson, class_grades)
         online_only = bool(class_modes) and class_modes == {"online"}
         sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids), class_grades)
-        if needs_review:
+        if lunch_scope_confirmed:
+            blockers.append({"code": "lunch_scope_advisory", "lesson_id": lesson_id, "severity": "info"})
+        elif stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
+            class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
+                            for group_id in display_classes if str(group_id) in groups]
+            blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
+                "message": f"Ссылка ведёт в {', '.join(str(group.get('display_name') or group.get('name')) for group in stale_math_groups)} для математики, а предмет — {subject or 'не указан'}. Класс размещения: {', '.join(class_labels) or 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён."})
+        elif needs_review:
             # Imported staffing checks do not make an explicit student audience
             # ambiguous. Keep the diagnostic without inventing any teacher.
             if review_reason == "Не подтверждён преподаватель" and not teacher_ids:
@@ -382,8 +399,10 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if practice:
             teacher_ids = []
         if special not in {"lunch", "no_lesson"} and not (lesson.get("kind") == "event" and lesson.get("informational") is True):
+            confirmed_elective_students = (set(str(value) for value in lesson.get("confirmedParticipantIds") or []) & students.keys()
+                                           if lesson.get("activityType") == "elective" else set())
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
-                              "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []),
+                              "teachers": set(teacher_ids), "students": set(result.get("student_ids") or []) | confirmed_elective_students,
                               "subject": subject, "room": room_key(lesson.get("room")),
                               "sdep_independent": sdep_independent})
         rule = _lesson_audience(lesson)
@@ -453,7 +472,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             "class_ids": display_class_ids, "assignment_kind": kind or special or "unspecified",
             "teachers": [teachers[t] for t in teacher_ids if t in teachers],
             "groups": [str(groups[g]["name"]) for g in (group_ids or class_ids or display_class_ids) if g in groups]}
-        if not online_only and not sdep_independent and not str(lesson.get("room") or "").strip():
+        if special not in {"lunch", "no_lesson"} and not online_only and not sdep_independent and not str(lesson.get("room") or "").strip():
             blockers.append({"code": "missing_room", "lesson_id": lesson_id,
                              "message": "Кабинет не указан", "severity": "info"})
         role = "explicit_no_lesson" if special == "no_lesson" else "residual" if special == "lunch" or kind in {"available_slot", "legacy_remaining"} else "primary"
@@ -549,7 +568,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         lid = issue.get("lesson_id")
         issue["context"] = contexts.get(lid, {})
         issue["block_key"] = lesson_keys.get(lid)
-        if issue["severity"] == "conflict":
+        if issue["severity"] == "conflict" or issue["code"] == "stale_group_subject_mismatch":
             excluded.update(lesson_keys[i] for i in issue.get("related_lesson_ids", [lid]) if i in lesson_keys)
     changed = True
     while changed:
@@ -568,13 +587,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     for lid, key in sorted(lesson_keys.items()):
         if key in excluded:
             connected_keys = connected_units({key})
-            causes = [issue for issue in blockers if issue["severity"]=="conflict" and
+            causes = [issue for issue in blockers if (issue["severity"]=="conflict" or issue["code"]=="stale_group_subject_mismatch") and
                       any(lesson_keys.get(i) in connected_keys for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]))]
             if not causes:
                 slot = (blocks[key]["weekday"],blocks[key]["slot"]["start"],blocks[key]["slot"]["end"])
                 unknown_keys = {k for k in excluded if not blocks[k].get("grade_scope") and
                                 (blocks[k]["weekday"],blocks[k]["slot"]["start"],blocks[k]["slot"]["end"])==slot}
-                causes = [issue for issue in blockers if issue["severity"]=="conflict" and issue.get("block_key") in unknown_keys]
+                causes = [issue for issue in blockers if (issue["severity"]=="conflict" or issue["code"]=="stale_group_subject_mismatch") and issue.get("block_key") in unknown_keys]
             deferred.append({"lesson_id": lid, "block_key": key, "action": "excluded", "context": contexts[lid],
                 "cause_codes": sorted({i["code"] for i in causes}),
                 "cause_lesson_ids": sorted({i for issue in causes for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]) if i}),

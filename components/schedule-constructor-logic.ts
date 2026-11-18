@@ -28,6 +28,19 @@ export function schedulePlacementClassIds(lesson: PlacementLesson, selectedColum
   return [...new Set((ids?.length ? ids : selectedColumnClassIds).filter(Boolean))];
 }
 
+export function confirmedElectiveOverlapIds(a: { activityType?: string; confirmedParticipantIds?: string[] }, b: { activityType?: string; confirmedParticipantIds?: string[] }, knownStudentIds?: string[]): string[] {
+  const aIds = a.activityType === 'elective' ? new Set(a.confirmedParticipantIds || []) : new Set<string>();
+  const bIds = b.activityType === 'elective' ? new Set(b.confirmedParticipantIds || []) : new Set<string>();
+  const known = knownStudentIds ? new Set(knownStudentIds) : null;
+  return [...aIds].filter((id) => bIds.has(id) && (!known || known.has(id)));
+}
+
+export function confirmedClassLunchMarker(lesson: { specialMark?: string; classId?: string; classIds?: string[] }, groups: Pick<ScheduleGroup, 'id' | 'group_type'>[]): boolean {
+  if (lesson.specialMark !== 'lunch') return false;
+  const classIds = lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
+  return classIds.length > 0 && classIds.every((id) => groups.some((group) => group.id === id && group.group_type === 'class'));
+}
+
 type LinkedLesson = {
   groupId?: string;
   groupIds?: string[];

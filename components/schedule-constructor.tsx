@@ -45,7 +45,7 @@ import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
-import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, type ScheduleMergeConflict } from './schedule-constructor-logic';
+import { schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedElectiveOverlapIds, confirmedClassLunchMarker, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
@@ -234,6 +234,7 @@ type Clip = {
 };
 type Issue = {
   lessonId: string;
+  code?: string;
   severity: 'error' | 'warning';
   type: 'teacher' | 'room' | 'audience' | 'data';
   message: string;
@@ -522,20 +523,33 @@ function issuesFor(
       if (!bothIndependentSdep && lessonNeedsPhysicalRoom(payload, a, groups) && lessonNeedsPhysicalRoom(payload, b, groups) && normalizeRoomKey(a.room) && normalizeRoomKey(a.room) === normalizeRoomKey(b.room)) pair(`Кабинет ${normalizeRoomDisplay(a.room)} занят`);
       const studentIdsA = new Set(previews[a.id]?.status === 'ok' ? previews[a.id].student_ids || [] : []);
       const studentIdsB = new Set(previews[b.id]?.status === 'ok' ? previews[b.id].student_ids || [] : []);
-      const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
-      if (!bothIndependentSdep && overlappingStudents.length && a.activityType !== 'elective' && b.activityType !== 'elective') {
+      // Electives are parallel by default, but an explicit, confirmed roster
+      // remains evidence of a real participant collision in both validators.
+      const knownStudentIds = new Set(students.map((student) => student.id));
+      if (a.activityType === 'elective') for (const id of a.confirmedParticipantIds || []) if (knownStudentIds.has(id)) studentIdsA.add(id);
+      if (b.activityType === 'elective') for (const id of b.confirmedParticipantIds || []) if (knownStudentIds.has(id)) studentIdsB.add(id);
+      const overlappingStudents = [...new Set([...studentIdsA].filter((id) => studentIdsB.has(id)).concat(confirmedElectiveOverlapIds(a, b, [...knownStudentIds])))];
+      if (!bothIndependentSdep && overlappingStudents.length) {
         const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || studentId);
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
         pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
       }
     }
-  return result.concat(payload.lessons.filter((lesson) => lesson.needsClarification || lesson.importError).map((lesson) => ({
-    lessonId: lesson.id,
-    type: 'data' as const,
-    category: 'import' as const,
-    severity: lesson.importError ? 'error' as const : 'warning' as const,
-    message: lesson.clarificationReason || 'Canonical-аудиторию нужно сопоставить с данными школы.',
-  })));
+  return result.concat(payload.lessons.filter((lesson) => lesson.needsClarification || lesson.importError).filter((lesson) => !confirmedClassLunchMarker(lesson, groups)).map((lesson) => {
+    const mismatchedMathGroups = lesson.clarificationReason?.includes('прежняя математическая группа удалена')
+      ? linkedInstructionalGroups(lesson, groups).filter((group) => group.subject && subjectLabel(group.subject) !== subjectLabel(lesson.subject)) : [];
+    const classNames = lessonClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name).filter(Boolean);
+    return {
+      lessonId: lesson.id,
+      ...(mismatchedMathGroups.length ? { code: 'stale_group_subject_mismatch' } : {}),
+      type: 'data' as const,
+      category: 'import' as const,
+      severity: lesson.importError ? 'error' as const : 'warning' as const,
+      message: mismatchedMathGroups.length
+        ? `Ссылка ведёт в ${mismatchedMathGroups.map((group) => group.name).join(', ')} для математики, а предмет — ${subjectLabel(lesson.subject)}. Класс размещения: ${classNames.join(', ') || 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён.`
+        : lesson.clarificationReason || 'Canonical-аудиторию нужно сопоставить с данными школы.',
+    };
+  }));
 }
 
 function readableTeacherText(hex: string) {
@@ -2187,6 +2201,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   });
   useEffect(()=>{let active=true;if(!conflictsOpen||dirty||!draft)return;void api<{exceptions:Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>}>(`/api/admin/schedule/constructor/${encodeURIComponent(draft.id)}/resolution/preview`,{method:'POST',body:JSON.stringify({expected_revision:draft.revision,lesson_ids:draft.payload.lessons.map(l=>l.id)})}).then(result=>{if(active){setResolutionStates(result.exceptions||{});setResolutionRevision(draft.revision);}}).catch(()=>{if(active)setResolutionStates({});});return()=>{active=false;};},[api,conflictsOpen,dirty,draft?.id,draft?.revision]);
   const workflowFor=(item:Issue)=>{const receipts=dirty||resolutionRevision!==draft?.revision?[]:[...(resolutionStates[item.lessonId]||[]),...(item.related?resolutionStates[item.related]||[]:[])];const targets=[item.lessonId,...(item.related?[item.related]:[])];const coversIssue=(receipt:{lesson_ids?:string[]})=>targets.every(id=>receipt.lesson_ids?.includes(id));if(item.category==='critical')return 'critical';if(receipts.some(r=>r.type==='defer'&&coversIssue(r)))return 'deferred';if(receipts.some(r=>r.type==='joint'&&item.category==='conflict'&&coversIssue(r)))return 'acknowledged';if(receipts.some(r=>r.type==='independent_practice'&&item.type==='teacher'&&targets.some(id=>r.lesson_ids?.includes(id))))return 'acknowledged';if(receipts.some(r=>r.type==='confirm_roster'&&item.category==='review'&&item.type==='audience'&&r.lesson_ids?.includes(item.lessonId)))return 'acknowledged';return item.type==='room'||item.type!=='audience'&&item.category==='incomplete'?'quick':'decision';};
+  const copyIssueReport=async()=>{const groups=new Map<string,Issue[]>();for(const issue of filteredIssues){const code=issue.code||(issue.type==='teacher'&&/уже ведёт/i.test(issue.message)?'TEACHER_OVERLAP':issue.type==='room'&&/занят/i.test(issue.message)?'ROOM_OVERLAP':issue.type==='audience'&&/ученик/i.test(issue.message)?'STUDENT_OVERLAP':issue.type==='teacher'?'TEACHER_REVIEW':issue.type==='room'?'ROOM_REVIEW':issue.type==='audience'?'AUDIENCE_REVIEW':'SCHEDULE_REVIEW');groups.set(code,[...(groups.get(code)||[]),issue]);}const lines=['Отчёт проверки расписания',...[...groups].map(([code,items])=>{const ids=[...new Set(items.flatMap(item=>[item.lessonId,...(item.related?[item.related]:[])]).filter((id):id is string=>typeof id==='string'))];return `${code}\t${items.length}\t${ids.map(id=>`[${id}](${window.location.origin}/admin/schedule/constructor#lesson-${encodeURIComponent(id)})`).join(', ')}`;})];await navigator.clipboard.writeText(lines.join('\n'));setStatus('Отчёт проверки скопирован без персональных данных.');};
   const filteredIssues = issues.filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
   const conflictIssues = issues.filter((item) => item.category === 'conflict');
   const conflictLessons = new Set(conflictIssues.flatMap((item) => [item.lessonId, ...(item.related ? [item.related] : [])]));
@@ -2630,6 +2645,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               <div className="constructor-conflict-filters">
                 <select aria-label="Важность проблемы" value={issueSeverity} onChange={(event) => setIssueSeverity(event.target.value)}><option value="all">Все уровни</option><option value="error">Ошибки</option><option value="warning">Предупреждения</option></select>
                 <select aria-label="Тип проблемы" value={issueType} onChange={(event) => setIssueType(event.target.value)}><option value="all">Все типы</option><option value="teacher">Преподаватель</option><option value="room">Кабинет</option><option value="student">Группа или ученик</option><option value="data">Данные занятия</option></select>
+                <button type="button" onClick={()=>void copyIssueReport()}>Скопировать отчёт проверки</button>
               </div>
               {(['quick', 'decision', 'acknowledged', 'deferred', 'critical'] as const).map((category) => {
                 const categoryIssues = filteredIssues.filter((item) => workflowFor(item) === category);
@@ -2638,14 +2654,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 const affected = new Set(categoryIssues.map((item) => item.lessonId));
                 const pairs = new Set(categoryIssues.filter((item) => item.related).map((item) => [item.lessonId, item.related!].sort().join(':')));
                 const count = category === 'decision' ? `${russianCount(affected.size, 'занятие', 'занятия', 'занятий')} · ${russianCount(pairs.size, 'парное совпадение', 'парных совпадения', 'парных совпадений')}` : russianCount(affected.size, 'занятие', 'занятия', 'занятий');
-                return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3><div className="constructor-conflict-list">{categoryIssues.map((item, index) => {
+                const reasonGroups = new Map<string, Issue[]>();
+                for (const item of categoryIssues) reasonGroups.set(`${item.type}:${item.message}`, [...(reasonGroups.get(`${item.type}:${item.message}`) || []), item]);
+                return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3>{[...reasonGroups].map(([reason, examples])=><details key={reason} className="constructor-issue-reason"><summary>{reason.slice(reason.indexOf(':')+1)} · {examples.length}</summary><div className="constructor-conflict-list">{examples.slice(0,5).map((item, index) => {
                   const lesson = payload.lessons.find((entry) => entry.id === item.lessonId);
                   const targetGroup = groups.find((entry) => entry.id === lesson?.groupId);
                   const dayName = lesson ? DAYS[lesson.day] || 'День не определён' : 'Занятие не найдено';
                   const startTime = lesson ? payload.slots[lesson.period]?.start || 'Время не определено' : '';
-                  return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><button className="constructor-issue-open" onClick={()=>setResolutionIssue(item)}>Разобрать проблему</button><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{item.message}</small><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || id).join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button onClick={() => { if (!lesson) return; setDay(lesson.day); setViewMode('day'); setClassFilter(''); setPanelMode('lesson'); setPanelOpen(true); const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((id) => entry.classIds.includes(id))); if (col >= 0) { setAnchor({row: lesson.period, col}); setFocus({row: lesson.period, col}); } setSelectedId(lesson.id); setConflictsOpen(false); }}>Показать в расписании</button></article>;
-                })}</div></section>;
+                  return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><button className="constructor-issue-open" onClick={()=>setResolutionIssue(item)}>Разобрать проблему</button><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || id).join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button onClick={() => { if (!lesson) return; setDay(lesson.day); setViewMode('day'); setClassFilter(''); setPanelMode('lesson'); setPanelOpen(true); const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((id) => entry.classIds.includes(id))); if (col >= 0) { setAnchor({row: lesson.period, col}); setFocus({row: lesson.period, col}); } setSelectedId(lesson.id); setConflictsOpen(false); }}>Показать в расписании</button></article>;
+                })}{examples.length>5?<small>Показаны первые 5 из {examples.length} примеров.</small>:null}</div></details>)}</section>;
               })}
+              <details className="constructor-source-week"><summary>Полная таблица исходной недели · {payload.lessons.length} занятий</summary><div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];const lessonGroups=linkedInstructionalGroups(lesson,groups);return <tr key={lesson.id}><td>{DAYS[lesson.day]||'—'} · {payload.slots[lesson.period]?.start||lesson.start||'—'}</td><td>{lesson.subject||'Обед'}{lesson.activityType==='elective'?' · курс по выбору':''}</td><td>{displayedClasses(lesson).map(id=>groups.find(group=>group.id===id)?.name||id).join(', ')||'Не указаны'}</td><td>{lessonGroups.map(group=>group.name).join(', ')||'Не указаны'}</td><td>{teacherIds.map(id=>teachers.find(teacher=>teacher.id===id)?.name||'Преподаватель требует проверки').join(', ')||'Не указан'}</td><td>{lesson.room||lesson.place||'Не указано'}</td><td>{status}</td><td><button type="button" onClick={()=>{openReviewLesson(lesson.id);setConflictsOpen(false);}}>Открыть</button></td></tr>})}</tbody></table></div></details>
             </section>
           ) : null}
           {conflictsOpen && unplaced.length ? (
@@ -2809,6 +2828,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                               const classCaption = visualClasses(item, groups).filter((id) => column.classIds.includes(id)).map((id) => groups.find((g) => g.id === id)?.name || id).join(', ');
                               return (
                                 <button
+                                  id={`lesson-${item.id}`}
                                   key={item.id}
                                   data-lesson-id={item.id}
                                   title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${item.room ? normalizeRoomDisplay(item.room) : 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
