@@ -85,13 +85,21 @@ class TermComparisonTests(unittest.TestCase):
         row.update(initial_status="accepted", assessment={
             "category": "equivalent", "reason": "Один кабинет и одно назначение",
             "priority": 3, "type": "Написание кабинета", "options": [],
+            "roster_evidence": {
+                "sources": [{"gid": 728827779, "range": "B3:B8", "label": "Список группы"}],
+                "outcome": "closed", "historical": "Шесть участников",
+                "current": "Тот же состав", "overrides": "Ручных исключений нет",
+                "reliability": "Точное совпадение", "reason": "Состав и назначение подтверждены",
+            },
         })
         self.draft = create_experiment(self.database, name="Reviewed copy", source="import",
                                        payload=payload, _trusted_resolution_history=True)
         with self.assertRaisesRegex(ValueError, "уже"):
             self.decide(1, "accept")
         changed = deepcopy(self.draft["payload"])
-        changed["school_source"]["term2_preparation"]["comparison"]["items"][0]["initial_status"] = "pending"
+        client_row = changed["school_source"]["term2_preparation"]["comparison"]["items"][0]
+        client_row["initial_status"] = "pending"
+        client_row["assessment"].pop("roster_evidence")
         saved = save_experiment(self.database, self.draft["id"], expected_revision=1, payload=changed)
         self.assertEqual(comparison_of(saved)["items"][0], row)
         self.assertEqual(saved["payload"]["lessons"][0]["room"], "1")

@@ -17,6 +17,16 @@ export type TermComparisonSide = {
 };
 type Status = 'pending' | 'accepted' | 'rejected' | 'deferred';
 export type TermComparisonAction = 'accept' | 'reject' | 'defer';
+type RosterEvidence = {
+  sources: { gid: string | number; range: string; label: string }[];
+  historical: string;
+  current: string;
+  overrides: string;
+  reliability: string;
+  outcome: 'closed' | 'clarified' | 'context';
+  reason: string;
+};
+
 type Assessment = {
   category: 'equivalent' | 'safe_fix' | 'proposal' | 'admin';
   reason: string;
@@ -26,6 +36,7 @@ type Assessment = {
   original_candidates?: TermComparisonSide[];
   term1_text?: string;
   related_keys?: string[];
+  roster_evidence?: RosterEvidence;
 };
 type TermComparisonItem = {
   key: string;
@@ -93,6 +104,51 @@ function normalizationValue(value: unknown) {
   if (value === true) return 'да';
   if (value === false) return 'нет';
   return typeof value === 'string' && value ? value : 'не указано';
+}
+
+const rosterWorkbook = 'https://docs.google.com/spreadsheets/d/1j5dI2VbT0RoW2A5ZkCpMYVdt7cSY4ZjNxQaMWtu--Fo/edit';
+const rosterSources = new Map([
+  ['189719954', 'Списки учеников по классам'],
+  ['728827779', 'Списки учебных групп'],
+  ['1097654333', 'Старые списки групп · дополнительная справка'],
+]);
+const rosterOutcomes: Record<RosterEvidence['outcome'], string> = {
+  closed: 'Вопрос закрыт',
+  clarified: 'Состав уточнён',
+  context: 'Справочные данные',
+};
+const cellOrRange = /^\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6}(?::\$?[A-Z]{1,3}\$?[1-9][0-9]{0,6})?$/;
+
+function RosterEvidenceDetails({ evidence }: { evidence: RosterEvidence }) {
+  const links = new Map<string, { label: string; range: string }>();
+  for (const source of evidence.sources || []) {
+    const gid = String(source.gid);
+    const label = rosterSources.get(gid);
+    if (!label) continue;
+    const requestedRange = source.range?.trim().toUpperCase() || '';
+    const range = cellOrRange.test(requestedRange) ? requestedRange : '';
+    const fragment = new URLSearchParams({ gid, ...(range ? { range } : {}) });
+    const address = `${rosterWorkbook}#${fragment}`;
+    if (!links.has(address)) links.set(address, { label: source.label?.trim() || label, range });
+  }
+  const facts = [
+    ['Исторический состав', evidence.historical],
+    ['Текущий состав', evidence.current],
+    ['Подтверждённые правки', evidence.overrides],
+    ['Надёжность сведений', evidence.reliability],
+  ].filter(([, value]) => Boolean(value));
+
+  return <details className="constructor-review-detail constructor-term-roster-evidence">
+    <summary>Сведения о составах {rosterOutcomes[evidence.outcome] ? `· ${rosterOutcomes[evidence.outcome]}` : ''}</summary>
+    {evidence.reason ? <p>{evidence.reason}</p> : null}
+    {facts.length ? <dl>{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl> : null}
+    {links.size ? <>
+      <strong>Исторические источники</strong>
+      <ul>{[...links].map(([href, source]) => <li key={href}>
+        <a href={href} target="_blank" rel="noreferrer">{source.label}</a>{source.range ? ` · ${source.range}` : ''}
+      </li>)}</ul>
+    </> : null}
+  </details>;
 }
 
 function SideDetails({ side }: { side: TermComparisonSide }) {
@@ -297,6 +353,7 @@ export function ConstructorTermComparison({
             <summary>Ячейка в таблице I триместра</summary>
             <p className="constructor-term-literal">{assessment.term1_text}</p>
           </details> : null}
+          {assessment?.roster_evidence ? <RosterEvidenceDetails evidence={assessment.roster_evidence} /> : null}
           {assessment?.options?.length && !automaticallyResolved ? <div className="constructor-term-assessment">
               <h4>Варианты решения</h4>
               <ul className="constructor-term-options">{assessment.options.map((option, index) => <li key={index}>

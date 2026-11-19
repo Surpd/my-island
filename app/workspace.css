@@ -1245,10 +1245,20 @@
 .constructor-term-dialog .constructor-term-options button { display:block; margin-top:4px; min-height:38px; }
 .constructor-term-candidates ul { list-style:none; padding:0; }
 .constructor-term-candidates li + li { border-top:1px solid var(--cp-line); padding-top:8px; }
+.constructor-term-roster-evidence { overflow-wrap:anywhere; }
+.constructor-term-roster-evidence dl { margin-block:8px 12px; }
+.constructor-term-roster-evidence dl > div {
+  display:grid; grid-template-columns:minmax(0, 10rem) minmax(0, 1fr); gap:8px;
+  padding-block:6px; border-top:1px solid var(--cp-line);
+}
+.constructor-term-roster-evidence dt { font-weight:600; }
+.constructor-term-roster-evidence dd { margin:0; }
+.constructor-term-roster-evidence ul { padding-inline-start:22px; }
 
 @media (max-width:560px) {
   .constructor-term-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .constructor-term-filters label:last-child { grid-column:1 / -1; }
+  .constructor-term-roster-evidence dl > div { grid-template-columns:1fr; gap:2px; }
   .constructor-term-filters select,.campus-shell .constructor-term-dialog .constructor-term-list button { min-height:42px; }
 }
 
