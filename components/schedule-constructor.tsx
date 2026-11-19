@@ -928,6 +928,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setStatus(String((error as Error).message));
     }
   };
+  const openLesson = async (id: string, lessonId: string) => {
+    await open(id);
+    setSelectedId(lessonId);
+    setPanelOpen(true);
+  };
   const create = async (source: 'empty' | 'canonical') => {
     try {
       const name =
@@ -2368,7 +2373,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       ) : null}
       {directoryAccess === 'checking' ? <section className="constructor-school-gate">Проверяем подключение к справочнику…</section> : workspace === 'school' && !draft ? (
         <ConstructorSchoolStart api={api} drafts={schoolDrafts} index={schoolWeekIndex} hiddenIds={hiddenSchoolDrafts} readOnly={readOnlySchoolWorkspace} initialSection={schoolStartSection}
-          onOpen={open} onCopy={(item) => void duplicate(item as DraftSummary)} onHide={hideSchoolDraft} onRestore={restoreSchoolDraft}
+          onOpen={open} onOpenLesson={(draftId, lessonId) => void openLesson(draftId, lessonId)} onCopy={(item) => void duplicate(item as DraftSummary)} onHide={hideSchoolDraft} onRestore={restoreSchoolDraft}
           onCreateEmpty={() => void create('empty')} onCreated={async (id) => { setSchoolStartSection('weeks'); await refreshDrafts(); await open(id); }}
           onPublication={async (id) => { await open(id); setPublicationOpen(true); }} />
       ) : !draft ? (
