@@ -1596,16 +1596,27 @@ def _project_student_block(
             best = [claim for claim in activity_claims if _claim_priority(claim) == best_priority]
             activities = {claim["activity"] for claim in best}
             if len(activities) > 1:
-                trace = {
+                if best and all(_assignment_metadata(claim["assignment"].get("metadata") or {}).get("day_plan_mode") == "sdep" for claim in best):
+                    # A self-study plan can list multiple independent tasks in
+                    # one time slot. Preserve every task without treating the
+                    # student as double-booked or selecting one arbitrarily.
+                    ordered = sorted(best, key=lambda claim: (claim["activity"], claim["assignment_id"]))
+                    result = {"state": "ACTIVITY", "activity": " · ".join(claim["activity"] for claim in ordered),
+                              "activity_type": "sdep_plan", "activities": [
+                                  {"activity": claim["activity"], "activity_type": claim.get("activity_type") or "lesson",
+                                   "provenance": {"source_cells": claim["source_cells"]}} for claim in ordered],
+                              "provenance": {**provenance, "source_cells": sorted({cell for claim in ordered for cell in claim["source_cells"]})}}
+                else:
+                    trace = {
                     "assignment_ids": sorted(claim["assignment_id"] for claim in best),
                     "group_ids": sorted({value for claim in best for value in claim["group_ids"]}),
                     "membership_ids": sorted({value for claim in best for value in claim["membership_ids"]}),
                     "source_cells": sorted({str(cell) for claim in best for cell in claim["source_cells"]}),
                     "final_state": "UNRESOLVED", "assignments": assignment_traces,
-                }
-                issue = _projection_issue("MULTIPLE_ACTIVITY_CLAIMS", "multiple equally applicable incompatible activities", student=student, block=block, day=day, trace=trace)
-                issues.append(issue)
-                result = {"state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]], "provenance": provenance}
+                    }
+                    issue = _projection_issue("MULTIPLE_ACTIVITY_CLAIMS", "multiple equally applicable incompatible activities", student=student, block=block, day=day, trace=trace)
+                    issues.append(issue)
+                    result = {"state": "UNRESOLVED", "activity": None, "reason": issue["reason"], "issue_codes": [issue["code"]], "provenance": provenance}
             else:
                 selected = sorted(best, key=lambda claim: (
                     int(not bool(claim["assignment"].get("teacher_ids"))) if _assignment_metadata(claim["assignment"].get("metadata") or {}).get("audience_coverage")=="explicit" else 0,
@@ -1675,7 +1686,12 @@ def _published_unresolved_items(database: Database, effective: Mapping[str, Any]
     records=(source or {}).get('records') or []
     grouped={}
     for record in records:
-        if record.get('status')!='unresolved' or identity_id not in {str(i) for i in record.get('known_student_ids' if kind=='student' else 'known_teacher_ids') or []}:continue
+        if kind == 'student':
+            owns_marker = identity_id in {str(i) for i in record.get('conflict_student_ids') or []}
+            owns_marker = owns_marker or (record.get('status') == 'unresolved' and identity_id in {str(i) for i in record.get('known_student_ids') or []})
+        else:
+            owns_marker = record.get('status') == 'unresolved' and identity_id in {str(i) for i in record.get('known_teacher_ids') or []}
+        if not owns_marker:continue
         if record.get('day') not in range(7) or not record.get('start') or not record.get('end'):continue
         key=(record['day'],record['start'],record['end'])
         entry=grouped.setdefault(key,{'date':(date.fromisoformat(week_start)+timedelta(days=key[0])).isoformat(),'weekday':key[0],'start_time':key[1],'end_time':key[2], 'state':'UNRESOLVED','activity':None,'reason':'Занятие ожидает уточнения администратора','issue_codes':[],'provenance':{'publication_id':row['id'],'unresolved_record_ids':[]}})
@@ -1890,6 +1906,14 @@ def project_student(
         day = (start + timedelta(days=int(block["weekday"]))).isoformat()
         state, block_issues = _project_student_block(database, context, student, block, day)
         issues.extend(block_issues)
+        day_mode = day_modes_by_date.get(day)
+        assignments = _assignments(database, block.get("canonical_block_id"), block.get("patch") or {})
+        sdep_plan = bool(assignments) and all(
+            _assignment_metadata(assignment.get("metadata") or {}).get("day_plan_mode") == "sdep"
+            for assignment in assignments
+        )
+        if day_mode == "sdep" or sdep_plan:
+            state = {key: value for key, value in state.items() if key not in {"teacher_ids", "teacher_names", "room"}}
         joint_id = (state.get("provenance") or {}).get("joint_activity_id")
         if state["state"] == "ACTIVITY" and joint_id:
             joint_key = (day,str(block.get("start_time")),str(block.get("end_time")),str(joint_id))
@@ -1900,7 +1924,7 @@ def project_student(
     unresolved=_published_unresolved_items(database,effective,student_id,week_start,'student')
     if unresolved:
         intervals={(i['date'],i['start_time'],i['end_time']) for i in unresolved}
-        items=[i for i in items if not (i['state']=='NO_LESSON' and (i['date'],i['start_time'],i['end_time']) in intervals)]
+        items=[i for i in items if (i['date'],i['start_time'],i['end_time']) not in intervals]
         items.extend(unresolved)
     items = _event_priority_items(items)
     optional_activities = _published_optional_activities(database, effective, student, context, week_start)
@@ -1974,6 +1998,8 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
         for assignment in _assignments(database, block.get("canonical_block_id"), block.get("patch") or {}):
             teacher_ids = [str(value) for value in assignment.get("teacher_ids") or []]
             metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), Mapping) else {}
+            if metadata.get("day_plan_mode") == "sdep":
+                continue
             responsible_ids=[str(value) for value in metadata.get('responsible_teacher_ids') or []] if metadata.get('activity_format')=='independent_practice' else []
             if teacher_id not in teacher_ids and teacher_id not in responsible_ids:
                 continue

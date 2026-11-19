@@ -78,12 +78,18 @@ def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: 
 
 
 def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], class_grades: Mapping[str, str]) -> set[str]:
-    class_ids = lesson.get("classIds") or ([lesson.get("classId")] if lesson.get("classId") else [])
+    rule = _lesson_audience(lesson)
+    class_ids = {str(value) for value in (lesson.get("classIds") or []) if value}
+    class_ids.update(str(value) for value in (rule.get("class_ids") or rule.get("group_ids") or []) if value)
+    class_ids.update(str(value) for value in (lesson.get("groupIds") or []) if value)
+    class_ids.update(str(value) for value in (lesson.get("classId"), lesson.get("groupId")) if value)
     try:
         weekday = int(lesson.get("day", lesson.get("weekday", -1)))
     except (TypeError, ValueError):
         return set()
     grades = {class_grades.get(str(class_id), "") for class_id in class_ids}
+    if rule.get("grade"):
+        grades.add(str(rule["grade"]))
     grades.discard("")
     modes = {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] for grade in grades}
     return {str(mode) for mode in modes if mode is not None}
@@ -91,11 +97,9 @@ def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], cla
 
 def _sdep_independent_lesson(payload: Mapping[str, Any], lesson: Mapping[str, Any], teacher_ids: set[str], class_grades: Mapping[str, str]) -> bool:
     class_modes = _lesson_day_modes(payload, lesson, class_grades)
-    if not class_modes or class_modes != {"sdep"}:
-        return False
-    if isinstance(lesson.get("sdepIndependent"), bool):
-        return bool(lesson["sdepIndependent"])
-    return not teacher_ids and not str(lesson.get("room") or "").strip() and lesson.get("format") != "offline" and lesson.get("kind") != "event"
+    # The saved grade/day mode is authoritative. Imported teacher, room, format,
+    # and legacy per-lesson flags describe source data, not physical presence.
+    return bool(class_modes) and class_modes == {"sdep"}
 
 
 def initialize_publication_schema(database: Any) -> None:
@@ -174,6 +178,9 @@ _ISSUE_MESSAGES = {
     "joint_activity": "Совместное занятие подтверждено явной связью; исходные аудитории сохранены",
     "joint_activity_unconfirmed": "Возможно совместное занятие, но общий кабинет не подтверждён; нельзя автоматически объединить назначения преподавателя",
     "review_required": "Занятие требует проверки",
+    "explicit_deferred": "Запись отложена администратором и сохранена в исходном расписании",
+    "mixed_day_modes_unsupported": "Занятие охватывает классы с разными режимами дня; разделите аудитории или режимы",
+    "day_mode_conflict": "Для классов одной параллели заданы разные режимы дня",
     "audience_unresolved": "Состав участников не подтверждён или изменился",
     "unknown_teacher": "Указанный преподаватель отсутствует или неактивен",
     "unsupported_partial_cohort": "Нельзя безопасно определить оставшуюся часть параллели",
@@ -190,10 +197,27 @@ _ISSUE_MESSAGES = {
     "stale_base": "Базовая версия изменилась: обновите черновик перед публикацией",
     "missing_base": "Перед публикацией недели нужен опубликованный базовый шаблон",
     "projection_mismatch": "Canonical-проекция не совпадает с подтверждённым составом занятия",
-    "teacher_overlap": "Конфликт: один преподаватель назначен одновременно на разные занятия; эти записи не входят в Campus-проекцию",
-    "student_overlap": "Конфликт: аудитория пересекается по времени; эти записи не входят в Campus-проекцию",
-    "room_overlap": "Конфликт: один кабинет назначен одновременно на разные занятия; эти записи не входят в Campus-проекцию",
-    "joint_activity_unconfirmed": "Конфликт: совместное занятие не подтверждено явной связью; эти записи не входят в Campus-проекцию",
+    "teacher_overlap": "Преподаватель назначен на два независимых занятия одновременно; подтвердите или измените расписание",
+    "student_overlap": "Ученик записан на два занятия одновременно; конфликт будет показан только затронутым ученикам",
+    "room_overlap": "Кабинет назначен на два очных занятия одновременно; измените помещение или время",
+    "joint_activity_unconfirmed": "Возможно совместное занятие; подтвердите его явной связью или разведите записи",
+    "stale_group_subject_mismatch": "Ссылка ведёт на устаревшую группу другого предмета; проверьте аудиторию и сопоставьте её вручную",
+    "missing_teacher": "Для обычного занятия не указан преподаватель",
+    "missing_room": "Для очного занятия не указан кабинет",
+    "unknown_teacher": "Указанный преподаватель отсутствует или неактивен",
+    "missing_runtime_grade": "Не удалось определить параллель для участников",
+    "unsupported_partial_cohort": "Нельзя безопасно определить остаток параллели; задайте подтверждённый состав",
+    "unknown_class": "Класс не найден в школьном справочнике",
+    "missing_special_scope": "Не удалось определить класс для специальной отметки",
+    "duplicate_lesson_id": "Повторяется идентификатор исходной записи",
+    "missing_lesson_id": "У исходной записи отсутствует стабильный идентификатор",
+    "missing_origin_block": "Не найдена исходная опубликованная запись",
+    "invalid_slot": "Указано неверное время или день занятия",
+    "protected": "Изменение защищённой записи требует отдельного решения",
+    "protected_base": "Изменена защищённая запись опубликованного расписания",
+    "stale_base": "Основа расписания изменилась; обновите черновик и повторите проверку",
+    "missing_base": "Перед публикацией недели нужен опубликованный школьный шаблон",
+    "projection_mismatch": "Не удалось безопасно подтвердить персональное отображение записи",
 }
 
 
@@ -208,7 +232,8 @@ def _class_grade(group: Mapping[str, Any]) -> str | None:
 
 
 def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: Mapping[str, Any],
-                           reference: date) -> set[str]:
+                           reference: date,
+                           conflict_student_ids_by_block: Mapping[str, set[str]] | None = None) -> set[str]:
     """Use the real projector in memory, before any immutable artifact is written.
 
     In particular a removed partition must never widen a remaining audience.
@@ -248,11 +273,27 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
                          and not canonical._student_busy_in_slot(database, context, student, membership_groups, candidate, index, exact_intervals=True, include_available_slot=True)]
             projected, _ = canonical._project_student_block(database, context, student, candidate, day)
             expected_activities = [a for a in expected if a["activity"] != "NO_LESSON"]
-            if projected["state"] == "ACTIVITY":
+            if projected["state"] == "ACTIVITY" and projected.get("activity_type") == "sdep_plan":
+                planned = {item.get("activity") for item in projected.get("activities") or []}
+                expected_planned = {item.get("activity") for item in expected_activities
+                                    if (item.get("metadata") or {}).get("day_plan_mode") == "sdep"}
+                if not expected_planned or not expected_planned.issubset(planned):
+                    mismatches.add(key)
+            elif projected["state"] == "ACTIVITY":
                 matches = [a for a in expected_activities if a["activity"] == projected.get("activity")
-                           and set(a["teacher_ids"]) == set(str(t) for t in projected.get("teacher_ids") or [])]
+                           and ((a.get("metadata") or {}).get("day_plan_mode") == "sdep"
+                                or set(a["teacher_ids"]) == set(str(t) for t in projected.get("teacher_ids") or []))]
                 if not matches:
                     mismatches.add(key)
+            elif (projected["state"] == "UNRESOLVED"
+                  and set(projected.get("issue_codes") or []) == {"MULTIPLE_ACTIVITY_CLAIMS"}
+                  and sid in (conflict_student_ids_by_block or {}).get(key, set())):
+                # The exact student has a confirmed timetable collision. Keep
+                # this block's assignments for unaffected classmates and attach
+                # a personal conflict marker in the immutable source archive.
+                # Other projection failures, even for the same student, remain
+                # blocking and are handled by the normal mismatch path.
+                continue
             elif projected["state"] == "UNRESOLVED" or expected_activities:
                 mismatches.add(key)
     return mismatches
@@ -381,6 +422,8 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         class_modes = _lesson_day_modes(payload, lesson, class_grades)
         online_only = bool(class_modes) and class_modes == {"online"}
         sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids), class_grades)
+        if len(class_modes) > 1:
+            block("mixed_day_modes_unsupported", "Занятие охватывает классы с разными режимами дня; разделите аудитории или режимы")
         if stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
             class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
                             for group_id in display_classes if str(group_id) in groups]
@@ -389,19 +432,32 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         elif needs_review:
             # An explicit, active teacher is sufficient for publication. A
             # separate workload row is not required evidence for the lesson.
-            if review_reason == "Не подтверждён преподаватель" and not teacher_ids:
-                pass  # The missing_teacher diagnostic below records this once.
-            elif (review_reason == "Нет подтверждённого назначения преподавателя группе"
+            # Historical import notes can be compound. Clear only the teacher
+            # clause when every explicitly named teacher is currently active.
+            active_teacher_note = "не подтверждён преподаватель"
+            reason_without_active_teacher_note = review_reason
+            if active_teacher_note in review_reason.casefold() and teacher_ids and not teacher_evidence - teachers.keys():
+                reason_without_active_teacher_note = re.sub(active_teacher_note, "", review_reason, flags=re.IGNORECASE)
+                reason_without_active_teacher_note = re.sub(r"\s*(?:[,;·]|\bи\b)\s*", " ", reason_without_active_teacher_note, flags=re.IGNORECASE).strip(" .,:;-")
+            if active_teacher_note in review_reason.casefold() and not teacher_ids:
+                reason_without_active_teacher_note = ""  # missing_teacher below reports the current condition.
+            elif ("нет подтверждённого назначения преподавателя группе" in review_reason.casefold()
                   and teacher_evidence and not teacher_evidence - teachers.keys()):
-                pass  # Routine workload metadata must not become a publication warning.
+                reason_without_active_teacher_note = re.sub(r"нет подтверждённого назначения преподавателя группе", "", review_reason, flags=re.IGNORECASE).strip(" .,:;-и")
+            if not reason_without_active_teacher_note:
+                pass  # Stale teacher/workload evidence is fully resolved.
             elif is_lunch and lunch_scope_confirmed:
                 pass
             elif is_optional:
                 pass
             else:
-                block("review_required", review_reason)
+                block("review_required", reason_without_active_teacher_note)
         if teacher_evidence - teachers.keys():
-            block("unknown_teacher", "An assigned teacher is missing or inactive")
+            if sdep_independent:
+                blockers.append({"code": "unknown_teacher", "severity": "info", "lesson_id": lesson_id,
+                                 "message": "В исходных данных указан отсутствующий или неактивный преподаватель; в SDEP-день он не назначается для Campus"})
+            else:
+                block("unknown_teacher", "An assigned teacher is missing or inactive")
         if not teacher_ids and not sdep_independent and not is_optional and not is_event and _requires_physical_teacher(lesson, practice):
             blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
                              "message": "Преподаватель занятия не подтверждён", "severity": "info"})
@@ -409,8 +465,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             teacher_ids = []
         if not is_lunch and special != "no_lesson" and not informational_unassigned_event:
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
-                              "teachers": set(teacher_ids), "students": set() if is_optional else set(result.get("student_ids") or []),
-                              "subject": subject, "room": "" if practice else room_key(lesson.get("room")),
+                              "teachers": set() if sdep_independent or practice else set(teacher_ids),
+                              "students": set() if is_optional or sdep_independent else set(result.get("student_ids") or []),
+                              "subject": subject, "room": "" if practice or sdep_independent or online_only else room_key(lesson.get("room")),
                               "activity_type": "event" if is_event else activity_type,
                               "sdep_independent": sdep_independent})
         rule = _lesson_audience(lesson)
@@ -521,6 +578,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                                    "teachers": [teachers[t] for t in teacher_ids if t in teachers],
                                    "constructor_lesson_id": lesson_id,
                                    "activity_type": "event" if is_event else activity_type,
+                                   "day_plan_mode": "sdep" if sdep_independent else "online" if online_only else "normal",
                                    **({"activity_format":"independent_practice", "responsible_teacher_ids":responsible_teacher_ids,
                                        "responsible_teachers":[teachers[t] for t in responsible_teacher_ids if t in teachers]} if practice else {}),
                                    "special_mark": special}}
@@ -585,12 +643,10 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 continue
             if left["id"] in joint_by_lesson and joint_by_lesson.get(left["id"]) == joint_by_lesson.get(right["id"]):
                 continue
-            both_independent_sdep = left["sdep_independent"] and right["sdep_independent"]
-            if both_independent_sdep:
-                continue
             event_overlay = left.get("activity_type") == "event" or right.get("activity_type") == "event"
             if left["students"] & right["students"] and not event_overlay:
                 blockers.append({"code": "student_overlap", "lesson_id": right["id"], "related_lesson_ids": [left["id"], right["id"]],
+                                 "affected_student_ids": sorted(left["students"] & right["students"]),
                                  "message": f"Conflicting student audience overlaps lesson {left['id']}"})
             if left["teachers"] & right["teachers"]:
                 code = "joint_activity_unconfirmed" if left["subject"] == right["subject"] and left["interval"] == right["interval"] and left["teachers"] == right["teachers"] and (not left["room"] or not right["room"]) else "teacher_overlap"
@@ -608,8 +664,10 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         lid = issue.get("lesson_id")
         issue["context"] = contexts.get(lid, {})
         issue["block_key"] = lesson_keys.get(lid)
-        if issue["severity"] == "conflict" or issue["code"] == "stale_group_subject_mismatch":
+        if ((issue["severity"] == "conflict" and issue["code"] != "student_overlap")
+                or issue["code"] == "stale_group_subject_mismatch"):
             excluded.update(lesson_keys[i] for i in issue.get("related_lesson_ids", [lid]) if i in lesson_keys)
+    direct_excluded = set(excluded)
     changed = True
     while changed:
         changed = False
@@ -617,36 +675,45 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if connected != excluded:
             excluded = connected
             changed = True
-        # A missing cohort cannot safely identify a smaller parallel unit.
-        unknown_slots = {(blocks[k]["weekday"], blocks[k]["slot"]["start"], blocks[k]["slot"]["end"])
-                         for k in excluded if not blocks[k].get("grade_scope")}
-        for key, value in blocks.items():
-            if (value["weekday"], value["slot"]["start"], value["slot"]["end"]) in unknown_slots and key not in excluded:
-                excluded.add(key)
-                changed = True
+        # An unscoped item is excluded on its own. Sharing its time slot does
+        # not make otherwise valid classes part of the same publication unit.
     for lid, key in sorted(lesson_keys.items()):
         if key in excluded:
             connected_keys = connected_units({key})
-            causes = [issue for issue in blockers if (issue["severity"]=="conflict" or issue["code"]=="stale_group_subject_mismatch") and
+            causes = [issue for issue in blockers if ((issue["severity"]=="conflict" and issue["code"]!="student_overlap") or issue["code"]=="stale_group_subject_mismatch") and
                       any(lesson_keys.get(i) in connected_keys for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]))]
-            if not causes:
-                slot = (blocks[key]["weekday"],blocks[key]["slot"]["start"],blocks[key]["slot"]["end"])
-                unknown_keys = {k for k in excluded if not blocks[k].get("grade_scope") and
-                                (blocks[k]["weekday"],blocks[k]["slot"]["start"],blocks[k]["slot"]["end"])==slot}
-                causes = [issue for issue in blockers if (issue["severity"]=="conflict" or issue["code"]=="stale_group_subject_mismatch") and issue.get("block_key") in unknown_keys]
             deferred.append({"lesson_id": lid, "block_key": key, "action": "excluded", "context": contexts[lid],
+                "exclusion_scope": "direct" if key in direct_excluded else "cascade",
                 "cause_codes": sorted({i["code"] for i in causes}),
                 "cause_lesson_ids": sorted({i for issue in causes for i in issue.get("related_lesson_ids",[issue.get("lesson_id")]) if i}),
-                "reason": "Весь связанный блок исключён из публикации; исходная запись остаётся в черновике"})
+                "reason": "Непосредственно затронуто диагностикой; исходная запись остаётся в черновике" if key in direct_excluded
+                    else "Исключено из-за атомарной связи с непосредственно затронутой записью; исходная запись остаётся в черновике"})
     for issue in blockers:
         issue["action"] = "excluded" if issue.get("block_key") in excluded else "blocked" if issue["severity"] == "critical" else "published"
     blocks = {key: value for key, value in blocks.items() if key not in excluded}
     invalid_projections: set[str] = set()
+    conflicted_students_by_block: dict[str, set[str]] = {}
+    for issue in blockers:
+        if issue.get("code") != "student_overlap":
+            continue
+        related_keys = {lesson_keys[lesson_id] for lesson_id in issue.get("related_lesson_ids") or []
+                        if lesson_id in lesson_keys}
+        # A projection can only be unresolved by conflicting assignments within
+        # the same canonical block. Cross-block overlaps are handled by the
+        # personal unresolved marker and must not exempt another block.
+        if len(related_keys) != 1:
+            continue
+        block_key = next(iter(related_keys))
+        conflicted_students_by_block.setdefault(block_key, set()).update(
+            str(sid) for sid in issue.get("affected_student_ids") or []
+        )
     while blocks:
-        invalid = _projection_mismatches(database, blocks, audience, reference)
+        invalid = _projection_mismatches(database, blocks, audience, reference, conflicted_students_by_block)
         if not invalid:
             break
-        invalid = connected_units(invalid) & blocks.keys()
+        # Projector mismatches invalidate only the affected immutable block.
+        # The mismatch identifies the full block; adjacent lessons stay intact.
+        invalid = invalid & blocks.keys()
         invalid_projections.update(invalid)
         blocks = {key: value for key, value in blocks.items() if key not in invalid}
     for lid, key in sorted(lesson_keys.items()):
@@ -654,6 +721,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             blockers.append({"code": "projection_mismatch", "severity": "conflict", "lesson_id": lid,
                              "block_key": key, "context": contexts[lid], "action": "excluded"})
             deferred.append({"lesson_id": lid, "block_key": key, "context": contexts[lid], "action": "excluded",
+                             "exclusion_scope": "direct",
                              "cause_codes":["projection_mismatch"], "cause_lesson_ids":[lid],
                              "reason": "Весь блок исключён: проверка canonical-проекции не пройдена"})
     blocks = {key: value for key, value in blocks.items() if key not in invalid_projections}
@@ -716,6 +784,8 @@ def _published_source(database: Any, payload: Mapping[str, Any], diagnostics: li
                         "responsible_teacher_ids":assigned_teachers if practice else [],
                         "acknowledged_exceptions":deepcopy(acknowledgements),
                         "diagnostic_codes": sorted({issue["code"] for issue in issues}),
+                        "conflict_student_ids": sorted({str(sid) for issue in issues if issue.get("code") == "student_overlap"
+                                                         for sid in issue.get("affected_student_ids") or []}),
                         "related_lesson_ids": sorted({str(i) for issue in issues for i in issue.get("related_lesson_ids", []) if str(i)!=lid})})
     return {"schema_version": "published-source-v1", "payload_fingerprint": _hash(payload),
             "payload": deepcopy(dict(payload)), "records": records}
@@ -746,8 +816,9 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
         messages = [next((issue.get("message") for issue in diagnostics if issue.get("code") == code and issue.get("message")), None)
                     or _ISSUE_MESSAGES.get(code) for code in cause_codes]
         messages = [message for message in messages if message]
-        entry["reason"] = ("Не включено в персональный Campus: " + " · ".join(dict.fromkeys(messages))) if messages else (
-            "Не включено в персональный Campus: аудитория не подтверждена; запись сохранена в административном источнике")
+        cause = " · ".join(dict.fromkeys(messages)) if messages else "аудитория не подтверждена"
+        scope = "непосредственно затронуто проверкой" if entry.get("exclusion_scope") == "direct" else "исключено по атомарной связи с другой записью" if entry.get("exclusion_scope") == "cascade" else "сохранено как неразрешённое административное решение"
+        entry["reason"] = f"Причина: {cause}. Статус: {scope}; исходная запись сохранена."
     for issue in diagnostics:
         if issue.get("action")=="excluded":issue["action"]="retained_unresolved"
     if version and base_id != version["version_id"]:
@@ -755,7 +826,7 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
     if scope_kind == "week" and not base:
         diagnostics.append({"code": "missing_base", "severity": "critical"})
     for issue in diagnostics:
-        issue["message"] = issue.get("message") if issue["code"] == "review_required" else _ISSUE_MESSAGES.get(issue["code"], issue.get("message", "Требуется проверка"))
+        issue["message"] = issue.get("message") if issue["code"] in {"review_required", "stale_group_subject_mismatch"} else _ISSUE_MESSAGES.get(issue["code"], "Проверьте исходную запись в конструкторе")
     blockers = [issue for issue in diagnostics if issue["severity"] == "critical"]
     before = (base or {}).get("blocks") or {}
     if scope_kind == "week" and effective:
@@ -777,6 +848,16 @@ def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
                    confirmed_lessons=sum(r["status"]=="resolved" for r in published_source["records"]),
                    acknowledged_exception_lessons=sum(r["status"]=="acknowledged_exception" for r in published_source["records"]),
                    acknowledged_exceptions=len({e["id"] for r in published_source["records"] for e in r["acknowledged_exceptions"]}))
+    conflict_diagnostics = [item for item in diagnostics if item.get("severity") == "conflict"]
+    summary.update(
+        diagnostic_events=len(diagnostics),
+        conflict_lessons=len({str(value) for item in conflict_diagnostics
+                              for value in [item.get("lesson_id"), *(item.get("related_lesson_ids") or [])] if value}),
+        affected_students=len({str(value) for item in conflict_diagnostics for value in item.get("affected_student_ids") or []}),
+        day_mode_issues=sum(item.get("code") in {"day_mode_conflict", "mixed_day_modes_unsupported"} for item in diagnostics),
+        direct_exclusions=len({item["lesson_id"] for item in deferred if item.get("exclusion_scope") == "direct"}),
+        cascade_exclusions=len({item["lesson_id"] for item in deferred if item.get("exclusion_scope") == "cascade"}),
+    )
     result = {"draft_id": draft_id, "draft_revision": draft["revision"], "scope_kind": scope_kind,
               "scope_key": scope_key, "week_start": week_start if scope_kind == "week" else None,
               "base_version_id": base_id or None, "effective_week_id": (effective or {}).get("effective_week_id"),

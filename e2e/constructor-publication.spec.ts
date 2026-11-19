@@ -120,8 +120,11 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
 test('publication preview filters remarks and shows readable lesson context and deferred actions', async ({ page }) => {
   const { dialog } = await openPublicationPanel(page, { critical: true });
   await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
-  const criticalGroup = dialog.locator('.constructor-publication-diagnostics details').filter({ hasText: 'review_required' });
-  await criticalGroup.locator('summary').click();
+  await expect(dialog.getByText('События проверки')).toBeVisible();
+  await expect(dialog.getByText('уникальных занятий с конфликтами')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /События проверки 3/ })).toBeVisible();
+  const criticalGroup = dialog.locator('.constructor-publication-diagnostics details').filter({ hasText: 'Не подтверждена аудитория занятия.' }).first();
+  await criticalGroup.locator('summary').first().click();
   await expect(criticalGroup.getByText('Не подтверждена аудитория занятия.', { exact: true })).toBeVisible();
   await expect(criticalGroup.getByText('Пн · 09:00–09:45 · Математика · Преподаватели: Анна Учитель · Группы: 7 класс')).toBeVisible();
   await expect(dialog.getByText(/teacher-fixture|group-fixture|lesson-critical/)).toHaveCount(0);
@@ -131,8 +134,12 @@ test('publication preview filters remarks and shows readable lesson context and 
   await dialog.getByRole('button', { name: /Критичные/ }).click();
   await expect(dialog.locator('.constructor-publication-diagnostics li')).toHaveCount(1);
   await dialog.getByRole('button', { name: /Отложенные/ }).click();
+  const deferredGroups = dialog.locator('.constructor-publication-deferred details');
+  await expect(deferredGroups).toHaveCount(2);
+  await deferredGroups.nth(0).locator('summary').click();
   await expect(dialog.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
-  await expect(dialog.getByText('Назначение исключено из Campus этой исторической версии.')).toBeVisible();
+  await deferredGroups.nth(1).locator('summary').click();
+  await expect(dialog.getByText('Исключено непосредственно по указанной причине.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toBeDisabled();
 });
 
@@ -143,7 +150,7 @@ test('diagnostics collapse by cause and copy a sanitized report with lesson link
   const { dialog } = await openPublicationPanel(page);
   await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
   await expect(dialog.getByRole('button', { name: 'Скопировать отчёт проверки' })).toBeVisible();
-  const group = dialog.getByText(/Конфликт · schedule_overlap · 1/);
+  const group = dialog.getByText(/Конфликт · Нужно проверить пересечение занятий\. · 1/);
   await expect(group).toBeVisible();
   await dialog.getByRole('button', { name: 'Скопировать отчёт проверки' }).click();
   await expect(dialog.getByText(/Отчёт проверки скопирован/)).toBeVisible();
