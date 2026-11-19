@@ -40,6 +40,8 @@ import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
+import { ConstructorScheduleExport } from './constructor-schedule-export';
+import { ConstructorTermComparison, type TermComparisonAction, type TermComparisonSide, type TermComparisonSource } from './constructor-term-comparison';
 import { normalizeRoomKey, normalizeRoomDisplay, normalizeRoomInput } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
@@ -138,6 +140,7 @@ type Payload = {
   column_widths?: Record<string, number>;
   column_width_mode?: 'auto' | 'manual';
   import_review?: Raw;
+  school_source?: TermComparisonSource;
   day_modes?: Record<string, Record<string, DayMode>>;
   grade_modes?: Record<string, Record<string, DayMode>>;
 };
@@ -593,8 +596,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [activityEditor, setActivityEditor] = useState<{ item?: ScheduleActivity; name: string; type: 'club' | 'elective'; aliases: string; teacher_ids: string[]; room: string; eligible_grades: number[] } | null>(null);
   const [catalogSaving, setCatalogSaving] = useState(false);
   const [activityType, setActivityType] = useState<'lesson' | 'club' | 'elective' | 'event'>('lesson');
-  const [exporting, setExporting] = useState(false);
-  const [lastExport, setLastExport] = useState<{ draftId: string; revision: number; name: string; week: string; status: string; url?: string; reconnect?: boolean } | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonFocus, setComparisonFocus] = useState<{ draftId: string; key: string } | null>(null);
   const [newWeekStart, setNewWeekStart] = useState('');
   useEffect(() => {
     try { const saved = JSON.parse(window.localStorage.getItem('my-island-hidden-school-drafts:v1') || '[]'); setHiddenSchoolDrafts(Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : []); }
@@ -758,18 +762,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       setActivities((items) => items.map((entry) => entry.id === saved.id ? saved : entry));
       setStatus(`«${saved.name}» ${saved.status === 'archived' ? 'перенесён в архив' : 'восстановлен'}.`);
     } catch (error) { setStatus(`Не удалось изменить каталог: ${String((error as Error).message || error)}`); }
-  };
-  const exportDraft = async () => {
-    if (!draft || dirty || saving || exporting) return;
-    setExporting(true);
-    const exportingRevision = revision.current;
-    try {
-      const path = workspace === 'school' ? `/api/admin/schedule/experiments/school/${encodeURIComponent(draft.id)}/export` : `/api/admin/schedule/experiments/${encodeURIComponent(draft.id)}/export`;
-      const result = await api<{ status: 'exported' | 'existing' | 'authorization_required'; url?: string; message?: string; reconnect_available?: boolean }>(path, { method: 'POST', body: JSON.stringify({ expected_revision: revision.current }) });
-      setLastExport({ draftId: draft.id, revision: exportingRevision, name: draft.name, week: draft.payload.week_start || 'неделя не задана', status: result.status, url: result.url, reconnect: result.reconnect_available });
-      setStatus(result.status === 'authorization_required' ? result.message || 'Для экспорта требуется подключить Google аккаунт.' : `${result.status === 'existing' ? 'Экспорт уже существует' : 'Экспорт выполнен'} · ${draft.name} · ${draft.payload.week_start || 'неделя не задана'}`);
-    } catch (error) { setStatus(`Не удалось экспортировать черновик: ${String((error as Error).message || error)}`); }
-    finally { setExporting(false); }
   };
   const createWeek = async () => {
     if (!draft || dirty || saving || !newWeekStart) return;
@@ -1890,15 +1882,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         return next;
       }),
     }));
-  const reviewDecision = (lessonIds: string[], status: 'confirmed' | 'rejected') =>
-    mutate((state) => ({
-      ...state,
-      import_review: {
-        ...state.import_review,
-        source_items: (state.import_review?.source_items || []).map((item: Raw) =>
-          lessonIds.includes(item.lesson_id) ? { ...item, status } : item),
-      },
-    }));
   const openReviewLesson = (id: string) => {
     const lesson = payload?.lessons.find((item) => item.id === id);
     if (!lesson) return;
@@ -1914,6 +1897,31 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     linkedLesson.current = id;
     setAnchor(null);
     setFocus(null);
+  };
+  const openComparisonSlot = (side: TermComparisonSide) => {
+    if (!payload) return;
+    setComparisonOpen(false);
+    setViewMode('day');
+    setDay(side.day);
+    setClassFilter('');
+    setTeacherFilter('');
+    setSubjectFilter('');
+    setQuery('');
+    setSelectedId('');
+    setPanelMode('lesson');
+    const row = payload.slots.findIndex(slot => slot.start === side.start && slot.end === side.end);
+    const targetClasses = new Set(groups.filter(group => side.classes.includes(group.name)).map(group => group.id));
+    const col = gridColumns.findIndex(column => column.classIds.some(id => targetClasses.has(id)));
+    if (row >= 0 && col >= 0) {
+      setAnchor({ row, col });
+      setFocus({ row, col });
+      setPanelOpen(true);
+    } else {
+      setAnchor(null);
+      setFocus(null);
+      setPanelOpen(false);
+      setStatus(`Найдите занятие в сетке. ${DAYS[side.day]} · ${side.start}–${side.end} · ${side.classes.join(', ')}`);
+    }
   };
   const removeSelected = () => {
     if (!payload) return;
@@ -2299,6 +2307,32 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   };
 
   const schoolReview = workspace === 'school';
+  const termComparison = schoolReview && !payload?.week_start ? payload?.school_source?.term2_preparation?.comparison : undefined;
+  const termDecided = new Set(termComparison?.decisions?.map(decision => decision.key));
+  const pendingTermItems = termComparison?.items.filter(item => item.initial_status !== 'accepted' && !termDecided.has(item.key)).length || 0;
+  const decideTermComparison = async (key: string, action: TermComparisonAction, reason: string, lessonId?: string) => {
+    if (!draft || dirty || saving || !termComparison) return;
+    let updated: Draft;
+    try {
+      updated = await api<Draft>(schedulePath(`/${encodeURIComponent(draft.id)}/term-comparison/decision`), {
+        method: 'POST',
+        body: JSON.stringify({ expected_revision: draft.revision, key, action, reason, lesson_id: lessonId }),
+      });
+    } catch (failure) {
+      if ((failure as Error & { status?: number }).status === 409) {
+        await open(draft.id);
+        throw new Error('Черновик изменился. Сверьте текущую версию перед сохранением решения.');
+      }
+      throw failure;
+    }
+    const schoolSource = updated.payload.school_source;
+    setHistory(items => items.map(item => ({ ...item, school_source: schoolSource })));
+    setFuture(items => items.map(item => ({ ...item, school_source: schoolSource })));
+    revision.current = updated.revision;
+    baseDraftRef.current = updated;
+    setDraft(updated);
+    void refreshDrafts().catch(() => {});
+  };
   const rosterClassId = classFilter || (selected
     ? audienceOf(selected, groups).kind === 'groups' ? audienceOf(selected, groups).group_ids?.[0] : lessonClasses(selected)[0]
     : undefined);
@@ -2324,7 +2358,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   ) : null;
   return (
     <div
-      className={`constructor constructor-ux ${draft ? 'has-draft' : ''} ${fullScreen ? 'is-fullscreen' : ''}`}
+      className={`constructor constructor-ux ${draft ? 'has-draft' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${termComparison ? 'has-term-comparison' : ''}`}
       role="application"
       aria-label="Конструктор расписания"
       ref={root}
@@ -2370,6 +2404,40 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           ) : null}
         </div>
       </header>
+      {draft && termComparison?.items.length ? <div className="constructor-term-strip">
+        <span>Второй триместр · ждут первичной проверки {pendingTermItems}</span>
+        <button type="button" className="admin-button" onClick={() => setComparisonOpen(true)}>Сверка с таблицей</button>
+      </div> : null}
+      {draft && termComparison && comparisonOpen ? <ConstructorTermComparison
+        key={draft.id} comparison={termComparison} name={draft.name} dirty={dirty || saving} readOnly={readOnlySchoolWorkspace}
+        initialKey={comparisonFocus?.draftId === draft.id ? comparisonFocus.key : null}
+        lessons={draft.payload.lessons.map(lesson => {
+          const classes = visualClasses(lesson, groups).map(id => groups.find(group => group.id === id)?.name).filter((label): label is string => Boolean(label));
+          const teacherIds = [...new Set([lesson.teacherId, ...(lesson.teacherIds || [])].filter(Boolean))];
+          const room = normalizeRoomDisplay(lesson.room || lesson.place || '');
+          return {
+            ...lessonTimes(lesson, draft.payload.slots),
+            id: lesson.id,
+            day: lesson.day,
+            subject: lesson.subject,
+            room,
+            classes,
+            teachers: teacherIds.map(id => teachers.find(teacher => teacher.id === id)?.name || 'Требует уточнения'),
+            groups: linkedInstructionalGroups(lesson, groups).map(group => group.name),
+            kind: isLunch(lesson) ? 'lunch' : editorActivityType(lesson) || 'lesson',
+            warning: lesson.needsClarification ? lesson.clarificationReason || 'Требует уточнения' : '',
+            label: [lesson.subject, ...classes, room].filter(Boolean).join(' · '),
+          };
+        })}
+        onSelect={key => setComparisonFocus(key ? { draftId: draft.id, key } : null)}
+        onClose={() => setComparisonOpen(false)}
+        onOpenLesson={id => { setComparisonOpen(false); openReviewLesson(id); }}
+        onOpenSlot={openComparisonSlot}
+        onDecide={decideTermComparison} /> : null}
+      {draft && exportOpen ? <ConstructorScheduleExport
+        api={api} id={draft.id} revision={draft.revision} name={draft.name}
+        path={schedulePath(`/${encodeURIComponent(draft.id)}/export`)} readOnly={schoolReview && readOnlySchoolWorkspace}
+        onClose={() => setExportOpen(false)} /> : null}
       {recalculationOpen && draft && !schoolReview ? <ConstructorAudienceRecalculation
         api={api} apiPrefix="/api/admin/schedule/experiments"
         draftId={draft.id} revision={draft.revision} dirty={dirty} day={day} classId={rosterClassId} classLabel={rosterClassLabel}
@@ -2488,27 +2556,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       ) : payload ? (
         <>
           {payload.import_review?.status === 'canonical_copy' ? <p className="constructor-status">{payload.import_review.message} · {payload.lessons.length} карточек · версия {draft.base_version_id}</p> : null}
-          {workspace === 'school' && conflictsOpen && payload.import_review?.status === 'source_led_applied' ? <details className="constructor-unplaced constructor-source-review">
-            <summary><strong>Сверка «Было → Стало» · {(payload.import_review.source_items || []).filter((item: Raw) => item.status === 'needs_confirmation').length} требуют решения</strong></summary>
-            <p>Источник: Google Sheets «2026/27 шаблон». {payload.import_review.source_cell_count} занятых ячеек, {payload.import_review.source_block_count} блоков. Старая версия сохранена в локальной резервной копии. Подтверждения сохраняются вместе с черновиком.</p>
-            {(payload.import_review.source_items || []).map((item: Raw) => {
-              const lesson = payload.lessons.find((entry) => entry.id === item.lesson_id);
-              if (!lesson) return null;
-              const sameCases = (payload.import_review?.source_items || []).filter((other: Raw) =>
-                other.status === 'needs_confirmation' && other.proposed?.subject === item.proposed?.subject &&
-                other.proposed?.group_id === item.proposed?.group_id && other.proposed?.teacher_id === item.proposed?.teacher_id &&
-                JSON.stringify(other.reasons) === JSON.stringify(item.reasons) &&
-                JSON.stringify(Object.values(other.source_text || {})) === JSON.stringify(Object.values(item.source_text || {})));
-              return <details key={item.lesson_id} className="constructor-review-item">
-                <summary>{DAYS[item.day]} {item.start}–{item.end} · {lessonClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name || id).join(', ')} · {lesson.subject} · {item.status === 'needs_confirmation' ? 'Требует проверки' : item.status === 'auto_applied' ? 'Перенесено' : item.status === 'confirmed' ? 'Подтверждено' : 'Отклонено'}</summary>
-                <div className="constructor-review-comparison"><div><b>Исходник · {item.source_cells?.join(', ')}</b><p>{Object.values(item.source_text || {}).join(' / ')}</p></div><div><b>Было</b><p>{item.before?.length ? item.before.map((entry: Raw) => `${entry.subject || 'Без предмета'} · ${(entry.group_ids || []).map((id: string) => groups.find((group) => group.id === id)?.name || 'группа не найдена').join(', ') || 'без группы'} · ${(entry.teacher_ids || []).map((id: string) => teachers.find((teacher) => teacher.id === id)?.name || 'преподаватель не найден').join(', ') || 'без преподавателя'}${entry.room ? ` · ${normalizeRoomDisplay(entry.room)}` : ''}`).join('; ') : 'В прежнем черновике нет'}</p></div><div><b>Стало</b><p>{lesson.subject} · {groups.find((group) => group.id === lesson.groupId)?.name || 'группа требует уточнения'} · {teachers.find((teacher) => teacher.id === lesson.teacherId)?.name || 'преподаватель требует уточнения'}{lesson.room ? ` · ${normalizeRoomDisplay(lesson.room)}` : ''}</p></div></div>
-                {item.reasons?.length ? <p>Причина: {item.reasons.join('; ')}</p> : <p>Исходник изменился или отсутствовал в прежнем черновике; запись перенесена автоматически.</p>}
-                <div className="constructor-draft-actions"><button onClick={() => openReviewLesson(item.lesson_id)}>Показать и исправить</button>{item.status === 'needs_confirmation' ? <><button onClick={() => reviewDecision([item.lesson_id], 'confirmed')}>Подтвердить</button><button onClick={() => reviewDecision([item.lesson_id], 'rejected')}>Отклонить сопоставление</button>{sameCases.length > 1 ? <button onClick={() => reviewDecision(sameCases.map((other: Raw) => other.lesson_id), 'confirmed')}>Подтвердить одинаковые · {sameCases.length}</button> : null}</> : null}</div>
-              </details>;
-            })}
-            <p>Исключены из сетки: {payload.import_review.excluded_legacy_no_lesson_count || 0} прежних служебных отметок NO_LESSON и {payload.import_review.excluded_old_source_cells?.length || 0} ячеек старой версии, отсутствующих в актуальном шаблоне.</p>
-            {(payload.import_review.visual_exclusions || []).map((item: Raw) => <p key={item.source_cell}>Отдельная заметка {item.source_cell}: «{item.raw_text?.trim()}» · {item.reason}.</p>)}
-          </details> : null}
           <div className="constructor-toolbar constructor-command-bar">
             <div className="constructor-primary-tools" role="group" aria-label="Вид расписания и инструменты">
             <div className="constructor-view-tabs" role="group" aria-label="Режим просмотра">
@@ -2633,8 +2680,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             >
               {workspace === 'school' ? 'К шаблону и неделям' : 'Все черновики'}
             </button>
-            <button onClick={() => void exportDraft()} disabled={dirty || saving || exporting || !draft.payload.week_start}>{exporting ? 'Экспортируем…' : 'Экспортировать в Google Sheets'}</button>
-            {lastExport?.draftId === draft.id && lastExport.revision === draft.revision && !dirty ? <span className="constructor-export-result">{lastExport.reconnect ? <button onClick={async () => { try { const result = await api<{ authorization_url: string }>('/api/admin/google/reconnect?schedule_export=true', { method: 'POST' }); window.location.assign(result.authorization_url); } catch (error) { setStatus(String((error as Error).message || error)); } }}>Подключить Google для экспорта</button> : null}{lastExport.name} · {lastExport.week} · {lastExport.status === 'existing' ? 'уже экспортировано' : lastExport.status === 'authorization_required' ? 'нужна авторизация' : 'экспортировано'}{lastExport.url ? <> · <a href={lastExport.url} target="_blank" rel="noreferrer">Открыть таблицу</a></> : null}</span> : null}
+            <button type="button" disabled={dirty || saving} onClick={() => setExportOpen(true)}>Подготовить экспорт в Google Sheets</button>
             {workspace !== 'school' ? <><input type="date" aria-label="Понедельник новой недели" value={newWeekStart} onChange={(event) => setNewWeekStart(event.target.value)} /><button onClick={() => void createWeek()} disabled={dirty || saving || !newWeekStart}>Создать неделю</button></> : null}
 
             <input
@@ -3494,7 +3540,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               ) : (
                 <div className="constructor-hint">Выберите ячейку расписания или откройте настройку шаблона.</div>
               )}
-              <div className="constructor-editor-actions"><button onClick={() => setPanelOpen(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> Сохранить черновик</button></div>
+              <div className="constructor-editor-actions"><button onClick={() => setPanelOpen(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> {termComparison ? 'Сохранить правку' : 'Сохранить черновик'}</button></div>
             </ConstructorInspectorShell>
             <button
               type="button"

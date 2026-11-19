@@ -17,6 +17,7 @@ from typing import Any, Iterator
 
 from backend.database import Database
 from backend.services.canonical_schedule import canonical_version, project_teacher, read_canonical_template
+from backend.services.google_contract import SCHOOL_SCHEDULE_SPREADSHEET_ID
 from backend.services.schedule_experiments import (
     _canonical_payload, create_experiment, get_experiment, list_experiments,
 )
@@ -25,7 +26,7 @@ from backend.services.schedule_experiments import (
 ROOT = Path(__file__).resolve().parents[2]
 SCHOOL_DB = ROOT / ".local-test" / "school-experiments.sqlite3"
 EXPECTED_PROJECT = "kmrcbewmxeqqxfauiwyy"
-EXPECTED_SPREADSHEET = "1j5dI2VbT0RoW2A5ZkCpMYVdt7cSY4ZjNxQaMWtu--Fo"
+EXPECTED_SPREADSHEET = SCHOOL_SCHEDULE_SPREADSHEET_ID
 EXPECTED_SHEET = "638874869"
 SCHOOL_DRAFT_NAME = "ШКОЛА · Реальный шаблон 2026/27 · На проверке"
 # Confirmed by the school on 2026-10-14. This aliases only the administrative

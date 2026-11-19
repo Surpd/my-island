@@ -79,7 +79,7 @@ async def forward_admin_browser_session(request, call_next):
             local_draft_operation = (
                 request.method == "POST" and request.url.path == "/api/admin/schedule/experiments/school/import"
                 or request.method in {"PUT", "DELETE"} and re.fullmatch(r"/api/admin/schedule/experiments/school/[^/]+", request.url.path)
-                or request.method == "POST" and re.fullmatch(r"/api/admin/schedule/experiments/school/[^/]+/(duplicate|week|export)", request.url.path)
+                or request.method == "POST" and re.fullmatch(r"/api/admin/schedule/experiments/school/[^/]+/(duplicate|week|export(?:/preview)?|term-comparison/decision)", request.url.path)
                 or request.method in {"POST", "PUT"} and request.query_params.get("workspace") == "school"
                 and re.fullmatch(r"/api/admin/schedule/activities(?:/[^/]+)?", request.url.path)
             )

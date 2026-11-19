@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import timedelta
 import json
 import math
 import re
@@ -11,7 +11,7 @@ import textwrap
 from typing import Any, Mapping
 
 from backend.services.schedule_sheet_export import (
-    DAY_NAMES, FORMAT_VERSION, _class_key, _compact_text, _hash, _label, column_name,
+    DAY_NAMES, FORMAT_VERSION, _class_key, _compact_text, _hash, _label, _schedule_heading, column_name,
 )
 
 
@@ -272,7 +272,7 @@ def build_readable_plan(snapshot: Mapping[str, Any], by_day: Mapping[int, list[d
     slot_ranges = []
     day_sections = []
     day_metrics = []
-    monday = date.fromisoformat(payload["week_start"])
+    monday, schedule_label = _schedule_heading(payload)
 
     def cell(r, c, text, *, h=1, w=1, bg="#FFFFFF", fg="#202124", size=10, bold=False,
              note="", align="LEFT"):
@@ -407,8 +407,9 @@ def build_readable_plan(snapshot: Mapping[str, Any], by_day: Mapping[int, list[d
     cell(0, 0, "Время", bg="#E8EAED", bold=True, align="CENTER")
     for grade, geo in grade_columns.items():
         cell(0, geo["start"], str(grade), w=geo["width"], bg="#E8EAED", bold=True, size=14, align="CENTER")
-    cell(1, 0, f"{monday:%d.%m}–{monday+timedelta(days=4):%d.%m}", size=9, align="CENTER")
-    cell(1, 1, "My Island · неделя из шаблона · уточнения и полные названия в примечаниях", w=columns-1, size=9)
+    cell(1, 0, schedule_label, size=9, align="CENTER")
+    scope = "расписание недели" if monday else "шаблон расписания"
+    cell(1, 1, f"My Island · {scope} · уточнения и полные названия в примечаниях", w=columns-1, size=9)
     row_heights.update({0: 30, 1: 25})
     row = 2
     for day in sorted(payload["days"]):
@@ -419,7 +420,8 @@ def build_readable_plan(snapshot: Mapping[str, Any], by_day: Mapping[int, list[d
                 row += 1
         day_rows.append(row)
         day_short = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[day]
-        cell(row, 0, f"{day_short} {monday+timedelta(days=day):%d.%m}", bg="#344054", fg="#FFFFFF", bold=True, align="CENTER")
+        label = f"{day_short} {monday + timedelta(days=day):%d.%m}" if monday else day_short
+        cell(row, 0, label, bg="#344054", fg="#FFFFFF", bold=True, align="CENTER")
         cell(row, 1, DAY_NAMES[day], w=columns-1, bg="#344054", fg="#FFFFFF", bold=True, size=12)
         row_heights[row] = 26 if final_compact else 30
         row += 1

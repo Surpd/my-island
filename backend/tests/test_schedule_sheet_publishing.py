@@ -1,15 +1,24 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from backend.database import Database
+from backend.handlers.api import create_router
+from backend.services.google_contract import SCHOOL_SCHEDULE_SPREADSHEET_ID
 from backend.services.google_live import GoogleLiveError
 from backend.services.schedule_experiments import ExperimentConflict, create_experiment, get_experiment, save_experiment
 from backend.services.schedule_sheet_export import freeze_week
-from backend.services.schedule_sheet_publishing import ExportAuthorizationRequired, export_client, export_saved_week, prepare_export
+from backend.services.schedule_sheet_publishing import (
+    ExportAuthorizationRequired, ExportPreviewConflict, export_client, export_saved_schedule,
+    prepare_export, preview_saved_export, TEST_EXPORT_TARGET,
+)
 from backend.services.teacher_ui_colors import initialize_sqlite_schema, set_manual_color
 
 
@@ -18,15 +27,19 @@ class FakeSheets:
         self.sheets = {}
         self.values = {}
         self.writes = []
+        self.targets = []
         self.lost_response = lost_response
 
     def spreadsheet(self, target):
+        self.targets.append(target)
         return {"sheets": [{"properties": s} for s in self.sheets.values()]}
 
     def sheet_values(self, target, name):
+        self.targets.append(target)
         return self.values.get(name, [])
 
     def batch_update_spreadsheet(self, target, requests):
+        self.targets.append(target)
         self.writes.append(requests)
         for r in requests:
             if 'addSheet' in r:
@@ -58,8 +71,13 @@ class SchedulePublishingTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def confirm(self, draft_id, revision=1, *, client=None, settings=None):
+        preview = preview_saved_export(self.db, draft_id, expected_revision=revision)
+        return export_saved_schedule(self.db, draft_id, expected_revision=revision,
+                                     preview_token=preview["preview_token"], settings=settings, client=client)
+
     def test_authorization_required_is_not_reported_as_success(self):
-        result = export_saved_week(self.db, self.draft['id'], expected_revision=1, settings=SimpleNamespace(local_test_mode=True))
+        result = self.confirm(self.draft["id"], settings=SimpleNamespace(local_test_mode=True))
         self.assertEqual(result['status'], 'authorization_required')
         self.assertNotIn('url', result)
         with self.assertRaises(ExperimentConflict):
@@ -75,16 +93,96 @@ class SchedulePublishingTests(unittest.TestCase):
                 export_client(self.db, settings)
             token_load.assert_not_called()
 
+    def test_approved_destination_can_be_previewed_confirmed_and_reopened(self):
+        approved = "synthetic-approved-export-workbook-1"
+        client = FakeSheets()
+        with patch.dict(os.environ, {"GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID": approved,
+                                     "GOOGLE_SCHEDULE_EXPORT_APPROVED_SPREADSHEET_IDS":
+                                         f"synthetic-other-workbook, {approved}",
+                                     "GOOGLE_SHEETS_SPREADSHEET_ID": ""}):
+            preview = preview_saved_export(self.db, self.draft["id"], expected_revision=1)
+            self.assertEqual(preview["target_url"], f"https://docs.google.com/spreadsheets/d/{approved}/edit")
+            first = self.confirm(self.draft["id"], client=client)
+            repeated = self.confirm(self.draft["id"], client=client)
+        self.assertEqual(repeated["status"], "existing")
+        self.assertEqual(repeated["url"], first["url"])
+        self.assertEqual(set(client.targets), {approved})
+        self.assertEqual(len(client.writes), 1)
+
+    def test_rejects_invalid_unapproved_and_source_destinations(self):
+        configured_source = "synthetic-configured-source-1"
+        provenance_source = "synthetic-draft-source-1"
+        draft = create_experiment(self.db, name="Источник", source="import", payload={
+            **self.payload, "school_source": {"spreadsheet_id": provenance_source},
+        })
+        cases = [
+            ("https://docs.google.com/spreadsheets/d/synthetic-url", "без ссылки"),
+            ("", "без ссылки"),
+            ("synthetic-unapproved-export", "ещё не разрешена"),
+            (SCHOOL_SCHEDULE_SPREADSHEET_ID, "только для чтения"),
+            (configured_source, "только для чтения"),
+            (provenance_source, "только для чтения"),
+        ]
+        approved = ",".join((SCHOOL_SCHEDULE_SPREADSHEET_ID, configured_source, provenance_source))
+        for target, issue in cases:
+            with self.subTest(target=target), patch.dict(os.environ, {
+                "GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID": target,
+                "GOOGLE_SCHEDULE_EXPORT_APPROVED_SPREADSHEET_IDS": approved,
+                "GOOGLE_SHEETS_SPREADSHEET_ID": configured_source,
+            }):
+                with self.assertRaisesRegex(ValueError, issue):
+                    preview_saved_export(self.db, draft["id"], expected_revision=1)
+
+    def test_publish_rechecks_selected_destination_after_google_metadata_read(self):
+        other = "synthetic-newly-selected-export"
+        client = FakeSheets()
+        original = client.spreadsheet
+
+        def switch_target(target):
+            metadata = original(target)
+            os.environ["GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID"] = other
+            return metadata
+
+        with patch.dict(os.environ, {"GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID": TEST_EXPORT_TARGET,
+                                     "GOOGLE_SCHEDULE_EXPORT_APPROVED_SPREADSHEET_IDS": other,
+                                     "GOOGLE_SHEETS_SPREADSHEET_ID": ""}), patch.object(
+                                         client, "spreadsheet", side_effect=switch_target):
+            with self.assertRaisesRegex(ExportPreviewConflict, "Книга для выгрузок изменилась"):
+                self.confirm(self.draft["id"], client=client)
+        self.assertEqual(client.targets, [TEST_EXPORT_TARGET])
+        self.assertEqual(client.writes, [])
+
+    def test_stored_receipt_cannot_supply_a_different_destination_or_url(self):
+        client = FakeSheets()
+        other = "synthetic-approved-external-book"
+        with patch.dict(os.environ, {"GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID": TEST_EXPORT_TARGET,
+                                     "GOOGLE_SCHEDULE_EXPORT_APPROVED_SPREADSHEET_IDS": other,
+                                     "GOOGLE_SHEETS_SPREADSHEET_ID": ""}):
+            first = self.confirm(self.draft["id"], client=client)
+            with self.db.connection() as connection:
+                connection.execute("UPDATE schedule_sheet_exports SET url=? WHERE export_key=?",
+                                   ("https://example.invalid/", first["export_key"]))
+            preview = preview_saved_export(self.db, self.draft["id"], expected_revision=1)
+            self.assertEqual(preview["url"], first["url"])
+            with self.db.connection() as connection:
+                connection.execute("UPDATE schedule_sheet_exports SET target_id=? WHERE export_key=?",
+                                   (other, first["export_key"]))
+            with self.assertRaises(ExportPreviewConflict):
+                export_saved_schedule(self.db, self.draft["id"], expected_revision=1,
+                                      preview_token=preview["preview_token"], settings=None, client=client)
+        self.assertEqual(set(client.targets), {TEST_EXPORT_TARGET})
+        self.assertEqual(len(client.writes), 1)
+
     def test_repeat_returns_same_document_and_new_revision_gets_new_tab(self):
         client = FakeSheets()
-        first = export_saved_week(self.db, self.draft['id'], expected_revision=1, settings=None, client=client)
-        again = export_saved_week(self.db, self.draft['id'], expected_revision=1, settings=None, client=client)
+        first = self.confirm(self.draft["id"], client=client)
+        again = self.confirm(self.draft["id"], client=client)
         self.assertEqual(first['url'], again['url'])
         self.assertEqual(again['status'], 'existing')
         self.assertEqual(len(client.writes), 1)
         self.payload['lessons'][0]['room'] = '19'
         save_experiment(self.db, self.draft['id'], expected_revision=1, payload=self.payload)
-        changed = export_saved_week(self.db, self.draft['id'], expected_revision=2, settings=None, client=client)
+        changed = self.confirm(self.draft["id"], revision=2, client=client)
         self.assertNotEqual(first['url'], changed['url'])
         self.assertEqual(len(client.sheets), 4)
         with self.db.connection() as c:
@@ -93,10 +191,32 @@ class SchedulePublishingTests(unittest.TestCase):
 
     def test_lost_google_response_recovers_without_duplicate_tabs(self):
         client = FakeSheets(lost_response=True)
-        result = export_saved_week(self.db, self.draft['id'], expected_revision=1, settings=None, client=client)
+        result = self.confirm(self.draft["id"], client=client)
         self.assertEqual(result['status'], 'exported')
         self.assertEqual(len(client.writes), 1)
         self.assertEqual(len(client.sheets), 2)
+
+    def test_existing_week_export_is_reused_across_layout_updates(self):
+        client = FakeSheets()
+        with patch("backend.services.schedule_sheet_publishing.EXPORT_POLICY", "compact-activities-v2"):
+            old = self.confirm(self.draft["id"], client=client)
+        preview = preview_saved_export(self.db, self.draft["id"], expected_revision=1)
+        self.assertEqual(preview["status"], "existing")
+        self.assertEqual(preview["url"], old["url"])
+        self.assertEqual(self.confirm(self.draft["id"], client=client)["status"], "existing")
+        self.assertEqual(len(client.writes), 1)
+
+    def test_legacy_week_with_missing_receipt_is_recovered_without_upload(self):
+        client = FakeSheets()
+        with patch("backend.services.schedule_sheet_publishing.EXPORT_POLICY", "compact-activities-v2"):
+            old = self.confirm(self.draft["id"], client=client)
+        with self.db.connection() as connection:
+            connection.execute("UPDATE schedule_sheet_exports SET status='prepared',url=NULL WHERE export_key=?",
+                               (old["export_key"],))
+        recovered = self.confirm(self.draft["id"], client=client)
+        self.assertEqual(recovered["status"], "existing")
+        self.assertEqual(recovered["url"], old["url"])
+        self.assertEqual(len(client.writes), 1)
 
     def test_confirmed_participants_are_not_sent_to_google(self):
         self.payload['lessons'][0].update(activityType='club', activityNameSnapshot='Шахматы', confirmedParticipantIds=['private-student'], eligibleGrades=[7])
@@ -104,6 +224,99 @@ class SchedulePublishingTests(unittest.TestCase):
         export = prepare_export(self.db, draft['id'], expected_revision=1)
         self.assertNotIn('private-student', json.dumps(export['plan']))
         self.assertIn('confirmed_participants_fingerprint', json.dumps(export['snapshot']))
+
+    def test_template_preview_is_undated_and_read_only_and_exports_once(self):
+        payload = {key: value for key, value in self.payload.items() if key != "week_start"}
+        payload["reference_date"] = "2026-10-19"
+        payload["school_source"] = {"term2_preparation": {"internal_note": "private-comparison-text"}}
+        payload["lessons"][0]["audience"]["include_student_ids"] = ["private-inclusion"]
+        payload["lessons"][0]["audience"]["exclude_student_ids"] = ["private-exclusion"]
+        draft = create_experiment(self.db, name="Тестовый шаблон", source="import", payload=payload)
+        preview = preview_saved_export(self.db, draft["id"], expected_revision=1)
+        self.assertEqual(preview["kind"], "template")
+        self.assertIsNone(preview["week_start"])
+        self.assertIn("Шаблон", preview["title"])
+        self.assertEqual(preview["summary"]["lessons"], 1)
+        sample = preview["sample"]
+        self.assertEqual({cell["text"] for cell in sample["cells"] if cell["row"] in {1, 2} and cell["col"] == 0},
+                         {"Шаблон", "Пн"})
+        self.assertFalse(any("note" in cell for cell in sample["cells"]))
+        with self.db.connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schedule_sheet_exports").fetchone()[0], 0)
+        client = FakeSheets()
+        result = self.confirm(draft["id"], client=client)
+        self.assertEqual(result["status"], "exported")
+        self.assertEqual(result["kind"], "template")
+        self.assertEqual(self.confirm(draft["id"], client=client)["url"], result["url"])
+        self.assertEqual(len(client.writes), 1)
+        self.assertNotIn("private-inclusion", json.dumps(client.writes))
+        self.assertNotIn("private-exclusion", json.dumps(client.writes))
+        self.assertNotIn("private-comparison-text", json.dumps(client.writes))
+
+    def test_full_grid_preview_includes_rows_after_the_sample_and_only_visible_cell_fields(self):
+        friday = {**self.payload["lessons"][0], "day": 4, "id": "friday",
+                  "subject": "География пятницы", "note": "hidden-audit-note"}
+        draft = create_experiment(self.db, name="Неделя", source="import",
+                                  payload={**self.payload, "days": list(range(5)),
+                                           "lessons": [*self.payload["lessons"], friday]})
+        preview = preview_saved_export(self.db, draft["id"], expected_revision=1)
+        grid, sample = preview["grid"], preview["sample"]
+        self.assertEqual(grid["rows"], preview["summary"]["rows"])
+        self.assertEqual(grid["columns"], preview["summary"]["columns"])
+        self.assertGreater(grid["rows"], sample["rows"])
+        self.assertTrue(any(cell["row"] >= sample["rows"] for cell in grid["cells"]))
+        plan = prepare_export(self.db, draft["id"], expected_revision=1)["plan"]
+        self.assertEqual(len(grid["cells"]), len(plan["cells"]))
+        self.assertEqual(grid["column_widths"], plan["column_widths"])
+        self.assertEqual(grid["row_heights"], [plan["row_heights"][row] for row in range(plan["rows"])])
+        self.assertEqual(grid["days"][-1], {"row": plan["day_rows"][-1], "label": "Пятница"})
+        self.assertTrue(all(cell.keys() == {"row", "col", "height", "width", "text", "bg", "fg", "bold"}
+                            for cell in grid["cells"]))
+        self.assertNotIn("hidden-audit-note", json.dumps(preview))
+
+    def test_confirm_rejects_changed_directory_and_revision_before_google(self):
+        preview = preview_saved_export(self.db, self.draft["id"], expected_revision=1)
+        with self.db.connection() as connection:
+            connection.execute("UPDATE identities SET display_name='Другой учитель' WHERE id=?", (self.teacher,))
+        client = FakeSheets()
+        with self.assertRaises(ExportPreviewConflict):
+            export_saved_schedule(self.db, self.draft["id"], expected_revision=1,
+                                  preview_token=preview["preview_token"], settings=None, client=client)
+        save_experiment(self.db, self.draft["id"], expected_revision=1, payload=self.payload)
+        with self.assertRaises(ExperimentConflict):
+            export_saved_schedule(self.db, self.draft["id"], expected_revision=1,
+                                  preview_token=preview["preview_token"], settings=None, client=client)
+        self.assertEqual(client.writes, [])
+
+    def test_http_requires_admin_and_explicit_confirmation(self):
+        admin = self.db.get_or_create_user(778823, "admin")
+        with self.db.connection() as connection:
+            connection.execute("INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test')", (admin["id"],))
+        challenge, _ = self.db.create_admin_login_challenge(admin["id"])
+        token, _ = self.db.consume_admin_login_challenge(challenge)
+        app = FastAPI()
+        app.include_router(create_router(self.db))
+        http = TestClient(app)
+        headers = {"X-Dev-Auth": f"browser:{token}"}
+        path = f"/api/admin/schedule/experiments/{self.draft['id']}/export"
+        body = {"expected_revision": 1}
+        writer = FakeSheets()
+        with patch("backend.services.schedule_sheet_publishing.export_client", return_value=writer) as connector:
+            self.assertIn(http.post(path + "/preview", json=body).status_code, {401, 403})
+            preview = http.post(path + "/preview", headers=headers, json=body)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["week_start"], "2026-10-19")
+            confirmation = {**body, "preview_token": preview.json()["preview_token"]}
+            self.assertEqual(http.post(path, headers=headers, json=confirmation).status_code, 422)
+            for invalid in (False, 1):
+                self.assertEqual(http.post(path, headers=headers, json={**confirmation, "confirmed": invalid}).status_code, 422)
+            stale = http.post(path, headers=headers, json={**confirmation, "preview_token": "a" * 64, "confirmed": True})
+            self.assertEqual(stale.status_code, 409, stale.text)
+            connector.assert_not_called()
+            applied = http.post(path, headers=headers, json={**confirmation, "confirmed": True})
+            self.assertEqual(applied.status_code, 200, applied.text)
+            self.assertEqual(applied.json()["status"], "exported")
+        self.assertEqual(len(writer.writes), 1)
 
     def test_consolidated_export_uses_shared_teacher_color_only_for_presentation(self):
         initialize_sqlite_schema(self.db)

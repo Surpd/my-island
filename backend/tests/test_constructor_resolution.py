@@ -179,18 +179,19 @@ class ConstructorResolutionTests(unittest.TestCase):
         self.assertFalse(saved_lunch['room'])
 
     def test_weekly_bulk_rosters_use_memberships_valid_on_each_lesson_day(self):
-        from backend.services.schedule_experiments import save_experiment
+        from backend.services.schedule_experiments import create_experiment_week, save_experiment
         expires_midweek = self.database.create_identity('student', 'Expires midweek', '9A')
         stays_active = self.database.create_identity('student', 'Stays active', '9A')
         for pupil in (expires_midweek, stays_active):
             self.database.create_membership(self.group['id'], pupil['id'], 'student', 'synthetic')
-        with self.database.connection() as connection:
-            connection.execute("UPDATE memberships SET valid_until='2026-10-21' WHERE identity_id=? AND group_id=?", (expires_midweek['id'], self.group['id']))
         lessons = [self.lesson(id='monday', day=0), self.lesson(id='thursday', day=3)]
         d = self.draft(lessons)
-        payload = {**d['payload'], 'days': [0, 3], 'week_start': '2026-10-19'}
+        payload = {**d['payload'], 'days': [0, 3]}
         d = save_experiment(self.database, d['id'], expected_revision=d['revision'], payload=payload)
+        d = create_experiment_week(self.database, d['id'], expected_revision=d['revision'], week_start='2026-10-19')
         before = {item['id']: item['audience_snapshot']['student_ids'] for item in d['payload']['lessons']}
+        with self.database.connection() as connection:
+            connection.execute("UPDATE memberships SET valid_until='2026-10-21' WHERE identity_id=? AND group_id=?", (expires_midweek['id'], self.group['id']))
         preview = bulk_audience_preview(self.database, d['id'], expected_revision=d['revision'], scope='template')
         self.assertEqual(preview['summary']['changed_count'], 1)
         self.assertEqual(preview['summary']['removed_count'], 1)

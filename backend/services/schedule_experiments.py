@@ -1000,8 +1000,11 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
     _validate_day_modes(database, clean_payload)
+    from backend.services.schedule_term_comparison import retain_term_comparison
     if not _trusted_resolution_history:
         for lesson in clean_payload['lessons']:lesson.pop('resolution_history',None)
+    if not _trusted_resolution_history or clean_payload.get("week_start"):
+        retain_term_comparison(clean_payload, None)
     provenance = clean_payload.get("school_source")
     provenance = provenance if isinstance(provenance, Mapping) else {}
     if provenance.get("role") == "primary_school_template" and not provenance.get("primary_draft_id"):
@@ -1204,6 +1207,8 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         raise ValueError("Чтобы начать работу над другой неделей, создайте отдельный черновик.")
     if current_week:
         clean["week_start"] = current_week
+    from backend.services.schedule_term_comparison import retain_term_comparison
+    retain_term_comparison(clean, current["payload"], record_edits=not _trusted_resolution_history)
 
     def lesson_key(lesson: Mapping[str, Any], index: int) -> str:
         return str(lesson.get("id") or f"index:{index}")
@@ -1273,8 +1278,14 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         lesson["audience_snapshot"] = {"student_ids": _ids(student_ids),
                                        "fingerprint": _audience_fingerprint(lesson, clean),
                                        "resolved_at": datetime.now(timezone.utc).isoformat()}
-    clean = _clean_payload(clean)
-    encoded = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
+    return _write_experiment_revision(database, experiment_id, expected_revision, _clean_payload(clean),
+                                      normalized_name=normalized_name, actor_user_id=actor_user_id)
+
+
+def _write_experiment_revision(database: Database, experiment_id: str, expected_revision: int,
+                               payload: Mapping[str, Any], *, normalized_name: str | None = None,
+                               actor_user_id: Any = None) -> dict[str, Any]:
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     now = datetime.now(timezone.utc).isoformat()
     with database.connection() as connection:

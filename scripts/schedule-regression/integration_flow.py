@@ -197,8 +197,10 @@ def main() -> None:
     results["shared_colors"] = {"teacher_count": len(color_list), "updated_revision": updated_color["revision"],
         "second_device_readback": second_device_color["color"], "stale_update_status": stale_color["status_code"]}
 
-    export_result = request(base, f"/api/admin/schedule/experiments/school/{week_id}/export", method="POST",
+    export_preview = request(base, f"/api/admin/schedule/experiments/school/{week_id}/export/preview", method="POST",
         body={"expected_revision": 1}, headers=device_a)["data"]
+    export_result = request(base, f"/api/admin/schedule/experiments/school/{week_id}/export", method="POST",
+        body={"expected_revision": 1, "preview_token": export_preview["preview_token"], "confirmed": True}, headers=device_a)["data"]
     if export_result.get("status") != "authorization_required":
         raise FlowError("Local export must prepare safely and stop before Google writes")
     results["export_http"] = {"status": export_result["status"], "revision": export_result["revision"],
