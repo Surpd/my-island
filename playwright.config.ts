@@ -14,6 +14,7 @@ export default defineConfig({
   outputDir: '.local-test/playwright-results',
   use: {
     ...devices['Desktop Chrome'],
+    ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } } : {}),
     baseURL: `http://localhost:${frontendPort}`,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',

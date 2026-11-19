@@ -562,6 +562,24 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(preview["summary"]["deferred_lessons"], 1)
         self.assertEqual([item["lesson_id"] for item in preview["deferred"]], ["independent-projection-error"])
 
+    def test_elective_shared_block_keeps_real_overlap_with_required_lesson(self):
+        class_id = str(self.group["id"])
+        elective = self.lesson(id="choice", subject="Programming", activityType="elective",
+            blockId="choice-block", blockName="Цифровой трек", classId=class_id, classIds=[class_id],
+            eligibleGrades=[9], audience={"kind": "students", "student_ids": []},
+            teacherId=str(self.other_teacher["id"]), room="E-1")
+        required = self.lesson(id="required", subject="Math", teacherId=str(self.teacher["id"]), room="101")
+        draft = self.draft([elective, required])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        overlaps = [item for item in preview["diagnostics"] if item["code"] == "student_overlap"]
+        self.assertEqual(len(overlaps), 1)
+        self.assertEqual(set(overlaps[0]["related_lesson_ids"]), {"choice", "required"})
+        self.assertEqual(preview["summary"]["deferred_lessons"], 0)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        projected = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        self.assertEqual([item["state"] for item in projected["items"]], ["UNRESOLVED"])
+
     def test_grade_10_and_11_sdep_records_ignore_teacher_room_and_normal_class_occupancy(self):
         class10 = self.database.create_group("10A", "class", base_class_name="10")
         class11 = self.database.create_group("11A", "class", base_class_name="11")
@@ -844,6 +862,7 @@ class ConstructorPublicationTests(unittest.TestCase):
         class_id = str(self.group["id"])
         courses = [self.lesson(id=f"elective-{index}", subject=f"Elective {index}", activityType="elective",
                                activityNameSnapshot=f"Elective {index}",
+                               blockId="elective-common", blockName="Курс по выбору",
                                classId=class_id, classIds=[class_id], eligibleGrades=[9],
                                confirmedParticipantIds=[],
                                audience={"kind": "classes", "class_ids": [class_id]},
@@ -866,9 +885,90 @@ class ConstructorPublicationTests(unittest.TestCase):
         room_preview = preview_publication(self.database, room_conflict["id"], scope_kind="template", expected_revision=1)
         self.assertIn("room_overlap", [item["code"] for item in room_preview["diagnostics"]])
 
+    def test_shared_elective_blocks_project_once_per_cohort_and_keep_teacher_lanes_private(self):
+        groups = {
+            name: self.database.create_group(name, "class", base_class_name=name[0])
+            for name in ("5A", "6A", "7A", "8A")
+        }
+        students = {}
+        for name in groups:
+            students[name] = self.database.create_identity("student", f"Synthetic {name}", name)
+            self.database.create_membership(groups[name]["id"], students[name]["id"], "student", "elective-test")
+        teachers = [self.database.create_identity("teacher", f"Elective teacher {index}") for index in range(8)]
+        inactive_teacher = self.database.create_identity("teacher", "Inactive elective teacher")
+        with self.database.connection() as connection:
+            connection.execute("UPDATE identities SET status='inactive' WHERE id=?", (inactive_teacher["id"],))
+        lessons = []
+        for cohort, grade_classes, day in (
+            ("block-56", ("5A", "6A"), 0),
+            ("block-78", ("7A", "8A"), 2),
+        ):
+            for index, title in enumerate(("Cambridge Flyers", "Логикон", "Лингвистический детектив", "Юннаты XXI")):
+                legacy = cohort == "block-56" and index == 0
+                lesson = self.lesson(
+                    id=f"{cohort}-{index}", day=day, period=0, subject=title,
+                    activityNameSnapshot=title, classId=str(groups[grade_classes[0]]["id"]),
+                    classIds=[str(groups[name]["id"]) for name in grade_classes],
+                    audience={"kind": "students", "student_ids": []}, eligibleGrades=[int(name[0]) for name in grade_classes],
+                    teacherId=("" if cohort == "block-56" and index == 0 else
+                               str(inactive_teacher["id"]) if cohort == "block-56" and index == 1 else
+                               str(teachers[index if cohort == "block-56" else index + 4]["id"])),
+                    room=f"{cohort}-{index}", blockId=cohort,
+                    blockName="Цифровой трек" if cohort == "block-78" else "Курс по выбору",
+                    activityType="elective",
+                )
+                if legacy:
+                    lesson.pop("activityType")
+                lessons.append(lesson)
+        draft = create_experiment(self.database, name="Shared electives", source="import", payload={
+            "reference_date": "2026-10-19", "days": [0, 2],
+            "classes": [str(group["id"]) for group in groups.values()],
+            "slots": [{"start": "09:00", "end": "09:45"}], "lessons": lessons,
+        })
+        original_payload = copy.deepcopy(draft["payload"])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        self.assertTrue(preview["can_publish"], preview["blockers"])
+        self.assertNotIn("student_overlap", {item["code"] for item in preview["diagnostics"]})
+        self.assertIn("missing_teacher", {item["code"] for item in preview["diagnostics"]})
+        self.assertIn("unknown_teacher", {item["code"] for item in preview["diagnostics"]})
+        self.assertEqual(get_experiment(self.database, draft["id"])["payload"], original_payload)
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        for name, title in (("5A", "Курс по выбору"), ("6A", "Курс по выбору"),
+                            ("7A", "Цифровой трек"), ("8A", "Цифровой трек")):
+            elective_items = [item for item in canonical.project_student(self.database, students[name]["id"], "2026-10-19")["items"]
+                              if item.get("activity_type") == "elective"]
+            self.assertEqual(len(elective_items), 1, name)
+            self.assertEqual(elective_items[0]["activity"], title)
+            for hidden in ("teacher_ids", "teacher_names", "room", "trace"):
+                self.assertNotIn(hidden, elective_items[0])
+            self.assertFalse(any(direction in str(elective_items[0]) for direction in
+                                 ("Cambridge Flyers", "Логикон", "Лингвистический детектив", "Юннаты XXI")))
+        self.assertEqual(canonical.project_student(self.database, self.student["id"], "2026-10-19")["items"], [])
+        for index, teacher in enumerate(teachers):
+            assigned = [item for item in canonical.project_teacher(self.database, teacher["id"], "2026-10-19")["items"]
+                        if item.get("activity", "").startswith(("Cambridge", "Логикон", "Лингвистический", "Юннаты"))]
+            expected = 0 if index in {0, 1} else 1
+            self.assertEqual(len(assigned), expected)
+            if expected:
+                self.assertIn(assigned[0]["activity"], {lesson["subject"] for lesson in lessons})
+
+    def test_unlinked_elective_is_not_auto_grouped_by_name_or_time(self):
+        class_id = str(self.group["id"])
+        lessons = [self.lesson(id=f"unlinked-{index}", subject="Programming", activityType="elective",
+                               classId=class_id, classIds=[class_id], eligibleGrades=[9], blockName="Цифровой трек",
+                               teacherId=str(self.teacher["id"]), room=f"D-{index}") for index in range(2)]
+        draft = self.draft(lessons)
+        before = copy.deepcopy(draft["payload"])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertEqual([item["code"] for item in preview["diagnostics"]].count("elective_block_unlinked"), 2)
+        self.assertEqual(len(preview["deferred"]), 2)
+        self.assertEqual(get_experiment(self.database, draft["id"])["payload"], before)
+
     def test_optional_activities_are_available_without_personal_membership(self):
         elective = self.lesson(id="shared-elective", subject="Проектная лаборатория", activityType="elective",
             activityNameSnapshot="Проектная лаборатория", classId=str(self.group["id"]), classIds=[str(self.group["id"])],
+            blockId="shared-elective-block", blockName="Цифровой трек",
             audience={"kind": "students", "student_ids": []}, eligibleGrades=[9], confirmedParticipantIds=[str(self.student["id"])],
             teacherId="", teacherIds=[], room="")
         club = self.lesson(id="shared-club", day=1, subject="Творческая мастерская", activityType="club",
@@ -879,14 +979,17 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertTrue(preview["can_publish"], preview["blockers"])
         codes = [item["code"] for item in preview["diagnostics"]]
         self.assertNotIn("audience_unresolved", codes)
-        self.assertNotIn("missing_teacher", codes)
+        self.assertIn("missing_teacher", codes)
+        self.assertTrue(all(item["severity"] == "info" for item in preview["diagnostics"] if item["code"] == "missing_teacher"))
         self.assertNotIn("missing_room", codes)
         self.publish(draft)
         self.publish(draft, "week", week_start="2026-10-19")
         projection = canonical.project_student(self.database, self.student["id"], "2026-10-19")
-        self.assertFalse(any(item.get("activity") in {"Проектная лаборатория", "Творческая мастерская"} for item in projection["items"]))
-        self.assertEqual([(item["type"], item["title"]) for item in projection["optional_activities"]], [
-            ("elective", "Проектная лаборатория"), ("club", "Творческая мастерская")])
+        elective_items = [item for item in projection["items"] if item.get("activity_type") == "elective"]
+        self.assertEqual([item.get("activity") for item in elective_items], ["Цифровой трек"])
+        self.assertNotIn("teacher_ids", elective_items[0])
+        self.assertNotIn("room", elective_items[0])
+        self.assertEqual(projection["optional_activities"], [])
         self.assertIn(str(self.student["id"]), preview["published_source"]["payload"]["lessons"][0]["confirmedParticipantIds"])
 
     def test_event_has_projection_priority_without_mutating_overlapping_source_lesson(self):
@@ -1345,8 +1448,9 @@ class ConstructorPublicationTests(unittest.TestCase):
                         activityNameSnapshot="Creative club", classId="", classIds=[], audience={"kind": "students", "student_ids": []},
                         eligibleGrades=[9], description="Club details"),
             self.lesson(id="elective", subject="Digital course", day=2, activityType="elective",
-                        activityNameSnapshot="Digital course", classId="", classIds=[],
-                        eligibleGrades=[9], electiveDirection="digital", confirmedParticipantIds=[str(self.student["id"])])]
+                        activityNameSnapshot="Digital course", classId=str(self.group["id"]), classIds=[str(self.group["id"])],
+                        blockId="digital-block", blockName="Цифровой трек", eligibleGrades=[9],
+                        electiveDirection="digital", confirmedParticipantIds=[str(self.student["id"])])]
         draft = self.draft(lessons)
         draft = save_experiment(self.database, draft["id"], expected_revision=1, payload=draft["payload"])
         self.publish(draft)
@@ -1360,6 +1464,8 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(records["Creative club"]["eligibleGrades"], [9])
         self.assertEqual(records["Digital course"]["confirmedParticipantIds"], [str(self.student["id"])])
         self.assertEqual(records["Digital course"]["electiveDirection"], "digital")
+        self.assertEqual(records["Digital course"]["blockId"], "digital-block")
+        self.assertEqual(records["Digital course"]["blockName"], "Цифровой трек")
         self.assertEqual(records["Обед"]["specialMark"], "lunch")
         self.assertEqual(records["NO_LESSON"]["specialMark"], "no_lesson")
         self.assertTrue(all(not l["needsClarification"] for l in copied["payload"]["lessons"]))

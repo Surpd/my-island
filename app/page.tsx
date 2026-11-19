@@ -128,7 +128,6 @@ type StudentScheduleProjection = {
   items: Lesson[];
   day_blocks: StudentDayBlock[];
   day_modes?: Array<{ date: string; mode: 'online' | 'sdep' }>;
-  optional_activities?: Array<{ date: string; type: 'club' | 'elective'; title: string; start_time: string; end_time: string; room?: string | null; teachers?: string[] }>;
   identity_id?: string;
   start_day?: string;
 };
@@ -586,7 +585,6 @@ function ScheduleItemRow({ item, index, onOpen }: { item: StudentScheduleItem; i
 function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expanded', detailKey, onOpenLesson, onSaveScroll, onBack, scheduleState, initialScrollTop = 0 }: { projection: StudentScheduleProjection; initialDay?: string; navigationLevel?: 'peek' | 'expanded' | 'detail'; detailKey?: string | null; onOpenLesson?: (key: string, scrollTop: number) => void; onSaveScroll?: (scrollTop: number) => void; onBack?: () => void; scheduleState?: string; initialScrollTop?: number }) {
   const initial = initialDay || scheduleStartingDay(projection.days);
   const [selectedDay, setSelectedDay] = useState(initial);
-  const [campusScheduleView, setCampusScheduleView] = useState<'lessons' | 'clubs'>('lessons');
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
   const attachScroll = useCallback((element: HTMLDivElement | null) => setScrollElement(element?.closest<HTMLElement>('.sheet-full') || null), []);
   useEffect(() => { if (scrollElement && initialScrollTop > 0) scrollElement.scrollTo({ top: initialScrollTop }); }, [scrollElement, initialScrollTop]);
@@ -596,15 +594,6 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
   );
   const day = projection.days.find((item) => item.date === selectedDay);
   const visibleItems = day?.items.filter((item) => item.state !== 'no_lesson' || item.no_lesson?.reason === 'break') || [];
-  const optionalActivities = (projection.optional_activities || []).filter((item) => item.date === selectedDay);
-  const electiveGroups = Array.from(optionalActivities.filter((item) => item.type === 'elective').reduce((groups, item) => {
-    const key = `${item.start_time}|${item.end_time}`;
-    groups.set(key, [...(groups.get(key) || []), item]);
-    return groups;
-  }, new Map<string, NonNullable<StudentScheduleProjection['optional_activities']>>()).entries())
-    .map(([key, activities]) => ({ key, start: activities[0].start_time, end: activities[0].end_time, activities }))
-    .sort((a, b) => a.start.localeCompare(b.start) || a.end.localeCompare(b.end));
-  const clubActivities = optionalActivities.filter((item) => item.type === 'club');
   const hasLessons = day?.items.some((item) => item.state === 'lesson' || item.state === 'conflict' || item.state === 'special_event');
   const unavailable = /unavailable|not_available|not_published|not_materialized|missing|not_configured|error|blocked|disabled/.test(scheduleState || '');
   const emptyTitle = ['not_published', 'canonical_not_materialized'].includes(scheduleState || '') ? 'Неделя не опубликована' : unavailable ? 'Расписание недоступно' : 'Занятий нет';
@@ -655,28 +644,11 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
       </div>
       {day?.mode === 'online' ? <div className="campus-day-mode online"><strong>Онлайн</strong><span>Занятия проходят дистанционно.</span></div> : null}
       {day?.mode === 'sdep' || day?.special?.kind === 'sdep' ? <div className="student-schedule-sdep"><strong>SDEP</strong><span>Самостоятельная работа по расписанию.</span></div> : null}
-      <div className="student-schedule-views" role="tablist" aria-label="Вид расписания Campus">
-        <button type="button" role="tab" aria-selected={campusScheduleView === 'lessons'} onClick={() => setCampusScheduleView('lessons')}>Уроки и курсы по выбору</button>
-        <button type="button" role="tab" aria-selected={campusScheduleView === 'clubs'} onClick={() => setCampusScheduleView('clubs')}>Кружки</button>
-      </div>
-      {campusScheduleView === 'lessons' ? (() => {
-        const timedRows = [
-          ...visibleItems.map((item) => ({ kind: 'lesson' as const, start: item.slot.start, end: item.slot.end, item })),
-          ...electiveGroups.map((group) => ({ kind: 'elective' as const, start: group.start, end: group.end, group })),
-        ].sort((a, b) => a.start.localeCompare(b.start) || String(a.end || '').localeCompare(String(b.end || '')) || (a.kind === 'lesson' ? -1 : 1));
-        return hasLessons || electiveGroups.length ? <div className="student-schedule-stack">
-          {timedRows.map((row) => row.kind === 'lesson'
-            ? row.item.state === 'no_lesson'
-              ? <div className="student-schedule-gap" key={`${row.item.date}-${row.start}`}><span />Перерыв</div>
-              : <ScheduleItemRow item={row.item} index={day?.items.indexOf(row.item) ?? 0} onOpen={key => { const scrollTop = document.querySelector<HTMLElement>('.sheet-full')?.scrollTop || 0; onSaveScroll?.(scrollTop); onOpenLesson?.(key, scrollTop); }} key={`${row.item.date}-${row.start}-${row.item.state}`} />
-            : <details className="student-elective-block" key={row.group.key}>
-              <summary><time>{formatLessonTimeRange(row.start, row.end)}</time><span><strong>Курсы по выбору</strong><small>{row.group.activities.length} {row.group.activities.length === 1 ? 'вариант' : row.group.activities.length < 5 ? 'варианта' : 'вариантов'}</small></span><span className="student-elective-chevron" aria-hidden="true">⌄</span></summary>
-              <div className="student-elective-options">{row.group.activities.map((activity) => <article key={`${activity.title}:${activity.start_time}:${activity.room || ''}`}><strong>{activity.title}</strong><span>{[...(activity.teachers || []), activity.room ? normalizeRoomDisplay(activity.room) : ''].filter(Boolean).join(' · ') || 'Сведения не указаны'}</span></article>)}</div>
-            </details>)}
-        </div> : unavailable ? <EmptyState icon={CalendarDays} title={emptyTitle} detail={emptyDetail} /> : <EmptyState icon={CalendarDays} title={emptyTitle} detail={emptyDetail} />;
-      })() : <section className="student-club-view" role="tabpanel" aria-label="Кружки">
-        {clubActivities.length ? <div className="student-club-list">{clubActivities.sort((a, b) => a.start_time.localeCompare(b.start_time)).map((item) => <article key={`${item.title}:${item.start_time}:${item.room || ''}`}><time>{formatLessonTimeRange(item.start_time, item.end_time)}</time><div><strong>{item.title}</strong><span>{[...(item.teachers || []), item.room ? normalizeRoomDisplay(item.room) : ''].filter(Boolean).join(' · ') || 'Сведения не указаны'}</span></div></article>)}</div> : <p className="student-club-empty">Кружков на этот день нет.</p>}
-      </section>}
+      {visibleItems.length ? <div className="student-schedule-stack">
+        {visibleItems.map((item) => item.state === 'no_lesson'
+          ? <div className="student-schedule-gap" key={`${item.date}-${item.slot.start}`}><span />Перерыв</div>
+          : <ScheduleItemRow item={item} index={day?.items.indexOf(item) ?? 0} onOpen={key => { const scrollTop = document.querySelector<HTMLElement>('.sheet-full')?.scrollTop || 0; onSaveScroll?.(scrollTop); onOpenLesson?.(key, scrollTop); }} key={`${item.date}-${item.slot.start}-${item.state}`} />)}
+      </div> : <EmptyState icon={CalendarDays} title={emptyTitle} detail={emptyDetail} />}
     </div>
   );
 }
