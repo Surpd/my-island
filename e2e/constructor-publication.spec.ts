@@ -27,6 +27,7 @@ type PreviewPayload = {
     code: string;
     message: string;
     lesson_id?: string;
+    related_lesson_ids?: string[];
     context?: { day: number; start: string; end: string; subject: string; teachers: string[]; groups: string[] };
   }[];
   summary: { ready_lessons: number; deferred_lessons: number; deferred_blocks: number; unchanged_lessons: number; replaced_lessons: number; info_count: number; conflict_count: number; critical_count: number };
@@ -40,7 +41,9 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   const context = { day: 0, start: '09:00', end: '09:45', subject: 'Математика', teachers: ['teacher-fixture'], groups: ['group-fixture'] };
   const diagnostics: PreviewPayload['diagnostics'] = [
     { severity: 'info', code: 'teaching_note', message: 'Проверено по школьному справочнику.', lesson_id: 'lesson-info', context },
-    { severity: 'conflict', code: 'teacher_overlap', message: 'Нужно проверить пересечение занятий.', lesson_id: 'lesson-conflict', context },
+    { severity: 'conflict', code: 'teacher_overlap', message: 'Нужно проверить пересечение занятий.', lesson_id: 'lesson-conflict', related_lesson_ids: ['lesson-related'], context },
+    { severity: 'conflict', code: 'teacher_overlap', message: 'Нужно проверить пересечение занятий.', lesson_id: 'lesson-related', related_lesson_ids: ['lesson-conflict'], context },
+    { severity: 'conflict', code: 'room_overlap', message: 'Кабинет занят.', lesson_id: 'lesson-conflict', related_lesson_ids: ['lesson-related'], context },
   ];
   if (critical) diagnostics.push({ severity: 'critical', code: 'review_required', message: 'Не подтверждена аудитория занятия.', lesson_id: 'lesson-critical', context });
   return {
@@ -86,8 +89,8 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === '/api/admin/schedule/observability') return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [], canonical: { version_id: 'base-version-hidden-in-ui', status: 'authoritative' } } });
     if (path.startsWith('/api/admin/schedule/activities')) return route.fulfill({ json: { items: [] } });
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}`) {
-      const lessons = ['lesson-info', 'lesson-conflict', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
-        id, day: 0, period: 0, subject: 'Математика', classId: 'group-fixture', teacherId: 'teacher-fixture',
+      const lessons = ['lesson-info', 'lesson-conflict', 'lesson-related', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
+        id, day: 0, period: 0, subject: id === 'lesson-related' ? 'Физика' : 'Математика', room: '309', classId: 'group-fixture', teacherId: 'teacher-fixture',
       }));
       return route.fulfill({ json: { id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, base_version_id: 'base-version-hidden-in-ui', payload: { days: [0], slots: [{ start: '09:00', end: '09:45' }], classes: ['group-fixture'], lessons } } });
     }
@@ -126,46 +129,64 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
   return { dialog, getPublishPayload: () => publishPayload };
 }
 
-test('publication preview filters remarks and shows readable lesson context and deferred actions', async ({ page }) => {
+test('publication preview groups pairs, separates severity and keeps the affected lesson details', async ({ page }) => {
   const { dialog } = await openPublicationPanel(page, { critical: true });
+  const severity = dialog.getByLabel('Серьёзность', { exact: true });
+  const issues = dialog.locator('[data-review-issue]');
   await expect(dialog.getByRole('heading', { name: 'Что требует внимания' })).toBeVisible();
-  await expect(dialog.locator('.constructor-publication-summary').getByText(/с пересечениями/)).toContainText('1');
-  await expect(dialog.getByRole('button', { name: 'Все', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  const criticalGroup = dialog.locator('.constructor-publication-diagnostics details').filter({ hasText: 'Не подтверждена аудитория занятия.' }).first();
-  await criticalGroup.locator('summary').first().click();
-  await expect(criticalGroup.getByText('Не подтверждена аудитория занятия.', { exact: true })).toBeVisible();
-  await expect(criticalGroup.getByText('Пн · 09:00–09:45 · Математика · Преподаватели: Анна Учитель · Группы: 7 класс')).toBeVisible();
-  await expect(dialog.getByText(/teacher-fixture|group-fixture|lesson-critical/)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toHaveCount(0);
+  await expect(severity).toHaveValue('all');
 
-  await dialog.getByRole('button', { name: /Замечания/ }).click();
-  await expect(dialog.locator('.constructor-publication-diagnostics li')).toHaveCount(1);
-  await dialog.getByRole('button', { name: /Блокируют публикацию/ }).click();
-  await expect(dialog.locator('.constructor-publication-diagnostics li')).toHaveCount(1);
-  await dialog.getByRole('button', { name: /Отложенные/ }).click();
-  const deferredGroups = dialog.locator('.constructor-publication-deferred details');
-  await expect(deferredGroups).toHaveCount(2);
-  await deferredGroups.nth(0).locator('summary').click();
-  await expect(dialog.getByText(/Не удалось проверить замену\./)).toBeVisible();
-  await expect(dialog.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
-  await deferredGroups.nth(1).locator('summary').click();
-  await expect(dialog.getByText(/Нет группы для назначения\./)).toBeVisible();
-  await expect(dialog.getByText('Исключено непосредственно по указанной причине.')).toBeVisible();
+  await severity.selectOption('conflict');
+  await expect(issues).toHaveCount(1);
+  const pairedIssue = issues.filter({ hasText: 'Математика / Физика' });
+  await expect(pairedIssue).toHaveAttribute('data-review-issue', /teacher_overlap.*room_overlap/);
+  await expect(pairedIssue).toHaveAttribute('data-review-lesson-ids', 'lesson-conflict lesson-related');
+  await dialog.getByLabel('Тип проблемы', { exact: true }).selectOption('room');
+  await expect(pairedIssue).toBeVisible();
+  await pairedIssue.getByRole('button', { name: 'Показать оба занятия' }).click();
+  await expect(pairedIssue.getByRole('button', { name: 'Показать в расписании — Математика' })).toBeVisible();
+  await expect(pairedIssue.getByRole('button', { name: 'Показать в расписании — Физика' })).toBeVisible();
+  await expect(pairedIssue.getByText(/Анна Учитель · каб\. 309/)).toHaveCount(2);
+
+  await dialog.getByLabel('Тип проблемы', { exact: true }).selectOption('');
+  await severity.selectOption('info');
+  await expect(issues).toHaveCount(1);
+  await severity.selectOption('critical');
+  await expect(issues).toHaveCount(1);
+  await issues.getByRole('button', { name: 'Блокирует публикацию Уточните данные занятия', exact: true }).click();
+  await expect(issues.getByText(/Сверьте предмет, преподавателя и состав/)).toBeVisible();
+  await expect(issues.getByText(/teacher-fixture|group-fixture|lesson-critical/)).toHaveCount(0);
+
+  await severity.selectOption('deferred');
+  await expect(issues).toHaveCount(2);
+  const preserved = dialog.locator('[data-review-lesson-ids="lesson-preserved"]');
+  await preserved.locator('.constructor-review-card-toggle').click();
+  await expect(preserved.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
+  const excluded = dialog.locator('[data-review-lesson-ids="lesson-excluded"]');
+  await excluded.locator('.constructor-review-card-toggle').click();
+  await expect(excluded.getByText('Занятие не войдёт в эту публикацию.')).toBeVisible();
+
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await expect(dialog.locator('.constructor-publication-summary').getByText(/с пересечениями/)).toContainText('2');
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Показать блокирующие проблемы' }).click();
+  await expect(severity).toHaveValue('critical');
 });
 
-test('diagnostics collapse by cause and copy a sanitized report with lesson links', async ({ page }) => {
+test('diagnostics copy a report with lesson links and without internal messages', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { document.documentElement.dataset.copiedReport = text; } } });
   });
   const { dialog } = await openPublicationPanel(page);
   await dialog.getByText('Отчёт проверки', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: 'Скопировать отчёт проверки' })).toBeVisible();
-  const group = dialog.getByText(/^Конфликт · .* · 1$/);
-  await expect(group).toBeVisible();
+  await expect(dialog.locator('[data-review-issue~="teacher_overlap"]')).toHaveCount(1);
   await dialog.getByRole('button', { name: 'Скопировать отчёт проверки' }).click();
   await expect(dialog.getByText(/Отчёт проверки скопирован/)).toBeVisible();
   const copiedReport = await page.locator('html').getAttribute('data-copied-report');
   expect(copiedReport).toContain('teacher_overlap\t1');
+  expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-related`);
   expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-conflict`);
   expect(copiedReport).not.toContain('Нужно проверить пересечение занятий');
   await page.screenshot({ path: 'test-results/schedule-publication-preview.png', fullPage: true });
@@ -173,6 +194,7 @@ test('diagnostics collapse by cause and copy a sanitized report with lesson link
 
 test('read-only preview remains available and cannot publish', async ({ page }) => {
   const { dialog } = await openPublicationPanel(page, { readOnly: true });
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
   await expect(dialog.getByText('Эта версия доступна для просмотра.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toHaveCount(0);
   await expect(dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ })).toHaveCount(0);
@@ -180,6 +202,7 @@ test('read-only preview remains available and cannot publish', async ({ page }) 
 
 test('changing publication scope clears confirmation and publish uses the latest exact preview token', async ({ page }) => {
   const { dialog, getPublishPayload } = await openPublicationPanel(page);
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
   await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
   await expect(dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ })).toBeEnabled();
 

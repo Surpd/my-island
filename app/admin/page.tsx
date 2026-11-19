@@ -381,7 +381,7 @@ function ResponsiveSchedule() {
   const [mobile, setMobile] = useState<boolean | null>(null);
   const [editor, setEditor] = useState(() => {
     const query = routeQuery();
-    return query.get('editor') === '1' || query.has('draft');
+    return query.get('editor') !== '0' || query.has('draft');
   });
   useEffect(() => {
     const media = window.matchMedia('(max-width: 740px)');

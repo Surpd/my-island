@@ -35,13 +35,16 @@ async function publication(draftId) {
   const reviewStarted = performance.now();
   await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Проверка расписания' });
-  await dialog.getByRole('heading', { name: 'Проверка перед публикацией' }).waitFor();
+  await dialog.getByRole('heading', { name: 'Что требует внимания' }).waitFor();
+  const query = dialog.getByRole('searchbox', { name: 'Поиск по вопросам' });
+  await query.fill('Required lesson 5');
+  await dialog.locator('[data-review-issue]').filter({ hasText: 'Required lesson 5' }).first().waitFor();
+  await query.clear();
   report.previewVisibleMs = Math.round(performance.now() - reviewStarted);
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('heading', { name: 'Проверка перед публикацией' }).waitFor();
   await dialog.getByText('Что изменится для школы', { exact: true }).click();
   await dialog.getByText('Сравнить с опубликованной версией', { exact: true }).click();
-  await dialog.getByRole('searchbox', { name: 'Найти в замечаниях' }).fill('Required lesson 5');
-  await dialog.locator('.constructor-publication-diagnostics li').filter({ hasText: 'Required lesson 5' }).first().waitFor();
-  await dialog.getByRole('searchbox', { name: 'Найти в замечаниях' }).clear();
   const confirm = dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ });
   const publish = dialog.getByRole('button', { name: /Опубликовать.*неделю/ });
   assert(await publish.isDisabled(), 'publication requires separate confirmation');
@@ -54,7 +57,7 @@ async function publication(draftId) {
       await mobilePage.goto(`http://localhost:3041/admin/schedule/constructor?draft=${draftId}`);
       await mobilePage.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
       const mobileReview = mobilePage.getByRole('dialog', { name: 'Проверка расписания' });
-      await mobileReview.getByRole('heading', { name: 'Проверка перед публикацией' }).waitFor();
+      await mobileReview.getByRole('heading', { name: 'Что требует внимания' }).waitFor();
       const box = await mobileReview.boundingBox();
       assert(box && box.x >= 0 && box.x + box.width <= width + 1 && box.y >= 0 && box.y + box.height <= height + 1);
       const documentWidth = await mobilePage.evaluate(() => document.documentElement.scrollWidth);
@@ -117,10 +120,11 @@ try{
  await page.getByRole('button', { name: 'Закрыть панель', exact: true }).click();
  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
  const dirtyReview = page.getByRole('dialog', { name: 'Проверка расписания' });
- await dirtyReview.getByText(/несохранённые правки/).waitFor();
+ const saveForReview = dirtyReview.getByRole('button', { name: 'Сохранить и проверить', exact: true });
+ await saveForReview.waitFor();
  const [savedResponse] = await Promise.all([
    page.waitForResponse(response => response.url().endsWith(editable.id) && response.request().method() === 'PUT'),
-   dirtyReview.getByRole('button', { name: 'Сохранить и проверить', exact: true }).click(),
+   saveForReview.click(),
  ]);
  assert(savedResponse.ok(), await savedResponse.text());
  const savedOrdinary = (await savedResponse.json()).payload.lessons.find(lesson => lesson.id === 'e2e-ordinary-draft');
@@ -137,7 +141,7 @@ try{
    await call('/api/admin/memberships', 'POST', { group_id: rosterId, identity_id: String(newMember.id) }, devAdmin);
  }
  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
- await dirtyReview.getByText(/^Безопасные исправления/).click();
+ await dirtyReview.getByRole('button', { name: 'Составы и старые записи', exact: true }).click();
  const updateRosters = dirtyReview.getByRole('button', { name: 'Подтвердить проверенные составы', exact: true });
  const [rosterResponse] = await Promise.all([
    page.waitForResponse(response => response.url().endsWith('/audiences/apply')),

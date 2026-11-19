@@ -39,8 +39,11 @@ test('capture masked rev45 diagnostics, lesson context, and mobile confirmation'
 
   const artifact = (name: string) => path.join(artifactDirectory, name);
   await page.goto('/admin/schedule/constructor?role=admin&editor=1');
-  await page.getByRole('button', { name: 'Открыть и редактировать', exact: true }).click();
+  await page.getByRole('button', { name: 'Открыть расписание', exact: true }).click();
   await page.locator('.constructor-issue-count').click();
+  const review = page.getByRole('dialog', { name: 'Проверка расписания' });
+  await review.getByRole('button', { name: 'Составы и старые записи' }).click();
+  await review.getByRole('button', { name: 'История решений в сетке' }).click();
   await expect(page.getByText('Центр решений расписания', { exact: true })).toBeVisible();
   await page.screenshot({ path: artifact('rev45-sanitized-diagnostics.png'), fullPage: true });
 

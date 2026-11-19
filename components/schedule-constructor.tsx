@@ -248,6 +248,16 @@ type Clip = {
   cells: { row: number; col: number; lessons: Lesson[] }[];
   cutIds: string[];
 };
+type IssueRoute = {
+  draftId: string;
+  origin: 'grid' | 'review' | 'comparison';
+  title: string;
+  ids: string[];
+  active: string;
+  slot?: TermComparisonSide;
+  mayCreate?: boolean;
+};
+
 type Issue = {
   lessonId: string;
   code?: string;
@@ -476,6 +486,11 @@ function sameText(left: string, right: string) {
     right.toLocaleLowerCase('ru').replace(/[^\p{L}\p{N}]/gu, '')
   );
 }
+function readableIssueReason(value: string | null | undefined, fallback: string) {
+  if (!value || /[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}|\b[a-z]+_[a-z_]+\b|\bcanonical\b|\bUUID\b/i.test(value)) return fallback;
+  return value;
+}
+
 function issuesFor(
   payload: Payload,
   groups: Group[],
@@ -501,7 +516,7 @@ function issuesFor(
   for (const lesson of payload.lessons) {
     const audience = previews[lesson.id];
     if (lesson.kind !== 'event' && subjectLabel(lesson.subject) === 'Английский язык' && !linkedInstructionalGroups(lesson, groups).length)
-      result.push({ lessonId: lesson.id, severity: 'warning', type: 'audience', category: 'import', message: 'Не определена группа английского урока в canonical-назначении.' });
+      result.push({ lessonId: lesson.id, severity: 'warning', type: 'audience', category: 'import', message: 'Не определена учебная группа для урока английского. Выберите группу и проверьте её состав.' });
     const resolvedLunchScope = lesson.specialMark === 'lunch' && (audience?.status === 'ok' || confirmedClassLunchMarker(lesson, groups));
     if (audienceNeedsReview(lesson, audience) && !resolvedLunchScope) add(lesson.id, 'warning', 'Состав учеников отличается от сохранённого или текущие данные требуют проверки. Сохранённый состав не заменён.', undefined, 'review');
     if (!payload.days.includes(lesson.day) || !payload.slots[lesson.period])
@@ -512,7 +527,7 @@ function issuesFor(
     if (!isSpecialMark(lesson) && lessonNeedsPhysicalRoom(payload, lesson, groups) && !String(lesson.room || '').trim())
       add(lesson.id, 'warning', 'Для очного занятия не указан кабинет.');
     if (!['elective', 'club'].includes(lesson.activityType || '') && audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
-      result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: audience.reason || 'Невозможно точно определить участников.' });
+      result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: readableIssueReason(audience.reason, 'Не удалось определить участников. Проверьте выбранную группу и состав на дату занятия.') });
     }
     if (!isSpecialMark(lesson) && shouldWarnMissingTeacher(lesson, independentPractice.has(lesson.id) || isSdepIndependentLesson(payload, lesson, groups)))
       add(lesson.id, 'warning', 'Преподаватель пока не назначен.');
@@ -527,7 +542,7 @@ function issuesFor(
         sb = lessonTimes(b, payload.slots);
       if (!sa.start || !sb.start || sa.start >= sb.end || sb.start >= sa.end) continue;
       const describe = (lesson: Lesson) =>
-        `${lessonClasses(lesson).map((id) => groups.find((item) => item.id === id)?.name || id).join(', ') || 'класс'} в ${payload.slots[lesson.period]?.start}`;
+        `${lessonClasses(lesson).map((id) => groups.find((item) => item.id === id)?.name || 'класс не уточнён').join(', ') || 'класс'} в ${lessonTimes(lesson,payload.slots).start || 'неуказанное время'}`;
       const pair = (message: string) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id);
       const teacherIdsA = new Set([...(a.teacherIds || []), a.teacherId].filter(Boolean));
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
@@ -544,7 +559,7 @@ function issuesFor(
         || ['club', 'elective', 'event'].includes(b.activityType || '');
       const overlappingStudents = [...studentIdsA].filter((id) => studentIdsB.has(id));
       if (!independentA && !independentB && !optionalAudience && overlappingStudents.length) {
-        const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || studentId);
+        const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || 'ученик');
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
         pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
       }
@@ -561,7 +576,7 @@ function issuesFor(
       severity: lesson.importError ? 'error' as const : 'warning' as const,
       message: mismatchedMathGroups.length
         ? `Ссылка ведёт в ${mismatchedMathGroups.map((group) => group.name).join(', ')} для математики, а предмет — ${subjectLabel(lesson.subject)}. Класс размещения: ${classNames.join(', ') || 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён.`
-        : lesson.clarificationReason || 'Canonical-аудиторию нужно сопоставить с данными школы.',
+        : readableIssueReason(lesson.clarificationReason, 'Уточните, какие ученики посещают это занятие.'),
     };
   }));
 }
@@ -578,7 +593,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [directoryAccess, setDirectoryAccess] = useState<'checking' | 'demo' | 'school'>('checking');
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [consolidatedSchedule, setConsolidatedSchedule] = useState(false);
+  const [reviewFilter,setReviewFilter] = useState<'all'|'conflict'>();
   const [reviewMode, setReviewMode] = useState<'review' | 'history' | null>(null);
+  const [resolutionFromReview, setResolutionFromReview] = useState(false);
   const [resolutionIssue, setResolutionIssue] = useState<Issue|null>(null);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [schoolDrafts, setSchoolDrafts] = useState<DraftSummary[]>([]);
@@ -597,6 +614,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [catalogSaving, setCatalogSaving] = useState(false);
   const [activityType, setActivityType] = useState<'lesson' | 'club' | 'elective' | 'event'>('lesson');
   const [exportOpen, setExportOpen] = useState(false);
+  const comparisonFromReview = useRef(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [comparisonFocus, setComparisonFocus] = useState<{ draftId: string; key: string } | null>(null);
   const [newWeekStart, setNewWeekStart] = useState('');
@@ -667,6 +685,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [bulkElectiveBlockName, setBulkElectiveBlockName] = useState('Цифровой трек');
   const [bulkElectiveTargetId, setBulkElectiveTargetId] = useState('__new__');
   const [issueSeverity, setIssueSeverity] = useState('all');
+  const [issueRoute, setIssueRoute] = useState<IssueRoute | null>(null);
+  const route = issueRoute?.draftId === draft?.id ? issueRoute : null;
+  const routedLesson = draft?.payload.lessons.find(lesson => lesson.id === route?.active);
+  const [issueDay, setIssueDay] = useState('');
+  const [issueClass, setIssueClass] = useState('');
   const [issueType, setIssueType] = useState('all');
   const [anchor, setAnchor] = useState<Cell | null>(null);
   const [focus, setFocus] = useState<Cell | null>(null);
@@ -890,13 +913,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     setDrafts(items);
     if (workspace === 'school') setSchoolDrafts(items); else setDemoDrafts(items);
   };
-  const open = async (id: string, lessonId?: string) => {
+  const open = async (id: string, lessonId?: string, comparisonOnly = false) => {
     const request = ++draftOpenRequest.current;
     try {
       const value = await api<Draft>(
         schedulePath(`/${encodeURIComponent(id)}`),
       );
       if (request !== draftOpenRequest.current) return false;
+      if (comparisonOnly && !value.payload?.school_source?.term2_preparation?.comparison?.items.length) return false;
       let recovered: LocalDraftRecovery | null = null;
       try {
         const stored = window.localStorage.getItem(recoveryKey(workspace, id));
@@ -906,6 +930,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         }
       } catch { /* Ignore an invalid or unavailable recovery copy. */ }
       const opened = recovered ? { ...value, name: recovered.name, payload: recovered.payload, revision: recovered.revision } : value;
+      setIssueRoute(null);
+      setComparisonOpen(false);
+      comparisonFromReview.current = false;
       setDraft(opened);
       baseDraftRef.current = recovered ? recovered.base || (recovered.revision === value.revision ? value : null) : value;
       setVersionConflict(null);
@@ -929,7 +956,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         setPanelMode('lesson');
         setPanelOpen(true);
       }
-      setStatus(recovered ? 'Восстановлена локальная копия несохранённых изменений; она появится на сервере после сохранения.' : '');
+      setStatus([
+        recovered ? 'Восстановлены несохранённые изменения. Сохраните черновик, чтобы записать их.' : '',
+        lessonId && !lesson ? 'В этой редакции указанное занятие отсутствует. Проверьте дату недели и выберите занятие в проверке расписания.' : '',
+      ].filter(Boolean).join(' '));
       return true;
     } catch (error) {
       if (request === draftOpenRequest.current) setStatus(String((error as Error).message));
@@ -1557,13 +1587,19 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const selectedActivityType = selected ? editorActivityType(selected) : undefined;
   useLayoutEffect(() => {
     if (!selected || !payload || linkedLesson.current !== selected.id || day !== selected.day || viewMode !== 'day') return;
-    const classIds = displayedClasses(selected);
+    const classIds = selected.activityType === 'club' ? visualClasses(selected, groups) : displayedClasses(selected);
     const col = gridColumns.findIndex(column => classIds.some(id => column.classIds.includes(id)));
     if (col >= 0 && payload.days.includes(selected.day) && payload.slots[selected.period]) {
       linkedLesson.current = null;
       setAnchor({ row: selected.period, col });
       setFocus({ row: selected.period, col });
-      requestAnimationFrame(() => document.getElementById(`lesson-${selected.id}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+      requestAnimationFrame(() => {
+        const card = gridWrap.current?.querySelector<HTMLElement>(`[data-cell="${keyOf({row:selected.period,col})}"] [data-lesson-id="${CSS.escape(selected.id)}"]`)
+          || gridWrap.current?.querySelector<HTMLElement>(`[data-lesson-id="${CSS.escape(selected.id)}"]`);
+        card?.scrollIntoView({block: 'center', inline: 'center'});
+        card?.focus({ preventScroll: true });
+        if (gridWrap.current) gridScroll.current = { left: gridWrap.current.scrollLeft, top: gridWrap.current.scrollTop };
+      });
     } else if (groups.length) {
       linkedLesson.current = null;
     }
@@ -1882,47 +1918,125 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         return next;
       }),
     }));
-  const openReviewLesson = (id: string) => {
+  const openReviewLesson = (id: string, revealGrid = false) => {
     const lesson = payload?.lessons.find((item) => item.id === id);
-    if (!lesson) return;
+    if (!lesson) { setStatus('В этой редакции такого занятия нет. Откройте исходную неделю или выберите слот в сверке.'); return false; }
     setDay(lesson.day);
     setViewMode('day');
+    setFiltersOpen(false);
     setClassFilter('');
     setTeacherFilter('');
     setSubjectFilter('');
     setQuery('');
     setSelectedId(id);
     setPanelMode('lesson');
-    setPanelOpen(true);
+    const placed = payload?.days.includes(lesson.day) && payload.slots[lesson.period] && visualClasses(lesson, groups).concat(displayedClasses(lesson)).some(id => classes.some(c => c.id === id));
+    setPanelOpen(!revealGrid || !placed || !window.matchMedia('(max-width: 900px)').matches);
+    if (!placed) setStatus('У занятия пока нет места в сетке. В редакторе можно указать день, время и класс.');
     linkedLesson.current = id;
     setAnchor(null);
     setFocus(null);
+    return true;
   };
-  const openComparisonSlot = (side: TermComparisonSide) => {
-    if (!payload) return;
+  const showIssueLesson = (id: string, origin: IssueRoute['origin'], title: string, related: string[] = []) => {
+    if (!draft || !openReviewLesson(id, true)) return;
+    setIssueRoute({draftId:draft.id, origin, title, ids:[...new Set([id,...related])], active:id});
+    setConflictsOpen(false);
+    setReviewMode(null);
+  };
+  const openReviewCenter = (filter: 'all' | 'conflict') => {
+    setIssueRoute(null);
     setComparisonOpen(false);
-    setViewMode('day');
-    setDay(side.day);
-    setClassFilter('');
-    setTeacherFilter('');
-    setSubjectFilter('');
-    setQuery('');
-    setSelectedId('');
-    setPanelMode('lesson');
-    const row = payload.slots.findIndex(slot => slot.start === side.start && slot.end === side.end);
-    const targetClasses = new Set(groups.filter(group => side.classes.includes(group.name)).map(group => group.id));
-    const col = gridColumns.findIndex(column => column.classIds.some(id => targetClasses.has(id)));
-    if (row >= 0 && col >= 0) {
-      setAnchor({ row, col });
-      setFocus({ row, col });
-      setPanelOpen(true);
-    } else {
-      setAnchor(null);
-      setFocus(null);
-      setPanelOpen(false);
-      setStatus(`Найдите занятие в сетке. ${DAYS[side.day]} · ${side.start}–${side.end} · ${side.classes.join(', ')}`);
+    setConflictsOpen(false);
+    setPanelOpen(false);
+    setReviewFilter(filter);
+    setReviewMode('review');
+  };
+  const openTermComparison = () => {
+    setIssueRoute(null);
+    setConflictsOpen(false);
+    setPanelOpen(false);
+    setComparisonOpen(true);
+  };
+  const backToIssues = () => {
+    if (!route) return;
+    setPanelOpen(false);
+    setIssueRoute(null);
+    if (route.origin === 'review') {setReviewFilter(undefined);setReviewMode('review');}
+    else if (route.origin === 'comparison') setComparisonOpen(true);
+    else {
+      setConflictsOpen(true);
+      requestAnimationFrame(() => {
+        const panel = document.querySelector<HTMLElement>('.constructor-conflict-panel');
+        const button = panel?.querySelector<HTMLElement>(`[data-issue-open="${CSS.escape(route.active)}"]`);
+        (button || panel)?.focus();
+        (button || panel)?.scrollIntoView({block:'center'});
+      });
     }
   };
+  const openComparisonSlot = (side: TermComparisonSide, mayCreate = true) => {
+    if (!draft) return;
+    setIssueRoute({draftId:draft.id,origin:'comparison',title:`Слот · ${side.subject || 'Новое занятие'}`,ids:[],active:'',slot:side,mayCreate});
+    setNewLesson({subject:side.subject || '',groupId:'',teacherId:'',room:side.room || '',classIds:[]});
+    setQuick(''); setQuickChoice({}); setCreationError('');
+    setTeacherQuery(''); setNewTeacherManuallySelected(false);
+    setActivityType(side.kind === 'club' || side.kind === 'elective' || side.kind === 'event' ? side.kind : 'lesson');
+    setViewMode('day'); setDay(side.day);
+    setFiltersOpen(false);
+    setClassFilter(''); setTeacherFilter(''); setSubjectFilter(''); setQuery('');
+    setSelectedId(''); setPanelMode('lesson'); setPanelOpen(false);
+    setAnchor(null); setFocus(null);
+  };
+  const slot = route?.slot;
+  const slotClasses = useMemo(() => {
+    const names = slot?.classes.map(name => name.split(' · ')[0].trim()) || [];
+    return groups.filter(group => payload?.classes.includes(group.id) && names.includes(group.name)).map(group => group.id);
+  }, [slot, groups, payload?.classes]);
+  const slotRow = slot && payload?.days.includes(slot.day) ? firstOverlappingSlot(slot.start, slot.end, payload.slots) : -1;
+  const slotColumn = slot && viewMode === 'day' && day === slot.day
+    ? gridColumns.findIndex(column => column.classIds.some(id => slotClasses.includes(id))) : -1;
+  const routeSlotCell = slotRow >= 0 && slotColumn >= 0 ? {row:slotRow, col:slotColumn} : null;
+  useLayoutEffect(() => {
+    if (!slot || slotRow < 0 || slotColumn < 0) return;
+    const cell = { row: slotRow, col: slotColumn };
+    setTargetClassId(slotClasses.length === 1 ? slotClasses[0] : '');
+    setNewLesson(item => ({
+      ...item, classIds: slotClasses, day: slot.day, period: slotRow,
+      ...(slot.kind === 'event' ? {start:slot.start, end:slot.end} : {}),
+    }));
+    setAnchor(cell);
+    setFocus(cell);
+    const grid = gridWrap.current;
+    const element = grid?.querySelector<HTMLElement>(`[data-cell="${keyOf(cell)}"]`);
+    if (!grid || !element) return;
+    // The available grid height changes after the comparison dialog closes.
+    // Keep the destination visible during layout, until the user takes control.
+    const keepVisible = new ResizeObserver(() => {
+      const bounds = grid.getBoundingClientRect();
+      const target = element.getBoundingClientRect();
+      if (target.bottom > bounds.bottom || target.top < bounds.top) {
+        grid.scrollTop += (target.top + target.bottom - bounds.top - bounds.bottom) / 2;
+        gridScroll.current = {left:grid.scrollLeft, top:grid.scrollTop};
+      }
+    });
+    const stop = () => keepVisible.disconnect();
+    const frame = requestAnimationFrame(() => {
+      element.scrollIntoView({block:'center', inline:'center'});
+      element.focus({preventScroll:true});
+      gridScroll.current = {left:grid.scrollLeft, top:grid.scrollTop};
+      keepVisible.observe(grid);
+    });
+    for (const event of ['pointerdown', 'wheel', 'keydown']) window.addEventListener(event, stop, {capture:true, passive:true});
+    return () => {
+      cancelAnimationFrame(frame);
+      stop();
+      for (const event of ['pointerdown', 'wheel', 'keydown']) window.removeEventListener(event, stop, true);
+    };
+  }, [slot, slotRow, slotColumn, slotClasses]);
+  const slotSelected = routeSlotCell && focus?.row === routeSlotCell.row && focus.col === routeSlotCell.col;
+  const selectedBell = slotSelected ? payload?.slots[routeSlotCell.row] : null;
+  const customSlotTime = slot && selectedBell && slot.kind !== 'event' && (selectedBell.start !== slot.start || selectedBell.end !== slot.end);
+  const canCreateAtSlot = route?.mayCreate && slotSelected && !customSlotTime;
   const removeSelected = () => {
     if (!payload) return;
     const ids = selectedId
@@ -2264,7 +2378,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   useEffect(()=>{let active=true;if(!conflictsOpen||dirty||!draft)return;void api<{exceptions:Record<string,Array<{id:string;type:string;reason:string;lesson_ids?:string[]}>>}>(`/api/admin/schedule/constructor/${encodeURIComponent(draft.id)}/resolution/preview`,{method:'POST',body:JSON.stringify({expected_revision:draft.revision,lesson_ids:draft.payload.lessons.map(l=>l.id)})}).then(result=>{if(active){setResolutionStates(result.exceptions||{});setResolutionRevision(draft.revision);}}).catch(()=>{if(active)setResolutionStates({});});return()=>{active=false;};},[api,conflictsOpen,dirty,draft?.id,draft?.revision]);
   const workflowFor=(item:Issue)=>{const receipts=dirty||resolutionRevision!==draft?.revision?[]:[...(resolutionStates[item.lessonId]||[]),...(item.related?resolutionStates[item.related]||[]:[])];const targets=[item.lessonId,...(item.related?[item.related]:[])];const coversIssue=(receipt:{lesson_ids?:string[]})=>targets.every(id=>receipt.lesson_ids?.includes(id));if(item.category==='critical')return 'critical';if(receipts.some(r=>r.type==='defer'&&coversIssue(r)))return 'deferred';if(receipts.some(r=>r.type==='joint'&&item.category==='conflict'&&coversIssue(r)))return 'acknowledged';if(receipts.some(r=>r.type==='independent_practice'&&item.type==='teacher'&&targets.some(id=>r.lesson_ids?.includes(id))))return 'acknowledged';if(receipts.some(r=>r.type==='confirm_roster'&&item.category==='review'&&item.type==='audience'&&r.lesson_ids?.includes(item.lessonId)))return 'acknowledged';return item.type==='room'||item.type!=='audience'&&item.category==='incomplete'?'quick':'decision';};
   const copyIssueReport=async()=>{if(!draft)return;const groups=new Map<string,Issue[]>();for(const issue of filteredIssues){const code=issue.code||(issue.type==='teacher'&&/уже ведёт/i.test(issue.message)?'TEACHER_OVERLAP':issue.type==='room'&&/занят/i.test(issue.message)?'ROOM_OVERLAP':issue.type==='audience'&&/ученик/i.test(issue.message)?'STUDENT_OVERLAP':issue.type==='teacher'?'TEACHER_REVIEW':issue.type==='room'?'ROOM_REVIEW':issue.type==='audience'?'AUDIENCE_REVIEW':'SCHEDULE_REVIEW');groups.set(code,[...(groups.get(code)||[]),issue]);}const lines=['Отчёт проверки расписания',...[...groups].map(([code,items])=>{const ids=[...new Set(items.flatMap(item=>[item.lessonId,...(item.related?[item.related]:[])]).filter((id):id is string=>typeof id==='string'))];return `${code}\t${items.length}\t${ids.map(id=>`${window.location.origin}/admin/schedule/constructor?${new URLSearchParams({draft:draft.id,lesson:id})}`).join(', ')}`;})];await navigator.clipboard.writeText(lines.join('\n'));setStatus('Отчёт проверки скопирован без персональных данных.');};
-  const filteredIssues = issues.filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
+  const matchesIssueLocation = (item: Issue) => (!issueDay && !issueClass) || [item.lessonId,item.related].some(id => {
+    const lesson = payload?.lessons.find(entry => entry.id === id);
+    return lesson && (!issueDay || String(lesson.day) === issueDay) && (!issueClass || displayedClasses(lesson).includes(issueClass));
+  });
+  const filteredIssues = issues.filter(matchesIssueLocation).filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
   const conflictIssues = issues.filter((item) => item.category === 'conflict');
   const conflictLessons = new Set(conflictIssues.flatMap((item) => [item.lessonId, ...(item.related ? [item.related] : [])]));
   const versionConflicts = versionConflict?.conflicts || [];
@@ -2379,16 +2497,16 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     >
       <header className="constructor-top">
         <div>
-          <small>РАСПИСАНИЕ · {workspace === 'school' ? 'ШКОЛА' : 'ПЕСОЧНИЦА'}</small>
-          <h1><span className="desktop-label">Конструктор расписания</span><span className="mobile-label">Расписание</span></h1>{draft ? <div className="constructor-current-draft" title={draft.name}><span>{draft.name}</span><button aria-label="Переименовать открытый черновик" aria-expanded={renameValue !== null} title="Переименовать" onClick={() => { setRenameValue(draft.name); setRenameError(''); }}><Pencil size={16} /></button>{renameValue !== null ? <div className="constructor-rename-popover" role="dialog" aria-label="Переименовать открытый черновик"><form onSubmit={(event) => { event.preventDefault(); void renameOpenDraft(); }}><label>Новое название<input ref={(element) => element?.focus()} aria-label="Новое название черновика" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') { setRenameValue(null); setRenameError(''); } }} /></label>{renameError ? <p role="alert">{renameError}</p> : null}<div><button type="submit" disabled={saving}>Сохранить название</button><button type="button" onClick={() => { setRenameValue(null); setRenameError(''); }}>Отмена</button></div></form></div> : null}</div> : null}
-          {!draft ? <p>Создавайте шаблон и отдельные учебные недели.</p> : null}
+          {draft || !schoolReview ? <small>РАСПИСАНИЕ · {workspace === 'school' ? 'ШКОЛА' : 'ПЕСОЧНИЦА'}</small> : null}
+          <h1><span className="desktop-label">{!draft && schoolReview ? 'Расписание' : 'Конструктор расписания'}</span><span className="mobile-label">Расписание</span></h1>{draft ? <div className="constructor-current-draft" title={draft.name}><span>{draft.name}</span><button aria-label="Переименовать открытый черновик" aria-expanded={renameValue !== null} title="Переименовать" onClick={() => { setRenameValue(draft.name); setRenameError(''); }}><Pencil size={16} /></button>{renameValue !== null ? <div className="constructor-rename-popover" role="dialog" aria-label="Переименовать открытый черновик"><form onSubmit={(event) => { event.preventDefault(); void renameOpenDraft(); }}><label>Новое название<input ref={(element) => element?.focus()} aria-label="Новое название черновика" value={renameValue} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') { setRenameValue(null); setRenameError(''); } }} /></label>{renameError ? <p role="alert">{renameError}</p> : null}<div><button type="submit" disabled={saving}>Сохранить название</button><button type="button" onClick={() => { setRenameValue(null); setRenameError(''); }}>Отмена</button></div></form></div> : null}</div> : null}
+          {!draft && !schoolReview ? <p>Создавайте шаблон и отдельные учебные недели.</p> : null}
           {scheduleDataSourceLabel ? <span className="admin-data-source">{scheduleDataSourceLabel}</span> : <span className="admin-data-source">{directoryAccess === 'school' ? 'Школьный справочник подключён' : directoryAccess === 'checking' ? 'Подключение…' : 'Локальная песочница'}</span>}{draft ? workspaceTabs : null}
         </div>
         <div className="constructor-actions">
-          {!draft ? <>
+          {!draft ? <details className="constructor-directory-tools"><summary>Справочник</summary>
           <Link href="/admin/people">Школьный справочник</Link>
           <button onClick={() => void load().then(() => setStatus('Справочник обновлён')).catch((error) => setStatus(String(error.message || error)))}><RefreshCw size={16} /> Обновить справочник</button>
-          </> : null}
+          </details> : null}
           {draft ? (
             <>
               <output className={dirty ? 'constructor-unsaved' : ''}>
@@ -2398,7 +2516,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 <Save size={16} />Сохранить
               </button>
               {schoolReview
-                ? <button className="constructor-review-trigger" disabled={saving} onClick={() => setReviewMode('review')}><BookOpenCheck size={16} />Проверить расписание</button>
+                ? <button className="constructor-review-trigger" disabled={saving} onClick={() => openReviewCenter('all')}><BookOpenCheck size={16} />Проверить расписание</button>
                 : <button onClick={() => setRecalculationOpen(true)} disabled={saving}>Пересчитать аудитории</button>}
             </>
           ) : null}
@@ -2406,10 +2524,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       </header>
       {draft && termComparison?.items.length ? <div className="constructor-term-strip">
         <span>Второй триместр · ждут первичной проверки {pendingTermItems}</span>
-        <button type="button" className="admin-button" onClick={() => setComparisonOpen(true)}>Сверка с таблицей</button>
+        <button type="button" className="admin-button" onClick={openTermComparison}>Сверка с таблицей</button>
       </div> : null}
       {draft && termComparison && comparisonOpen ? <ConstructorTermComparison
-        key={draft.id} comparison={termComparison} name={draft.name} dirty={dirty || saving} readOnly={readOnlySchoolWorkspace}
+        key={draft.id} comparison={termComparison} name={draft.name} suspended={route?.origin === 'comparison'} dirty={dirty || saving} readOnly={readOnlySchoolWorkspace}
         initialKey={comparisonFocus?.draftId === draft.id ? comparisonFocus.key : null}
         lessons={draft.payload.lessons.map(lesson => {
           const classes = visualClasses(lesson, groups).map(id => groups.find(group => group.id === id)?.name).filter((label): label is string => Boolean(label));
@@ -2430,8 +2548,16 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           };
         })}
         onSelect={key => setComparisonFocus(key ? { draftId: draft.id, key } : null)}
-        onClose={() => setComparisonOpen(false)}
-        onOpenLesson={id => { setComparisonOpen(false); openReviewLesson(id); }}
+        onClose={() => {
+          setComparisonOpen(false);
+          if (comparisonFromReview.current) {setReviewFilter(undefined);setReviewMode('review');}
+          comparisonFromReview.current = false;
+        }}
+        onOpenLesson={(id, related = [], title) => {
+          const partners = issues.filter(issue => issue.category === 'conflict' && issue.related && (issue.lessonId === id || issue.related === id))
+            .flatMap(issue => [issue.lessonId,issue.related!]);
+          showIssueLesson(id,'comparison',title || 'Сверка с таблицей',[...related,...partners]);
+        }}
         onOpenSlot={openComparisonSlot}
         onDecide={decideTermComparison} /> : null}
       {draft && exportOpen ? <ConstructorScheduleExport
@@ -2442,7 +2568,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         api={api} apiPrefix="/api/admin/schedule/experiments"
         draftId={draft.id} revision={draft.revision} dirty={dirty} day={day} classId={rosterClassId} classLabel={rosterClassLabel}
         onClose={() => setRecalculationOpen(false)} onUpdated={applyRosterDraft} /> : null}
-      {resolutionIssue && draft ? <ConstructorResolutionPanel api={api} draftId={draft.id} revision={draft.revision} lessons={draft.payload.lessons} slots={draft.payload.slots} issue={resolutionIssue} teacherNames={Object.fromEntries(teachers.map(t=>[t.id,t.name]))} groupNames={Object.fromEntries(groups.map(g=>[g.id,g.name]))} studentNames={Object.fromEntries(students.map(s=>[s.id,s.name]))} dirty={dirty} onClose={()=>setResolutionIssue(null)} onNavigate={id=>{openReviewLesson(id);setResolutionIssue(null);setConflictsOpen(false);}} onUpdated={async(value)=>{const updated=value as Draft|undefined;if(updated?.payload){setHistory(items=>[...items.slice(-49),draft.payload]);setFuture([]);revision.current=updated.revision;baseDraftRef.current=updated;setDraft(updated);setDirty(false);changeVersion.current++;}else{await open(draft.id);}await refreshDrafts();}} /> : null}
+      {resolutionIssue && draft ? <ConstructorResolutionPanel api={api} draftId={draft.id} revision={draft.revision} lessons={draft.payload.lessons} slots={draft.payload.slots} issue={resolutionIssue} teacherNames={Object.fromEntries(teachers.map(t=>[t.id,t.name]))} groupNames={Object.fromEntries(groups.map(g=>[g.id,g.name]))} studentNames={Object.fromEntries(students.map(s=>[s.id,s.name]))} dirty={dirty} onClose={()=>{setResolutionIssue(null);if(resolutionFromReview){setReviewFilter(undefined);setReviewMode('review');}setResolutionFromReview(false);}} onNavigate={id=>{showIssueLesson(id,resolutionFromReview?'review':'grid',resolutionIssue.message,[resolutionIssue.lessonId,...(resolutionIssue.related?[resolutionIssue.related]:[])]);setResolutionIssue(null);setResolutionFromReview(false);}} onUpdated={async(value)=>{const updated=value as Draft|undefined;if(updated?.payload){setHistory(items=>[...items.slice(-49),draft.payload]);setFuture([]);revision.current=updated.revision;baseDraftRef.current=updated;setDraft(updated);setDirty(false);changeVersion.current++;}else{await open(draft.id);}await refreshDrafts();}} /> : null}
       {reviewMode && draft && schoolReview ? <ConstructorPublicationPanel
         key={`${draft.id}:${reviewMode}`} api={api} mode={reviewMode} draftId={draft.id} draftName={draft.name}
         revision={draft.revision} weekStart={draft.payload.week_start} dirty={dirty} readOnly={readOnlySchoolWorkspace} publicationEnabled={consolidatedSchedule}
@@ -2453,7 +2579,23 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         onClose={() => setReviewMode(null)}
         onSave={save}
         onRostersUpdated={applyRosterDraft}
-        onOpenLesson={id => { openReviewLesson(id); setReviewMode(null); }}
+        onOpenGridDecisions={() => {setReviewMode(null);setConflictsOpen(true);requestAnimationFrame(()=>document.querySelector<HTMLElement>('.constructor-conflict-panel')?.focus());}}
+        initialFilter={reviewFilter}
+        localIssues={issues}
+        onResolveIssue={(ids,code) => {
+          const topic = /room|кабинет/i.test(code) ? 'room' : /teacher|преподавател/i.test(code) ? 'teacher' : /audience|roster|student|group|состав/i.test(code) ? 'audience' : null;
+          const matches = issues.filter(item => ids.includes(item.lessonId) && (!item.related || ids.includes(item.related)) && (!topic || item.type === topic));
+          if (matches.length !== 1) return false;
+          setReviewMode(null);setResolutionFromReview(true);setResolutionIssue(matches[0]);return true;
+        }}
+        lessonDetails={Object.fromEntries(draft.payload.lessons.map(lesson => [lesson.id, {
+          ...lessonTimes(lesson,draft.payload.slots),day:lesson.day,subject:lesson.subject,
+          classes:displayedClasses(lesson).flatMap(id => groups.find(g=>g.id===id)?.name || []),
+          teachers:[...new Set([lesson.teacherId,...(lesson.teacherIds || [])])].flatMap(id=>teachers.find(t=>t.id===id)?.name || []),
+          groups:linkedInstructionalGroups(lesson,groups).map(g=>g.name),room:normalizeRoomDisplay(lesson.room || lesson.place || '')
+        }]))}
+        onOpenComparison={termComparison?.items.length ? () => {comparisonFromReview.current = true;setReviewMode(null);openTermComparison();} : undefined}
+        onOpenLesson={(id, context) => showIssueLesson(id,'review',context?.title || 'Проверка расписания',context?.relatedIds)}
         onNormalizedCopy={async copy => {
           if (!await open(copy.id)) setReviewMode(null);
           void refreshDrafts().catch(() => {});
@@ -2514,8 +2656,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       {directoryAccess === 'checking' ? <section className="constructor-school-gate">Проверяем подключение к справочнику…</section> : workspace === 'school' && !draft ? (
         <ConstructorSchoolStart api={api} drafts={schoolDrafts} index={schoolWeekIndex} hiddenIds={hiddenSchoolDrafts} readOnly={readOnlySchoolWorkspace} initialSection={schoolStartSection}
           onOpen={async id => { await open(id); }} onCopy={(item) => void duplicate(item as DraftSummary)} onHide={hideSchoolDraft} onRestore={restoreSchoolDraft}
+          onCompare={async id => {
+            const opened = await open(id, undefined, true);
+            if (opened) setComparisonOpen(true);
+            return opened;
+          }}
           onCreateEmpty={() => void create('empty')} onCreated={async (id) => { setSchoolStartSection('weeks'); await refreshDrafts(); await open(id); }}
-          onReview={async id => { if (await open(id)) setReviewMode('review'); }} />
+          onReview={async id => { if (await open(id)) {setReviewFilter('all');setReviewMode('review');} }} />
       ) : !draft ? (
         <section className="constructor-start">
           <h2>С чего начнём?</h2>
@@ -2608,7 +2755,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               </section> : null}
             </span> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-            <button className="constructor-issue-count" onClick={() => setConflictsOpen((open) => !open)} aria-expanded={conflictsOpen}>
+            <button className="constructor-issue-count" onClick={() => {if(schoolReview) openReviewCenter('conflict'); else setConflictsOpen(open => !open);}} aria-expanded={schoolReview ? reviewMode === 'review' : conflictsOpen}>
               <AlertTriangle size={14} /><span className="desktop-label">{schoolReview ? 'Конфликты в сетке' : 'Проверка'} · {conflictLessons.size}</span><span className="mobile-label">{schoolReview ? 'В сетке' : 'Проверка'} · {conflictLessons.size}</span>
             </button>
             <button onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>Фильтры</button>
@@ -2844,16 +2991,19 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               })}</tbody></table></div>
             </section>
           </div> : null}
-          {conflictsOpen ? (
-            <section className="constructor-conflict-panel">
+          {conflictsOpen || route?.origin === 'grid' ? (
+            <section className="constructor-conflict-panel" tabIndex={-1} style={conflictsOpen ? undefined : {display:'none'}}>
               <header><strong>Центр решений расписания</strong><button onClick={() => setConflictsOpen(false)} aria-label="Закрыть список проблем"><X size={15} /></button></header>
               {!dirty&&resolutionRevision===draft?.revision&&Object.keys(resolutionStates).length?<details className="constructor-acknowledged-history"><summary>Подтверждённые решения и отложенные записи</summary>{[...new Map(Object.entries(resolutionStates).flatMap(([lid,items])=>items.filter(r=>r.type!=='room').map(r=>[r.id,{...r,lessonId:lid}] as const))).values()].map(r=><article key={r.id}><strong>{r.type==='joint'?'Совместное занятие':r.type==='independent_practice'?'Самостоятельная практика':r.type==='defer'?'Отложенное решение':'Подтверждение участников'}</strong><p>{r.reason}</p><button onClick={()=>setResolutionIssue({lessonId:r.lessonId,related:(r as {lesson_ids?:string[]}).lesson_ids?.find(id=>id!==r.lessonId),type:r.type==='joint'||r.type==='independent_practice'?'teacher':'audience',category:'review',severity:'warning',message:r.reason})}>Рассмотреть или отменить</button></article>)}</details>:null}
               <div className="constructor-conflict-filters">
+                <select aria-label="День проблемы" value={issueDay} onChange={event=>setIssueDay(event.target.value)}><option value="">Все дни</option>{payload.days.map(d=><option key={d} value={d}>{DAYS[d]}</option>)}</select>
+                <select aria-label="Класс проблемы" value={issueClass} onChange={event=>setIssueClass(event.target.value)}><option value="">Все классы</option>{classes.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select>
                 <select aria-label="Важность проблемы" value={issueSeverity} onChange={(event) => setIssueSeverity(event.target.value)}><option value="all">Все уровни</option><option value="error">Ошибки</option><option value="warning">Предупреждения</option></select>
                 <select aria-label="Тип проблемы" value={issueType} onChange={(event) => setIssueType(event.target.value)}><option value="all">Все типы</option><option value="teacher">Преподаватель</option><option value="room">Кабинет</option><option value="student">Группа или ученик</option><option value="data">Данные занятия</option></select>
                 <button type="button" onClick={()=>void copyIssueReport()}>Скопировать отчёт проверки</button>
               </div>
-              {(['quick', 'decision', 'acknowledged', 'deferred', 'critical'] as const).map((category) => {
+              {!filteredIssues.length ? <p role="status">По выбранным фильтрам проблем нет.</p> : null}
+              {(['critical', 'decision', 'quick', 'deferred', 'acknowledged'] as const).map((category) => {
                 const categoryIssues = filteredIssues.filter((item) => workflowFor(item) === category);
                 if (!categoryIssues.length) return null;
                 const title = category === 'quick' ? 'Исправляемые быстро' : category === 'decision' ? 'Требуют решения администратора' : category === 'acknowledged' ? 'Подтверждённые исключения' : category === 'deferred' ? 'Отложенные решения' : 'Критические технические проблемы';
@@ -2862,13 +3012,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 const count = category === 'decision' ? `${russianCount(affected.size, 'занятие', 'занятия', 'занятий')} · ${russianCount(pairs.size, 'парное совпадение', 'парных совпадения', 'парных совпадений')}` : russianCount(affected.size, 'занятие', 'занятия', 'занятий');
                 const reasonGroups = new Map<string, Issue[]>();
                 for (const item of categoryIssues) reasonGroups.set(`${item.type}:${item.message}`, [...(reasonGroups.get(`${item.type}:${item.message}`) || []), item]);
-                return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3>{[...reasonGroups].map(([reason, examples])=><details key={reason} className="constructor-issue-reason"><summary>{reason.slice(reason.indexOf(':')+1)} · {examples.length}</summary><div className="constructor-conflict-list">{examples.slice(0,5).map((item, index) => {
+                return <section className="constructor-issue-category" key={category}><h3>{title} · {count}</h3>{[...reasonGroups].map(([reason, examples])=><details key={reason} className="constructor-issue-reason"><summary>{reason.slice(reason.indexOf(':')+1)} · {examples.length}</summary><div className="constructor-conflict-list">{examples.map((item, index) => {
                   const lesson = payload.lessons.find((entry) => entry.id === item.lessonId);
                   const targetGroup = groups.find((entry) => entry.id === lesson?.groupId);
                   const dayName = lesson ? DAYS[lesson.day] || 'День не определён' : 'Занятие не найдено';
-                  const startTime = lesson ? payload.slots[lesson.period]?.start || 'Время не определено' : '';
-                  return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><button className="constructor-issue-open" onClick={()=>setResolutionIssue(item)}>Разобрать проблему</button><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || id).join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button onClick={() => { if (!lesson) return; setDay(lesson.day); setViewMode('day'); setClassFilter(''); setPanelMode('lesson'); setPanelOpen(true); const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((id) => entry.classIds.includes(id))); if (col >= 0) { setAnchor({row: lesson.period, col}); setFocus({row: lesson.period, col}); } setSelectedId(lesson.id); setConflictsOpen(false); }}>Показать в расписании</button></article>;
-                })}{examples.length>5?<small>Показаны первые 5 из {examples.length} примеров.</small>:null}</div></details>)}</section>;
+                  const startTime = lesson ? lessonTimes(lesson,payload.slots).start || 'Время не определено' : '';
+                  return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><button className="constructor-issue-open" onClick={()=>setResolutionIssue(item)}>Разобрать проблему</button><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || 'класс не уточнён').join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button data-issue-open={item.lessonId} onClick={() => showIssueLesson(item.lessonId,'grid',item.message,item.related?[item.related]:[])}>Показать в расписании</button></article>;
+                })}</div></details>)}</section>;
               })}
               <details className="constructor-source-week"><summary>Полная таблица исходной недели · {payload.lessons.length} занятий</summary><div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];const lessonGroups=linkedInstructionalGroups(lesson,groups);return <tr key={lesson.id}><td>{DAYS[lesson.day]||'—'} · {payload.slots[lesson.period]?.start||lesson.start||'—'}</td><td>{lesson.subject||'Обед'}{editorActivityType(lesson)==='elective'?' · курс по выбору':''}</td><td>{displayedClasses(lesson).map(id=>groups.find(group=>group.id===id)?.name||id).join(', ')||'Не указаны'}</td><td>{lessonGroups.map(group=>group.name).join(', ')||'Не указаны'}</td><td>{teacherIds.map(id=>teachers.find(teacher=>teacher.id===id)?.name||'Преподаватель требует проверки').join(', ')||'Не указан'}</td><td>{lesson.room||lesson.place||'Не указано'}</td><td>{status}</td><td><button type="button" onClick={()=>{openReviewLesson(lesson.id);setConflictsOpen(false);}}>Открыть</button></td></tr>})}</tbody></table></div></details>
             </section>
@@ -2884,6 +3034,23 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               </details>)}
             </details>
           ) : null}
+          {route ? <section className="constructor-issue-route" data-issue-route aria-label="Выбранная проблема">
+            <div><strong>{route.title}</strong><small>{route.slot ? [DAYS[route.slot.day],route.slot.start,route.slot.classes.join(', ')].join(' · ') : routedLesson ? [DAYS[routedLesson.day], lessonTimes(routedLesson,payload.slots).start,routedLesson.subject,normalizeRoomDisplay(routedLesson.room)].filter(Boolean).join(' · ') : 'Занятие отсутствует в этой редакции'}</small></div>
+            {(route.ids.length > 1 || (route.active && route.active !== selectedId)) ? <div className="constructor-route-lessons" role="group" aria-label="Связанные занятия">{route.ids.map(id => {
+              const lesson = payload.lessons.find(item => item.id === id);
+              const duplicateSubject = lesson && payload.lessons.some(other => other.id !== id && route.ids.includes(other.id) && other.subject === lesson.subject);
+              const label = lesson && [lesson.subject || 'Занятие', ...(duplicateSubject ? [displayedClasses(lesson).flatMap(classId => groups.find(g => g.id === classId)?.name || []).join(', '), normalizeRoomDisplay(lesson.room)] : [])].filter(Boolean).join(' · ');
+              return lesson ? <button key={id} aria-pressed={route.active===id} onClick={()=>{openReviewLesson(id,true);setIssueRoute({...route,active:id});}}>{label}</button> : null;
+            })}</div> : null}
+            {!panelOpen && (selected || canCreateAtSlot) ? <button onClick={()=>{if (route.slot && !selected) {
+                const kind = route.slot.kind;
+                setCreationMode(kind === 'lunch' || kind === 'event' || kind === 'no_lesson' ? kind : 'form');
+              }
+              setPanelOpen(true);}}>{selected?'Редактировать занятие':'Создать занятие в слоте'}</button> : null}
+            {route.mayCreate && customSlotTime ? <small>Показан пересекающийся урок. Для создания занятия уточните время по звонкам.</small> : null}
+            {route.slot && !selectedCell ? <small>Для этого времени или класса в сетке нет подходящей ячейки. Уточните размещение в сверке.</small> : null}
+            <button onClick={backToIssues}>К проверке</button>
+          </section> : null}
           <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
             <div ref={gridWrap} className={`constructor-grid-wrap ${density}`} onScroll={(event) => {
               if (!restoringGridScroll.current) gridScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
@@ -2981,6 +3148,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           }}
                           aria-label={`${column.label}, ${DAYS[cellDay]}, ${payload.slots[period].start}`}
                           data-cell={keyOf({ row, col })}
+                          data-issue-slot={routeSlotCell?.row === row && routeSlotCell.col === col ? true : undefined}
                           className={`constructor-cell ${inRange(row, col) ? 'selected' : ''}`}
                           onClick={(event) => {
                             if (
@@ -3034,7 +3202,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                               const classCaption = visualClasses(item, groups).filter((id) => column.classIds.includes(id)).map((id) => groups.find((g) => g.id === id)?.name || id).join(', ');
                               return (
                                 <button
-                                  id={`lesson-${item.id}`}
+                                  id={`lesson-${item.id}-${row}-${col}`}
+                                  aria-current={route?.active === item.id ? 'location' : undefined}
+                                  data-issue-target={route?.active === item.id ? 'current' : route?.ids.includes(item.id) ? 'related' : undefined}
                                   key={item.id}
                                   data-lesson-id={item.id}
                                   title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${item.room ? normalizeRoomDisplay(item.room) : 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
@@ -3147,7 +3317,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         : 'Выберите ячейку'}
                   </h2>
                 </div>
-                <div className="constructor-inspector-head-actions"><button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
+                <div className="constructor-inspector-head-actions">{route ? <button onClick={backToIssues}>К проверке</button> : null}<button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
               </div>
               {selected && focus ? (
                 <button

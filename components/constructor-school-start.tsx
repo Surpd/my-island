@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowRight, Ellipsis, X } from 'lucide-react';
 import { TemplateSelectionDialog } from './template-selection-dialog';
 import { formatLessonTimeRange } from './lesson-time';
 import { normalizeRoomDisplay } from './schedule-rooms';
+import './constructor-school-start.css';
 
 export type SchoolDraftSummary = { id: string; name: string; revision: number; lesson_count: number; updated_at?: string; week_start?: string | null; is_primary_template?: boolean; selection_stale?: boolean; selected_revision?: number; has_publications?: boolean; draft_kind: string; base_version_id?: string | null; source_template?: { id?: string; revision?: number } | null };
 export type EffectiveWeekSummary = { effective_week_id: string; version_id: string; week_start: string; status: string; created_at: string; revision_at?: string; is_current_publication?: boolean };
@@ -42,24 +43,67 @@ export function weekPeriod(value: string) {
 }
 const changedAt = (value?: string) => value ? new Date(value).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'дата не указана';
 const isTest = (draft: SchoolDraftSummary) => draft.draft_kind === 'test' || /(?:^|[\s·])тест(?:[\s·]|$)/iu.test(draft.name);
-export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly, initialSection = 'template', onOpen, onCopy, onHide, onRestore, onCreateEmpty, onCreated, onReview }: {
+const compareValue = (value: SelectionPreview['changed'][number]['changes'][number]['before']) => Array.isArray(value) ? value.join(', ') || '—' : value == null || value === '' ? '—' : String(value);
+
+function StartMenu({ label = 'Ещё', accessibleLabel, children }: { label?: string; accessibleLabel?: string; children: ReactNode }) {
+  return <details className={`schedule-start-menu${label === 'Ещё' ? '' : ' is-start'}`} data-ui-menu>
+    <summary aria-label={accessibleLabel}>{label === 'Ещё' ? <Ellipsis size={15} aria-hidden="true" /> : null}{label}</summary>
+    <div>{children}</div>
+  </details>;
+}
+
+function StartMenuAction({ children, disabled, risk, onClick }: { children: ReactNode; disabled?: boolean; risk?: boolean; onClick: () => void }) {
+  return <button className={risk ? 'schedule-start-risk' : undefined} disabled={disabled} onClick={event => {
+    const menu = event.currentTarget.closest('details');
+    menu?.removeAttribute('open');
+    menu?.querySelector('summary')?.focus();
+    onClick();
+  }}>{children}</button>;
+}
+
+function TemplateComparison({ preview, onClose }: { preview: SelectionPreview; onClose: () => void }) {
+  const lessonText = (lesson: SelectionPreview['added'][number]) => [lesson.subject, formatLessonTimeRange(lesson.start, lesson.end), lesson.groups.join(', '), lesson.teachers.join(', '), lesson.room && normalizeRoomDisplay(lesson.room)].filter(Boolean).join(' · ');
+  return <dialog className="constructor-conflict-dialog constructor-week-history schedule-start-comparison" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="schedule-start-comparison-title" onCancel={onClose}>
+    <header><h2 id="schedule-start-comparison-title">Сравнение шаблонов</h2><button aria-label="Закрыть сравнение" onClick={onClose}><X size={20} /></button></header>
+    <div className="schedule-start-comparison-content">
+      <dl className="schedule-start-facts">
+        <div><dt>Основной шаблон</dt><dd>{preview.current ? `${preview.current.name} · ревизия ${preview.current.revision}` : 'Не назначен'}</dd></div>
+        <div><dt>Выбранный шаблон</dt><dd>{preview.candidate.name} · ревизия {preview.candidate.revision}</dd></div>
+      </dl>
+      {preview.baseline_recovery_required ? <output className="schedule-start-notice">Снимок основной ревизии недоступен для сравнения.</output> : !preview.has_semantic_changes ? <p>Состав занятий и настройки совпадают.</p> : null}
+      {!preview.baseline_recovery_required ? <>
+        {([{ title: 'Добавленные занятия', lessons: preview.added }, { title: 'Удалённые занятия', lessons: preview.removed }]).map(({ title, lessons }) => lessons.length ? <details key={title}><summary>{title} · {lessons.length}</summary><ul>{lessons.map(lesson => <li key={lesson.id}>{lessonText(lesson)}</li>)}</ul></details> : null)}
+        {preview.changed.length ? <details><summary>Изменённые занятия · {preview.changed.length}</summary><ul>{preview.changed.map(lesson => <li key={lesson.id}><strong>{lesson.after.subject} · {formatLessonTimeRange(lesson.after.start, lesson.after.end)}</strong><ul>{lesson.changes.map(change => <li key={change.field}>{change.label} — {change.before_text ?? compareValue(change.before)} → {change.after_text ?? compareValue(change.after)}</li>)}</ul></li>)}</ul></details> : null}
+        {preview.settings_changes.length ? <details><summary>Изменения настроек · {preview.settings_changes.length}</summary><ul>{preview.settings_changes.map(item => <li key={item.field}>{item.label} — {item.before} → {item.after}</li>)}</ul></details> : null}
+      </> : null}
+      {preview.problems.length ? <details><summary>Замечания · {preview.problems.length}</summary><ul>{preview.problems.map(item => <li key={item.lesson_id}>{item.details.join(' · ')}</li>)}</ul></details> : null}
+    </div>
+  </dialog>;
+}
+
+export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly, initialSection = 'template', onOpen, onCopy, onHide, onRestore, onCreateEmpty, onCreated, onReview, onCompare }: {
   api: Api; drafts: SchoolDraftSummary[]; index: SchoolWeekIndex; hiddenIds: string[]; readOnly: boolean;
   initialSection?: 'template' | 'weeks';
   onOpen: (id: string) => Promise<void>; onCopy: (draft: SchoolDraftSummary) => void;
   onHide: (id: string) => void; onRestore: (id: string) => void; onCreateEmpty: () => void;
   onCreated: (id: string) => Promise<void>; onReview: (id: string) => Promise<void>;
+  onCompare?: (id: string) => Promise<boolean>;
 }) {
   const [section, setSection] = useState<'template' | 'weeks'>(initialSection);
   const [weekStart, setWeekStart] = useState(nearestMonday);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
   const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
+  const [comparisonPreview, setComparisonPreview] = useState<SelectionPreview | null>(null);
+  const [comparisonLoadingId, setComparisonLoadingId] = useState<string | null>(null);
+  const comparisonTrigger = useRef<HTMLButtonElement>(null);
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionError, setSelectionError] = useState('');
   const [acknowledgeProblems, setAcknowledgeProblems] = useState(false);
   const [acknowledgeBaseline, setAcknowledgeBaseline] = useState(false);
   const [selectionHistory, setSelectionHistory] = useState<{ id: string; previous_draft_id?: string; previous_revision?: number; next_draft_id: string; next_revision: number; created_at: string }[]>([]);
   const [restoredTests, setRestoredTests] = useState<string[]>([]);
+  const [showAllTemplates, setShowAllTemplates] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
@@ -72,6 +116,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const [history, setHistory] = useState<{ title: string; publications?: WeekPublication[]; weeks?: EffectiveWeekSummary[]; drafts?: SchoolDraftSummary[] } | null>(null);
   const [view, setView] = useState<{ title: string; loading?: boolean; blocks?: WeekHistoryBlock[]; error?: string } | null>(null);
   const primary = drafts.find(item => item.is_primary_template);
+  const primaryRevision = primary?.selection_stale ? primary.selected_revision : primary?.revision;
   const publications = index.week_publications || [];
   const effective = index.effective_weeks || [];
   const publishedDrafts = new Set(publications.map(item => item.draft_id));
@@ -80,7 +125,8 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const archived = drafts.filter(item => item.id !== primary?.id && (hiddenIds.includes(item.id) || isTest(item) && !restoredTests.includes(item.id) && !item.has_publications && !publishedDrafts.has(item.id)));
   const archiveIds = new Set(archived.map(item => item.id));
   const weekDrafts = drafts.filter(item => item.id !== primary?.id && item.week_start && !archiveIds.has(item.id));
-  const others = drafts.filter(item => item.id !== primary?.id && !item.week_start && !archiveIds.has(item.id));
+  const others = drafts.filter(item => item.id !== primary?.id && !item.week_start && !archiveIds.has(item.id))
+    .sort((left, right) => (right.updated_at || '').localeCompare(left.updated_at || '') || right.revision - left.revision);
   const weeks = [...new Set([...effective.map(item => item.week_start), ...publications.map(item => item.scope_key.replace(/^week:/, '')), ...weekDrafts.map(item => item.week_start!)])].sort().reverse();
   const existingDrafts = drafts.filter(item => item.week_start === weekStart);
   const weekExists = existingDrafts.length > 0 || effective.some(item => item.week_start === weekStart) || publications.some(item => item.scope_key === `week:${weekStart}`);
@@ -99,17 +145,31 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
       setHistory({ title: primary.name, publications: result.items, drafts: [primary] });
     } catch (error) { setMessage((error as Error).message); }
   };
-  const previewTemplateSelection = async (item: SchoolDraftSummary) => {
+  const previewTemplateSelection = async (item: SchoolDraftSummary, compareOnly = false) => {
+    if (selectionBusy || (!compareOnly && readOnly)) return;
     setSelectionBusy(true); setMessage(''); setSelectionError('');
+    if (compareOnly) setComparisonLoadingId(item.id);
     try {
+      if (compareOnly && onCompare && await onCompare(item.id)) return;
       const result = await api<SelectionPreview>('/api/admin/schedule/experiments/school/' + encodeURIComponent(item.id) + '/selection-preview', { method: 'POST' });
-      setSelectionPreview(result); setAcknowledgeProblems(false);
-      setAcknowledgeBaseline(false);
-    } catch (error) { setSelectionError((error as Error).message); setMessage((error as Error).message); } finally { setSelectionBusy(false); }
+      if (compareOnly) setComparisonPreview(result);
+      else {
+        setSelectionPreview(result);
+        setAcknowledgeProblems(false);
+        setAcknowledgeBaseline(false);
+      }
+    } catch (error) {
+      setSelectionError((error as Error).message);
+      setMessage((error as Error).message);
+      if (compareOnly) window.requestAnimationFrame(() => comparisonTrigger.current?.focus());
+    } finally {
+      setSelectionBusy(false);
+      setComparisonLoadingId(null);
+    }
   };
   const approveLegacyBaseline = async () => {
     const baseline = selectionPreview?.baseline_recovery;
-    if (!baseline || selectionBusy || !acknowledgeBaseline || (baseline.problems?.length && !acknowledgeProblems)) return;
+    if (readOnly || !baseline || selectionBusy || !acknowledgeBaseline || (baseline.problems?.length && !acknowledgeProblems)) return;
     setSelectionBusy(true); setSelectionError('');
     try {
       await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(baseline.draft_id) + '/approve-legacy-baseline', {
@@ -128,7 +188,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     } catch (error) { setSelectionError((error as Error).message); } finally { setSelectionBusy(false); }
   };
   const confirmTemplateSelection = async () => {
-    if (!selectionPreview || selectionBusy) return;
+    if (readOnly || !selectionPreview || selectionBusy) return;
     setSelectionBusy(true); setSelectionError('');
     try {
       await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(selectionPreview.candidate.id) + '/select-primary', {
@@ -152,6 +212,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     } catch (error) { setMessage((error as Error).message); }
   };
   const rollbackSelection = async (id: string) => {
+    if (readOnly) return;
     if (!window.confirm('Вернуть снимок предыдущего основного шаблона отдельной версией?')) return;
     try {
       await api('/api/admin/schedule/experiments/school/template-selection-rollback', { method: 'POST', body: JSON.stringify({ history_id: id }) });
@@ -161,11 +222,11 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     } catch (error) { setMessage((error as Error).message); }
   };
   const createWeek = async () => {
-    if (!primary || creating || readOnly || weekExists) return;
+    if (!primary || primary.selection_stale || primaryRevision == null || creating || readOnly || weekExists) return;
     if (new Date(`${weekStart}T12:00:00`).getDay() !== 1) { setMessage('Выберите понедельник для начала недели.'); return; }
     setCreating(true); setMessage('');
     try {
-      const result = await api<{ id: string }>(`/api/admin/schedule/experiments/school/${encodeURIComponent(primary.id)}/week`, { method: 'POST', body: JSON.stringify({ expected_revision: primary.revision, week_start: weekStart }) });
+      const result = await api<{ id: string }>(`/api/admin/schedule/experiments/school/${encodeURIComponent(primary.id)}/week`, { method: 'POST', body: JSON.stringify({ expected_revision: primaryRevision, week_start: weekStart }) });
       await onCreated(result.id);
     } catch (error) { setMessage((error as Error).message); } finally { setCreating(false); }
   };
@@ -183,53 +244,115 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     setRestoredTests(next);
     try { localStorage.setItem('my-island-visible-test-drafts:v1', JSON.stringify(next)); } catch { /* Optional browser preference. */ }
   };
-  const draftCard = (item: SchoolDraftSummary, archive = false) => <article className="constructor-draft" key={item.id}>
-    <button className="constructor-draft-open" onClick={() => void onOpen(item.id)}><strong>{item.name}</strong><span>{item.lesson_count} занятий · ревизия {item.revision} · {changedAt(item.updated_at)}</span></button>
-    <div className="constructor-draft-actions">{item.draft_kind === 'school' && !item.week_start && !item.is_primary_template && !archive ? <button disabled={readOnly || selectionBusy} onClick={() => void previewTemplateSelection(item)}>Сделать основным шаблоном</button> : null}<button disabled={readOnly} onClick={() => onCopy(item)}>Создать копию</button>{item.is_primary_template ? null : archive ? <button onClick={() => restore(item)}>Вернуть в список</button> : <button onClick={() => onHide(item.id)}>Скрыть</button>}</div>
+  const draftCard = (item: SchoolDraftSummary, archive = false) => <article className="schedule-start-row" key={item.id}>
+    <div><h3>{item.name}</h3><p>Ревизия {item.revision} · {item.lesson_count} занятий{item.updated_at ? ` · ${changedAt(item.updated_at)}` : ''}</p></div>
+    <div className="schedule-start-actions">
+      <button className="schedule-start-button" onClick={() => void onOpen(item.id)}>Открыть</button>
+      {!archive && !item.week_start && !item.is_primary_template ? <button className="schedule-start-button" disabled={selectionBusy} onClick={event => {
+        comparisonTrigger.current = event.currentTarget;
+        void previewTemplateSelection(item, true);
+      }}>{comparisonLoadingId === item.id ? 'Сравниваем…' : 'Сравнить'}</button> : null}
+      {archive ? <button className="schedule-start-button" onClick={() => restore(item)}>Вернуть в список</button> : !item.is_primary_template ? <StartMenu>
+        {item.draft_kind === 'school' && !item.week_start && !readOnly ? <StartMenuAction risk disabled={selectionBusy} onClick={() => void previewTemplateSelection(item)}>Сделать основным шаблоном</StartMenuAction> : null}
+        {!readOnly ? <StartMenuAction onClick={() => onCopy(item)}>Создать копию</StartMenuAction> : null}
+        <StartMenuAction onClick={() => onHide(item.id)}>Скрыть</StartMenuAction>
+      </StartMenu> : null}
+      {archive && !readOnly ? <StartMenu><StartMenuAction onClick={() => onCopy(item)}>Создать копию</StartMenuAction></StartMenu> : null}
+    </div>
   </article>;
-  return <section className="constructor-start constructor-school-start">
-    <nav className="constructor-draft-filters" aria-label="Разделы расписания"><button aria-current={section === 'template' ? 'page' : undefined} className={section === 'template' ? 'active' : ''} onClick={() => setSection('template')}>Основной шаблон</button><button aria-current={section === 'weeks' ? 'page' : undefined} className={section === 'weeks' ? 'active' : ''} onClick={() => setSection('weeks')}>Недели <small>{weeks.length}</small></button></nav>
-    {message ? <p role="alert">{message}</p> : null}{index.load_error ? <p role="alert">Не удалось получить историю недель: {index.load_error}. Сохранённые черновики показаны отдельно.</p> : null}
-    {section === 'template' ? <section className="constructor-template-overview">
-      <small className="constructor-section-caption">РЕДАКТОРСКАЯ ВЕРСИЯ</small>
-      <h2>{primary?.name || 'Основной шаблон не назначен'}</h2>
-      {primary ? <>
-        <p>{primary.lesson_count} занятий · {changedAt(primary.updated_at)}</p>
-        {primary.selection_stale ? <div className="constructor-existing-week" role="alert">
-          <p>Сравните сохранённые правки с выбранным шаблоном, чтобы создавать из них новые недели.</p>
-          <button disabled={readOnly || selectionBusy} onClick={() => void previewTemplateSelection(primary)}>Сравнить правки и подтвердить новую ревизию</button>
-        </div> : null}
-        <div className="constructor-version-status">
-          <div><strong>Шаблон для новых недель</strong><span>{primary.selection_stale ? `Выбрана версия ${primary.selected_revision ?? 'без номера'}, в редакторе — версия ${primary.revision}.` : `Для новых недель используется версия ${primary.revision}.`}</span></div>
-          <div><strong>Опубликованное расписание</strong><span>{index.canonical ? ({ authoritative: 'Подтверждено', approved: 'Подтверждено', approved_with_exceptions: 'Подтверждено с исключениями', superseded: 'Историческая версия' } as Record<string, string>)[index.canonical.status] || index.canonical.status : 'Основа публикации недоступна.'}</span></div>
-        </div>
-        <div className="constructor-start-primary-actions">
-          <button className="admin-button admin-button--primary" onClick={() => void onOpen(primary.id)}>Открыть и редактировать</button>
-          <button onClick={() => void onReview(primary.id)}>Проверить расписание</button>
-        </div>
-        <details className="constructor-secondary-actions">
-          <summary>Действия с шаблоном</summary>
-          <div className="constructor-start-secondary-buttons">
-            <button onClick={() => void templateHistory()}>История версий</button>
-            <button onClick={() => void loadSelectionHistory()}>История переключений</button>
-            <button disabled={readOnly} onClick={() => onCopy(primary)}>Создать отдельную копию</button>
+  return <section className="constructor-start constructor-school-start schedule-start">
+    <nav className="schedule-start-nav" aria-label="Разделы расписания">
+      <button aria-current={section === 'template' ? 'page' : undefined} onClick={() => { setSection('template'); setMessage(''); }}>Основной шаблон</button>
+      <button aria-current={section === 'weeks' ? 'page' : undefined} onClick={() => { setSection('weeks'); setMessage(''); }}>Недели</button>
+    </nav>
+    {message ? <p className="schedule-start-notice" role="alert">{message}</p> : null}
+    {section === 'template' ? <>
+      <section className="schedule-start-primary" aria-label="Основной шаблон школы">
+        <h2>{primary?.name || 'Основной шаблон не назначен'}</h2>
+        {primary ? <>
+          <dl className="schedule-start-facts">
+            <div><dt>Занятий</dt><dd>{primary.lesson_count}</dd></div>
+            <div><dt>Ревизия для новых недель</dt><dd>{primaryRevision ?? 'Не подтверждена'}</dd></div>
+            {primary.updated_at ? <div><dt>Последнее сохранение</dt><dd>{changedAt(primary.updated_at)}</dd></div> : null}
+          </dl>
+          {primary.selection_stale ? <div className="schedule-start-notice">
+            <p>Сохранена ревизия {primary.revision}. Подтвердите её, чтобы создавать из неё новые недели.</p>
+            <button className="schedule-start-button" disabled={readOnly || selectionBusy} onClick={() => void previewTemplateSelection(primary)}>Сравнить правки и подтвердить новую ревизию</button>
+          </div> : null}
+          <div className="schedule-start-actions">
+            <button className="schedule-start-button is-primary" onClick={() => void onOpen(primary.id)}>Открыть расписание <ArrowRight size={15} aria-hidden="true" /></button>
+            <button className="schedule-start-button" onClick={() => void onReview(primary.id)}>Проверить расписание</button>
+            <StartMenu label="Действия" accessibleLabel="Действия с основным шаблоном">
+              <StartMenuAction onClick={() => void templateHistory()}>История версий</StartMenuAction>
+              <StartMenuAction onClick={() => void loadSelectionHistory()}>История переключений</StartMenuAction>
+              {!readOnly ? <StartMenuAction onClick={() => onCopy(primary)}>Создать отдельную копию</StartMenuAction> : null}
+            </StartMenu>
           </div>
-        </details>
-      </> : <p>Выберите редакторский шаблон для создания новых недель.</p>}
-      {selectionHistory.length ? <section aria-label="История переключений шаблона"><h3>История переключений</h3>{selectionHistory.map(item => <article className="constructor-draft" key={item.id}><div className="constructor-draft-open"><strong>Снимок {item.previous_draft_id || 'первого шаблона'} · ревизия {item.previous_revision || '—'}</strong><span>{changedAt(item.created_at)}</span></div><div className="constructor-draft-actions"><button disabled={readOnly} onClick={() => void rollbackSelection(item.id)}>Вернуть предыдущую версию</button></div></article>)}</section> : null}
-      {others.length ? <details className="constructor-secondary-actions"><summary>Другие черновики шаблона · {others.length}</summary>{others.map(item => draftCard(item))}</details> : null}
-    </section> : <>
-      <div className="constructor-section-heading"><div><h2>Недели</h2><p>Сохранённые черновики и история недель по датам.</p></div><a href="#constructor-create-week">Создать неделю</a></div>
-      <section className="constructor-week-list" aria-label="Все недели">{weeks.length ? weeks.map(week => {
-        const saved = weekDrafts.filter(item => item.week_start === week), versions = effective.filter(item => item.week_start === week);
-        const current = versions.find(item => item.is_current_publication), latest = current || versions[0];
-        return <article className="constructor-draft constructor-week-row" key={week}><div className="constructor-draft-open"><strong>{weekPeriod(week)}</strong><div className="constructor-week-status">{saved.length ? <span>Сохранённый черновик{saved.length > 1 ? ` · ${saved.length}` : ''}</span> : null}{current ? <span>Действующая неделя</span> : versions.length ? <span>Историческая версия</span> : null}</div><span>{versions.length ? `Версий недели: ${versions.length}` : 'Сохранён только черновик'}</span></div><div className="constructor-draft-actions">{saved.length ? <button onClick={() => void onOpen(saved[0].id)}>Открыть черновик</button> : latest ? <button onClick={() => void showWeek(latest)}>Просмотреть</button> : null}<button onClick={() => showHistory(week)}>История</button>{!saved.length && latest && !readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(latest)}>Создать черновик версии</button> : null}</div></article>;
-      }) : <p>Сохранённых недель пока нет.</p>}</section>
-      <section id="constructor-create-week" className="constructor-create-week"><h3>Создать неделю</h3><p>{primary ? <>Источник: <strong>{primary.name}</strong> · редакторская ревизия {primary.revision}, {primary.lesson_count} занятий.</> : 'Сначала выберите основной редакторский шаблон.'}</p><div className="constructor-week-form"><label htmlFor="constructor-week-start">Неделя начинается<input id="constructor-week-start" type="date" value={weekStart} onChange={event => { setWeekStart(event.target.value); setMessage(''); }} /></label><div className="constructor-week-period" aria-live="polite">{weekPeriod(weekStart)}</div></div>{weekExists ? <div className="constructor-existing-week"><p>Эта неделя уже существует. Сначала откройте её черновик или историю.</p>{existingDrafts.length ? <button onClick={() => void onOpen(existingDrafts[0].id)}>Открыть существующий черновик</button> : <button onClick={() => showHistory(weekStart)}>Открыть историю недели</button>}</div> : <button className="admin-button admin-button--primary" disabled={readOnly || !primary || primary.selection_stale || !weekStart || creating} onClick={() => void createWeek()}>{creating ? 'Создаём черновик…' : 'Создать из основного шаблона'}</button>}{primary?.selection_stale ? <output style={{ display: 'block' }}>Сначала сравните и подтвердите изменения основного шаблона.</output> : null}<p className="constructor-muted">Создаётся самостоятельный черновик. Публикация доступна отдельным действием.</p></section>
+        </> : <p>Выберите основной шаблон из списка, чтобы создавать недели.</p>}
+      </section>
+      <section className="schedule-start-section" aria-labelledby="schedule-start-drafts">
+        <h2 id="schedule-start-drafts">Другие шаблоны и рабочие копии</h2>
+        <div className="schedule-start-list">{others.length ? (showAllTemplates ? others : others.slice(0, 6)).map(item => draftCard(item)) : <p className="schedule-start-list-empty">Других шаблонов пока нет.</p>}</div>
+        {others.length > 6 ? <button className="schedule-start-button schedule-start-more" onClick={() => setShowAllTemplates(!showAllTemplates)}>{showAllTemplates ? 'Свернуть список шаблонов' : `Показать остальные шаблоны · ${others.length - 6}`}</button> : null}
+      </section>
+      {selectionHistory.length ? <section className="schedule-start-section" aria-labelledby="schedule-start-selection-history">
+        <h2 id="schedule-start-selection-history">История переключений</h2>
+        <div className="schedule-start-list">{selectionHistory.map(item => <article className="schedule-start-row" key={item.id}>
+          <div><h3>{item.previous_revision == null ? 'Первый основной шаблон' : `Предыдущая ревизия ${item.previous_revision}`}</h3><p>{changedAt(item.created_at)}</p></div>
+          {item.previous_draft_id && !readOnly ? <button className="schedule-start-button" onClick={() => void rollbackSelection(item.id)}>Вернуть предыдущую версию</button> : null}
+        </article>)}</div>
+      </section> : null}
+    </> : <>
+      {index.load_error ? <p className="schedule-start-notice" role="alert">Не удалось получить публикации и историю недель. В списке доступны сохранённые черновики.</p> : null}
+      <div className="schedule-start-weeks">
+        <section className="schedule-start-create" aria-labelledby="schedule-start-create-week">
+          <h2 id="schedule-start-create-week">Создать неделю</h2>
+          {primary ? <p className="schedule-start-muted">Из шаблона «{primary.name}»{primaryRevision == null ? '' : ` · ревизия ${primaryRevision}`}.</p> : <p className="schedule-start-muted">Сначала выберите основной шаблон.</p>}
+          <label className="schedule-start-date" htmlFor="constructor-week-start">Неделя начинается<input id="constructor-week-start" type="date" value={weekStart} onChange={event => { setWeekStart(event.target.value); setMessage(''); }} /></label>
+          <p className="schedule-start-muted constructor-week-period" aria-live="polite">{weekPeriod(weekStart)}</p>
+          {weekExists ? <div className="schedule-start-notice"><p>Неделя с этими датами уже есть.</p>{existingDrafts.length ? <button className="schedule-start-button" onClick={() => void onOpen(existingDrafts[0].id)}>Открыть существующий черновик</button> : <button className="schedule-start-button" onClick={() => showHistory(weekStart)}>Открыть историю недели</button>}</div> : <>
+            <button className="schedule-start-button is-primary" disabled={readOnly || !primary || primary.selection_stale || primaryRevision == null || !weekStart || creating} onClick={() => void createWeek()}>{creating ? 'Создаём черновик…' : 'Создать из основного шаблона'}</button>
+            {primary?.selection_stale ? <p className="schedule-start-muted">Подтвердите сохранённую ревизию на вкладке «Основной шаблон».</p> : primary ? <p className="schedule-start-muted">Будет создан черновик недели.</p> : null}
+          </>}
+        </section>
+        <section className="schedule-start-section" aria-labelledby="schedule-start-weeks">
+          <h2 id="schedule-start-weeks">Все недели</h2>
+          <div className="schedule-start-list">{weeks.length ? weeks.map(week => {
+            const saved = weekDrafts.filter(item => item.week_start === week);
+            const versions = effective.filter(item => item.week_start === week);
+            const current = versions.find(item => item.is_current_publication);
+            const latest = current || versions[0];
+            const publicationCount = publications.filter(item => item.scope_key === `week:${week}`).length;
+            return <article className="schedule-start-row constructor-week-row" key={week}>
+              <div><h3>{weekPeriod(week)}</h3><div className="schedule-start-week-state">
+                {current ? <span className="is-published">Опубликована</span> : null}
+                {saved.length ? <span className="is-draft">Черновик{saved.length > 1 ? ` · ${saved.length}` : ''}</span> : null}
+                {!current && (versions.length || publicationCount) ? <span>История публикаций</span> : null}
+              </div></div>
+              <div className="schedule-start-actions">
+                {saved.length ? <button className="schedule-start-button" onClick={() => void onOpen(saved[0].id)}>Открыть черновик</button> : null}
+                {latest ? <button className="schedule-start-button" onClick={() => void showWeek(latest)}>{current ? 'Просмотреть публикацию' : 'Просмотреть'}</button> : null}
+                {(latest || publicationCount || saved.length > 1) ? <StartMenu>
+                  <StartMenuAction onClick={() => showHistory(week)}>История</StartMenuAction>
+                  {!saved.length && latest && !readOnly ? <StartMenuAction disabled={creating} onClick={() => void editHistoricalWeek(latest)}>Создать черновик версии</StartMenuAction> : null}
+                </StartMenu> : null}
+              </div>
+            </article>;
+          }) : <p className="schedule-start-list-empty">Сохранённых недель пока нет.</p>}</div>
+        </section>
+      </div>
     </>}
-    <details className="constructor-secondary-actions"><summary>Другие черновики и архив · {(section === 'weeks' ? others.length : 0) + archived.length}</summary><p className="constructor-muted">Тестовые и скрытые записи сохранены. Скрытие действует только в этом браузере.</p>{section === 'weeks' ? others.map(item => draftCard(item)) : null}{archived.length ? <details><summary>Тестовые и скрытые записи · {archived.length}</summary>{archived.map(item => draftCard(item, true))}</details> : null}</details>
-    <details className="constructor-secondary-actions"><summary>Дополнительно</summary><button disabled={readOnly} onClick={onCreateEmpty}>Создать пустое расписание</button></details>
-    {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.map(item => draftCard(item)) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span><code>{item.version_id}</code></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
+    {archived.length ? <details className="schedule-start-secondary">
+      <summary>Тестовые и скрытые записи · {archived.length}</summary>
+      <p className="schedule-start-muted">Скрытие действует в этом браузере.</p>
+      <div className="schedule-start-list">{archived.map(item => draftCard(item, true))}</div>
+    </details> : null}
+    {!readOnly ? <details className="schedule-start-secondary"><summary>Дополнительно</summary><button className="schedule-start-button" onClick={onCreateEmpty}>Создать пустое расписание</button></details> : null}
+    {comparisonPreview ? <TemplateComparison preview={comparisonPreview} onClose={() => {
+      setComparisonPreview(null);
+      window.requestAnimationFrame(() => comparisonTrigger.current?.focus());
+    }} /> : null}
+    {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.map(item => draftCard(item)) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
     {view ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-view-title" onCancel={() => setView(null)}><header><div><small>Только просмотр сохранённой версии</small><h2 id="week-view-title">{view.title}</h2></div><button aria-label="Закрыть просмотр недели" onClick={() => setView(null)}><X size={20} /></button></header>{view.loading ? <p>Загружаем занятия…</p> : view.error ? <p role="alert">{view.error}</p> : view.blocks?.map((block, position) => <article className="constructor-history-lesson" key={`${block.block_key}:${position}`}><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][block.weekday]} · {formatLessonTimeRange(block.start_time, block.end_time)}</strong>{block.change_kind === 'cancelled' ? <p>Занятие отменено в этой версии</p> : (block.effective_assignments || []).map((item, i) => <p key={i}>{item.activity} · {item.groups?.join(', ') || `${block.grade_scope || ''} параллель`} · {item.teachers?.join(', ') || 'Преподаватель не указан'}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : ''}</p>)}</article>)}</dialog></div> : null}
     {selectionPreview ? <TemplateSelectionDialog
       preview={selectionPreview}

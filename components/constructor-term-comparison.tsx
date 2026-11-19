@@ -181,18 +181,19 @@ function Side({ title, side, emptyText = 'Записи нет', candidates }: {
 }
 
 export function ConstructorTermComparison({
-  comparison, name, lessons, initialKey, dirty, readOnly, onClose, onSelect, onOpenLesson, onOpenSlot, onDecide,
+  comparison, name, lessons, initialKey, suspended = false, dirty, readOnly, onClose, onSelect, onOpenLesson, onOpenSlot, onDecide,
 }: {
   comparison: Comparison;
   name: string;
   lessons: Lesson[];
   initialKey: string | null;
+  suspended?: boolean;
   dirty: boolean;
   readOnly: boolean;
   onClose: () => void;
   onSelect: (key: string | null) => void;
-  onOpenLesson: (id: string) => void;
-  onOpenSlot: (side: TermComparisonSide) => void;
+  onOpenLesson: (id: string, related?: string[], title?: string) => void;
+  onOpenSlot: (side: TermComparisonSide, mayCreate?: boolean) => void;
   onDecide: (key: string, action: TermComparisonAction, reason: string, lessonId?: string) => Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -201,7 +202,12 @@ export function ConstructorTermComparison({
   const searchInput = useRef<HTMLInputElement>(null);
   const decisionReason = useRef<HTMLTextAreaElement>(null);
   const previousKey = useRef<string | null>(initialKey);
-  useEffect(() => { if (dialog.current && !dialog.current.open) dialog.current.showModal(); }, []);
+  useEffect(() => {
+    const node = dialog.current;
+    if (!node) return;
+    if (suspended) node.close();
+    else if (!node.open) node.showModal();
+  }, [suspended]);
   const [status, setStatus] = useState<Status>('pending');
   const [query, setQuery] = useState('');
   const [dayFilter, setDayFilter] = useState('');
@@ -307,11 +313,14 @@ export function ConstructorTermComparison({
   const linkedLessonId = current && (chosenId || decisions.get(current.item.key)?.lesson_id || current.item.lesson_id);
   const currentEdit = lessons.find(lesson => lesson.id === linkedLessonId);
   const destination = current?.item.after;
+  const proposedMove = currentEdit && destination && (
+    currentEdit.day !== destination.day || currentEdit.start !== destination.start || currentEdit.end !== destination.end
+  );
   const choices = destination ? lessons.filter(lesson =>
     destination.day === lesson.day && destination.start === lesson.start && destination.end === lesson.end) : [];
   const preventDecision = dirty || readOnly || busy || !reason.trim();
 
-  return <div className="constructor-conflict-backdrop">
+  return <div hidden={suspended} className={suspended ? undefined : "constructor-conflict-backdrop"}>
     <dialog ref={dialog} className="constructor-conflict-dialog constructor-publication-panel constructor-term-dialog" aria-labelledby="constructor-term-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
       <header><div><h2 id="constructor-term-title">Сверка с таблицей</h2><small>{name}</small></div>
         <button type="button" disabled={busy} aria-label="Закрыть сверку" onClick={onClose}><X size={20} /></button>
@@ -370,11 +379,13 @@ export function ConstructorTermComparison({
             <ul>{currentHistory.map((decision, index) => <li key={index}>{statusLabels[decision.status]} · {decision.reason}</li>)}</ul>
           </details> : null}
           {!canDecide
-            ? currentEdit ? <button type="button" onClick={() => onOpenLesson(currentEdit.id)}>Открыть связанное занятие</button> : null
+            ? currentEdit ? <button type="button" onClick={() => onOpenLesson(currentEdit.id, relatedItems.flatMap(item => item.lesson_id || []), [current.item.cells.join('/'), assessment?.type || 'Сверка с таблицей'].join(' · '))}>Открыть связанное занятие</button> : null
             : <>
             <p>Чтобы принять предложение, внесите и сохраните правку в конструкторе. Чтобы оставить текущее расписание, выберите «Отклонить».</p>
             <div className="constructor-term-actions">
-              {currentEdit ? <button type="button" disabled={busy} onClick={() => onOpenLesson(currentEdit.id)}>Открыть связанное занятие</button> : null}
+              {currentEdit ? <button type="button" disabled={busy} onClick={() => onOpenLesson(currentEdit.id, relatedItems.flatMap(item => item.lesson_id || []), [current.item.cells.join('/'), assessment?.type || 'Сверка с таблицей'].join(' · '))}>Открыть связанное занятие</button> : null}
+              {proposedMove ? <button type="button" disabled={busy} onClick={() => onOpenSlot(destination, false)}>Показать предложенный слот</button> : null}
+              {!currentEdit && !destination && current.item.before ? <button type="button" disabled={busy} onClick={() => onOpenSlot(current.item.before!, false)}>Показать прежний слот</button> : null}
               {!currentEdit && destination ? <button type="button" disabled={busy} onClick={() => onOpenSlot(destination)}>Открыть день и слот</button> : null}
             </div>
             {dirty ? <p role="alert">Сохраните изменения в конструкторе перед фиксацией решения.</p> : null}
