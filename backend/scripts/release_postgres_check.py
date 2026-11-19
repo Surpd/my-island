@@ -40,6 +40,9 @@ from backend.services.schedule_experiments import (
 )
 from backend.services.schedule_sheet_export import sheets_requests
 from backend.services.schedule_sheet_publishing import prepare_export
+from backend.services.schedule_normalization import (
+    normalization_preview, normalized_copy_payload, verified_teacher_directory_evidence,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -156,6 +159,32 @@ def run() -> dict[str, object]:
     else:
         raise AssertionError("PostgreSQL stale draft save was not rejected")
     admin = database.get_or_create_user(990000001, "admin")
+    database.set_teacher_assignment(teacher["id"], group["id"], "Math", True, admin["id"], base_class_name=class_name)
+    normalization_lessons = [{"id": f"ordinary-{index}", "subject": "Unclassified historic lesson"} for index in range(348)]
+    normalization_lessons.extend({"id": f"legacy-{block}-{index}", "blockId": f"source:{block}:electives",
+        "blockName": "Курсы по выбору", "subject": f"Option {index}", "classId": str(group["id"]),
+        "classIds": [str(group["id"])]} for block in ("B29", "F32") for index in range(4))
+    normalization_lessons.append({"id": "verified-teacher", "subject": "Math", "teacherId": str(teacher["id"]),
+        "classId": str(group["id"]), "needsClarification": True,
+        "clarificationReason": "Нет подтверждённого назначения преподавателя группе"})
+    normalization_source = create_experiment(database, name=f"Normalization {suffix}", source="import", payload={
+        "reference_date": "2026-10-19", "days": [0], "classes": [str(group["id"])],
+        "slots": [{"start": "09:00", "end": "09:45"}], "lessons": normalization_lessons,
+    }, actor_user_id=admin["id"])
+    active_teachers, teacher_assignments = verified_teacher_directory_evidence(database, normalization_source)
+    normalization = normalization_preview(normalization_source, verified_active_teachers=active_teachers,
+        verified_teacher_assignments=teacher_assignments)
+    if normalization["lesson_count"] != 357 or normalization["automatic_count"] != 9:
+        raise AssertionError(f"PostgreSQL normalization evidence plan mismatch: {normalization}")
+    normalized_payload = normalized_copy_payload(normalization_source, normalization)
+    normalization_copy = create_experiment(database, name=f"Normalization copy {suffix}", source="import",
+        payload=normalized_payload, actor_user_id=admin["id"])
+    persisted_normalization = get_experiment(database, normalization_copy["id"])
+    original_normalization = get_experiment(database, normalization_source["id"])
+    if (len(persisted_normalization["payload"]["lessons"]) != 357
+            or sum(item.get("activityType") == "elective" for item in persisted_normalization["payload"]["lessons"]) != 8
+            or not original_normalization["payload"]["lessons"][-1].get("needsClarification")):
+        raise AssertionError("PostgreSQL normalized copy changed the source or lost its stable lesson count")
     challenge, _ = database.create_admin_login_challenge(admin["id"])
     token, _ = database.consume_admin_login_challenge(challenge)
     app = FastAPI()
@@ -276,6 +305,8 @@ def run() -> dict[str, object]:
         "draft_edit_revision": persisted_edit["revision"], "stale_save_http": response.status_code,
         "stale_save_current_revision": route_current_revision,
         "week_copy_base": copied_week["base_version_id"], "render_only_export": rendered_export["status"],
+        "normalization_copy": {"lesson_count": len(persisted_normalization["payload"]["lessons"]),
+            "evidence_backed_changes": normalization["automatic_count"], "source_preserved": True},
         "rollback": "no_partial_rows",
         "publication_count": len(list_publications(database)["items"]),
         "synthetic_scope": f"release-{suffix}",

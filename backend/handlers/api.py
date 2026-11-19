@@ -45,6 +45,7 @@ from backend.services.schedule_experiments import (
     ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
     duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
+from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_teacher_directory_evidence
 from backend.services.school_experiment_workspace import (
     cached_audience_snapshot, import_school_template, school_directory, school_drafts, school_source,
 )
@@ -351,6 +352,12 @@ class SchoolTemplateBaselineApprovalPayload(BaseModel):
 
 class SchoolTemplateRollbackPayload(BaseModel):
     history_id: str
+
+
+class SchoolTemplateNormalizePayload(BaseModel):
+    expected_revision: int = Field(ge=1)
+    expected_source_hash: str
+    expected_plan_hash: str
 
 
 class ScheduleAudiencePreviewPayload(BaseModel):
@@ -1618,6 +1625,52 @@ def create_router(database: Database) -> APIRouter:
         _, store = school_stores()
         try:
             return preview_school_template_selection(store, experiment_id)
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/normalization-preview")
+    def admin_school_normalization_preview(experiment_id: str, init_data: str | None = None,
+            x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        _, store = school_stores()
+        try:
+            draft = get_experiment(store, experiment_id)
+            if draft["payload"].get("week_start"):
+                raise HTTPException(status_code=422, detail="Нормализация недельных копий отключена; сохраните переопределения отдельно.")
+            teachers, assignments = verified_teacher_directory_evidence(store, draft)
+            return normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments)
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/normalization-copy")
+    def admin_school_normalize_copy(experiment_id: str, payload: SchoolTemplateNormalizePayload,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        _, store = school_stores()
+        try:
+            draft = get_experiment(store, experiment_id)
+            if draft["payload"].get("week_start"):
+                raise HTTPException(status_code=422, detail="Недельные копии не изменяются этим действием.")
+            teachers, assignments = verified_teacher_directory_evidence(store, draft)
+            preview = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments)
+            if draft["revision"] != payload.expected_revision or preview["source_hash"] != payload.expected_source_hash or preview["plan_hash"] != payload.expected_plan_hash:
+                raise HTTPException(status_code=409, detail="Шаблон изменился после предпросмотра. Повторите анализ.")
+            if not preview["automatic_count"]:
+                raise HTTPException(status_code=422, detail="Нет подтверждённых автоматических преобразований для отдельной копии.")
+            normalized = normalized_copy_payload(draft, preview)
+            created = create_experiment(store, name=f"{draft['name']} · нормализованная копия", source="import",
+                payload=normalized, actor_user_id=principal["id"], _base_version_id=draft.get("base_version_id"))
+            return {"id": created["id"], "revision": created["revision"], "name": created["name"],
+                    "lesson_count": len(created["payload"].get("lessons") or []), "source_id": experiment_id,
+                    "changed_count": preview["automatic_count"], "is_primary_template": False, "published": False}
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
