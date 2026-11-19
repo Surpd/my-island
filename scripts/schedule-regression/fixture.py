@@ -168,6 +168,24 @@ def seed(db: Database) -> dict[str, Any]:
             if index <= 6:
                 db.create_membership(english_group, identity_id, "student", ORIGIN, f"english:{ref}")
 
+    # Separate synthetic cohorts let the same isolated HTTP/UI flow exercise
+    # the paired 5–6 elective block without changing the established 7–8 seed.
+    elective_classes: dict[str, str] = {}
+    for grade in (5, 6):
+        label = f"{grade}-А synthetic"
+        group_id = _insert_group(db, f"Fixture Elective {grade}A", "class",
+            display_name=label, base_class_name=str(grade))
+        elective_classes[label] = group_id
+        student_ids[label] = []
+        for index in range(1, 7):
+            ref = f"student:{label}:{index:02d}"
+            identity = db.create_identity("student", f"Synthetic Student {label} {index:02d}", label)
+            identity_id = str(identity["id"])
+            student_ids[label].append(identity_id)
+            with db.connection() as c:
+                c.execute("UPDATE identities SET origin=?,source_ref=? WHERE id=?", (ORIGIN, ref, identity_id))
+            db.create_membership(group_id, identity_id, "student", ORIGIN, f"class:{ref}")
+
     teacher_ids: list[str] = []
     for index in range(1, 25):
         teacher = db.create_identity("teacher", f"Synthetic Teacher {index:02d}")
@@ -312,9 +330,10 @@ def seed(db: Database) -> dict[str, Any]:
         "canonical_version_id": VERSION, "effective_week_id": effective["effective_week_id"],
         "draft_id": draft["id"], "template_publication_draft_id": template_draft["id"],
         "week_publication_draft_id": week_draft["id"], "admin_user_id": str(admin_id),
-        "classes": class_groups, "math_groups": math_groups, "english_group": english_group,
+        "classes": class_groups, "elective_classes": elective_classes,
+        "math_groups": math_groups, "english_group": english_group,
         "students": student_ids, "teachers": teacher_ids,
-        "counts": {"classes": len(class_groups), "students": sum(len(v) for v in student_ids.values()),
+        "counts": {"classes": len(class_groups) + len(elective_classes), "students": sum(len(v) for v in student_ids.values()),
                    "teachers": len(teacher_ids), "math_groups": len(math_groups),
                    "english_cross_class_memberships": sum(1 for values in student_ids.values() for _ in values[:6])},
         "canonical": {"status": imported["status"], "blocks": imported["blocks"], "assignments": imported["assignments"]},

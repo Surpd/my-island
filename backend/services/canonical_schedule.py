@@ -1638,16 +1638,32 @@ def _project_student_block(
                 details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
                 elective_evidence.append((metadata.get("activity_type") or details.get("activityType"),
                                           str(details.get("blockId") or ""),
-                                          str(details.get("blockName") or "").strip()))
-            if (best and all(kind == "elective" and block_id for kind, block_id, _ in elective_evidence)
-                    and len({block_id for _, block_id, _ in elective_evidence}) == 1):
+                                          str(details.get("blockName") or "").strip(),
+                                          str(details.get("electiveDirection") or metadata.get("electiveDirection") or "").strip().casefold()))
+            if (best and all(kind == "elective" and block_id for kind, block_id, _, _ in elective_evidence)
+                    and len({block_id for _, block_id, _, _ in elective_evidence}) == 1):
                 # An explicitly linked elective block is one student-facing
                 # class activity. The concrete lane, teacher and room remain
                 # intact on the source assignments and teacher projection.
-                names = {name for _, _, name in elective_evidence if name}
+                names = {name for _, _, name, _ in elective_evidence if name}
                 result = {"state": "ACTIVITY", "activity": next(iter(names), "Курс по выбору"),
                           "activity_type": "elective",
                           "provenance": {**provenance, "source_cells": sorted({cell for claim in best for cell in claim["source_cells"]})}}
+                best = []
+                activity_claims = []
+                selected = None
+            elif (best and all(kind == "elective" and not block_id for kind, block_id, _, _ in elective_evidence)):
+                # Historical publications predate stable elective block ids.
+                # Keep their already-confirmed canonical audience visible as a
+                # neutral card; do not reveal a lane or infer which option the
+                # pupil chose. The marker prompts an administrator to map the
+                # archived source when it is next edited and republished.
+                digital = all(direction == "digital" for _, _, _, direction in elective_evidence)
+                result = {"state": "ACTIVITY", "activity": "Цифровой трек" if digital else "Курс по выбору",
+                          "activity_type": "elective",
+                          "provenance": {**provenance,
+                              "source_cells": sorted({cell for claim in best for cell in claim["source_cells"]}),
+                              "requires_administrative_block_mapping": True}}
                 best = []
                 activity_claims = []
                 selected = None

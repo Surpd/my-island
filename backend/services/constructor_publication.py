@@ -256,6 +256,47 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
                         "patch": {"assignments": b["assignments"]}} for key, b in blocks.items()}
     context = canonical.StudentProjectionContext({}, students, groups, memberships, exclusions, list(candidates.values()))
     mismatches = set()
+
+    def assignment_is_elective(assignment: Mapping[str, Any]) -> bool:
+        metadata = canonical._assignment_metadata(assignment.get("metadata") or {})
+        details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
+        return (metadata.get("activity_type") or details.get("activityType")) == "elective"
+
+    # A school's pupils usually repeat the same canonical membership pattern
+    # (for example, base class + one instructional subgroup). Projection state
+    # depends on that pattern and grade, not the student's name. Reuse it while
+    # retaining per-student projections whenever audience rules or a confirmed
+    # personal conflict make identity itself significant.
+    projection_cache: dict[tuple[Any, ...], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+
+    def projected_for(student_id: str, student: Mapping[str, Any], membership_groups: set[str],
+                      candidate: Mapping[str, Any], day: str,
+                      assignments: list[Mapping[str, Any]], block_key: str):
+        student_specific = False
+        for assignment in assignments:
+            rule = canonical._assignment_audience_rule(assignment)
+            if rule.get("include_student_ids") or rule.get("exclude_student_ids"):
+                student_specific = True
+                break
+        if not student_specific:
+            student_specific = any(student_id in {str(value) for value in unresolved.get("student_ids") or []}
+                                   for unresolved in blocks.get(block_key, {}).get("unresolved") or [])
+        if student_id in (conflict_student_ids_by_block or {}).get(block_key, set()):
+            student_specific = True
+        signature = tuple((str(assignment.get("activity") or ""),
+                           tuple(sorted(str(value) for value in assignment.get("canonical_group_ids") or [])),
+                           tuple(sorted(str(value) for value in assignment.get("teacher_ids") or [])),
+                           str(canonical._assignment_metadata(assignment.get("metadata") or {}).get("constructor_lesson_id") or ""))
+                          for assignment in assignments)
+        identity_part = student_id if student_specific else "shared"
+        cache_key = (block_key, day, canonical._grade(student.get("class_name")),
+                     tuple(sorted(membership_groups)), signature, identity_part)
+        projected = projection_cache.get(cache_key)
+        if projected is None:
+            projected = canonical._project_student_block(database, context, student, candidate, day)
+            projection_cache[cache_key] = projected
+        return projected
+
     for key, block in blocks.items():
         day = (reference + timedelta(days=block["weekday"])).isoformat()
         candidate = candidates[key]
@@ -273,7 +314,7 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
             for assignment in block["assignments"]:
                 metadata = canonical._assignment_metadata(assignment.get("metadata") or {})
                 details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
-                if metadata.get("activity_type") != "elective" or not details.get("blockId"):
+                if not assignment_is_elective(assignment) or not details.get("blockId"):
                     continue
                 if set(str(value) for value in assignment.get("canonical_group_ids") or []).intersection(membership_groups):
                     eligible_electives.append(assignment)
@@ -282,7 +323,8 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
             expected += [a for index, a in enumerate(block["assignments"]) if a["metadata"].get("special_mark") == "lunch"
                          and canonical._other_assignment_occupies_slot(context, student, membership_groups, a, str(block["grade_scope"]))
                          and not canonical._student_busy_in_slot(database, context, student, membership_groups, candidate, index, exact_intervals=True, include_available_slot=True)]
-            projected, _ = canonical._project_student_block(database, context, student, candidate, day)
+            projected, _ = projected_for(sid, student, membership_groups, candidate, day,
+                                         block.get("assignments") or [], key)
             expected_activities = [a for a in expected if a["activity"] != "NO_LESSON"]
             if projected["state"] == "ACTIVITY" and projected.get("activity_type") == "sdep_plan":
                 planned = {item.get("activity") for item in projected.get("activities") or []}
@@ -295,6 +337,33 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
                     block_ids = {str(canonical._assignment_metadata(a.get("metadata") or {}).get("constructor_details", {}).get("blockId") or "")
                                  for a in eligible_electives}
                     if len(block_ids) == 1 and "" not in block_ids:
+                        # A successful shared elective card proves only that
+                        # the elective lanes can be folded together. Validate
+                        # every required assignment in this same canonical
+                        # block independently so the elective branch cannot
+                        # mask an ordinary lesson or a projection failure.
+                        all_assignments = list(block.get("assignments") or [])
+                        required_assignments = [assignment for assignment in all_assignments
+                            if not assignment_is_elective(assignment)]
+                        expected_required = [assignment for assignment in expected_activities
+                            if not assignment_is_elective(assignment)]
+                        if required_assignments or expected_required:
+                            required_candidate = {**candidate, "patch": {**candidate.get("patch", {}),
+                                "assignments": required_assignments}}
+                            required_projection, _ = projected_for(sid, student, membership_groups,
+                                required_candidate, day, required_assignments, key)
+                            required_names = {str(assignment.get("activity") or "") for assignment in expected_required}
+                            if required_names:
+                                matches_required = required_projection.get("state") == "ACTIVITY" and any(
+                                    assignment.get("activity") == required_projection.get("activity")
+                                    and ((assignment.get("metadata") or {}).get("day_plan_mode") == "sdep"
+                                         or set(assignment.get("teacher_ids") or []) == set(str(value) for value in
+                                             required_projection.get("teacher_ids") or []))
+                                    for assignment in expected_required)
+                                if not matches_required:
+                                    mismatches.add(key)
+                            elif required_projection.get("state") in {"ACTIVITY", "UNRESOLVED"}:
+                                mismatches.add(key)
                         continue
                 matches = [a for a in expected_activities if a["activity"] == projected.get("activity")
                            and ((a.get("metadata") or {}).get("day_plan_mode") == "sdep"

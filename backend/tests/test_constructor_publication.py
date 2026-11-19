@@ -5,6 +5,7 @@ import os
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from datetime import date
 from unittest.mock import patch
 
 from backend.database import Database
@@ -964,6 +965,69 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual([item["code"] for item in preview["diagnostics"]].count("elective_block_unlinked"), 2)
         self.assertEqual(len(preview["deferred"]), 2)
         self.assertEqual(get_experiment(self.database, draft["id"])["payload"], before)
+
+    def test_legacy_published_digital_lanes_remain_a_neutral_student_card(self):
+        from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week
+
+        class_id = str(self.group["id"])
+        block = {"weekday": 0, "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+            "status": "resolved", "mode": "PARALLEL", "assignments": [
+                {"activity": "F54 · Программирование", "role": "primary", "canonical_group_ids": [class_id],
+                 "teacher_ids": [str(self.teacher["id"])], "metadata": {"activity_type": "elective",
+                    "constructor_details": {"activityType": "elective", "electiveDirection": "digital"},
+                    "teachers": ["Synthetic Teacher"], "room": "D-54"}},
+                {"activity": "ШУМ · Медиамастерская", "role": "primary", "canonical_group_ids": [class_id],
+                 "teacher_ids": [str(self.other_teacher["id"])], "metadata": {"activity_type": "elective",
+                    "constructor_details": {"activityType": "elective", "electiveDirection": "digital"},
+                    "teachers": ["Other Synthetic Teacher"], "room": "D-55"}},
+            ]}
+        import_canonical_artifact(self.database, {"version_id": "legacy-digital-publication",
+            "status": "authoritative", "source_snapshot": {"id": "legacy-digital-source", "fingerprint": "legacy-digital"},
+            "blocks": {"legacy-digital-block": block}}, status="authoritative")
+        materialize_effective_week(self.database, "legacy-digital-publication", "2026-10-19")
+
+        student_projection = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        cards = [item for item in student_projection["items"] if item.get("activity_type") == "elective"]
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["activity"], "Цифровой трек")
+        self.assertTrue(cards[0]["provenance"]["requires_administrative_block_mapping"])
+        self.assertNotIn("teacher_ids", cards[0])
+        self.assertNotIn("teacher_names", cards[0])
+        self.assertNotIn("room", cards[0])
+        self.assertNotIn("F54", str(cards[0]))
+        self.assertNotIn("Медиамастерская", str(cards[0]))
+        self.assertEqual(student_projection["optional_activities"], [])
+
+        teacher_projection = canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")
+        teacher_items = [item for item in teacher_projection["items"] if item.get("activity") == "F54 · Программирование"]
+        self.assertEqual(len(teacher_items), 1)
+        self.assertEqual(teacher_items[0].get("room"), "D-54")
+
+    def test_elective_success_cannot_mask_required_assignment_projection_in_same_source_block(self):
+        from backend.services.constructor_publication import _projection_mismatches
+
+        class_id = str(self.group["id"])
+        assignments = [
+            {"activity": "Цифровое направление", "canonical_group_ids": [class_id], "teacher_ids": [],
+             "metadata": {"activity_type": "elective", "constructor_details": {"activityType": "elective", "blockId": "digital-shared"},
+                          "constructor_lesson_id": "elective-lane"}},
+            {"activity": "Обязательная математика", "canonical_group_ids": [class_id], "teacher_ids": [str(self.teacher["id"])],
+             "metadata": {"activity_type": "lesson", "constructor_lesson_id": "required-math"}},
+        ]
+        block = {"weekday": 0, "slot": {"start": "09:00", "end": "09:45"}, "grade_scope": "9",
+                 "assignments": assignments}
+        audience = {"elective-lane": {"student_ids": []}, "required-math": {"student_ids": [str(self.student["id"])]}}
+
+        def projector(_database, _context, _student, candidate, _day):
+            if len(candidate.get("patch", {}).get("assignments") or []) == 2:
+                return {"state": "ACTIVITY", "activity": "Цифровой трек", "activity_type": "elective"}, []
+            return {"state": "UNRESOLVED", "activity": None, "issue_codes": ["UNKNOWN_CANONICAL_GROUP"]}, []
+
+        with patch.object(canonical, "_project_student_block", side_effect=projector) as projection:
+            mismatches = _projection_mismatches(self.database, {"shared-source-block": block}, audience,
+                date.fromisoformat("2026-10-19"))
+        self.assertGreaterEqual(projection.call_count, 2)
+        self.assertEqual(mismatches, {"shared-source-block"})
 
     def test_optional_activities_are_available_without_personal_membership(self):
         elective = self.lesson(id="shared-elective", subject="Проектная лаборатория", activityType="elective",

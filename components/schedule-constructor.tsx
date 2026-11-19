@@ -651,6 +651,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [fitWidth, setFitWidth] = useState(true);
   const [conflictsOpen, setConflictsOpen] = useState(false);
   const [adminTableOpen, setAdminTableOpen] = useState(false);
+  const [bulkElectiveSelection, setBulkElectiveSelection] = useState<string[]>([]);
+  const [bulkElectivePreviewOpen, setBulkElectivePreviewOpen] = useState(false);
+  const [bulkElectiveBlockName, setBulkElectiveBlockName] = useState('Цифровой трек');
+  const [bulkElectiveTargetId, setBulkElectiveTargetId] = useState('__new__');
   const [issueSeverity, setIssueSeverity] = useState('all');
   const [issueType, setIssueType] = useState('all');
   const [anchor, setAnchor] = useState<Cell | null>(null);
@@ -1519,6 +1523,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       (item) =>
       item.needsClarification || !payload.days.includes(item.day) || !payload.slots[item.period],
     ) || [];
+  const unlinkedElectives = payload?.lessons.filter((lesson) => editorActivityType(lesson) === 'elective' && !lesson.blockId) || [];
+  const selectedBulkElectives = unlinkedElectives.filter((lesson) => bulkElectiveSelection.includes(lesson.id));
   const issues = useMemo(() => {
     if (!payload) return [];
     const practiceIds = new Set<string>();
@@ -2645,6 +2651,55 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           {adminTableOpen ? <div className="constructor-source-week-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdminTableOpen(false); }}>
             <section className="constructor-source-week-dialog" role="dialog" aria-modal="true" aria-labelledby="constructor-source-week-title">
               <header><div><strong id="constructor-source-week-title">Полная таблица исходной недели</strong><small>{payload.lessons.length} записей · полный административный источник</small></div><button type="button" aria-label="Закрыть таблицу недели" onClick={() => setAdminTableOpen(false)}><X size={16} /></button></header>
+              {unlinkedElectives.length ? <details className="constructor-source-week-scroll constructor-elective-bulk-map">
+                <summary>Сопоставить курсы без общего блока · {unlinkedElectives.length}</summary>
+                <p>Выберите направления, которые должны входить в один общий блок. Совпадение названий и времени не выбирает занятия автоматически.</p>
+                <div className="constructor-draft-actions">
+                  <button type="button" onClick={() => {
+                    const digital = unlinkedElectives.filter((lesson) => lesson.electiveDirection === 'digital');
+                    setBulkElectiveSelection(digital.map((lesson) => lesson.id));
+                    setBulkElectiveBlockName('Цифровой трек');
+                    setBulkElectivePreviewOpen(false);
+                  }}>Отметить направления с цифровым признаком · {unlinkedElectives.filter((lesson) => lesson.electiveDirection === 'digital').length}</button>
+                  <button type="button" onClick={() => { setBulkElectiveSelection([]); setBulkElectivePreviewOpen(false); }}>Снять выбор</button>
+                </div>
+                <div className="constructor-conflict-list">{unlinkedElectives.map((lesson) => {
+                  const selected = bulkElectiveSelection.includes(lesson.id);
+                  const classesText = displayedClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'Классы не указаны';
+                  const teachersText = [...new Set([...(lesson.teacherIds || []), lesson.teacherId].filter(Boolean))].map((id) => teachers.find((teacher) => teacher.id === id)?.name || 'Преподаватель требует проверки').join(', ') || 'Преподаватель не указан';
+                  return <label key={lesson.id} data-elective-lesson-id={lesson.id} className="constructor-review-item"><input type="checkbox" aria-label={`Добавить «${lesson.subject || 'курс по выбору'}» в общий блок`} checked={selected} onChange={(event) => {
+                    setBulkElectiveSelection((current) => event.target.checked ? [...new Set([...current, lesson.id])] : current.filter((id) => id !== lesson.id));
+                    setBulkElectivePreviewOpen(false);
+                  }} /><span><strong>{lesson.subject || 'Направление по выбору'}{lesson.electiveDirection === 'digital' ? ' · цифровой трек' : ''}</strong><small>{DAYS[lesson.day] || `День ${lesson.day + 1}`} · {lesson.start || payload.slots[lesson.period]?.start || '—'}–{lesson.end || payload.slots[lesson.period]?.end || '—'} · {classesText} · {teachersText} · {lesson.room || lesson.place || 'кабинет не указан'}</small></span></label>;
+                })}</div>
+                <label>Название общего блока <input aria-label="Название общего блока для сопоставления" value={bulkElectiveBlockName} onChange={(event) => { setBulkElectiveBlockName(event.target.value); setBulkElectivePreviewOpen(false); }} placeholder="Курс по выбору" /></label>
+                <label>Общий блок <select aria-label="Целевой общий блок" value={bulkElectiveTargetId} onChange={(event) => {
+                  setBulkElectiveTargetId(event.target.value);
+                  const existing = payload.lessons.find((lesson) => lesson.blockId === event.target.value);
+                  if (existing) setBulkElectiveBlockName(existing.blockName || 'Курс по выбору');
+                  setBulkElectivePreviewOpen(false);
+                }}><option value="__new__">Создать новый блок</option>{Array.from(new Map(payload.lessons.filter((lesson) => editorActivityType(lesson) === 'elective' && lesson.blockId).map((lesson) => [lesson.blockId!, lesson])).values()).map((lesson) => <option key={lesson.blockId} value={lesson.blockId}>{lesson.blockName || 'Курс по выбору'} · {DAYS[lesson.day] || ''} {lesson.start || payload.slots[lesson.period]?.start || ''}</option>)}</select></label>
+                <button type="button" disabled={!bulkElectiveSelection.length} onClick={() => { setBulkElectiveBlockName((current) => current.trim() || 'Курс по выбору'); setBulkElectivePreviewOpen(true); }}>Предпросмотр · {bulkElectiveSelection.length} направлений</button>
+                {bulkElectivePreviewOpen ? <section aria-label="Предпросмотр сопоставления курсов" className="constructor-review-comparison">
+                  <strong>Будут сопоставлены {selectedBulkElectives.length} направления</strong>
+                  <p>Блок: {bulkElectiveTargetId === '__new__' ? (bulkElectiveBlockName.trim() || 'Курс по выбору') : (payload.lessons.find((lesson) => lesson.blockId === bulkElectiveTargetId)?.blockName || bulkElectiveBlockName || 'Курс по выбору')}</p>
+                  <ul>{selectedBulkElectives.map((lesson) => <li key={lesson.id}>{lesson.subject} · {DAYS[lesson.day] || `День ${lesson.day + 1}`} · {lesson.start || payload.slots[lesson.period]?.start || '—'}–{lesson.end || payload.slots[lesson.period]?.end || '—'} · {displayedClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'классы не указаны'}</li>)}</ul>
+                  <p>Ученики не распределяются по направлениям. Публикация заново проверит аудиторию и конфликты.</p>
+                  <button type="button" onClick={() => {
+                    const selectedIds = new Set(bulkElectiveSelection);
+                    const targetId = bulkElectiveTargetId === '__new__' ? freshId() : bulkElectiveTargetId;
+                    const targetName = bulkElectiveTargetId === '__new__'
+                      ? (bulkElectiveBlockName.trim() || 'Курс по выбору')
+                      : (payload.lessons.find((lesson) => lesson.blockId === targetId)?.blockName || bulkElectiveBlockName.trim() || 'Курс по выбору');
+                    mutate((state) => ({ ...state, lessons: state.lessons.map((lesson) => selectedIds.has(lesson.id)
+                      ? { ...lesson, activityType: 'elective', blockId: targetId, blockName: targetName }
+                      : lesson) }));
+                    setBulkElectiveSelection([]);
+                    setBulkElectivePreviewOpen(false);
+                  }}>Подтвердить сопоставление выбранных направлений</button>
+                  <button type="button" onClick={() => setBulkElectivePreviewOpen(false)}>Отмена</button>
+                </section> : null}
+              </details> : null}
               <div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Тип и занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус и проекция Campus</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{
                 const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);
                 const audience=audiencePreviews[lesson.id];
