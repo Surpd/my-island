@@ -74,7 +74,11 @@ try {
   await page.screenshot({ path: `${root}/screenshots/normalization-preview-1366.png` });
   await reopenedDialog.getByRole('button', { name: 'Подтвердить и создать отдельную копию' }).click();
   await page.getByRole('dialog').waitFor({ state: 'detached' });
-  await page.getByRole('alert').filter({ hasText: 'Создана отдельная копия' }).waitFor();
+  const copyNotice = page.getByRole('alert').filter({ hasText: 'Создана отдельная копия' });
+  await copyNotice.waitFor();
+  const noticeText = await copyNotice.innerText();
+  assert(noticeText.includes('типы курсов — 8'));
+  assert(noticeText.includes('снятые предупреждения преподавателей — 0'));
   const drafts = await call('/api/admin/schedule/experiments/school');
   const copy = drafts.items.find(item => item.name === 'Normalization E2E synthetic source · нормализованная копия');
   assert(copy); assert.equal(copy.is_primary_template, false);

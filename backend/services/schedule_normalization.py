@@ -74,7 +74,9 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             if row.get("electiveDirection") and not block_id:
                 manual.append({"lesson_id": str(row.get("id") or ""), "reason": "Элективное направление не связано с общим блоком; требуется групповое сопоставление"})
         elif not kind and strong_legacy_block:
-            changes.append({"lesson_id": str(row.get("id") or ""), "before": "(не задан)", "after": "elective",
+            changes.append({"lesson_id": str(row.get("id") or ""), "field": "activity_type",
+                            "before": "(не задан)", "after": "elective",
+                            "companion_fields": ["activityNameSnapshot"] if not row.get("activityNameSnapshot") else [],
                             "block_id": block_id, "reason": "Стабильный исходный ID общего блока electives; в блоке несколько направлений"})
         elif not kind and row.get("electiveDirection"):
             manual.append({"lesson_id": str(row.get("id") or ""), "reason": "Направление электива не связано с подтверждённым общим блоком"})
@@ -125,11 +127,15 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
     source_hash = payload_hash(payload)
     plan = {"changes": changes, "source_hash": source_hash, "source_revision": int(draft.get("revision") or 0),
             "source_id": str(draft.get("id") or "")}
+    type_change_count = sum(item.get("field") == "activity_type" for item in changes)
+    teacher_warning_clear_count = sum(item.get("field") in {"teacher_assignment_warning", "teacher_identity_warning"} for item in changes)
     return {
         "source_id": plan["source_id"], "source_name": str(draft.get("name") or ""),
         "source_revision": plan["source_revision"], "source_hash": source_hash,
         "plan_hash": payload_hash(plan), "lesson_count": len(lessons),
-        "automatic_count": len(changes), "already_current_count": already_current,
+        "automatic_count": len(changes), "activity_type_change_count": type_change_count,
+        "teacher_warning_clear_count": teacher_warning_clear_count,
+        "already_current_count": already_current,
         "unchanged_count": unchanged, "unclassified_count": unclassified,
         "manual_count": len(manual), "real_conflict_count": None,
         "changes": changes, "manual": manual,
@@ -143,10 +149,10 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
 
 def normalized_copy_payload(draft: Mapping[str, Any], preview: Mapping[str, Any]) -> dict[str, Any]:
     payload = copy.deepcopy(dict(draft.get("payload") or {}))
-    changes = {str(row["lesson_id"]) for row in preview.get("changes") or []}
+    changes = list(preview.get("changes") or [])
     for lesson in payload.get("lessons") or []:
         if isinstance(lesson, dict):
-            lesson_changes = [row for row in preview.get("changes") or [] if str(row.get("lesson_id") or "") == str(lesson.get("id") or "")]
+            lesson_changes = [row for row in changes if str(row.get("lesson_id") or "") == str(lesson.get("id") or "")]
             for change in lesson_changes:
                 if change.get("field") in {"teacher_assignment_warning", "teacher_identity_warning"}:
                     lesson.pop("needsClarification", None)
@@ -154,11 +160,20 @@ def normalized_copy_payload(draft: Mapping[str, Any], preview: Mapping[str, Any]
                     lesson["normalization_resolution"] = {
                         "code": "teacher_assignment_verified" if change.get("field") == "teacher_assignment_warning" else "teacher_identity_verified",
                         "source": "teacher_assignments" if change.get("field") == "teacher_assignment_warning" else "identity_directory"}
-                else:
+                elif change.get("field") == "activity_type":
                     lesson["activityType"] = "elective"
+                    if "activityNameSnapshot" in change.get("companion_fields", []) and str(lesson.get("subject") or "").strip():
+                        lesson["activityNameSnapshot"] = str(lesson["subject"]).strip()
     source = dict(payload.get("school_source") or {})
     source["normalization_copy"] = {"source_id": preview["source_id"],
         "source_revision": preview["source_revision"], "source_hash": preview["source_hash"],
-        "plan_hash": preview["plan_hash"], "changed_count": len(changes)}
+        "plan_hash": preview["plan_hash"], "changed_count": len(changes),
+        "activity_type_change_count": int(preview.get("activity_type_change_count") or 0),
+        "teacher_warning_clear_count": int(preview.get("teacher_warning_clear_count") or 0),
+        "change_plan": [{"lesson_id": str(row.get("lesson_id") or ""),
+                         "fields": ([row["field"], *row.get("companion_fields", [])]
+                                    if row.get("field") == "activity_type" else
+                                    ["needsClarification", "clarificationReason", "normalization_resolution"])}
+                        for row in changes]}
     payload["school_source"] = source
     return payload

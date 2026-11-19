@@ -1667,10 +1667,14 @@ def create_router(database: Database) -> APIRouter:
                 raise HTTPException(status_code=422, detail="Нет подтверждённых автоматических преобразований для отдельной копии.")
             normalized = normalized_copy_payload(draft, preview)
             created = create_experiment(store, name=f"{draft['name']} · нормализованная копия", source="import",
-                payload=normalized, actor_user_id=principal["id"], _base_version_id=draft.get("base_version_id"))
+                payload=normalized, actor_user_id=principal["id"], _base_version_id=draft.get("base_version_id"),
+                _trusted_resolution_history=True)
             return {"id": created["id"], "revision": created["revision"], "name": created["name"],
                     "lesson_count": len(created["payload"].get("lessons") or []), "source_id": experiment_id,
-                    "changed_count": preview["automatic_count"], "is_primary_template": False, "published": False}
+                    "changed_count": preview["automatic_count"],
+                    "changed_type_count": preview["activity_type_change_count"],
+                    "cleared_teacher_warning_count": preview["teacher_warning_clear_count"],
+                    "is_primary_template": False, "published": False}
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
