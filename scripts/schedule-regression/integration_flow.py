@@ -236,6 +236,15 @@ def main() -> None:
             "classId": class_5, "classIds": [class_5, class_6], "eligibleGrades": [5, 6],
             "teacherId": fixture["teachers"][lane], "teacherIds": [fixture["teachers"][lane]],
             "room": f"Choice-{lane + 1}", "audience": {"kind": "students", "student_ids": []}})
+    # Legacy imported elective: stable existing block id + old label are the
+    # only type evidence at first. The browser flow maps new lanes into this
+    # block, renames it, and verifies the explicit type survives re-opening.
+    lanes.append({"id": "e2e-legacy-choice", "day": 0, "period": 0,
+        "subject": "Legacy workshop lane", "blockName": "Курсы по выбору",
+        "blockId": "legacy-choice-5-6",
+        "classId": class_5, "classIds": [class_5, class_6], "eligibleGrades": [5, 6],
+        "teacherId": fixture["teachers"][14], "teacherIds": [fixture["teachers"][14]],
+        "room": "Choice-Legacy", "audience": {"kind": "students", "student_ids": []}})
     for period, subjects in ((1, ("F54 · Programming", "G54 · Graphics")),
                              (2, ("F55 · Media", "ШУМ · Медиамастерская"))):
         for lane, subject in enumerate(subjects):

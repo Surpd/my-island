@@ -144,8 +144,11 @@ type Payload = {
 function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleActivity[]) {
   const problems: string[] = [];
   const lessons = payload.lessons.map((lesson) => {
-    if (lesson.activityType !== 'club' && lesson.activityType !== 'elective') return lesson;
-    const typeLabel = lesson.activityType === 'club' ? 'Кружок' : 'Курс по выбору';
+    const inferredLegacyElective = !lesson.activityType && Boolean(lesson.blockId)
+      && ['курс по выбору', 'курсы по выбору', 'цифровой трек'].includes(String(lesson.blockName || '').trim().toLocaleLowerCase('ru'));
+    const activityType = lesson.activityType || (inferredLegacyElective ? 'elective' : undefined);
+    if (activityType !== 'club' && activityType !== 'elective') return lesson;
+    const typeLabel = activityType === 'club' ? 'Кружок' : 'Курс по выбору';
     const catalog = lesson.activityCatalogId
       ? activities.find((item) => item.id === lesson.activityCatalogId)
       : undefined;
@@ -153,7 +156,7 @@ function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleAc
       problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): запись каталога не найдена. Снимите привязку или выберите существующую.`);
       return lesson;
     }
-    if (catalog && catalog.type !== lesson.activityType) {
+    if (catalog && catalog.type !== activityType) {
       problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): тип не совпадает с записью каталога «${catalog.name}».`);
       return lesson;
     }
@@ -162,7 +165,8 @@ function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleAc
       problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): нет названия. Введите название или выберите запись каталога.`);
       return lesson;
     }
-    return lesson.activityNameSnapshot === snapshot ? lesson : { ...lesson, activityNameSnapshot: snapshot };
+    return lesson.activityNameSnapshot === snapshot && lesson.activityType === activityType
+      ? lesson : { ...lesson, activityType, activityNameSnapshot: snapshot };
   });
   return { payload: lessons.some((lesson, index) => lesson !== payload.lessons[index]) ? { ...payload, lessons } : payload, problems };
 }
@@ -3177,7 +3181,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             updateLesson(selected.id, { blockId: target, blockName: source?.blockName || 'Курс по выбору' });
                           }
                         }}><option value="">Не сопоставлен</option><option value="__create__">Создать новый общий блок</option>{Array.from(new Map(payload.lessons.filter((item) => editorActivityType(item) === 'elective' && item.blockId).map((item) => [item.blockId!, item])).values()).map((item) => <option key={item.blockId} value={item.blockId}>{item.blockName || 'Курс по выбору'} · {item.day + 1}, {item.start || payload.slots[item.period]?.start || ''}</option>)}</select></label>
-                        {selected.blockId ? <label>Название общего блока <input aria-label="Название общего блока" value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, blockName: event.target.value } : item) }))} placeholder="Курс по выбору" /></label> : <small>Укажите общий блок, чтобы связанные параллельные направления показывались ученикам одной карточкой.</small>}
+                        {selected.blockId ? <label>Название общего блока <input aria-label="Название общего блока" value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, ...(editorActivityType(item) === 'elective' ? { activityType: 'elective' as const } : {}), blockName: event.target.value } : item) }))} placeholder="Курс по выбору" /></label> : <small>Укажите общий блок, чтобы связанные параллельные направления показывались ученикам одной карточкой.</small>}
                         <label>Направление <select value={selected.electiveDirection || ''} onChange={(event) => updateLesson(selected.id, { electiveDirection: event.target.value === 'digital' ? 'digital' : undefined })}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label>
                       </> : null}
                       </> : null}

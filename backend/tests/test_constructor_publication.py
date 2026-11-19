@@ -1003,6 +1003,76 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertEqual(len(teacher_items), 1)
         self.assertEqual(teacher_items[0].get("room"), "D-54")
 
+    def test_renamed_legacy_elective_persists_explicit_type_through_preview_publish_and_campus(self):
+        legacy = self.lesson(id="legacy-elective", subject="Project workshop", blockId="legacy-workshops",
+            blockName="Курсы по выбору", eligibleGrades=[9], confirmedParticipantIds=[])
+        draft = self.draft([legacy])
+        initial = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        self.assertTrue(initial["can_publish"], initial["blockers"])
+
+        # This is the payload the constructor saves when the recognized legacy
+        # block is renamed. Subsequent reads must not depend on its old label.
+        changed = copy.deepcopy(get_experiment(self.database, draft["id"])["payload"])
+        changed["lessons"][0].update(activityType="elective", blockName="Мастерские")
+        saved = save_experiment(self.database, draft["id"], expected_revision=1, payload=changed)
+        reopened = get_experiment(self.database, draft["id"])
+        self.assertEqual(reopened["revision"], saved["revision"])
+        self.assertEqual(reopened["payload"]["lessons"][0]["activityType"], "elective")
+        self.assertEqual(reopened["payload"]["lessons"][0]["blockName"], "Мастерские")
+
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=saved["revision"])
+        self.assertTrue(preview["can_publish"], preview["blockers"])
+        published = publish_publication(self.database, draft["id"], scope_kind="template",
+            expected_revision=saved["revision"], preview_token=preview["preview_token"], confirmed=True)
+        current_revision = get_experiment(self.database, draft["id"])["revision"]
+        week_preview = preview_publication(self.database, draft["id"], scope_kind="week",
+            expected_revision=current_revision, week_start="2026-10-19")
+        self.assertTrue(week_preview["can_publish"], week_preview["blockers"])
+        publish_publication(self.database, draft["id"], scope_kind="week", expected_revision=current_revision,
+            week_start="2026-10-19", preview_token=week_preview["preview_token"], confirmed=True)
+        template = canonical.read_canonical_template(self.database, published["published_id"])
+        assignment = next(item for block in template["blocks"].values() for item in block.get("assignments") or [])
+        metadata = assignment.get("metadata") or {}
+        details = metadata.get("constructor_details") or {}
+        self.assertEqual(metadata.get("activity_type"), "elective")
+        self.assertEqual(details.get("blockName"), "Мастерские")
+
+        campus = canonical.project_student(self.database, self.student["id"], "2026-10-19")
+        cards = [item for item in campus["items"] if item.get("activity_type") == "elective"]
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["activity"], "Мастерские")
+
+    def test_available_slot_projection_cache_matches_uncached_with_individual_dependencies(self):
+        from backend.services.constructor_publication import _projection_mismatches
+
+        class_id = str(self.group["id"])
+        first_id, second_id = str(self.student["id"]), str(self.other_student["id"])
+        def assignment(lesson_id, activity, rule):
+            return {"activity": activity, "role": "primary", "canonical_group_ids": [class_id],
+                "teacher_ids": [], "metadata": {"constructor_lesson_id": lesson_id,
+                    "audience_rule": rule}}
+        available = assignment("available", "Available choice", {
+            "kind": "available_slot", "grade": "9", "class_group_id": class_id})
+        included = assignment("included", "Included assignment", {
+            "kind": "students", "include_student_ids": [first_id]})
+        excluded = assignment("excluded", "Excluded assignment", {
+            "kind": "students", "exclude_student_ids": [second_id]})
+        def block(activity):
+            return {"weekday": 0, "slot": {"start": "09:00", "end": "09:45"},
+                "grade_scope": "9", "assignments": [activity]}
+        blocks = {"available": block(available), "included": block(included), "excluded": block(excluded)}
+        audience = {"available": {"student_ids": [second_id]},
+                    "included": {"student_ids": [first_id]},
+                    "excluded": {"student_ids": [first_id]}}
+        with patch.object(canonical, "_project_student_block", wraps=canonical._project_student_block) as cached_project:
+            cached = _projection_mismatches(self.database, blocks, audience, date.fromisoformat("2026-10-19"))
+        cached_available_students = {str(call.args[2]["id"]) for call in cached_project.call_args_list
+            if call.args[3].get("block_key") == "available"}
+        uncached = _projection_mismatches(self.database, blocks, audience,
+            date.fromisoformat("2026-10-19"), use_projection_cache=False)
+        self.assertEqual(cached, uncached)
+        self.assertEqual(cached_available_students, {first_id, second_id})
+
     def test_elective_success_cannot_mask_required_assignment_projection_in_same_source_block(self):
         from backend.services.constructor_publication import _projection_mismatches
 

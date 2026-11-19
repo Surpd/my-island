@@ -236,7 +236,8 @@ def _class_grade(group: Mapping[str, Any]) -> str | None:
 
 def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: Mapping[str, Any],
                            reference: date,
-                           conflict_student_ids_by_block: Mapping[str, set[str]] | None = None) -> set[str]:
+                           conflict_student_ids_by_block: Mapping[str, set[str]] | None = None,
+                           *, use_projection_cache: bool = True) -> set[str]:
     """Use the real projector in memory, before any immutable artifact is written.
 
     In particular a removed partition must never widen a remaining audience.
@@ -268,6 +269,16 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
     # retaining per-student projections whenever audience rules or a confirmed
     # personal conflict make identity itself significant.
     projection_cache: dict[tuple[Any, ...], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    identity_sensitive_by_day: dict[int, set[str]] = {}
+    for source_block in blocks.values():
+        weekday = source_block.get("weekday")
+        if weekday is None:
+            continue
+        for assignment in source_block.get("assignments") or []:
+            rule = canonical._assignment_audience_rule(assignment)
+            identity_sensitive_by_day.setdefault(int(weekday), set()).update(
+                str(value) for field in ("include_student_ids", "exclude_student_ids")
+                for value in rule.get(field) or [])
 
     def projected_for(student_id: str, student: Mapping[str, Any], membership_groups: set[str],
                       candidate: Mapping[str, Any], day: str,
@@ -283,6 +294,13 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
                                    for unresolved in blocks.get(block_key, {}).get("unresolved") or [])
         if student_id in (conflict_student_ids_by_block or {}).get(block_key, set()):
             student_specific = True
+        weekday = candidate.get("weekday")
+        if weekday is not None and student_id in identity_sensitive_by_day.get(int(weekday), set()):
+            # _student_busy_in_slot() evaluates overlapping blocks and can
+            # recursively inspect available_slot assignments. Any student
+            # explicitly named elsewhere on this day must keep an identity
+            # scoped result for this candidate too.
+            student_specific = True
         signature = tuple((str(assignment.get("activity") or ""),
                            tuple(sorted(str(value) for value in assignment.get("canonical_group_ids") or [])),
                            tuple(sorted(str(value) for value in assignment.get("teacher_ids") or [])),
@@ -291,6 +309,8 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
         identity_part = student_id if student_specific else "shared"
         cache_key = (block_key, day, canonical._grade(student.get("class_name")),
                      tuple(sorted(membership_groups)), signature, identity_part)
+        if not use_projection_cache:
+            return canonical._project_student_block(database, context, student, candidate, day)
         projected = projection_cache.get(cache_key)
         if projected is None:
             projected = canonical._project_student_block(database, context, student, candidate, day)
