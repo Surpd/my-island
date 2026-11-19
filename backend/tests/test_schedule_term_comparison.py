@@ -79,6 +79,24 @@ class TermComparisonTests(unittest.TestCase):
                                       expected_revision=accepted["revision"])
         self.assertNotIn("comparison", week["payload"].get("school_source", {}).get("term2_preparation", {}))
 
+    def test_proven_equivalence_is_closed_without_editing_the_lesson(self):
+        payload = deepcopy(self.payload)
+        row = payload["school_source"]["term2_preparation"]["comparison"]["items"][0]
+        row.update(initial_status="accepted", assessment={
+            "category": "equivalent", "reason": "Один кабинет и одно назначение",
+            "priority": 3, "type": "Написание кабинета", "options": [],
+        })
+        self.draft = create_experiment(self.database, name="Reviewed copy", source="import",
+                                       payload=payload, _trusted_resolution_history=True)
+        with self.assertRaisesRegex(ValueError, "уже"):
+            self.decide(1, "accept")
+        changed = deepcopy(self.draft["payload"])
+        changed["school_source"]["term2_preparation"]["comparison"]["items"][0]["initial_status"] = "pending"
+        saved = save_experiment(self.database, self.draft["id"], expected_revision=1, payload=changed)
+        self.assertEqual(comparison_of(saved)["items"][0], row)
+        self.assertEqual(saved["payload"]["lessons"][0]["room"], "1")
+        self.assertFalse(comparison_of(saved).get("manual_edits"))
+
     def test_background_changes_do_not_count_as_an_explicit_edit(self):
         payload = deepcopy(self.draft["payload"])
         payload["lessons"][0]["room"] = "3"

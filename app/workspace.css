@@ -1227,6 +1227,31 @@
   font:inherit;
 }
 .constructor-term-dialog textarea { resize:vertical; }
+.constructor-term-filters { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-block:8px 12px; }
+.constructor-term-filters label { display:grid; gap:4px; min-width:0; color:var(--cp-muted); }
+.constructor-term-filters select { width:100%; min-height:38px; }
+.constructor-term-queue h4 { margin:14px 0 2px; overflow-wrap:anywhere; }
+.constructor-term-queue .constructor-term-priority { margin:16px 0 6px; }
+.constructor-term-priority[data-priority="1"] { color:#7d3a1d; }
+.constructor-term-list li > div { flex:1; min-width:0; overflow-wrap:anywhere; }
+.constructor-term-list li > button { flex:none; }
+.constructor-term-list li p { color:var(--cp-muted); }
+.constructor-term-state { font-weight:650; }
+.constructor-term-assessment { padding:8px 0; }
+.constructor-term-dialog .constructor-term-assessment h4 { margin:0 0 6px; }
+.constructor-term-assessment ul { margin-block:6px 0; padding-inline-start:22px; }
+.constructor-term-assessment li { margin-block:4px; }
+.constructor-term-options li { padding-bottom:4px; }
+.constructor-term-dialog .constructor-term-options button { display:block; margin-top:4px; min-height:38px; }
+.constructor-term-candidates ul { list-style:none; padding:0; }
+.constructor-term-candidates li + li { border-top:1px solid var(--cp-line); padding-top:8px; }
+
+@media (max-width:560px) {
+  .constructor-term-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .constructor-term-filters label:last-child { grid-column:1 / -1; }
+  .constructor-term-filters select,.campus-shell .constructor-term-dialog .constructor-term-list button { min-height:42px; }
+}
+
 .constructor-term-dialog .constructor-term-actions { display:flex; flex-wrap:wrap; gap:6px; }
 .constructor-term-dialog .constructor-term-actions .admin-button--primary {
   border-color:var(--cp-ink);
