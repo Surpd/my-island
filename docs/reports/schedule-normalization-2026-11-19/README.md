@@ -41,7 +41,7 @@ PR #10 зависит от PR #9 (`codex/elective-campus-blocks`). Нормал�
 
 ## Проверки
 
-- Backend suite и адресный HTTP E2E запускаются в disposable SQLite; E2E проверяет предпросмотр, копию, stale revision 409 и неизменность исходного шаблона. Публикации в этом сценарии нет.
+- Backend suite: **621 passed, 13 skipped**, 27 subtests. Адресный React + HTTP E2E в disposable SQLite проверил preview, открытие исходного занятия, подтверждение и отдельную копию: 8 преобразований; в 129-строчном источнике сохранено предупреждение об обеде; исходник неизменён; публикации не было. API regression также проверяет stale preview 409.
 - Isolated PostgreSQL **17.12** contract check прошёл: `041` и `042` применены повторно, stale write возвращает 409, publication rollback не оставил частичные записи; дополнительный fixture 357 строк создал копию с 9 evidence-backed изменениями и подтвердил неизменность оригинала. При подготовке схемы migration `016` пропущена из-за повторного `school_source_mappings_protect_manual` trigger, уже созданного migration `015`; полный прогон всего набора схемных migrations не заявляется.
 - 357-строчный synthetic preview: **0.553 ms/run** в 1000 последовательных измерениях чистого планировщика Python. Это не production latency; основной DB запрос выполняется один раз на запрос preview/apply, а не на каждое занятие.
 - Снимки: [preview с объяснениями](normalization-preview-1366.png), [отдельная копия после подтверждения](normalization-copy-created-1366.png).
