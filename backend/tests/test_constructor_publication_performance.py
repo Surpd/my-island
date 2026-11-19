@@ -17,6 +17,7 @@ from unittest.mock import patch
 from backend.database import Database
 from backend.services import canonical_schedule as canonical
 from backend.services import constructor_publication as publication
+from backend.services import schedule_experiments
 from backend.services.constructor_publication import initialize_publication_schema
 from backend.services.schedule_experiments import create_experiment
 
@@ -83,10 +84,13 @@ class ConstructorPublicationPerformanceTests(unittest.TestCase):
                 "classes": [str(group["id"]) for group in classes.values()], "slots": slots, "lessons": lessons})
 
             sql_statements: list[str] = []
+            connections = 0
             original_connection = database.connection
 
             @contextmanager
             def traced_connection():
+                nonlocal connections
+                connections += 1
                 with original_connection() as connection:
                     connection.set_trace_callback(sql_statements.append)
                     yield connection
@@ -113,7 +117,7 @@ class ConstructorPublicationPerformanceTests(unittest.TestCase):
                 stages["projection_mismatches_ms"] += (time.perf_counter() - started) * 1000
                 return result
 
-            original_audience_preview = publication.experiment_audience_preview
+            original_audience_preview = schedule_experiments.experiment_audience_preview
 
             def measured_audience_preview(*args, **kwargs):
                 started = time.perf_counter()
@@ -124,19 +128,20 @@ class ConstructorPublicationPerformanceTests(unittest.TestCase):
             started = time.perf_counter()
             with patch.object(canonical, "_project_student_block", side_effect=measured_project), \
                  patch.object(publication, "_projection_mismatches", side_effect=measured_mismatches), \
-                 patch.object(publication, "experiment_audience_preview", side_effect=measured_audience_preview):
+                 patch.object(schedule_experiments, "experiment_audience_preview", side_effect=measured_audience_preview):
                 result = publication.preview_publication(database, draft["id"], scope_kind="template",
                     expected_revision=draft["revision"])
             elapsed_ms = (time.perf_counter() - started) * 1000
 
             self.assertTrue(result["can_publish"], result["blockers"])
             self.assertEqual(result["summary"]["source_lessons"], 357)
-            self.assertLessEqual(len(sql_statements), 80, f"unexpected DB round-trips: {len(sql_statements)}")
+            self.assertEqual(connections, 1, "publication preview must reuse one fresh database connection")
+            self.assertLessEqual(len(sql_statements), 15, f"unexpected DB round-trips: {len(sql_statements)}")
             self.assertLess(projection_calls, 1000,
                             f"preview projected each pupil independently ({projection_calls} calls)")
             if os.getenv("MY_ISLAND_REPORT_PERF") == "1":
                 print(json.dumps({"dataset": "synthetic 357 rows, 7 grades, 175 students, 35 teachers, split-subgroup memberships",
-                    "elapsed_ms": round(elapsed_ms, 1), "sqlite_statements": len(sql_statements),
+                    "elapsed_ms": round(elapsed_ms, 1), "sqlite_statements": len(sql_statements), "connections": connections,
                     "personal_projection_calls": projection_calls,
                     "personal_projection_ms": round(projection_seconds * 1000, 1), **stages}, ensure_ascii=False))
 

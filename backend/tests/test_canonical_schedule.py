@@ -233,10 +233,23 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         projection = project_student(self.database, self.student["id"], "2026-09-14")
         cancelled = next(item for item in projection["items"] if item["start_time"] == "09:00")
         self.assertEqual(cancelled["state"], "NO_LESSON")
+        teacher_cancelled = project_teacher_range(self.database, self.teacher["id"], "2026-09-14", "2026-09-14")
+        self.assertEqual(teacher_cancelled["items"], [])
 
         materialize_effective_week(self.database, self.version_id, "2026-09-07")
         teacher_projection = project_teacher_range(self.database, self.teacher["id"], "2026-09-09", "2026-09-09")
         self.assertEqual(teacher_projection["items"], [])
+
+    def test_legacy_club_keeps_staffing_and_is_hidden_from_students(self):
+        artifact = self.artifact()
+        assignment = artifact["blocks"][self.block_key]["assignments"][0]
+        assignment.update(activity="Synthetic club", activity_type="club")
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        student = project_student(self.database, self.student["id"], "2026-09-07")
+        self.assertFalse(any(item["activity"] == "Synthetic club" for item in student["items"]))
+        teacher = project_teacher_range(self.database, self.teacher["id"], "2026-09-07", "2026-09-07")
+        self.assertEqual([item["activity"] for item in teacher["items"]], ["Synthetic club"])
 
     def test_corrected_week_creates_a_new_immutable_overlay_revision(self):
         import_canonical_artifact(self.database, self.artifact())

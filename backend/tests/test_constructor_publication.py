@@ -57,8 +57,13 @@ class ConstructorPublicationTests(unittest.TestCase):
         week = create_experiment_week(self.database, active["id"], week_start="2026-10-19",
                                       expected_revision=active["revision"])
         self.assertEqual(week["payload"]["source_template"], {"id": active["id"], "revision": active["revision"]})
+        for scope, wrong_date in (("template", None), ("week", "2026-10-26")):
+            with self.assertRaisesRegex(ValueError, "только на её исходные даты"):
+                preview_publication(self.database, week["id"], scope_kind=scope, week_start=wrong_date,
+                                    expected_revision=week["revision"])
         changed = copy.deepcopy(week["payload"])
         changed["lessons"][0]["subject"] = "Synthetic changed Math"
+        changed["lessons"][0]["audience"]["exclude_student_ids"] = [str(self.other_student["id"])]
         changed["lessons"].append(self.lesson(id="conflict", period=0, subject="Synthetic overlap"))
         week = save_experiment(self.database, week["id"], expected_revision=week["revision"], payload=changed,
                                _preserve_unconfirmed_rosters=True)
@@ -115,6 +120,12 @@ class ConstructorPublicationTests(unittest.TestCase):
         student_items, teacher_items = student_response.json()["items"], teacher_response.json()["items"]
         self.assertTrue(any(item.get("activity") == "Synthetic changed Math" for item in student_items), student_response.json())
         self.assertTrue(any(item.get("activity") == "Synthetic changed Math" for item in teacher_items), teacher_response.json())
+        self.assertNotIn("trace", student_response.text)
+        self.assertNotIn("exclude_student_ids", student_response.text)
+        with patch.dict(os.environ, {"SCHEDULE_BACKEND": "canonical"}):
+            today = client.get("/api/student/today?day=2026-10-19", headers=student_headers)
+        self.assertEqual(today.status_code, 200, today.text)
+        self.assertNotIn("exclude_student_ids", today.text)
         self.assertFalse(any(item.get("activity") == "Synthetic overlap" for item in student_items))
         self.assertFalse(any(item.get("activity") == "Synthetic overlap" for item in teacher_items))
         outsider = self.database.create_identity("student", "Synthetic unrelated student", "10B")
@@ -233,7 +244,12 @@ class ConstructorPublicationTests(unittest.TestCase):
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
         self.assertEqual(list_publications(self.database)["items"], [])
         self.assertEqual(get_experiment(self.database, draft["id"])["revision"], 1)
-        published = self.publish(draft)
+        from backend.services import constructor_publication as publication
+        with patch.object(publication, "_compile", wraps=publication._compile) as compile_schedule:
+            published = publish_publication(self.database, draft["id"], scope_kind="template", expected_revision=1,
+                preview_token=preview["preview_token"], confirmed=True)
+        self.assertEqual(compile_schedule.call_count, 1)
+        draft["revision"] = published["draft_revision"]
         self.assertTrue(published["runtime_readback"]["verified"])
         self.assertEqual(canonical.canonical_version(self.database)["version_id"], published["published_id"])
         weekly = self.publish(draft, "week", week_start="2026-10-19")
@@ -851,6 +867,25 @@ class ConstructorPublicationTests(unittest.TestCase):
         p=preview_publication(self.database,draft["id"],scope_kind="template",expected_revision=1)
         self.assertEqual(p["summary"]["ready_lessons"],0)
         self.assertIn("projection_mismatch",[i["code"] for i in p["diagnostics"]])
+
+    def test_dated_membership_overrides_agree_in_save_preview_and_campus(self):
+        with self.database.connection() as connection:
+            for student, action in ((self.other_student, "include"), (self.student, "exclude")):
+                self.database.execute(connection, """INSERT INTO membership_overrides
+                    (identity_id,group_id,member_role,action,reason,active,valid_from,valid_until)
+                    VALUES (?,?,'student',?,'synthetic',TRUE,'2026-10-20','2026-10-20')""",
+                    (student["id"], self.math["id"], action))
+        rule = {"kind": "groups", "group_ids": [str(self.math["id"])]}
+        draft = self.draft([self.lesson(id="monday", audience=rule),
+                            self.lesson(id="tuesday", day=1, audience=rule)])
+        draft = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=draft["payload"])
+        snapshots = {row["id"]: row["audience_snapshot"]["student_ids"] for row in draft["payload"]["lessons"]}
+        self.assertEqual(snapshots, {"monday": [str(self.student["id"])], "tuesday": [str(self.other_student["id"])]})
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        for student, expected_day in ((self.student, "2026-10-19"), (self.other_student, "2026-10-20")):
+            items = canonical.project_student(self.database, student["id"], "2026-10-19")["items"]
+            self.assertEqual([item["date"] for item in items if item["state"] == "ACTIVITY"], [expected_day])
 
     def test_same_activity_text_student_conflict_is_personal_and_does_not_drop_rows(self):
         draft=self.draft([self.lesson(subject="Creative"),self.lesson(id="second",subject="Creative",room="202",teacherId=str(self.other_teacher["id"]))])
@@ -1502,13 +1537,14 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertTrue(p["can_publish"])
 
     def test_lunch_and_no_lesson_keep_scope_and_details(self):
-        draft = self.draft([self.lesson(specialMark="lunch", subject="Обед", teacherId="", description="Long lunch"),
-                            self.lesson(id="none", day=1, specialMark="no_lesson", subject="", teacherId="")])
+        draft = self.draft([self.lesson(specialMark="lunch", subject="Обед", description="Long lunch"),
+                            self.lesson(id="none", day=1, specialMark="no_lesson", subject="")])
         self.publish(draft)
         self.publish(draft, "week", week_start="2026-10-19")
         projection = canonical.project_student(self.database, self.student["id"], "2026-10-19")
         self.assertEqual(projection["items"][0]["activity"], "Обед")
         self.assertEqual(projection["items"][1]["state"], "NO_LESSON")
+        self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")["items"], [])
         template = canonical.read_canonical_template(self.database)
         details = next(iter(template["blocks"].values()))["assignments"][0]["metadata"]["constructor_details"]
         self.assertEqual(details["description"], "Long lunch")

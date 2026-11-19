@@ -34,10 +34,10 @@ export async function createSyntheticFilledWeek(request: APIRequestContext, regi
     name?: string;
     display_name?: string;
   }[];
-  // Other CRUD scenarios may leave a class without a school grade. This
-  // scenario's grid covers the seven seeded parallels, not those extra rows.
+  // Other tests add classes within the same grades. Use the seven seeded
+  // parallel groups so fixture columns stay stable after directory tests.
   const gradedClassIds = new Set(groups.filter((group) => group.group_type === 'class'
-    && /^\d/.test(group.base_class_name || group.name || '')).map((group) => String(group.id)));
+    && group.name === group.base_class_name && /^(?:[5-9]|10|11)$/.test(group.name || '')).map((group) => String(group.id)));
   experiment.payload.classes = experiment.payload.classes.filter((id) => gradedClassIds.has(String(id)));
   const classId = String(groups.find((group) => group.group_type === 'class' && group.base_class_name === '5')?.id || '');
   const classId6 = String(groups.find((group) => group.group_type === 'class' && group.base_class_name === '6')?.id || '');

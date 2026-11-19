@@ -36,10 +36,9 @@ from backend.services.school_template_selection import (
 )
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
 from backend.services.google_sync_service import CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
-from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability
-from backend.services.canonical_weekly_refresh import preview_current_template, preview_current_week, refresh_current_week
+from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability, student_campus_projection
 from backend.services.schedule_drafts import (
-    audience_preview, get_draft, preview_changes,
+    audience_preview, get_draft,
 )
 from backend.services.schedule_experiments import (
     ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
@@ -772,7 +771,7 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
         if not canonical_backend_enabled():
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "schedule": [], "day_block": None, "schedule_issues": [], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
-        projection = project_student_range(database, user["identity_id"], requested_day)
+        projection = student_campus_projection(database, user["identity_id"], requested_day)
         schedule = [item for item in projection.get("items", []) if item.get("date") == requested_day]
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "schedule": schedule, "day_block": None, "schedule_issues": projection.get("issues", []), "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
 
@@ -816,7 +815,7 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
         if not canonical_backend_enabled():
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "items": [], "issues": []}
-        projection = project_student_range(database, user["identity_id"], start_day, end_day)
+        projection = student_campus_projection(database, user["identity_id"], start_day, end_day)
         return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), **projection}
 
     @router.get("/student/profile")
@@ -1376,26 +1375,13 @@ def create_router(database: Database) -> APIRouter:
     def admin_schedule_refresh(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        if not canonical_admin_backend_enabled():
-            return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
-        try:
-            return refresh_current_week(database, get_settings(), week_start or None)
-        except (GoogleLiveError, ValueError, RuntimeError) as error:
-            return {"status": "blocked", "ok": False, "message": str(error)}
+        return {"status": "blocked", "ok": False, "message": "Расписание публикуется из конструктора. Для Google Sheets доступен экспорт."}
 
     @router.post("/admin/schedule/preview")
     def admin_schedule_preview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
-        if not canonical_admin_backend_enabled():
-            return {"status": "blocked", "ok": False, "message": "Canonical schedule backend is disabled"}
-        try:
-            result = preview_current_week(database, get_settings(), week_start or None)
-            if result.get("status") == "preview":
-                result["draft_changes"] = preview_changes(result)
-            return result
-        except (GoogleLiveError, ValueError, RuntimeError) as error:
-            return {"status": "blocked", "ok": False, "message": str(error)}
+        return {"status": "blocked", "ok": False, "message": "Сверка расписания с Google Sheets отключена."}
 
     @router.post("/admin/schedule/template/confirm")
     def admin_schedule_confirm_template(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1405,15 +1391,7 @@ def create_router(database: Database) -> APIRouter:
     @router.post("/admin/schedule/template/preview")
     def admin_schedule_template_preview(payload: ScheduleConfirmTemplatePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        if not canonical_admin_backend_enabled():
-            return {"status": "blocked", "message": "Canonical schedule backend is disabled"}
-        try:
-            result = preview_current_template(database, get_settings(), payload.expected_version_id)
-            if result.get("status") == "preview":
-                result["draft_changes"] = preview_changes(result)
-            return result
-        except (GoogleLiveError, ValueError, RuntimeError) as error:
-            return {"status": "blocked", "message": str(error)}
+        return {"status": "blocked", "message": "Сверка шаблона с Google Sheets отключена."}
 
     @router.get("/admin/schedule/validate-students")
     def admin_schedule_validate_students(week_start: str, grades: str = "", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1438,7 +1416,7 @@ def create_router(database: Database) -> APIRouter:
         head = publication_head(database, f"week:{monday}") or publication_head(database, "template")
         return {"week_start": monday, "manual_publication_active": bool(head),
                 "review_required": bool(head), "source_checked": False,
-                "automatic_application_enabled": canonical_admin_backend_enabled() and not bool(head)}
+                "automatic_application_enabled": False}
 
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1668,7 +1646,8 @@ def create_router(database: Database) -> APIRouter:
             normalized = normalized_copy_payload(draft, preview)
             created = create_experiment(store, name=f"{draft['name']} · нормализованная копия", source="import",
                 payload=normalized, actor_user_id=principal["id"], _base_version_id=draft.get("base_version_id"),
-                _trusted_resolution_history=True)
+                _trusted_resolution_history=True, _copy_key=f"normalization:{experiment_id}:{preview['plan_hash']}",
+                _source_guard=(experiment_id, payload.expected_revision))
             return {"id": created["id"], "revision": created["revision"], "name": created["name"],
                     "lesson_count": len(created["payload"].get("lessons") or []), "source_id": experiment_id,
                     "changed_count": preview["automatic_count"],
@@ -1677,6 +1656,8 @@ def create_router(database: Database) -> APIRouter:
                     "is_primary_template": False, "published": False}
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail="Шаблон изменился. Повторите проверку.") from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

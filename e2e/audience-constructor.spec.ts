@@ -25,6 +25,7 @@ test('one subject and teacher work with seventh-grade split and administrative c
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(String(klass!.id));
   await page.locator('[data-cell]').first().click();
+  await page.getByRole('button', { name: 'Открыть редактор расписания', exact: true }).click();
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Литература');
   const picker = page.getByRole('region', { name: 'Участники занятия' });
@@ -38,6 +39,7 @@ test('one subject and teacher work with seventh-grade split and administrative c
   await picker.getByRole('checkbox', { name: '7-А', exact: true }).check();
   await expect(page.locator('.constructor-inspector').getByRole('combobox', { name: 'Предмет', exact: true })).toHaveValue('Литература');
   await expect(page.locator('.constructor-inspector label').filter({ hasText: 'Преподаватель' }).locator('select')).toHaveValue(String(teacher!.id));
+  await page.getByRole('button', { name: 'Закрыть панель', exact: true }).click();
   await page.getByRole('button', { name: /Сохранить/ }).first().click();
   await expect(page.locator('header').getByText('Сохранено', { exact: true })).toBeVisible();
   await page.screenshot({ path: resolve(shots, 'constructor-class-and-teacher-1920x1080.png'), fullPage: true });
@@ -62,6 +64,7 @@ test('exact English group suggests its teacher and a lesson may override that te
   await page.getByRole('button', { name: 'Фильтры' }).click();
   await page.getByRole('combobox', { name: 'Фильтр по классу' }).selectOption(String(klass!.id));
   await page.locator('[data-cell]').first().click();
+  await page.getByRole('button', { name: 'Открыть редактор расписания', exact: true }).click();
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Английский язык');
   const picker = page.getByRole('region', { name: 'Участники занятия' });

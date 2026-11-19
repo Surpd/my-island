@@ -111,7 +111,7 @@ class ReadOnlySchoolDatabase(Database):
         connection = psycopg.connect(self.database_url, row_factory=dict_row, connect_timeout=10,
                                      prepare_threshold=None)
         try:
-            connection.execute("SET TRANSACTION READ ONLY")
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             if connection.execute("SELECT current_setting('transaction_read_only') AS mode").fetchone()["mode"] != "on":
                 raise RuntimeError("School source is not read only")
             yield connection

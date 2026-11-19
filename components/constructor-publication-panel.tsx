@@ -1,9 +1,13 @@
 'use client';
 
-import {useEffect, useState} from 'react';
+import {useEffect, useEffectEvent, useRef, useState} from 'react';
 import {X} from 'lucide-react';
 import Link from 'next/link';
 import { normalizeRoomDisplay } from './schedule-rooms';
+import {
+  ConstructorLegacyReview, ConstructorRosterReview,
+  type NormalizationCopy, type NormalizationPreview, type RosterPreview, type RosterScope,
+} from './constructor-review-fixes';
 
 type Api = <T>(path:string, init?:RequestInit)=>Promise<T>;
 type ApiError = Error & {status?:number};
@@ -17,6 +21,8 @@ type Publication = {id:string;scope_kind:string;scope_key:string;created_at:stri
 type History = {items:Publication[];heads?:Record<string,{revision:number}>};
 type Filter = 'all'|'remarks'|'conflict'|'critical'|'deferred';
 const dayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const overlapCodes = new Set(['teacher_overlap', 'room_overlap', 'student_overlap']);
+const isScheduleConflict = (issue: Diagnostic) => issue.severity === 'conflict' && overlapCodes.has(issue.code);
 const emptySummary:Summary={ready_lessons:0,deferred_lessons:0,deferred_blocks:0,unchanged_lessons:0,replaced_lessons:0,info_count:0,conflict_count:0,critical_count:0};
 
 function readableContext(context?:LessonContext,teacherNames:Record<string,string>={},groupNames:Record<string,string>={}) {
@@ -30,7 +36,7 @@ function readableContext(context?:LessonContext,teacherNames:Record<string,strin
 
 function sourceLabel(kind?:Preview['source_kind']) {
   if(kind==='template_week')return 'Неделя рассчитана из школьного шаблона';
-  if(kind==='authored_week')return 'Авторская версия недели';
+  if(kind==='authored_week')return 'Черновик отдельной недели';
   if(kind==='template')return 'Школьный шаблон';
   return 'Текущая база публикации';
 }
@@ -50,61 +56,291 @@ const reasonTitles:Record<string,string>={
 function storedDiagnostics(item:Publication) { return item.diagnostics||item.preview?.diagnostics||item.preview_metadata?.diagnostics||item.metadata?.diagnostics||[]; }
 function storedDeferred(item:Publication) { return item.deferred||item.preview?.deferred||item.preview_metadata?.deferred||item.metadata?.deferred||[]; }
 
-export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onClose,onPublished,teacherNames,groupNames}: {api:Api; draftId:string; revision:number; weekStart?:string; onClose:()=>void; onPublished:()=>Promise<void>;teacherNames:Record<string,string>;groupNames:Record<string,string>}) {
+export function ConstructorPublicationPanel({
+  api, draftId, revision, draftName, weekStart, dirty, readOnly, publicationEnabled, mode, day, classId, classLabel,
+  onClose, onSave, onRostersUpdated, onNormalizedCopy, onPublished, onOpenLesson,
+  teacherNames, groupNames, lessonLabels,
+}: {
+  api: Api;
+  draftId: string;
+  revision: number;
+  draftName: string;
+  weekStart?: string;
+  dirty: boolean;
+  readOnly: boolean;
+  publicationEnabled: boolean;
+  mode: 'review' | 'history';
+  day: number;
+  classId?: string;
+  classLabel?: string;
+  onClose: () => void;
+  onSave: () => Promise<boolean>;
+  onRostersUpdated: (value: unknown) => void;
+  onNormalizedCopy: (copy: NormalizationCopy) => Promise<void>;
+  onPublished: () => Promise<void>;
+  onOpenLesson: (id: string) => void;
+  teacherNames: Record<string, string>;
+  groupNames: Record<string, string>;
+  lessonLabels: Record<string, string>;
+}) {
+  const historyOnly = mode === 'history';
   const [scope,setScope] = useState(weekStart ? 'week' : 'template');
   const [week,setWeek] = useState(weekStart || '');
   const [preview,setPreview] = useState<Preview|null>(null);
   const [previewTarget,setPreviewTarget] = useState<{draftId:string;revision:number;scope:string;week:string}|null>(null);
   const [history,setHistory] = useState<History>({items:[]});
+  const [historyPending, setHistoryPending] = useState(historyOnly);
   const [confirmed,setConfirmed] = useState(false);
   const [busy,setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [rosterScope, setRosterScope] = useState<RosterScope>('stale');
+  const [rosters, setRosters] = useState<RosterPreview | null>(null);
+  const [rosterError, setRosterError] = useState('');
+  const [checkingRosters, setCheckingRosters] = useState(false);
+  const [legacy, setLegacy] = useState<NormalizationPreview | null>(null);
+  const [legacyError, setLegacyError] = useState('');
+  const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
+  const reviewRequest = useRef<AbortController | null>(null);
+  const rosterRequest = useRef<AbortController | null>(null);
+  const automaticRevision = useRef<number | null>(null);
   const [message,setMessage] = useState('');
   const [sessionExpired,setSessionExpired] = useState(false);
   const [published,setPublished] = useState(false);
   const [filter,setFilter] = useState<Filter>('all');
+  const [query, setQuery] = useState('');
   const [restore,setRestore] = useState<{publication:Publication; expected_head_revision:number; preview:{preview_token:string;can_restore:boolean;blockers:{message:string}[];diff:Preview['diff']}}|null>(null);
   const [restoreConfirmed,setRestoreConfirmed] = useState(false);
   const prefix = `/api/admin/schedule/constructor/${encodeURIComponent(draftId)}`;
-  const showError = (error:unknown) => {
-    const apiError=error as ApiError;
-    setMessage(apiError instanceof Error ? apiError.message : 'Не удалось выполнить запрос.');
-    setSessionExpired(apiError.status===401);
+  const legacyPrefix = `/api/admin/schedule/experiments/school/${encodeURIComponent(draftId)}`;
+  const canCheckRosters = publicationEnabled && !readOnly;
+  const canCheckLegacy = !readOnly && !weekStart;
+  const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'Не удалось выполнить запрос.';
+  const showError = (error: unknown) => {
+    setMessage(errorMessage(error));
+    setSessionExpired((error as ApiError).status === 401);
   };
   const loadHistory = () => api<History>(`${prefix}/publications`).then(setHistory);
-  useEffect(()=>{let active=true; void api<History>(`${prefix}/publications`).then(value=>{if(active){setHistory(value);setSessionExpired(false);}}).catch(error=>{if(active){const apiError=error as ApiError;setMessage(apiError instanceof Error?apiError.message:'Не удалось выполнить запрос.');setSessionExpired(apiError.status===401);}}); return()=>{active=false;};},[api,prefix]);
+  useEffect(() => {
+    if (!historyOnly) return;
+    const controller = new AbortController();
+    void api<History>(`${prefix}/publications`, { signal: controller.signal })
+      .then(value => { if (!controller.signal.aborted) setHistory(value); })
+      .catch(error => { if (!controller.signal.aborted) showError(error); })
+      .finally(() => { if (!controller.signal.aborted) setHistoryPending(false); });
+    return () => controller.abort();
+  }, [api, historyOnly, prefix]);
+  useEffect(() => () => {
+    const reviewing = reviewRequest.current;
+    const checkingScope = rosterRequest.current;
+    reviewRequest.current = null;
+    rosterRequest.current = null;
+    reviewing?.abort();
+    checkingScope?.abort();
+  }, []);
   const publishedQuery = new URLSearchParams(scope==='week'&&week ? {week_start:week} : {});
   if (typeof window!=='undefined' && new URLSearchParams(window.location.search).get('role')==='admin') publishedQuery.set('role','admin');
   const publishedHref = `/admin/schedule/published${publishedQuery.size ? `?${publishedQuery}` : ''}`;
   const body = {scope_kind:scope, expected_revision:revision, ...(scope==='week' ? {week_start:week} : {})};
   const describe = (block:SemanticBlock|null) => block ? <><strong>{dayNames[block.weekday]} {block.start}–{block.end} · {block.grade} параллель</strong>{block.assignments.map((item,index)=><p key={index}>{item.activity} · {item.teachers.map(id=>teacherNames[id]||'Преподаватель не подтверждён').join(', ')||'без преподавателя'} · {item.groups.map(id=>groupNames[id]||'Группа не подтверждена').join(', ')}{item.metadata?.room ? ` · ${normalizeRoomDisplay(item.metadata.room)}` : ''}</p>)}</> : <span>Нет занятия</span>;
   const previewMatches=previewTarget?.draftId===draftId&&previewTarget.revision===revision&&previewTarget.scope===scope&&(scope!=='week'||previewTarget.week===week);
-  const activePreview=previewMatches?preview:null;
+  const activePreview=previewMatches&&!dirty?preview:null;
   const summary = {...emptySummary,...activePreview?.summary};
   const rawDiagnostics = activePreview?.diagnostics||[];
   const diagnostics:Diagnostic[] = [...rawDiagnostics,...(activePreview?.blockers||[]).filter(blocker=>!rawDiagnostics.some(item=>item.severity==='critical'&&item.message===blocker.message)).map(blocker=>({severity:'critical' as const,code:blocker.code,message:blocker.message,lesson_id:blocker.lesson_id,context:undefined}))];
-  const counts={info:diagnostics.filter(item=>item.severity==='info').length,conflict:diagnostics.filter(item=>item.severity==='conflict').length,critical:diagnostics.filter(item=>item.severity==='critical').length,deferred:activePreview?.deferred.length||0};
-  const visibleDiagnostics=diagnostics.filter(item=>filter==='all'||filter==='remarks'&&item.severity==='info'||filter==='conflict'&&item.severity==='conflict'||filter==='critical'&&item.severity==='critical');
-  const groupedDiagnostics=[...visibleDiagnostics.reduce((groups,item)=>{const key=`${item.severity}:${item.code}`;const group=groups.get(key)||{severity:item.severity,code:item.code,items:[] as Diagnostic[]};group.items.push(item);groups.set(key,group);return groups;},new Map<string,{severity:Diagnostic['severity'];code:string;items:Diagnostic[]}>()).values()];
-  const copyReport=async()=>{const lines=['Отчёт проверки расписания',...[...diagnostics.reduce((groups,item)=>{const key=`${item.severity}:${item.code}`;const group=groups.get(key)||{severity:item.severity,code:item.code,items:[] as Diagnostic[]};group.items.push(item);groups.set(key,group);return groups;},new Map<string,{severity:Diagnostic['severity'];code:string;items:Diagnostic[]}>()).values()].map(group=>{const ids=[...new Set(group.items.flatMap(item=>[item.lesson_id,...(item.related_lesson_ids||[])].filter((id):id is string=>typeof id==='string')))];const links=ids.map(id=>`[${id}](${window.location.origin}/admin/schedule/constructor#lesson-${encodeURIComponent(id)})`).join(', ');return `${group.code}\t${group.items.length}\t${links}`;})];await navigator.clipboard.writeText(lines.join('\n'));setMessage('Отчёт проверки скопирован. В нём только коды, количества и ссылки на записи.');};
-  const review = async()=>{
-    setBusy(true);setMessage('');setSessionExpired(false);setPreview(null);setPreviewTarget(null);setConfirmed(false);setFilter('all');
-    const controller=new AbortController();
-    const timeout=window.setTimeout(()=>controller.abort(),120000);
-    try {const result=await api<Preview>(`${prefix}/publication/preview`,{method:'POST',body:JSON.stringify(body),signal:controller.signal});setPreview(result);setPreviewTarget({draftId,revision,scope,week});}
-    catch(error){if(controller.signal.aborted)setMessage('Проверка не завершилась за 2 минуты. Изменения не публиковались. Повторите проверку.');else showError(error);}finally{window.clearTimeout(timeout);setBusy(false);}
+  const conflicts = diagnostics.filter(isScheduleConflict);
+  const conflictLessons = new Set(conflicts.flatMap(issue => [issue.lesson_id, ...(issue.related_lesson_ids || [])]).filter(Boolean));
+  const counts = {
+    info: diagnostics.filter(issue => issue.severity !== 'critical' && !isScheduleConflict(issue)).length,
+    conflict: conflicts.length,
+    critical: diagnostics.filter(issue => issue.severity === 'critical').length,
+    deferred: activePreview?.deferred.length || 0,
+  };
+  const normalizedQuery = query.trim().toLocaleLowerCase('ru');
+  const matchesQuery = (ids: (string | undefined)[], context: LessonContext | undefined, text: string) =>
+    !normalizedQuery || [text, ...ids.map(id => id ? lessonLabels[id] : ''), readableContext(context, teacherNames, groupNames)]
+      .join(' ').toLocaleLowerCase('ru').includes(normalizedQuery);
+  const visibleDiagnostics = diagnostics.filter(item =>
+    (filter === 'all' || filter === 'remarks' && item.severity !== 'critical' && !isScheduleConflict(item) ||
+      filter === 'conflict' && isScheduleConflict(item) || filter === 'critical' && item.severity === 'critical') &&
+    matchesQuery([item.lesson_id, ...(item.related_lesson_ids || [])], item.context, item.message));
+  const groupedDiagnostics = [...visibleDiagnostics.reduce((groups, item) => {
+    const key = `${item.severity}:${item.code}`;
+    const group = groups.get(key) || { severity: item.severity, code: item.code, items: [] as Diagnostic[] };
+    group.items.push(item);
+    groups.set(key, group);
+    return groups;
+  }, new Map<string, { severity: Diagnostic['severity']; code: string; items: Diagnostic[] }>()).values()];
+  const copyReport = async () => {
+    const byCode = new Map<string, { count: number; ids: Set<string> }>();
+    for (const issue of diagnostics) {
+      const group = byCode.get(issue.code) || { count: 0, ids: new Set<string>() };
+      group.count++;
+      for (const id of [issue.lesson_id, ...(issue.related_lesson_ids || [])]) {
+        if (id && lessonLabels[id]) group.ids.add(id);
+      }
+      byCode.set(issue.code, group);
+    }
+    const rows = [...byCode].map(([code, group]) => {
+      const links = [...group.ids].map(id => {
+        const search = new URLSearchParams({ draft: draftId, lesson: id });
+        return `${window.location.origin}/admin/schedule/constructor?${search}`;
+      });
+      return [code, group.count, links.join(', ')].join('\t');
+    });
+    try {
+      await navigator.clipboard.writeText(['Отчёт проверки расписания', ...rows].join('\n'));
+      setMessage('Отчёт проверки скопирован. Он содержит коды, количества и ссылки на записи.');
+    } catch {
+      setMessage('Браузер не смог скопировать отчёт.');
+    }
+  };
+  const rosterBody = (target: RosterScope) => ({
+    expected_revision: revision, scope: target,
+    ...(target === 'day' ? { day } : {}),
+    ...(target === 'class' ? { class_id: classId } : {}),
+  });
+  const requestRosters = (target: RosterScope, signal: AbortSignal) => api<RosterPreview>(`${prefix}/audiences/preview`, {
+    method: 'POST', body: JSON.stringify(rosterBody(target)), signal,
+  });
+  const checkRosterScope = async (target: RosterScope) => {
+    rosterRequest.current?.abort();
+    const controller = new AbortController();
+    rosterRequest.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 120_000);
+    setRosterScope(target);
+    setCheckingRosters(true);
+    setRosters(null);
+    setRosterError('');
+    try {
+      const result = await requestRosters(target, controller.signal);
+      if (!controller.signal.aborted) setRosters(result);
+    } catch (error) {
+      if (rosterRequest.current === controller) setRosterError(controller.signal.aborted ? 'Истекло время ожидания. Повторите проверку.' : errorMessage(error));
+    } finally {
+      window.clearTimeout(timeout);
+      if (rosterRequest.current === controller) setCheckingRosters(false);
+    }
+  };
+  const review = async (keepMessage = false) => {
+    if (dirty || scope === 'week' && !week) return;
+    reviewRequest.current?.abort();
+    const controller = new AbortController();
+    reviewRequest.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 120_000);
+    setChecking(true);
+    if (!keepMessage) setMessage('');
+    setSessionExpired(false);
+    setPreview(null);
+    setPreviewTarget(null);
+    setConfirmed(false);
+    setFilter('all');
+    const checkRosters = canCheckRosters && rosters?.revision !== revision;
+    const checkLegacy = canCheckLegacy && legacy?.source_revision !== revision;
+    if (checkRosters) {
+      setRosters(null);
+      setRosterError('');
+    }
+    if (checkLegacy) {
+      setLegacy(null);
+      setLegacyError('');
+    }
+    const failureMessage = (error: unknown) => controller.signal.aborted ? 'Истекло время ожидания. Повторите проверку.' : errorMessage(error);
+    const current = () => reviewRequest.current === controller;
+    try {
+      await Promise.all([
+        publicationEnabled ? api<Preview>(`${prefix}/publication/preview`, { method: 'POST', body: JSON.stringify(body), signal: controller.signal })
+          .then(result => {
+            if (current() && !controller.signal.aborted) {
+              setPreview(result);
+              setPreviewTarget({ draftId, revision, scope, week });
+            }
+          }).catch(error => {
+            if (current()) {
+              setMessage(`Не удалось проверить публикацию. ${failureMessage(error)}`);
+              setSessionExpired((error as ApiError).status === 401);
+            }
+          }) : null,
+        checkRosters ? requestRosters(rosterScope, controller.signal)
+          .then(result => { if (current() && !controller.signal.aborted) setRosters(result); })
+          .catch(error => { if (current()) setRosterError(failureMessage(error)); }) : null,
+        checkLegacy ? api<NormalizationPreview>(`${legacyPrefix}/normalization-preview`, { method: 'POST', signal: controller.signal })
+          .then(result => {
+            if (!current() || controller.signal.aborted) return;
+            if (result.source_revision === revision && result.source_id === draftId) setLegacy(result);
+            else setLegacyError('Версия черновика изменилась. Откройте свежую версию.');
+          }).catch(error => { if (current()) setLegacyError(failureMessage(error)); }) : null,
+      ]);
+    } finally {
+      window.clearTimeout(timeout);
+      if (current()) {
+        setChecking(false);
+        setReviewedRevision(revision);
+      }
+    }
+  };
+  const autoReview = useEffectEvent(() => {
+    if (dirty || historyOnly || published || automaticRevision.current === revision) return;
+    automaticRevision.current = revision;
+    void review(true);
+  });
+  useEffect(() => {
+    const timer = window.setTimeout(() => autoReview(), 0);
+    return () => window.clearTimeout(timer);
+  }, [dirty, historyOnly, revision]);
+  const saveForReview = async () => {
+    setBusy(true);
+    try { if (!await onSave()) onClose(); }
+    finally { setBusy(false); }
+  };
+  const applyRosters = async () => {
+    if (dirty || readOnly || busy || !rosters?.summary.safe_count || rosters.revision !== revision) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await api<{ draft?: unknown }>(`${prefix}/audiences/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ ...rosterBody(rosterScope), preview_token: rosters.preview_token, reason: 'Подтверждение проверенных составов в конструкторе' }),
+      });
+      setMessage(`Составы обновлены для ${rosters.summary.safe_count} занятий.`);
+      setPreview(null);
+      setConfirmed(false);
+      onRostersUpdated(result.draft || result);
+    } catch (error) {
+      setRosterError(errorMessage(error));
+      setRosters(null);
+      setPreview(null);
+      setConfirmed(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copyNormalized = async () => {
+    if (dirty || readOnly || busy || !legacy?.automatic_count || legacy.source_revision !== revision) return;
+    setBusy(true);
+    try {
+      const copy = await api<NormalizationCopy>(`${legacyPrefix}/normalization-copy`, {
+        method: 'POST',
+        body: JSON.stringify({ expected_revision: revision, expected_source_hash: legacy.source_hash, expected_plan_hash: legacy.plan_hash }),
+      });
+      await onNormalizedCopy(copy);
+    } catch (error) {
+      setLegacyError(errorMessage(error));
+      setLegacy(null);
+    } finally {
+      setBusy(false);
+    }
   };
   const publish = async()=>{
-    if(!activePreview || !confirmed || activePreview.publication_available===false)return;
+    if(!activePreview || !confirmed || dirty || checking || busy || readOnly || activePreview.publication_available===false)return;
     setBusy(true);setMessage('');setSessionExpired(false);
     try {
       const result = await api<{published_id:string;scope_key?:string;version_id?:string;week_start?:string;created_at?:string;summary?:Partial<Summary>;runtime_readback:{verified:boolean;block_count:number;assignment_count:number}}>(`${prefix}/publication/publish`,{method:'POST',body:JSON.stringify({...body,preview_token:activePreview.preview_token,confirmed:true})});
       const publishedWhen=result.created_at?new Date(result.created_at).toLocaleString('ru-RU'):'сейчас';
       const where=result.week_start?` · неделя с ${result.week_start}`:scope==='week'?` · неделя с ${week}`:' · школьный шаблон';
-      const version=result.published_id;
       const resultSummary={...emptySummary,...(result.summary||activePreview.summary)};
-      const totals=resultSummary.source_lessons!==undefined?` Все ${resultSummary.source_lessons} исходных записей сохранены. В Campus доступны ${resultSummary.campus_lessons??resultSummary.ready_lessons}; ${resultSummary.admin_only_lessons??resultSummary.deferred_lessons} ожидают административного рассмотрения.`:` ${resultSummary.ready_lessons} готово, ${resultSummary.deferred_lessons} отложено, ${resultSummary.deferred_blocks} блоков отложено.`;
-      setMessage(`Опубликовано${where} (${publishedWhen}). Версия: ${version}.${scope==='week'&&result.version_id ? ` Шаблон: ${result.version_id}.` : ''}${totals} ${result.runtime_readback.verified ? 'Чтение расписания подтверждено' : 'Чтение расписания пока не подтверждено'}: ${result.runtime_readback.block_count} блоков, ${result.runtime_readback.assignment_count} назначений.`);
-      setPublished(true);setPreview(null);setConfirmed(false);await loadHistory();await onPublished();
+      const totals=`В Campus доступны ${resultSummary.campus_lessons??resultSummary.ready_lessons} занятий. Требуют уточнения ${resultSummary.admin_only_lessons??resultSummary.deferred_lessons} записей.`;
+      setMessage(`Опубликовано${where} (${publishedWhen}). ${totals} ${result.runtime_readback.verified ? 'Проверка после публикации пройдена.' : 'Проверка после публикации ещё не пройдена.'}`);
+      setPublished(true);setPreview(null);setConfirmed(false);await onPublished();
     } catch(error){showError(error);setPreview(null);setConfirmed(false);}finally{setBusy(false);}
   };
   const reviewRestore = async(publication:Publication)=>{
@@ -124,38 +360,106 @@ export function ConstructorPublicationPanel({api,draftId,revision,weekStart,onCl
       setMessage(`Создана новая восстановленная версия расписания. Чтение: ${result.runtime_readback.verified?'подтверждено':'не подтверждено'}. Для дальнейшей работы откройте конструктор.`);setRestore(null);setRestoreConfirmed(false);await loadHistory();await onPublished();
     }catch(error){showError(error);setRestore(null);}finally{setBusy(false);}
   };
-  const filterButtons: [Filter,string,number][]=[['all','События проверки',diagnostics.length],['remarks','Замечания',counts.info],['conflict','События конфликтов',counts.conflict],['critical','Критичные',counts.critical],['deferred','Отложенные занятия',counts.deferred]];
-  const filteredDeferred=filter==='all'||filter==='deferred'?activePreview?.deferred||[]:[];
+  const filterButtons: [Filter,string,number?][]=[['all','Все'],['remarks','Замечания',counts.info],['conflict','Конфликты',counts.conflict],['critical','Блокируют публикацию',counts.critical],['deferred','Отложенные',counts.deferred]];
+  const filteredDeferred=filter==='all'||filter==='deferred'?(activePreview?.deferred||[]).filter(item=>matchesQuery([item.lesson_id, ...(item.cause_lesson_ids || [])], item.context, item.reason)):[];
   const deferredGroups=[...filteredDeferred.reduce((groups,item)=>{const key=(item.cause_codes||[]).join(',')||item.reason||'unresolved';const group=groups.get(key)||{code:key,items:[] as Deferred[]};group.items.push(item);groups.set(key,group);return groups;},new Map<string,{code:string;items:Deferred[]}>()).values()];
+  const controlsBusy = busy || checking || checkingRosters;
+  const currentRosters = rosters?.revision === revision ? rosters : null;
+  const currentLegacy = legacy?.source_revision === revision ? legacy : null;
+  const showFixes = !historyOnly && !dirty && !published && (canCheckRosters || canCheckLegacy) &&
+    (Boolean(currentRosters || currentLegacy || rosterError || legacyError) || reviewedRevision === revision);
+  const weekValid = scope !== 'week' || Boolean(week) && new Date(`${week}T12:00:00`).getDay() === 1;
+  const resetPublicationPreview = () => { setPreview(null); setPreviewTarget(null); setConfirmed(false); setFilter('all'); setMessage(''); };
+  const openLessonButton = (id?: string, related = false) => id && lessonLabels[id] ?
+    <button type="button" className="constructor-review-text-button" disabled={busy} onClick={() => onOpenLesson(id)}>
+      {related ? 'Открыть связанное занятие' : 'Открыть занятие'}
+    </button> : null;
+
   return <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-publication-panel" aria-labelledby="publication-title" ref={node=>{if(node&&!node.open)node.showModal();}} onCancel={event=>{event.preventDefault();if(!busy)onClose();}}>
-    <header><div><small>Сохранённая ревизия {revision} · отдельное подтверждение</small><h2 id="publication-title">Публикация расписания</h2></div><button disabled={busy} aria-label="Закрыть публикацию" onClick={onClose}><X size={20}/></button></header>
-    <p>Публикация сохраняет полный исходный черновик и все замечания в неизменяемой версии. В Student/Teacher Campus попадают только безопасные подтверждённые назначения; нерешённые записи остаются доступны администратору.</p>
-    <div className="constructor-publication-fields"><label>Назначение<select aria-label="Вид публикации" value={scope} disabled={busy || published} onChange={event=>{setScope(event.target.value);setPreview(null);setPreviewTarget(null);setConfirmed(false);setFilter('all');}}><option value="template">Школьный шаблон</option><option value="week">Отдельная неделя</option></select></label>{scope==='week' ? <label>Понедельник<input type="date" aria-label="Неделя публикации" value={week} disabled={busy || published} onChange={event=>{setWeek(event.target.value);setPreview(null);setPreviewTarget(null);setConfirmed(false);setFilter('all');}}/></label> : null}</div>
-    <p>{scope==='template' ? 'Новый шаблон не изменит ранее опубликованные независимые недели.' : 'Неделя не изменит школьный шаблон и другие недели.'} Обновления источника не заменяют опубликованную вручную версию автоматически.</p>
-    {!published ? <button disabled={busy || scope==='week'&&!week} onClick={()=>void review()}>{busy ? 'Проверяем расписание…' : 'Проверить изменения'}</button> : null}
-    {busy ? <output aria-live="polite">Проверка может занять до 2 минут. Если она не завершится, появится сообщение и проверку можно будет запустить повторно.</output> : null}
-    {activePreview ? <section aria-label="Проверка публикации"><h3>Проверка перед публикацией</h3><p className="constructor-publication-source">{sourceLabel(activePreview.source_kind)} · база: {activePreview.base_version_id||'последняя опубликованная версия расписания'}</p>
-      {activePreview.source_kind==='template_week' ? <p>Это шаблонная неделя: проверьте оперативные изменения отдельно.</p> : null}
-      {activePreview.read_only ? <p className="constructor-publication-readonly">Предварительный просмотр: эта версия открыта только для чтения.</p> : null}
+    <header>
+      <div><h2 id="publication-title">{historyOnly ? 'История публикаций' : 'Проверка расписания'}</h2><small>{draftName}</small></div>
+      <button type="button" disabled={busy} aria-label={historyOnly ? 'Закрыть историю публикаций' : 'Закрыть проверку'} onClick={onClose}><X size={20}/></button>
+    </header>
+    <div className="constructor-review-scroll">
+    {!historyOnly && dirty ? <output>У вас есть несохранённые правки. Сохраните черновик для проверки.</output> : null}
+    {!historyOnly && !dirty && !published ? <>
+      {checking ? <output className="constructor-review-progress">Проверяем занятия, составы групп и отличия от опубликованной версии…</output> : null}
+      {showFixes ? <details className="constructor-review-fixes">
+        <summary>Безопасные исправления{currentRosters || currentLegacy ? ` · ${(currentRosters?.summary.safe_count ?? 0) + (currentLegacy?.automatic_count ?? 0)}` : ''}</summary>
+        {canCheckRosters ? <ConstructorRosterReview preview={currentRosters} error={rosterError} busy={controlsBusy} readOnly={readOnly} scope={rosterScope} classLabel={classLabel} onScopeChange={target => void checkRosterScope(target)} onApply={() => void applyRosters()} onOpenLesson={onOpenLesson} /> : null}
+        {canCheckLegacy ? <ConstructorLegacyReview preview={currentLegacy} error={legacyError} busy={controlsBusy} readOnly={readOnly} lessonLabels={lessonLabels} onCopy={() => void copyNormalized()} onOpenLesson={onOpenLesson} /> : null}
+      </details> : null}
+      {publicationEnabled ? <div className="constructor-publication-fields">
+        {weekStart ? <p>Неделя с <strong>{new Date(`${weekStart}T12:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}</strong></p> : <>
+          <label>Что проверить<select aria-label="Вид публикации" value={scope} disabled={controlsBusy} onChange={event => { setScope(event.target.value); resetPublicationPreview(); }}><option value="template">Школьный шаблон</option><option value="week">Неделя из шаблона</option></select></label>
+          {scope === 'week' ? <label>Понедельник<input type="date" aria-label="Неделя публикации" value={week} disabled={controlsBusy} onChange={event => { setWeek(event.target.value); resetPublicationPreview(); }} /></label> : null}
+        </>}
+      </div> : <p>Публикация в этой среде недоступна.</p>}
+      {publicationEnabled && !weekValid && week ? <p role="alert">Выберите понедельник.</p> : null}
+      {(!activePreview || legacyError || rosterError) && !checking && reviewedRevision === revision && (publicationEnabled || legacyError || rosterError) ? <button type="button" disabled={controlsBusy || !weekValid} onClick={() => void review()}>Проверить изменения</button> : null}
+    </> : null}
+    {activePreview && !historyOnly ? <section aria-label="Проверка публикации" className="constructor-review-results">
+      <h3>Проверка перед публикацией</h3>
+      <p className="constructor-publication-source">{sourceLabel(activePreview.source_kind)}</p>
+      {activePreview.read_only ? <p className="constructor-publication-readonly">Эта версия доступна для просмотра.</p> : null}
       <div className="constructor-publication-summary" aria-label="Итоги проверки">
-        <span><b>{summary.source_lessons??summary.ready_lessons+summary.deferred_lessons}</b> исходных записей</span><span><b>{summary.main_campus_cards??summary.campus_lessons??summary.ready_lessons}</b> основных карточек Campus</span><span><b>{summary.elective_blocks??0}</b> блоков курсов по выбору · {summary.elective_lanes??0} направлений</span><span><b>{summary.clubs_hidden??0}</b> кружков остаются только в административном источнике</span><span><b>{summary.unresolved_personal_assignments??summary.deferred_lessons}</b> неразрешённых персональных назначений</span><span><b>{summary.conflict_lessons??counts.conflict}</b> занятий с конфликтами · {summary.affected_students??0} учеников затронуты</span><span><b>{summary.non_blocking_warnings??counts.info}</b> информационных замечаний</span><span><b>{summary.critical_count??counts.critical}</b> критических ошибок</span><span><b>{summary.deferred_lessons}</b> записей отложено в персональных проекциях</span>
+        <span><b>{summary.main_campus_cards ?? summary.campus_lessons ?? summary.ready_lessons}</b> в Campus</span>
+        <span><b>{conflictLessons.size}</b> с пересечениями</span>
+        <span><b>{summary.deferred_lessons}</b> ждут уточнения</span>
+        <span><b>{summary.critical_count ?? counts.critical}</b> блокирующих ошибок</span>
       </div>
-      <p>Число карточек Campus отличается от числа исходных направлений: связанные элективы объединяются в общий блок, кружки сохраняются в источнике и не попадают в ученическое расписание.</p>
-      <div className="constructor-publication-diff"><span>Добавлено canonical-блоков: {activePreview.diff.added}</span><span>Изменено: {activePreview.diff.changed}</span><span>Удалено из сравнения: {activePreview.diff.removed}</span><span>{activePreview.diff.before_blocks} → {activePreview.diff.after_blocks} блоков</span></div>
-      <small>Это сравнение canonical-блоков с предыдущей опубликованной версией, а не подсчёт вручную удалённых уроков.</small>
-      {activePreview.change_items?.length ? <details><summary>Разобрать изменения canonical-блоков ({activePreview.change_items.length})</summary><div className="constructor-publication-changes">{activePreview.change_items.slice(0,20).map(item=><article key={item.block_key}><div><small>{item.operation==='add'?'Добавлен блок':item.operation==='remove'?'Блок убран из новой версии':'Блок изменён'} · было</small>{describe(item.before)}</div><div><small>После публикации</small>{describe(item.after)}</div></article>)}</div>{activePreview.change_items.length>20?<p>Показаны первые 20 из {activePreview.change_items.length} изменений.</p>:null}</details> : null}
-      <h4>Замечания проверки</h4><div className="constructor-publication-filters" aria-label="Фильтр замечаний">{filterButtons.map(([value,label,count])=><button type="button" key={value} aria-pressed={filter===value} onClick={()=>setFilter(value)}>{label} <span>{count}</span></button>)}</div>
-      {visibleDiagnostics.length ? <><button type="button" onClick={()=>void copyReport()}>Скопировать отчёт проверки</button><div className="constructor-publication-diagnostics">{groupedDiagnostics.map(group=><details key={`${group.severity}:${group.code}`}><summary>{group.severity==='critical'?'Критично':group.severity==='conflict'?'Конфликт':'Замечание'} · {reasonTitles[group.code]||group.items[0]?.message||'Проверка записи'} · {group.items.length}</summary><details className="constructor-publication-code"><summary>Технический код</summary><code>{group.code}</code></details><ul>{group.items.slice(0,5).map((item,index)=><li className={`is-${item.severity}`} key={`${item.lesson_id||index}`}><p>{item.message}</p>{readableContext(item.context,teacherNames,groupNames)?<small>{readableContext(item.context,teacherNames,groupNames)}</small>:null}{item.lesson_id?<a href={`#lesson-${encodeURIComponent(item.lesson_id)}`}>Открыть запись</a>:null}</li>)}</ul>{group.items.length>5?<small>Показаны первые 5 примеров из {group.items.length}; полный список — в отчёте проверки.</small>:null}</details>)}</div></> : null}
-      {deferredGroups.length ? <div className="constructor-publication-deferred"><h4>Отложенные занятия</h4>{deferredGroups.map(group=><details key={group.code}><summary>{reasonTitles[group.code]||group.items[0]?.reason||'Требуется уточнение'} · {group.items.length}</summary><ul>{group.items.slice(0,5).map((item,index)=><li key={`${item.lesson_id}-${index}`}><p>{readableContext(item.context,teacherNames,groupNames)||'Занятие из исходного расписания'}{item.reason?` · ${item.reason}`:''}</p><small>{deferredOutcome(item.action,item.exclusion_scope)}</small><a href={`#lesson-${encodeURIComponent(item.lesson_id)}`}>Открыть занятие</a></li>)}</ul>{group.items.length>5?<small>Показаны первые 5 примеров из {group.items.length}.</small>:null}</details>)}</div> : null}
-      {!visibleDiagnostics.length&&!filteredDeferred.length ? <p>В этой категории замечаний нет.</p> : null}
-      {activePreview.publication_available===false ? <p role="note">Публикация сейчас недоступна для этой версии.</p> : activePreview.can_publish ? <label className="constructor-publication-confirm"><input type="checkbox" checked={confirmed&&previewMatches} onChange={event=>setConfirmed(event.target.checked)}/>Я проверил изменения и подтверждаю публикацию {scope==='week' ? 'этой недели' : 'шаблона'}{counts.info||counts.conflict||counts.deferred?' с указанными замечаниями':''}{summary.deferred_lessons ? activePreview.published_source?` и сохранение ${summary.deferred_lessons} нерешённых записей в полном опубликованном источнике без неподтверждённых назначений в Campus`:` и исключение ${summary.deferred_lessons} назначений из Campus этой версии` : ''}.</label> : <p role="alert">Публикация заблокирована: {[...new Set((activePreview.blockers||[]).map(item=>item.message).filter(Boolean))].join(' · ')||'есть критические проблемы, исправьте их и повторите проверку'}.</p>}
-      <nav className="constructor-publication-links" aria-label="Быстрые переходы"><button type="button" onClick={onClose}>Вернуться к черновику</button><button type="button" onClick={()=>setFilter(counts.critical?'critical':counts.conflict?'conflict':'deferred')}>Показать проблемы</button><Link href={publishedHref} onClick={onClose}>Открыть опубликованное расписание</Link></nav>
+      <details className="constructor-review-detail">
+        <summary>Что изменится для школы</summary>
+        <p>{summary.source_lessons ?? summary.ready_lessons + summary.deferred_lessons} записей в расписании. {summary.elective_blocks ?? 0} общих блоков курсов по выбору и {summary.elective_lanes ?? 0} направлений. Кружки ({summary.clubs_hidden ?? 0}) доступны в конструкторе. Затронуто учеников: {summary.affected_students ?? 0}.</p>
+        <div className="constructor-publication-diff"><span>Добавится {activePreview.diff.added}</span><span>Изменится {activePreview.diff.changed}</span><span>Будет убрано {activePreview.diff.removed}</span></div>
+        {activePreview.change_items?.length ? <details><summary>Сравнить с опубликованной версией</summary><div className="constructor-publication-changes">{activePreview.change_items?.map(item=><article key={item.block_key}><div><small>Опубликовано</small>{describe(item.before)}</div><div><small>После публикации</small>{describe(item.after)}</div></article>)}</div></details> : null}
+      </details>
+      <h4>Что требует внимания</h4>
+      <div className="constructor-review-filters">
+        <div className="constructor-publication-filters" aria-label="Фильтр замечаний">{filterButtons.map(([value,label,count])=><button type="button" key={value} aria-pressed={filter===value} onClick={()=>setFilter(value)}>{label}{count === undefined ? null : <span>{count}</span>}</button>)}</div>
+        {diagnostics.length || counts.deferred ? <input type="search" placeholder="Предмет, класс или преподаватель" aria-label="Найти в замечаниях" value={query} onChange={event => setQuery(event.target.value)} /> : null}
+      </div>
+      {visibleDiagnostics.length ? <div className="constructor-publication-diagnostics">{groupedDiagnostics.map(group => <details key={`${group.severity}:${group.code}`} open={normalizedQuery ? true : undefined}>
+        <summary>{group.severity === 'critical' ? 'Критично' : overlapCodes.has(group.code) ? 'Конфликт' : group.severity === 'conflict' ? 'Требует уточнения' : 'Замечание'} · {reasonTitles[group.code] || group.items[0]?.message || 'Проверка записи'} · {group.items.length}</summary>
+        <ul>{group.items.map((item, index) => <li className={`is-${item.severity}`} key={`${item.lesson_id || 'schedule'}:${index}`}>
+          <p>{item.message}</p>
+          <small>{readableContext(item.context, teacherNames, groupNames) || (item.lesson_id ? lessonLabels[item.lesson_id] : '')}</small>
+          {openLessonButton(item.lesson_id)}
+          {item.related_lesson_ids?.filter(id => id !== item.lesson_id && lessonLabels[id]).map(id => <div className="constructor-review-related" key={id}>
+            <small>Связано с занятием «{lessonLabels[id]}»</small>
+            {openLessonButton(id, true)}
+          </div>)}
+        </li>)}</ul>
+      </details>)}</div> : null}
+      {deferredGroups.length ? <div className="constructor-publication-deferred"><h4>Отложенные занятия</h4>{deferredGroups.map(group => <details key={group.code} open={normalizedQuery ? true : undefined}>
+        <summary>{reasonTitles[group.code] || 'Требуется уточнение'} · {group.items.length}</summary>
+        <ul>{group.items.map((item, index) => <li key={`${item.lesson_id}:${index}`}>
+          <p>{readableContext(item.context, teacherNames, groupNames) || lessonLabels[item.lesson_id] || 'Занятие из исходного расписания'}</p>
+          {item.reason ? <small>{item.reason}</small> : null}
+          <small>{deferredOutcome(item.action, item.exclusion_scope)}</small>
+          {openLessonButton(item.lesson_id)}
+        </li>)}</ul>
+      </details>)}</div> : null}
+      {!visibleDiagnostics.length && !filteredDeferred.length ? <p>{normalizedQuery ? 'По этому запросу ничего не найдено.' : 'В этой категории замечаний нет.'}</p> : null}
+      {diagnostics.length ? <details className="constructor-review-detail"><summary>Отчёт проверки</summary><button type="button" onClick={() => void copyReport()}>Скопировать отчёт проверки</button></details> : null}
+      {activePreview.publication_available === false || readOnly ? <p role="note">Публикация для этой версии недоступна.</p> : activePreview.can_publish ? <label className="constructor-publication-confirm">
+        <input type="checkbox" checked={confirmed && previewMatches} disabled={controlsBusy} onChange={event => setConfirmed(event.target.checked)} />
+        <span>Подтверждаю публикацию {scope === 'week' ? 'этой недели' : 'шаблона'}{summary.deferred_lessons ? `. ${summary.deferred_lessons} записей останутся в конструкторе до уточнения` : ''}.</span>
+      </label> : <p role="alert">Исправьте критические проблемы выше и повторите проверку.</p>}
     </section> : null}
     {message ? <output className="constructor-publication-message">{message}</output> : null}
     {sessionExpired ? <section role="alert" className="constructor-publication-session-help"><p>Перепроверьте текущий вход. Если admin-сессия ещё действует, страница откроется без нового кода; форма входа появится только если срок сессии действительно истёк.</p><button type="button" className="admin-button" disabled={busy} onClick={()=>window.location.reload()}>Перепроверить вход</button></section> : null}
     {published ? <nav className="constructor-publication-links" aria-label="После публикации"><Link href={publishedHref} onClick={onClose}>Открыть опубликованное расписание</Link><button type="button" onClick={onClose}>К оставшимся записям черновика</button></nav> : null}
     {restore ? <section aria-label="Проверка восстановления"><h3>Восстановление отдельной новой версией</h3><p>Версия от {new Date(restore.publication.created_at).toLocaleString('ru-RU')}. Добавить: {restore.preview.diff.added}; изменить: {restore.preview.diff.changed}; удалить: {restore.preview.diff.removed}.</p>{restore.preview.blockers.map((item,index)=><p key={index} role="alert">{item.message}</p>)}<label className="constructor-publication-confirm"><input type="checkbox" checked={restoreConfirmed} onChange={event=>setRestoreConfirmed(event.target.checked)}/>Подтверждаю замену текущей публикации новой восстановленной версией.</label><button disabled={busy||!restore.preview.can_restore||!restoreConfirmed} onClick={()=>void confirmRestore()}>Подтвердить восстановление</button><button disabled={busy} onClick={()=>setRestore(null)}>Отмена</button></section> : null}
-    <details><summary>Журнал публикаций этого черновика ({history.items.length})</summary>{!history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><details><summary>Сведения о проверке</summary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnostic.message}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</details><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</details>
-    <footer><button disabled={busy} onClick={onClose}>К конструктору</button><button className="is-primary" disabled={busy || !activePreview?.can_publish || activePreview.publication_available===false || !confirmed || !previewMatches} onClick={()=>void publish()}>{counts.info||counts.conflict||counts.deferred?'Опубликовать с замечаниями':'Опубликовать'} {scope==='week'?'неделю':'шаблон'}</button></footer>
+    {historyOnly ? <details open><summary>Журнал публикаций этого черновика ({history.items.length})</summary>{historyPending ? <output>Загружаем публикации…</output> : !history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><details><summary>Сведения о проверке</summary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnostic.message}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</details><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{!readOnly && !dirty && history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</details> : null}
+    </div>
+    <footer>
+      <button type="button" disabled={busy} onClick={onClose}>К конструктору</button>
+      {!historyOnly && dirty ? <button type="button" className="is-primary" disabled={busy} onClick={() => void saveForReview()}>{busy ? 'Сохраняем…' : 'Сохранить и проверить'}</button> : null}
+      {!historyOnly && activePreview && !published && activePreview.publication_available !== false && !readOnly ?
+        <button type="button" className="is-primary" disabled={controlsBusy || !activePreview.can_publish || !confirmed} onClick={() => void publish()}>{activePreview.can_publish
+          ? `${counts.info || counts.conflict || counts.deferred ? 'Опубликовать с замечаниями' : 'Опубликовать'} ${scope === 'week' ? 'неделю' : 'шаблон'}`
+          : 'Опубликовать после исправления'}</button> : null}
+    </footer>
   </dialog></div>;
 }

@@ -206,8 +206,8 @@ def main() -> None:
 
     before_refresh = database_snapshot(db_path)
     refresh = request(base, "/api/admin/schedule/refresh?week_start=2026-10-26", method="POST", headers=admin)["data"]
-    if refresh.get("status") != "manual_publication_protected" or database_snapshot(db_path) != before_refresh:
-        raise FlowError("Source refresh did not hold the manual publication without writes")
+    if refresh.get("status") != "blocked" or database_snapshot(db_path) != before_refresh:
+        raise FlowError("Legacy source refresh must be disabled without schedule writes")
     results["source_refresh_protection"] = refresh
 
     with sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True) as connection:

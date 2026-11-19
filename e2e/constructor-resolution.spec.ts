@@ -1,6 +1,7 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { test } from './helpers/experiment-test';
 import { mkdir } from 'node:fs/promises';
+import { normalizeRoomKey } from '../components/schedule-rooms';
 
 const API = 'http://127.0.0.1:8011';
 const id = 'resolution-ui-fixture';
@@ -256,15 +257,22 @@ async function setup(
   ).toBeVisible();
   return { actions };
 }
+function issueReason(panel: Locator, text: string | RegExp) {
+  return panel.locator('.constructor-issue-reason').filter({
+    has: panel.page().locator('summary').filter({ hasText: text }),
+  });
+}
+
+const roomConflict = /Кабинет (?:каб\. )?101 занят/;
+const teacherConflict = 'Преподаватель уже ведёт урок';
+
+async function openReason(group: Locator) {
+  await group.locator('summary').click();
+  await group.getByRole('button', { name: 'Разобрать проблему' }).first().click();
+}
+
 async function openIssue(page: Page, type: 'room' | 'teacher') {
-  const item = page
-    .locator('.constructor-conflict-list article')
-    .filter({
-      hasText:
-        type === 'room' ? 'Кабинет 101 занят' : 'Преподаватель уже ведёт урок',
-    })
-    .first();
-  await item.getByRole('button', { name: 'Разобрать проблему' }).click();
+  await openReason(issueReason(page.locator('.constructor-conflict-panel'), type === 'room' ? roomConflict : teacherConflict).first());
   return page.getByRole('dialog', {
     name:
       type === 'room'
@@ -279,12 +287,12 @@ test('room correction offers only free rooms, applies after confirmation and sup
   const { actions } = await setup(page);
   const dialog = await openIssue(page, 'room');
   await expect(
-    dialog.getByRole('button', { name: '202', exact: true }),
+    dialog.getByRole('button', { name: 'каб. 202', exact: true }),
   ).toBeVisible();
   await expect(
-    dialog.getByRole('button', { name: '101', exact: true }),
+    dialog.getByRole('button', { name: 'каб. 101', exact: true }),
   ).toHaveCount(0);
-  await dialog.getByRole('button', { name: '202', exact: true }).click();
+  await dialog.getByRole('button', { name: 'каб. 202', exact: true }).click();
   await dialog
     .getByLabel('Основание изменения')
     .fill('Проверено расписание кабинетов');
@@ -294,19 +302,16 @@ test('room correction offers only free rooms, applies after confirmation and sup
   await expect(dialog).not.toBeVisible();
   expect(actions[0]).toMatchObject({
     action: 'room',
-    room: '202',
     lesson_ids: ['lesson-a'],
     expected_revision: 1,
   });
+  expect(normalizeRoomKey(actions[0].room)).toBe('room:202');
   await expect(
-    page.locator('.constructor-conflict-list').getByText(/Кабинет 101 занят/),
+    issueReason(page.locator('.constructor-conflict-panel'), roomConflict),
   ).toHaveCount(0);
   await page.getByRole('button', { name: 'Отменить', exact: true }).click();
   await expect(
-    page
-      .locator('.constructor-conflict-list')
-      .getByText(/Кабинет 101 занят/)
-      .first(),
+    issueReason(page.locator('.constructor-conflict-panel'), roomConflict).first(),
   ).toBeVisible();
 });
 
@@ -336,16 +341,12 @@ test('joint confirmation leaves unresolved list, can be reviewed and revoked', a
       .filter({ hasText: 'Требуют решения администратора' }),
   ).toBeVisible();
   await expect(
-    page.locator('.constructor-issue-category')
-      .filter({ hasText: 'Требуют решения администратора' })
-      .locator('.constructor-conflict-list article')
-      .filter({ hasText: 'Преподаватель уже ведёт урок' }),
+    issueReason(page.locator('.constructor-issue-category').filter({ hasText: 'Требуют решения администратора' }), teacherConflict)
+      .locator('.constructor-conflict-list article'),
   ).toHaveCount(2);
   await expect(
-    page.locator('.constructor-issue-category')
-      .filter({ hasText: 'Подтверждённые исключения' })
-      .locator('.constructor-conflict-list article')
-      .filter({ hasText: 'Преподаватель уже ведёт урок' }),
+    issueReason(page.locator('.constructor-issue-category').filter({ hasText: 'Подтверждённые исключения' }), teacherConflict)
+      .locator('.constructor-conflict-list article'),
   ).toHaveCount(1);
   await page
     .getByText('Подтверждённые решения и отложенные записи', { exact: true })
@@ -403,11 +404,8 @@ test('audience review exposes all 26 safe bulk targets and links to the existing
   page,
 }) => {
   const { actions } = await setup(page, { needsRosterReview: true, thirdConflict: true });
-  const item = page
-    .locator('.constructor-conflict-list article')
-    .filter({ hasText: 'Состав учеников отличается от сохранённого' })
-    .first();
-  await item.getByRole('button', { name: 'Разобрать проблему' }).click();
+  const reason = issueReason(page.locator('.constructor-conflict-panel'), 'Состав учеников отличается от сохранённого');
+  await openReason(reason.first());
   const dialog = page.getByRole('dialog', { name: 'Проверка участников' });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'Проверить пересчёт участников' }).click();
@@ -455,7 +453,7 @@ test('critical structural issues stay in their own category and cannot be deferr
   const critical = page.locator('.constructor-issue-category').filter({ hasText: 'Критические технические проблемы' });
   await expect(critical).toBeVisible();
   await expect(critical).toContainText('День или время занятия не входят в шаблон.');
-  await critical.getByRole('button', { name: 'Разобрать проблему' }).click();
+  await openReason(issueReason(critical, 'День или время занятия не входят в шаблон.'));
   const dialog = page.getByRole('dialog', { name: 'Уточнение занятия' });
   await expect(dialog.getByRole('alert')).toContainText('Критическая ошибка структуры блокирует публикацию.');
   await expect(dialog.getByRole('button', { name: 'Отложить решение' })).toHaveCount(0);

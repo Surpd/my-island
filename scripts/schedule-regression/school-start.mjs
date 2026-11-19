@@ -8,7 +8,7 @@ import { directory, payload } from './historical-fixture.mjs';
 const auth = JSON.parse(await fs.readFile('.local-test/consolidation/auth.json', 'utf8'));
 assert.equal(auth.synthetic, true);
 assert.equal(payload.lessons.length, 386);
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH });
 try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'ru-RU' });
@@ -53,6 +53,10 @@ try {
       return route.continue();
     });
     const page = await context.newPage();
+    const returnToSchedule = async () => {
+      await page.locator('.constructor-draft-menu > summary').click();
+      await page.getByRole('button', { name: 'К шаблону и неделям', exact: true }).click();
+    };
     page.on('pageerror', error => errors.push(error.message));
     await page.goto('http://localhost:3042/admin#/admin/schedule/constructor');
     await page.getByRole('button', { name: 'Открыть и редактировать', exact: true }).waitFor().catch(async error => {
@@ -69,7 +73,7 @@ try {
     await page.locator('.constructor-card').first().click();
     await page.locator('.constructor-inspector label').filter({ hasText: /^\s*Преподаватель/ }).first().waitFor();
     if (width < 900) await page.getByRole('button', { name: 'Закрыть панель', exact: true }).click();
-    await page.getByRole('button', { name: 'К основному шаблону', exact: true }).click();
+    await returnToSchedule();
     await page.getByRole('navigation', { name: 'Разделы расписания' }).getByRole('button', { name: /Недели/ }).click();
     assert.equal(await page.locator('.constructor-week-row').count(), 4);
     assert.equal(await page.getByText('Историческая версия', { exact: true }).count(), 3);
@@ -85,14 +89,14 @@ try {
     assert(await page.getByRole('button', { name: 'Открыть существующий черновик', exact: true }).isVisible());
     assert.equal(await page.getByRole('button', { name: 'Создать из основного шаблона', exact: true }).count(), 0);
     await page.getByRole('button', { name: 'Открыть существующий черновик', exact: true }).click();
-    await page.getByRole('button', { name: 'К неделям', exact: true }).click();
+    await returnToSchedule();
     await page.getByLabel('Неделя начинается', { exact: true }).fill('2026-11-09');
     assert.match(await page.locator('.constructor-week-period').innerText(), /9 ноября — 15 ноября/);
     await page.getByRole('button', { name: 'Создать из основного шаблона', exact: true }).click();
     await page.locator('.constructor-card').first().waitFor();
     assert.equal(records.at(-1).payload.lessons.length, 386);
     assert.equal(primary.payload.week_start, undefined);
-    await page.getByRole('button', { name: 'К неделям', exact: true }).click();
+    await returnToSchedule();
     await page.locator('.constructor-secondary-actions').filter({ has: page.locator('summary').filter({ hasText: /^Другие черновики и архив/ }) }).locator('summary').first().click();
     await page.getByText('Тестовые и скрытые записи · 1', { exact: true }).click();
     await page.getByRole('button', { name: test.name, exact: false }).waitFor();

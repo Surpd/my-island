@@ -40,7 +40,7 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   const context = { day: 0, start: '09:00', end: '09:45', subject: 'Математика', teachers: ['teacher-fixture'], groups: ['group-fixture'] };
   const diagnostics: PreviewPayload['diagnostics'] = [
     { severity: 'info', code: 'teaching_note', message: 'Проверено по школьному справочнику.', lesson_id: 'lesson-info', context },
-    { severity: 'conflict', code: 'schedule_overlap', message: 'Нужно проверить пересечение занятий.', lesson_id: 'lesson-conflict', context },
+    { severity: 'conflict', code: 'teacher_overlap', message: 'Нужно проверить пересечение занятий.', lesson_id: 'lesson-conflict', context },
   ];
   if (critical) diagnostics.push({ severity: 'critical', code: 'review_required', message: 'Не подтверждена аудитория занятия.', lesson_id: 'lesson-critical', context });
   return {
@@ -86,7 +86,16 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === '/api/admin/schedule/observability') return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [], canonical: { version_id: 'base-version-hidden-in-ui', status: 'authoritative' } } });
     if (path.startsWith('/api/admin/schedule/activities')) return route.fulfill({ json: { items: [] } });
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}`) {
-      return route.fulfill({ json: { id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, base_version_id: 'base-version-hidden-in-ui', payload: { days: [0], slots: [{ start: '09:00', end: '09:45' }], classes: ['group-fixture'], lessons: [] } } });
+      const lessons = ['lesson-info', 'lesson-conflict', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
+        id, day: 0, period: 0, subject: 'Математика', classId: 'group-fixture', teacherId: 'teacher-fixture',
+      }));
+      return route.fulfill({ json: { id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, base_version_id: 'base-version-hidden-in-ui', payload: { days: [0], slots: [{ start: '09:00', end: '09:45' }], classes: ['group-fixture'], lessons } } });
+    }
+    if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}/normalization-preview`) {
+      return route.fulfill({ json: { source_id: DRAFT_ID, source_revision: 1, automatic_count: 0, changes: [], manual: [], retained_warning_count: 0 } });
+    }
+    if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
+      return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publications`) return route.fulfill({ json: { items: historyItems, heads: {} } });
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/preview` && route.request().method() === 'POST') {
@@ -111,18 +120,17 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
   });
 
   await page.goto('/admin/schedule/constructor?role=admin');
-  await page.getByRole('button', { name: 'Проверить публикацию', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Публикация расписания' });
+  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Проверка расписания' });
   await expect(dialog).toBeVisible();
   return { dialog, getPublishPayload: () => publishPayload };
 }
 
 test('publication preview filters remarks and shows readable lesson context and deferred actions', async ({ page }) => {
   const { dialog } = await openPublicationPanel(page, { critical: true });
-  await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
-  await expect(dialog.getByText('События проверки')).toBeVisible();
-  await expect(dialog.getByText('уникальных занятий с конфликтами')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: /События проверки 3/ })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Что требует внимания' })).toBeVisible();
+  await expect(dialog.locator('.constructor-publication-summary').getByText(/с пересечениями/)).toContainText('1');
+  await expect(dialog.getByRole('button', { name: 'Все', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const criticalGroup = dialog.locator('.constructor-publication-diagnostics details').filter({ hasText: 'Не подтверждена аудитория занятия.' }).first();
   await criticalGroup.locator('summary').first().click();
   await expect(criticalGroup.getByText('Не подтверждена аудитория занятия.', { exact: true })).toBeVisible();
@@ -131,14 +139,16 @@ test('publication preview filters remarks and shows readable lesson context and 
 
   await dialog.getByRole('button', { name: /Замечания/ }).click();
   await expect(dialog.locator('.constructor-publication-diagnostics li')).toHaveCount(1);
-  await dialog.getByRole('button', { name: /Критичные/ }).click();
+  await dialog.getByRole('button', { name: /Блокируют публикацию/ }).click();
   await expect(dialog.locator('.constructor-publication-diagnostics li')).toHaveCount(1);
   await dialog.getByRole('button', { name: /Отложенные/ }).click();
   const deferredGroups = dialog.locator('.constructor-publication-deferred details');
   await expect(deferredGroups).toHaveCount(2);
   await deferredGroups.nth(0).locator('summary').click();
+  await expect(dialog.getByText(/Не удалось проверить замену\./)).toBeVisible();
   await expect(dialog.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
   await deferredGroups.nth(1).locator('summary').click();
+  await expect(dialog.getByText(/Нет группы для назначения\./)).toBeVisible();
   await expect(dialog.getByText('Исключено непосредственно по указанной причине.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toBeDisabled();
 });
@@ -148,46 +158,47 @@ test('diagnostics collapse by cause and copy a sanitized report with lesson link
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { document.documentElement.dataset.copiedReport = text; } } });
   });
   const { dialog } = await openPublicationPanel(page);
-  await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
+  await dialog.getByText('Отчёт проверки', { exact: true }).click();
   await expect(dialog.getByRole('button', { name: 'Скопировать отчёт проверки' })).toBeVisible();
-  const group = dialog.getByText(/Конфликт · Нужно проверить пересечение занятий\. · 1/);
+  const group = dialog.getByText(/^Конфликт · .* · 1$/);
   await expect(group).toBeVisible();
   await dialog.getByRole('button', { name: 'Скопировать отчёт проверки' }).click();
   await expect(dialog.getByText(/Отчёт проверки скопирован/)).toBeVisible();
   const copiedReport = await page.locator('html').getAttribute('data-copied-report');
-  expect(copiedReport).toContain('schedule_overlap\t1');
-  expect(copiedReport).toContain('#lesson-lesson-conflict');
+  expect(copiedReport).toContain('teacher_overlap\t1');
+  expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-conflict`);
   expect(copiedReport).not.toContain('Нужно проверить пересечение занятий');
   await page.screenshot({ path: 'test-results/schedule-publication-preview.png', fullPage: true });
 });
 
 test('read-only preview remains available and cannot publish', async ({ page }) => {
   const { dialog } = await openPublicationPanel(page, { readOnly: true });
-  await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
-  await expect(dialog.getByText('Предварительный просмотр: эта версия открыта только для чтения.')).toBeVisible();
-  await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toBeDisabled();
-  await expect(dialog.getByLabel('Я проверил изменения и подтверждаю публикацию шаблона')).toHaveCount(0);
+  await expect(dialog.getByText('Эта версия доступна для просмотра.')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ })).toHaveCount(0);
 });
 
 test('changing publication scope clears confirmation and publish uses the latest exact preview token', async ({ page }) => {
   const { dialog, getPublishPayload } = await openPublicationPanel(page);
-  await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
-  await dialog.getByRole('checkbox', { name: /Я проверил изменения/ }).check();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
   await expect(dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ })).toBeEnabled();
 
   await dialog.getByLabel('Вид публикации').selectOption('week');
-  await expect(dialog.getByRole('checkbox', { name: /Я проверил изменения/ })).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: /Опубликовать.*неделю/ })).toBeDisabled();
+  await expect(dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: /Опубликовать.*неделю/ })).toHaveCount(0);
   await dialog.getByLabel('Неделя публикации').fill('2026-10-26');
   await dialog.getByRole('button', { name: 'Проверить изменения' }).click();
-  await expect(dialog.getByRole('checkbox', { name: /Я проверил изменения/ })).not.toBeChecked();
-  await dialog.getByRole('checkbox', { name: /Я проверил изменения/ }).check();
+  await expect(dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ })).not.toBeChecked();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
   const publishResponse = page.waitForResponse((response) => response.url().endsWith(`/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`));
   await dialog.getByRole('button', { name: /Опубликовать с замечаниями неделю/ }).click();
   expect((await publishResponse).ok()).toBeTruthy();
   expect(getPublishPayload()).toMatchObject({ scope_kind: 'week', week_start: '2026-10-26', preview_token: 'ui-preview-token-2', confirmed: true });
-  await expect(dialog.getByText(new RegExp(`Версия: ${PUBLISHED_ID}`))).toBeVisible();
+  await expect(dialog.getByText(/Проверка после публикации пройдена/)).toBeVisible();
   await expect(dialog.getByRole('link', {name:'Открыть опубликованное расписание'})).toHaveAttribute('href', /week_start=2026-10-26/);
-  await dialog.getByText('Журнал публикаций этого черновика').click();
-  await expect(dialog.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Закрыть проверку' }).click();
+  await page.locator('.constructor-draft-menu > summary').click();
+  await page.getByRole('button', { name: 'История публикаций', exact: true }).click();
+  const history = page.getByRole('dialog', { name: 'История публикаций' });
+  await expect(history.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
 });

@@ -109,7 +109,7 @@ class SchoolPreviewWorkspaceTests(unittest.TestCase):
             with database.connection():
                 pass
         self.assertIsNone(connect.call_args.kwargs["prepare_threshold"])
-        self.assertEqual(connection.execute.call_args_list[0].args[0], "SET TRANSACTION READ ONLY")
+        self.assertEqual(connection.execute.call_args_list[0].args[0], "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         connection.rollback.assert_called_once()
         connection.close.assert_called_once()
 

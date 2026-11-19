@@ -28,6 +28,7 @@ from backend.services.constructor_publication import (
     restore_publication,
     _TransactionDatabase, _compile, _persist,
 )
+from backend.services.constructor_resolution import apply_resolution, resolution_preview
 from backend.services.schedule_experiments import create_experiment, save_experiment
 
 
@@ -230,13 +231,20 @@ class PartialPublicationPostgresTests(unittest.TestCase):
         self.database.create_membership(joint_class["id"], joint_student["id"], "student", "admin_override", self.suffix)
         joint = self.draft([self.lesson("joint-9", subject="Joint"),
                             self.lesson("joint-11", group=joint_class, subject="Joint")])
+        self.assertIn("teacher_overlap", {item["code"] for item in self.preview(joint)["diagnostics"]})
+        actor = self.database.get_or_create_user(990000124, "admin")
+        lesson_ids = ["joint-9", "joint-11"]
+        resolution = resolution_preview(self.database, joint["id"], expected_revision=joint["revision"], lesson_ids=lesson_ids)
+        joint = apply_resolution(self.database, joint["id"], expected_revision=joint["revision"], lesson_ids=lesson_ids,
+            preview_token=resolution["preview_token"], action="joint", reason="Synthetic joint activity verified",
+            actor_user_id=actor["id"])
         with self.database.connection() as connection:
             with connection.transaction(force_rollback=True):
                 bound = _TransactionDatabase(self.database, connection)
-                joint_preview = preview_publication(bound, joint["id"], scope_kind="template", expected_revision=1)
+                joint_preview = preview_publication(bound, joint["id"], scope_kind="template", expected_revision=joint["revision"])
                 blocks,_,_ = _compile(bound, joint["payload"], None, "template", "2026-10-19")
                 _persist(bound, joint_preview, blocks, None)
-                weekly_preview = preview_publication(bound, joint["id"], scope_kind="week", expected_revision=1, week_start="2026-10-19")
+                weekly_preview = preview_publication(bound, joint["id"], scope_kind="week", expected_revision=joint["revision"], week_start="2026-10-19")
                 _persist(bound, weekly_preview, blocks, None)
                 teacher = canonical.project_teacher(bound, self.teacher["id"], "2026-10-19")
                 self.assertEqual(len(teacher["items"]), 1)
