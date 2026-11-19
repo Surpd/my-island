@@ -7,12 +7,13 @@ canonical version remains immutable while projections stay date-aware.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from backend.database import Database
 from backend.services.schedule_rooms import display_room
@@ -34,6 +35,11 @@ class StudentProjectionContext:
     memberships: list[dict[str, Any]]
     exclusions: list[dict[str, Any]]
     blocks: list[dict[str, Any]]
+    membership_cache: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    membership_rows_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    student_grade_cache: dict[str, str] = field(default_factory=dict)
+    class_context_cache: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    group_dimension_cache: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 def _json(database: Database, value: Any) -> Any:
@@ -731,6 +737,10 @@ def _date_in_period(day: str, start: Any, end: Any) -> bool:
 
 
 def _student_memberships(context: StudentProjectionContext, student_id: str, day: str) -> set[str]:
+    cache_key = (student_id, day)
+    cached = context.membership_cache.get(cache_key)
+    if cached is not None:
+        return cached
     excluded = {
         str(row["group_id"])
         for row in context.exclusions
@@ -738,7 +748,7 @@ def _student_memberships(context: StudentProjectionContext, student_id: str, day
         and str(row.get("member_role") or "student") == "student"
         and _date_in_period(day, row.get("valid_from"), row.get("valid_until"))
     }
-    return {
+    result = {
         str(row["group_id"])
         for row in context.memberships
         if str(row.get("identity_id")) == student_id
@@ -750,6 +760,29 @@ def _student_memberships(context: StudentProjectionContext, student_id: str, day
         and _date_in_period(day, row.get("valid_from"), row.get("valid_until"))
         and str(row["group_id"]) not in excluded
     }
+    context.membership_cache[cache_key] = result
+    return result
+
+
+def _projection_grade(context: StudentProjectionContext, student: Mapping[str, Any]) -> str:
+    student_id = str(student.get("id") or "")
+    if student_id not in context.student_grade_cache:
+        context.student_grade_cache[student_id] = _grade(student.get("class_name"))
+    return context.student_grade_cache[student_id]
+
+
+def _projection_class_context(context: StudentProjectionContext, grade: str, class_group_id: str) -> set[str]:
+    key = (grade, class_group_id)
+    if key not in context.class_context_cache:
+        context.class_context_cache[key] = class_context_group_ids(context.groups, grade, class_group_id)
+    return context.class_context_cache[key]
+
+
+def _projection_group_dimension(context: StudentProjectionContext, group_id: str) -> tuple[str, str]:
+    if group_id not in context.group_dimension_cache:
+        group = context.groups.get(group_id) or {}
+        context.group_dimension_cache[group_id] = _group_dimension(group)
+    return context.group_dimension_cache[group_id]
 
 
 def _group_dimension(group: Mapping[str, Any]) -> tuple[str, str]:
@@ -1030,7 +1063,7 @@ def _admin_week_history(database: Database) -> tuple[list[dict[str, Any]], list[
         if "schedule_publication_heads" in tables:
             heads = {str(row["scope_key"]): dict(row) for row in database.execute(connection,
                 "SELECT scope_key,published_id,version_id,revision,updated_at FROM schedule_publication_heads "
-                "WHERE scope_key LIKE 'week:%'").fetchall()}
+                "WHERE scope_key LIKE ?", ("week:%",)).fetchall()}
         publications = []
         if "schedule_constructor_publications" in tables:
             publications = [dict(row) for row in database.execute(connection, """SELECT id,draft_id,draft_revision,
@@ -1394,11 +1427,16 @@ def _project_student_block(
     day: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     student_id = str(student["id"])
+    student_grade = _projection_grade(context, student)
     membership_groups = _student_memberships(context, student_id, day)
     memberships_by_group: defaultdict[str, list[str]] = defaultdict(list)
-    for membership in context.memberships:
+    membership_rows = context.membership_rows_cache.get(student_id)
+    if membership_rows is None:
+        membership_rows = [row for row in context.memberships if str(row.get("identity_id")) == student_id]
+        context.membership_rows_cache[student_id] = membership_rows
+    for membership in membership_rows:
         group_id = str(membership.get("group_id"))
-        if group_id in membership_groups and str(membership.get("identity_id")) == student_id:
+        if group_id in membership_groups:
             memberships_by_group[group_id].append(str(membership.get("id")))
 
     patch = block.get("patch") if isinstance(block.get("patch"), Mapping) else {}
@@ -1417,7 +1455,7 @@ def _project_student_block(
         audience_kind = str(audience_rule.get("kind") or assignment.get("audience_kind") or "groups")
         scope = str(block.get("grade_scope") or "")
         class_group_id = str(audience_rule.get("class_group_id") or "")
-        class_ids = class_context_group_ids(context.groups, scope if "," not in scope else "", class_group_id)
+        class_ids = _projection_class_context(context, scope if "," not in scope else "", class_group_id)
         in_class_context = (not class_group_id and not class_ids) or bool(membership_groups.intersection(class_ids))
         include_student_ids = {str(value) for value in audience_rule.get("include_student_ids") or []}
         exclude_student_ids = {str(value) for value in audience_rule.get("exclude_student_ids") or []}
@@ -1429,7 +1467,7 @@ def _project_student_block(
         explicit_match = student_id in include_student_ids
         if audience_kind == "whole_grade":
             grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
-            explicit_match = explicit_match or (bool(grade) and in_class_context and _grade(student.get("class_name")) == grade)
+            explicit_match = explicit_match or (bool(grade) and in_class_context and student_grade == grade)
         elif audience_kind == "students":
             explicit_match = student_id in include_student_ids
         elif audience_kind == "remaining":
@@ -1437,11 +1475,11 @@ def _project_student_block(
             partition_ids = {str(value) for value in audience_rule.get("partition_group_ids") or []}
             dimension = str(audience_rule.get("partition_dimension") or "")
             if dimension:
-                partition_ids.update(group_id for group_id, group in context.groups.items() if _group_dimension(group)[0] == dimension)
-            explicit_match = bool(not grade or _grade(student.get("class_name")) == grade) and in_class_context and not bool(membership_groups.intersection(partition_ids))
+                partition_ids.update(group_id for group_id in context.groups if _projection_group_dimension(context, group_id)[0] == dimension)
+            explicit_match = bool(not grade or student_grade == grade) and in_class_context and not bool(membership_groups.intersection(partition_ids))
         elif audience_kind == "available_slot":
             grade = str(audience_rule.get("grade") or block.get("grade_scope") or "")
-            explicit_match = bool(grade and _grade(student.get("class_name")) == grade) and in_class_context and not _student_busy_in_slot(database, context, student, membership_groups, block, index,
+            explicit_match = bool(grade and student_grade == grade) and in_class_context and not _student_busy_in_slot(database, context, student, membership_groups, block, index,
                 exact_intervals=(assignment.get("metadata") or {}).get("audience_coverage") == "explicit")
         if not in_class_context and audience_kind not in {"students"}:
             matched_group_ids = []
@@ -1457,7 +1495,7 @@ def _project_student_block(
         group_roles = []
         for group_id in matched_group_ids:
             group = context.groups[group_id]
-            dimension, evidence = _group_dimension(group)
+            dimension, evidence = _projection_group_dimension(context, group_id)
             dimensions.append(dimension)
             dimension_evidence.append({"group_id": group_id, "dimension": dimension, "source": evidence})
             group_role = str(group.get("role") or "")
@@ -1535,7 +1573,7 @@ def _project_student_block(
             group_type = str(group.get("group_type") or "")
             if role not in {"base_class", "instructional_partition"} and group_type not in {"class", "instructional", "instructional_group", "subject_group"}:
                 continue
-            dimension, evidence = _group_dimension(group)
+            dimension, evidence = _projection_group_dimension(context, group_id)
             if dimension != "unknown":
                 partition_groups[dimension].add(group_id)
                 partition_evidence[dimension].append({"group_id": group_id, "source": evidence})
@@ -1594,8 +1632,47 @@ def _project_student_block(
         if activity_claims:
             best_priority = max(_claim_priority(claim) for claim in activity_claims)
             best = [claim for claim in activity_claims if _claim_priority(claim) == best_priority]
+            elective_evidence = []
+            for claim in best:
+                metadata = _assignment_metadata(claim["assignment"].get("metadata") or {})
+                details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
+                elective_evidence.append((metadata.get("activity_type") or details.get("activityType"),
+                                          str(details.get("blockId") or ""),
+                                          str(details.get("blockName") or "").strip(),
+                                          str(details.get("electiveDirection") or metadata.get("electiveDirection") or "").strip().casefold()))
+            if (best and all(kind == "elective" and block_id for kind, block_id, _, _ in elective_evidence)
+                    and len({block_id for _, block_id, _, _ in elective_evidence}) == 1):
+                # An explicitly linked elective block is one student-facing
+                # class activity. The concrete lane, teacher and room remain
+                # intact on the source assignments and teacher projection.
+                names = {name for _, _, name, _ in elective_evidence if name}
+                result = {"state": "ACTIVITY", "activity": next(iter(names), "Курс по выбору"),
+                          "activity_type": "elective",
+                          "provenance": {**provenance, "source_cells": sorted({cell for claim in best for cell in claim["source_cells"]})}}
+                best = []
+                activity_claims = []
+                selected = None
+            elif (best and all(kind == "elective" and not block_id for kind, block_id, _, _ in elective_evidence)):
+                # Historical publications predate stable elective block ids.
+                # Keep their already-confirmed canonical audience visible as a
+                # neutral card; do not reveal a lane or infer which option the
+                # pupil chose. The marker prompts an administrator to map the
+                # archived source when it is next edited and republished.
+                digital = all(direction == "digital" for _, _, _, direction in elective_evidence)
+                result = {"state": "ACTIVITY", "activity": "Цифровой трек" if digital else "Курс по выбору",
+                          "activity_type": "elective",
+                          "provenance": {**provenance,
+                              "source_cells": sorted({cell for claim in best for cell in claim["source_cells"]}),
+                              "requires_administrative_block_mapping": True}}
+                best = []
+                activity_claims = []
+                selected = None
+            else:
+                selected = None
             activities = {claim["activity"] for claim in best}
-            if len(activities) > 1:
+            if result is not None:
+                pass
+            elif len(activities) > 1:
                 if best and all(_assignment_metadata(claim["assignment"].get("metadata") or {}).get("day_plan_mode") == "sdep" for claim in best):
                     # A self-study plan can list multiple independent tasks in
                     # one time slot. Preserve every task without treating the
@@ -1833,48 +1910,9 @@ def _event_priority_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _published_optional_activities(database: Database, effective: Mapping[str, Any], student: Mapping[str, Any],
                                    context: StudentProjectionContext, week_start: str) -> list[dict[str, Any]]:
-    source = _published_source_for_effective(database, effective)
-    payload = (source or {}).get("payload") or {}
-    if not payload:
-        return []
-    student_id = str(student.get("id") or "")
-    grade = _grade(student.get("class_name"))
-    activities: list[dict[str, Any]] = []
-    for lesson in payload.get("lessons") or []:
-        if not isinstance(lesson, Mapping) or lesson.get("activityType") not in {"club", "elective"}:
-            continue
-        targets = {str(value) for value in (lesson.get("classIds") or lesson.get("displayClassIds") or [])}
-        grades = {str(value) for value in (lesson.get("eligibleGrades") or [])}
-        try:
-            weekday, period_index = int(lesson.get("day", -1)), int(lesson.get("period", -1))
-        except (TypeError, ValueError):
-            continue
-        if weekday not in range(7):
-            continue
-        activity_date = (date.fromisoformat(week_start) + timedelta(days=weekday)).isoformat()
-        student_groups = _student_memberships(context, student_id, activity_date)
-        class_match = not targets or bool(targets & student_groups)
-        grade_match = not grades or grade in grades
-        if not class_match or not grade_match:
-            continue
-        slots = payload.get("slots") or []
-        slot = slots[period_index] if 0 <= period_index < len(slots) and isinstance(slots[period_index], Mapping) else {}
-        start, end = str(lesson.get("start") or slot.get("start") or "")[:5], str(lesson.get("end") or slot.get("end") or "")[:5]
-        if _clock_minutes(start) is None or _clock_minutes(end) is None or _clock_minutes(start) >= _clock_minutes(end):
-            continue
-        teacher_ids = sorted({str(value) for value in (lesson.get("teacherIds") or []) + ([lesson["teacherId"]] if lesson.get("teacherId") else [])})
-        teachers: dict[str, str] = {}
-        if teacher_ids:
-            with database.connection() as connection:
-                rows = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND status='active' AND id IN (" + ",".join("?" for _ in teacher_ids) + ")", tuple(teacher_ids)).fetchall()
-            teachers = {str(row["id"]): str(row["display_name"]) for row in rows}
-        activities.append({"date": activity_date, "day": weekday, "start_time": start, "end_time": end,
-            "type": str(lesson["activityType"]),
-            "title": str(lesson.get("activityNameSnapshot") or lesson.get("subject") or "Дополнительное занятие"),
-            "room": display_room(lesson.get("room")) or None,
-            "teachers": [teachers[value] for value in teacher_ids if value in teachers],
-            "activity_catalog_id": lesson.get("activityCatalogId")})
-    return sorted(activities, key=lambda item: (item["date"], item["start_time"], item["type"], item["title"]))
+    # Clubs are intentionally retained in the immutable admin source only.
+    # Electives are already projected as a shared, non-personal canonical item.
+    return []
 
 
 def project_student(
@@ -1906,6 +1944,10 @@ def project_student(
         day = (start + timedelta(days=int(block["weekday"]))).isoformat()
         state, block_issues = _project_student_block(database, context, student, block, day)
         issues.extend(block_issues)
+        if state.get("activity_type") == "elective":
+            # Direction-level source traces include course names and staffing;
+            # those are not part of a student's shared-block projection.
+            state.pop("trace", None)
         day_mode = day_modes_by_date.get(day)
         assignments = _assignments(database, block.get("canonical_block_id"), block.get("patch") or {})
         sdep_plan = bool(assignments) and all(

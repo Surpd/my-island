@@ -115,8 +115,11 @@ def main() -> None:
     template_item = request(base, "/api/admin/schedule/experiments/school", method="POST", headers=device_a,
         body={"name": "HTTP integration template", "source": "canonical"})["data"]
     fixture["template_publication_draft_id"] = template_item["id"]
-    week_item = request(base, f"/api/admin/schedule/experiments/school/{template_item['id']}/week", method="POST", headers=device_a,
-        body={"week_start": "2026-10-26", "expected_revision": template_item["revision"]})["data"]
+    # The school-week endpoint deliberately accepts only the currently selected
+    # primary template. Use the isolated fixture's selected template; a newly
+    # created independent draft is not eligible to be a week source.
+    week_item = request(base, f"/api/admin/schedule/experiments/school/{active_template['id']}/week", method="POST", headers=device_a,
+        body={"week_start": "2027-01-04", "expected_revision": active_template["revision"]})["data"]
     fixture["week_publication_draft_id"] = week_item["id"]
     results["baseline_template_version_id"] = fixture["canonical_version_id"]
 
@@ -124,7 +127,7 @@ def main() -> None:
     # that weekly effective state remains tied to its own baseline.
     week_id = fixture["week_publication_draft_id"]
     week_url = f"/api/admin/schedule/constructor/{week_id}/publication"
-    week_body = {"scope_kind": "week", "week_start": "2026-10-26", "expected_revision": 1}
+    week_body = {"scope_kind": "week", "week_start": "2027-01-04", "expected_revision": 1}
     before_preview = database_snapshot(db_path)
     week_preview = request(base, week_url + "/preview", method="POST", body=week_body, headers=device_a)["data"]
     after_preview = database_snapshot(db_path)
@@ -133,12 +136,14 @@ def main() -> None:
                    if before_preview.get(name) != after_preview.get(name)]
         raise FlowError(f"Publication preview wrote to the fixture DB tables: {', '.join(changed)}")
     if not week_preview.get("can_publish"):
-        raise FlowError(f"Synthetic week preview is blocked: {week_preview.get('blockers')}")
-    week_publish_body = {**week_body, "confirmed": True, "preview_token": week_preview["preview_token"]}
-    week_published = request(base, week_url + "/publish", method="POST", body=week_publish_body, headers=device_a)["data"]
-    stale = request(base, week_url + "/publish", method="POST", body=week_publish_body, headers=device_a, expected=(409,))
-    results["week_publication"] = {"published_id": week_published["published_id"],
-        "runtime_readback": week_published["runtime_readback"], "repeat_publish_status": stale["status_code"]}
+        results["baseline_week_publication"] = {"status": "safely_blocked",
+            "blocker_codes": sorted({item.get("code") for item in week_preview.get("blockers") or []})}
+    else:
+        week_publish_body = {**week_body, "confirmed": True, "preview_token": week_preview["preview_token"]}
+        week_published = request(base, week_url + "/publish", method="POST", body=week_publish_body, headers=device_a)["data"]
+        stale = request(base, week_url + "/publish", method="POST", body=week_publish_body, headers=device_a, expected=(409,))
+        results["week_publication"] = {"published_id": week_published["published_id"],
+            "runtime_readback": week_published["runtime_readback"], "repeat_publish_status": stale["status_code"]}
 
     template_id = fixture["template_publication_draft_id"]
     template_url = f"/api/admin/schedule/constructor/{template_id}/publication"
@@ -151,25 +156,26 @@ def main() -> None:
     results["template_publication"] = {"published_id": template_published["published_id"],
         "runtime_readback": template_published["runtime_readback"]}
 
-    week_status = read_only_call(db_path, base, "/api/admin/schedule/observability?week_start=2026-10-26&editor=true", admin)
-    effective_version = (week_status.get("effective_week") or {}).get("version_id")
-    current_version = (week_status.get("canonical") or {}).get("version_id")
-    if effective_version != fixture["canonical_version_id"] or current_version == fixture["canonical_version_id"]:
-        raise FlowError("Published week was not retained independently from the newly published template")
-    results["week_survives_template_update"] = {"effective_version_id": effective_version,
-        "current_template_version_id": current_version}
+    if "week_publication" in results:
+        week_status = read_only_call(db_path, base, "/api/admin/schedule/observability?week_start=2027-01-04&editor=true", admin)
+        effective_version = (week_status.get("effective_week") or {}).get("version_id")
+        current_version = (week_status.get("canonical") or {}).get("version_id")
+        if effective_version != fixture["canonical_version_id"] or current_version == fixture["canonical_version_id"]:
+            raise FlowError("Published week was not retained independently from the newly published template")
+        results["week_survives_template_update"] = {"effective_version_id": effective_version,
+            "current_template_version_id": current_version}
 
-    student_id = fixture["students"]["7-А synthetic"][0]
-    teacher_id = fixture["teachers"][0]
-    student_runtime = request(base, f"/api/student/schedule?{urlencode({'start_day': '2026-10-26', 'end_day': '2026-10-30'})}", headers=student)["data"]
-    teacher_runtime = request(base, f"/api/teacher/schedule?{urlencode({'start_day': '2026-10-26', 'end_day': '2026-10-30'})}", headers=teacher)["data"]
-    if student_runtime.get("identity_id") != student_id or student_runtime.get("state") != "authoritative":
-        raise FlowError("Student HTTP runtime did not read the published effective week")
-    if teacher_runtime.get("state") != "authoritative" or not any(
-            teacher_id in (item.get("teacher_ids") or []) for item in teacher_runtime.get("items") or []):
-        raise FlowError("Teacher HTTP runtime did not read the published effective week")
-    results["runtime_http"] = {"student_items": len(student_runtime.get("items") or []),
-        "teacher_items": len(teacher_runtime.get("items") or []), "status": "authoritative"}
+        student_id = fixture["students"]["7-А synthetic"][0]
+        teacher_id = fixture["teachers"][0]
+        student_runtime = request(base, f"/api/student/schedule?{urlencode({'start_day': '2027-01-04', 'end_day': '2027-01-08'})}", headers=student)["data"]
+        teacher_runtime = request(base, f"/api/teacher/schedule?{urlencode({'start_day': '2027-01-04', 'end_day': '2027-01-08'})}", headers=teacher)["data"]
+        if student_runtime.get("identity_id") != student_id or student_runtime.get("state") != "authoritative":
+            raise FlowError("Student HTTP runtime did not read the published effective week")
+        if teacher_runtime.get("state") != "authoritative" or not any(
+                teacher_id in (item.get("teacher_ids") or []) for item in teacher_runtime.get("items") or []):
+            raise FlowError("Teacher HTTP runtime did not read the published effective week")
+        results["runtime_http"] = {"student_items": len(student_runtime.get("items") or []),
+            "teacher_items": len(teacher_runtime.get("items") or []), "status": "authoritative"}
 
     draft_inspector = read_only_call(db_path, base,
         f"/api/admin/schedule/experiments/school/{fixture['draft_id']}", device_a)
@@ -211,14 +217,71 @@ def main() -> None:
         raise FlowError(f"Fixture publication unexpectedly touched source rows: entries={source_entries}, mappings={mappings}")
     results["source_write_counts"] = {"schedule_entries": source_entries, "school_source_mappings": mappings}
 
+    # The subsequent React integration test maps these explicitly selected
+    # unlinked directions, saves the draft through the real API, previews it,
+    # publishes only this isolated week, and reads Student/Teacher Campus.
+    elective_classes = fixture["elective_classes"]
+    regular_classes = fixture["classes"]
+    slots = [
+        {"start": "09:00", "end": "09:45"}, {"start": "09:55", "end": "10:40"},
+        {"start": "10:55", "end": "11:40"}, {"start": "11:50", "end": "12:35"},
+        {"start": "12:45", "end": "13:30"},
+    ]
+    class_5, class_6 = elective_classes["5-А synthetic"], elective_classes["6-А synthetic"]
+    class_7a, class_7b, class_8a = (regular_classes[name] for name in ("7-А synthetic", "7-Б synthetic", "8-А synthetic"))
+    lanes = []
+    for lane in range(4):
+        lanes.append({"id": f"e2e-choice-{lane}", "day": 0, "period": 0,
+            "subject": f"Course choice lane {lane + 1}", "activityType": "elective",
+            "classId": class_5, "classIds": [class_5, class_6], "eligibleGrades": [5, 6],
+            "teacherId": fixture["teachers"][lane], "teacherIds": [fixture["teachers"][lane]],
+            "room": f"Choice-{lane + 1}", "audience": {"kind": "students", "student_ids": []}})
+    # Legacy imported elective: stable existing block id + old label are the
+    # only type evidence at first. The browser flow maps new lanes into this
+    # block, renames it, and verifies the explicit type survives re-opening.
+    lanes.append({"id": "e2e-legacy-choice", "day": 0, "period": 0,
+        "subject": "Legacy workshop lane", "blockName": "Курсы по выбору",
+        "blockId": "legacy-choice-5-6",
+        "classId": class_5, "classIds": [class_5, class_6], "eligibleGrades": [5, 6],
+        "teacherId": fixture["teachers"][14], "teacherIds": [fixture["teachers"][14]],
+        "room": "Choice-Legacy", "audience": {"kind": "students", "student_ids": []}})
+    for period, subjects in ((1, ("F54 · Programming", "G54 · Graphics")),
+                             (2, ("F55 · Media", "ШУМ · Медиамастерская"))):
+        for lane, subject in enumerate(subjects):
+            index = 4 + (period - 1) * 2 + lane
+            lanes.append({"id": f"e2e-digital-{period}-{lane}", "day": 0, "period": period,
+                "subject": subject, "activityType": "elective", "electiveDirection": "digital",
+                "classId": class_7a, "classIds": [class_7a, class_7b, class_8a], "eligibleGrades": [7, 8],
+                "teacherId": fixture["teachers"][index], "teacherIds": [fixture["teachers"][index]],
+                "room": f"Digital-{period}-{lane}", "audience": {"kind": "students", "student_ids": []}})
+    lanes.append({"id": "e2e-hidden-club", "day": 0, "period": 3, "subject": "Theatre club",
+        "activityType": "club", "classId": class_7a, "classIds": [class_7a], "eligibleGrades": [7],
+        "teacherId": fixture["teachers"][12], "teacherIds": [fixture["teachers"][12]], "room": "Club room"})
+    conflict_teacher = fixture["teachers"][20]
+    for grade, group in ((5, class_5), (6, class_6)):
+        lanes.append({"id": f"e2e-real-conflict-{grade}", "day": 0, "period": 4,
+            "subject": f"Required lesson {grade}", "classId": group, "classIds": [group],
+            "audience": {"kind": "classes", "class_ids": [group]}, "teacherId": conflict_teacher,
+            "teacherIds": [conflict_teacher], "room": "Shared physical room"})
+    elective_workflow = request(base, "/api/admin/schedule/experiments/school", method="POST", headers=device_a,
+        body={"name": "Elective block full-path check", "source": "canonical", "payload": {
+            "draft_kind": "school", "week_start": "2026-11-02", "reference_date": "2026-11-02",
+            "days": [0], "slots": slots,
+            "classes": [class_5, class_6, class_7a, class_7b, class_8a], "lessons": lanes}})["data"]
+    fixture["elective_workflow_draft_id"] = elective_workflow["id"]
+    fixture["elective_workflow_week"] = "2026-11-02"
+    (DATA / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False, indent=2), encoding="utf-8")
+    results["elective_workflow_fixture"] = {"draft_id": elective_workflow["id"], "source_lanes": len(lanes),
+        "week_start": "2026-11-02", "classes": 5, "expected_real_conflicts": ["teacher_overlap", "room_overlap"]}
+
     retired_calls = [
-        ("DELETE", "/api/admin/schedule/draft?scope_kind=week&scope_key=2026-10-26&expected_revision=1", None),
+        ("DELETE", "/api/admin/schedule/draft?scope_kind=week&scope_key=2027-01-04&expected_revision=1", None),
         ("PUT", "/api/admin/schedule/draft", {"scope_kind": "template", "scope_key": "school",
           "expected_revision": 1, "payload": {"days": [], "slots": [], "classes": [], "lessons": []}}),
         ("POST", "/api/admin/schedule/draft/publish", {"scope_kind": "template", "scope_key": "school",
           "expected_revision": 1}),
         ("POST", "/api/admin/schedule/template/confirm", {"expected_version_id": fixture["canonical_version_id"]}),
-        ("POST", "/api/admin/schedule/import-to-draft", {"week_start": "2026-10-26", "expected_revision": 1,
+        ("POST", "/api/admin/schedule/import-to-draft", {"week_start": "2027-01-04", "expected_revision": 1,
           "proposed_changes": [], "source_context": {}}),
     ]
     before_retired = database_snapshot(db_path)

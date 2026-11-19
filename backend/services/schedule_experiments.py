@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+from collections.abc import Mapping
 import hashlib
 import json
 import os
-from typing import Any, Mapping
+from typing import Any
 import re
 from uuid import UUID, uuid4
 from threading import Lock
@@ -741,7 +742,7 @@ def _canonical_payload(database: Database, version_id: str, *, source_blocks: Ma
         descriptive = {key: details[key] for key in (
             "description", "place", "format", "kind", "informational",
             "activityCatalogId", "activityNameSnapshot", "eligibleGrades",
-            "confirmedParticipantIds", "electiveDirection") if key in details}
+            "confirmedParticipantIds", "electiveDirection", "blockId", "blockName") if key in details}
         activity_type = metadata.get("activity_type")
         if activity_type in {"club", "elective", "event"}:
             descriptive["activityType"] = activity_type

@@ -144,8 +144,11 @@ type Payload = {
 function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleActivity[]) {
   const problems: string[] = [];
   const lessons = payload.lessons.map((lesson) => {
-    if (lesson.activityType !== 'club' && lesson.activityType !== 'elective') return lesson;
-    const typeLabel = lesson.activityType === 'club' ? 'Кружок' : 'Курс по выбору';
+    const inferredLegacyElective = !lesson.activityType && Boolean(lesson.blockId)
+      && ['курс по выбору', 'курсы по выбору', 'цифровой трек'].includes(String(lesson.blockName || '').trim().toLocaleLowerCase('ru'));
+    const activityType = lesson.activityType || (inferredLegacyElective ? 'elective' : undefined);
+    if (activityType !== 'club' && activityType !== 'elective') return lesson;
+    const typeLabel = activityType === 'club' ? 'Кружок' : 'Курс по выбору';
     const catalog = lesson.activityCatalogId
       ? activities.find((item) => item.id === lesson.activityCatalogId)
       : undefined;
@@ -153,7 +156,7 @@ function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleAc
       problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): запись каталога не найдена. Снимите привязку или выберите существующую.`);
       return lesson;
     }
-    if (catalog && catalog.type !== lesson.activityType) {
+    if (catalog && catalog.type !== activityType) {
       problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): тип не совпадает с записью каталога «${catalog.name}».`);
       return lesson;
     }
@@ -162,9 +165,15 @@ function prepareOptionalActivityPayload(payload: Payload, activities: ScheduleAc
       problems.push(`${typeLabel} «${lesson.subject || lesson.id}» (${lesson.id}): нет названия. Введите название или выберите запись каталога.`);
       return lesson;
     }
-    return lesson.activityNameSnapshot === snapshot ? lesson : { ...lesson, activityNameSnapshot: snapshot };
+    return lesson.activityNameSnapshot === snapshot && lesson.activityType === activityType
+      ? lesson : { ...lesson, activityType, activityNameSnapshot: snapshot };
   });
   return { payload: lessons.some((lesson, index) => lesson !== payload.lessons[index]) ? { ...payload, lessons } : payload, problems };
+}
+function editorActivityType(lesson: Lesson): Lesson['activityType'] {
+  if (lesson.activityType) return lesson.activityType;
+  if (lesson.blockId && ['курс по выбору', 'курсы по выбору', 'цифровой трек'].includes(String(lesson.blockName || '').trim().toLocaleLowerCase('ru'))) return 'elective';
+  return lesson.kind === 'event' ? 'event' : 'lesson';
 }
 type Draft = {
   id: string;
@@ -646,6 +655,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [fitWidth, setFitWidth] = useState(true);
   const [conflictsOpen, setConflictsOpen] = useState(false);
   const [adminTableOpen, setAdminTableOpen] = useState(false);
+  const [bulkElectiveSelection, setBulkElectiveSelection] = useState<string[]>([]);
+  const [bulkElectivePreviewOpen, setBulkElectivePreviewOpen] = useState(false);
+  const [bulkElectiveBlockName, setBulkElectiveBlockName] = useState('Цифровой трек');
+  const [bulkElectiveTargetId, setBulkElectiveTargetId] = useState('__new__');
   const [issueSeverity, setIssueSeverity] = useState('all');
   const [issueType, setIssueType] = useState('all');
   const [anchor, setAnchor] = useState<Cell | null>(null);
@@ -1514,6 +1527,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       (item) =>
       item.needsClarification || !payload.days.includes(item.day) || !payload.slots[item.period],
     ) || [];
+  const unlinkedElectives = payload?.lessons.filter((lesson) => editorActivityType(lesson) === 'elective' && !lesson.blockId) || [];
+  const selectedBulkElectives = unlinkedElectives.filter((lesson) => bulkElectiveSelection.includes(lesson.id));
   const issues = useMemo(() => {
     if (!payload) return [];
     const practiceIds = new Set<string>();
@@ -1524,6 +1539,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return issuesFor(payload, groups, students, audiencePreviews, practiceIds);
   }, [payload, groups, students, audiencePreviews, dirty, draft?.revision, resolutionRevision, resolutionStates]);
   const selected = payload?.lessons.find((item) => item.id === selectedId);
+  const selectedActivityType = selected ? editorActivityType(selected) : undefined;
   const selectedCell = focus &&
     payload && {
       day: dayAtRow(focus.row),
@@ -2639,6 +2655,55 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           {adminTableOpen ? <div className="constructor-source-week-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdminTableOpen(false); }}>
             <section className="constructor-source-week-dialog" role="dialog" aria-modal="true" aria-labelledby="constructor-source-week-title">
               <header><div><strong id="constructor-source-week-title">Полная таблица исходной недели</strong><small>{payload.lessons.length} записей · полный административный источник</small></div><button type="button" aria-label="Закрыть таблицу недели" onClick={() => setAdminTableOpen(false)}><X size={16} /></button></header>
+              {unlinkedElectives.length ? <details className="constructor-source-week-scroll constructor-elective-bulk-map">
+                <summary>Сопоставить курсы без общего блока · {unlinkedElectives.length}</summary>
+                <p>Выберите направления, которые должны входить в один общий блок. Совпадение названий и времени не выбирает занятия автоматически.</p>
+                <div className="constructor-draft-actions">
+                  <button type="button" onClick={() => {
+                    const digital = unlinkedElectives.filter((lesson) => lesson.electiveDirection === 'digital');
+                    setBulkElectiveSelection(digital.map((lesson) => lesson.id));
+                    setBulkElectiveBlockName('Цифровой трек');
+                    setBulkElectivePreviewOpen(false);
+                  }}>Отметить направления с цифровым признаком · {unlinkedElectives.filter((lesson) => lesson.electiveDirection === 'digital').length}</button>
+                  <button type="button" onClick={() => { setBulkElectiveSelection([]); setBulkElectivePreviewOpen(false); }}>Снять выбор</button>
+                </div>
+                <div className="constructor-conflict-list">{unlinkedElectives.map((lesson) => {
+                  const selected = bulkElectiveSelection.includes(lesson.id);
+                  const classesText = displayedClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'Классы не указаны';
+                  const teachersText = [...new Set([...(lesson.teacherIds || []), lesson.teacherId].filter(Boolean))].map((id) => teachers.find((teacher) => teacher.id === id)?.name || 'Преподаватель требует проверки').join(', ') || 'Преподаватель не указан';
+                  return <label key={lesson.id} data-elective-lesson-id={lesson.id} className="constructor-review-item"><input type="checkbox" aria-label={`Добавить «${lesson.subject || 'курс по выбору'}» в общий блок`} checked={selected} onChange={(event) => {
+                    setBulkElectiveSelection((current) => event.target.checked ? [...new Set([...current, lesson.id])] : current.filter((id) => id !== lesson.id));
+                    setBulkElectivePreviewOpen(false);
+                  }} /><span><strong>{lesson.subject || 'Направление по выбору'}{lesson.electiveDirection === 'digital' ? ' · цифровой трек' : ''}</strong><small>{DAYS[lesson.day] || `День ${lesson.day + 1}`} · {lesson.start || payload.slots[lesson.period]?.start || '—'}–{lesson.end || payload.slots[lesson.period]?.end || '—'} · {classesText} · {teachersText} · {lesson.room || lesson.place || 'кабинет не указан'}</small></span></label>;
+                })}</div>
+                <label>Название общего блока <input aria-label="Название общего блока для сопоставления" value={bulkElectiveBlockName} onChange={(event) => { setBulkElectiveBlockName(event.target.value); setBulkElectivePreviewOpen(false); }} placeholder="Курс по выбору" /></label>
+                <label>Общий блок <select aria-label="Целевой общий блок" value={bulkElectiveTargetId} onChange={(event) => {
+                  setBulkElectiveTargetId(event.target.value);
+                  const existing = payload.lessons.find((lesson) => lesson.blockId === event.target.value);
+                  if (existing) setBulkElectiveBlockName(existing.blockName || 'Курс по выбору');
+                  setBulkElectivePreviewOpen(false);
+                }}><option value="__new__">Создать новый блок</option>{Array.from(new Map(payload.lessons.filter((lesson) => editorActivityType(lesson) === 'elective' && lesson.blockId).map((lesson) => [lesson.blockId!, lesson])).values()).map((lesson) => <option key={lesson.blockId} value={lesson.blockId}>{lesson.blockName || 'Курс по выбору'} · {DAYS[lesson.day] || ''} {lesson.start || payload.slots[lesson.period]?.start || ''}</option>)}</select></label>
+                <button type="button" disabled={!bulkElectiveSelection.length} onClick={() => { setBulkElectiveBlockName((current) => current.trim() || 'Курс по выбору'); setBulkElectivePreviewOpen(true); }}>Предпросмотр · {bulkElectiveSelection.length} направлений</button>
+                {bulkElectivePreviewOpen ? <section aria-label="Предпросмотр сопоставления курсов" className="constructor-review-comparison">
+                  <strong>Будут сопоставлены {selectedBulkElectives.length} направления</strong>
+                  <p>Блок: {bulkElectiveTargetId === '__new__' ? (bulkElectiveBlockName.trim() || 'Курс по выбору') : (payload.lessons.find((lesson) => lesson.blockId === bulkElectiveTargetId)?.blockName || bulkElectiveBlockName || 'Курс по выбору')}</p>
+                  <ul>{selectedBulkElectives.map((lesson) => <li key={lesson.id}>{lesson.subject} · {DAYS[lesson.day] || `День ${lesson.day + 1}`} · {lesson.start || payload.slots[lesson.period]?.start || '—'}–{lesson.end || payload.slots[lesson.period]?.end || '—'} · {displayedClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'классы не указаны'}</li>)}</ul>
+                  <p>Ученики не распределяются по направлениям. Публикация заново проверит аудиторию и конфликты.</p>
+                  <button type="button" onClick={() => {
+                    const selectedIds = new Set(bulkElectiveSelection);
+                    const targetId = bulkElectiveTargetId === '__new__' ? freshId() : bulkElectiveTargetId;
+                    const targetName = bulkElectiveTargetId === '__new__'
+                      ? (bulkElectiveBlockName.trim() || 'Курс по выбору')
+                      : (payload.lessons.find((lesson) => lesson.blockId === targetId)?.blockName || bulkElectiveBlockName.trim() || 'Курс по выбору');
+                    mutate((state) => ({ ...state, lessons: state.lessons.map((lesson) => selectedIds.has(lesson.id)
+                      ? { ...lesson, activityType: 'elective', blockId: targetId, blockName: targetName }
+                      : lesson) }));
+                    setBulkElectiveSelection([]);
+                    setBulkElectivePreviewOpen(false);
+                  }}>Подтвердить сопоставление выбранных направлений</button>
+                  <button type="button" onClick={() => setBulkElectivePreviewOpen(false)}>Отмена</button>
+                </section> : null}
+              </details> : null}
               <div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Тип и занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус и проекция Campus</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{
                 const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);
                 const audience=audiencePreviews[lesson.id];
@@ -2646,7 +2711,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';
                 const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];
                 const lessonGroups=linkedInstructionalGroups(lesson,groups);
-                const type=lesson.specialMark==='lunch'?'Обед':lesson.activityType==='club'?'Кружок':lesson.activityType==='elective'?'Курс по выбору':lesson.activityType==='event'||lesson.kind==='event'?'Мероприятие':'Урок';
+                const type=lesson.specialMark==='lunch'?'Обед':editorActivityType(lesson)==='club'?'Кружок':editorActivityType(lesson)==='elective'?'Курс по выбору':editorActivityType(lesson)==='event'?'Мероприятие':'Урок';
                 return <tr key={lesson.id}><td>{DAYS[lesson.day]||'—'} · {lesson.start||payload.slots[lesson.period]?.start||'—'}–{lesson.end||payload.slots[lesson.period]?.end||'—'}</td><td>{type}: {lesson.subject||'Обед'}</td><td>{displayedClasses(lesson).map(id=>groups.find(group=>group.id===id)?.name||id).join(', ')||'Не указаны'}</td><td>{lessonGroups.map(group=>group.name).join(', ')||'Не указаны'}</td><td>{teacherIds.map(id=>teachers.find(teacher=>teacher.id===id)?.name||'Требует проверки').join(', ')||'Не указан'}</td><td>{lesson.room||lesson.place||'Не указано'}</td><td><strong>{status}</strong>{blocker?<small>Campus: {blocker}</small>:null}</td><td><button type="button" onClick={()=>{openReviewLesson(lesson.id);setAdminTableOpen(false);}}>Открыть</button></td></tr>;
               })}</tbody></table></div>
             </section>
@@ -2677,7 +2742,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                   return <article key={`${item.lessonId}:${index}`} className={item.severity}><div><button className="constructor-issue-open" onClick={()=>setResolutionIssue(item)}>Разобрать проблему</button><strong>{item.type === 'teacher' ? 'Преподаватель' : item.type === 'room' ? 'Кабинет' : item.type === 'audience' ? 'Группа или ученик' : 'Данные занятия'} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'}</strong><small>{dayName}, {startTime} · {lesson?.subject || 'Занятие'} · {lesson ? lessonClasses(lesson).map((id) => groups.find((entry) => entry.id === id)?.name || id).join(', ') : ''} · {targetGroup?.name || 'аудитория не выбрана'}</small>{item.related ? <small>Связано с: {payload.lessons.find((entry) => entry.id === item.related)?.subject || 'занятием'}</small> : null}</div><button onClick={() => { if (!lesson) return; setDay(lesson.day); setViewMode('day'); setClassFilter(''); setPanelMode('lesson'); setPanelOpen(true); const col = gridColumns.findIndex((entry) => lessonClasses(lesson).some((id) => entry.classIds.includes(id))); if (col >= 0) { setAnchor({row: lesson.period, col}); setFocus({row: lesson.period, col}); } setSelectedId(lesson.id); setConflictsOpen(false); }}>Показать в расписании</button></article>;
                 })}{examples.length>5?<small>Показаны первые 5 из {examples.length} примеров.</small>:null}</div></details>)}</section>;
               })}
-              <details className="constructor-source-week"><summary>Полная таблица исходной недели · {payload.lessons.length} занятий</summary><div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];const lessonGroups=linkedInstructionalGroups(lesson,groups);return <tr key={lesson.id}><td>{DAYS[lesson.day]||'—'} · {payload.slots[lesson.period]?.start||lesson.start||'—'}</td><td>{lesson.subject||'Обед'}{lesson.activityType==='elective'?' · курс по выбору':''}</td><td>{displayedClasses(lesson).map(id=>groups.find(group=>group.id===id)?.name||id).join(', ')||'Не указаны'}</td><td>{lessonGroups.map(group=>group.name).join(', ')||'Не указаны'}</td><td>{teacherIds.map(id=>teachers.find(teacher=>teacher.id===id)?.name||'Преподаватель требует проверки').join(', ')||'Не указан'}</td><td>{lesson.room||lesson.place||'Не указано'}</td><td>{status}</td><td><button type="button" onClick={()=>{openReviewLesson(lesson.id);setConflictsOpen(false);}}>Открыть</button></td></tr>})}</tbody></table></div></details>
+              <details className="constructor-source-week"><summary>Полная таблица исходной недели · {payload.lessons.length} занятий</summary><div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];const lessonGroups=linkedInstructionalGroups(lesson,groups);return <tr key={lesson.id}><td>{DAYS[lesson.day]||'—'} · {payload.slots[lesson.period]?.start||lesson.start||'—'}</td><td>{lesson.subject||'Обед'}{editorActivityType(lesson)==='elective'?' · курс по выбору':''}</td><td>{displayedClasses(lesson).map(id=>groups.find(group=>group.id===id)?.name||id).join(', ')||'Не указаны'}</td><td>{lessonGroups.map(group=>group.name).join(', ')||'Не указаны'}</td><td>{teacherIds.map(id=>teachers.find(teacher=>teacher.id===id)?.name||'Преподаватель требует проверки').join(', ')||'Не указан'}</td><td>{lesson.room||lesson.place||'Не указано'}</td><td>{status}</td><td><button type="button" onClick={()=>{openReviewLesson(lesson.id);setConflictsOpen(false);}}>Открыть</button></td></tr>})}</tbody></table></div></details>
             </section>
           ) : null}
           {conflictsOpen && unplaced.length ? (
@@ -3079,8 +3144,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             </button>
                           ))}
                       </div>
-                      <div className="constructor-related-actions"><button onClick={() => { const blockId = selected.blockId || freshId(); if (!selected.blockId) updateLesson(selected.id, { blockId, blockName: selected.blockName || 'Параллельные занятия' }); setSelectedId(''); setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds: lessonClasses(selected), day: selected.day, period: selected.period, blockId, blockName: selected.blockName || 'Параллельные занятия' }); setNewTeacherManuallySelected(false); setCreationMode('form'); }}>+ Параллельное занятие</button>{selected.blockId ? <span>{selected.blockName || 'Параллельные занятия'} · {payload.lessons.filter((item) => item.blockId === selected.blockId).length}</span> : null}</div>
-                      {selected.blockId ? <label>Название блока <input value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, blockName: event.target.value } : item) }))} /></label> : null}
+                      <div className="constructor-related-actions"><button onClick={() => { const isElective = selectedActivityType === 'elective'; const blockId = selected.blockId || freshId(); const blockName = selected.blockName || (isElective ? 'Курс по выбору' : 'Параллельные занятия'); if (!selected.blockId) updateLesson(selected.id, { blockId, blockName }); setSelectedId(''); setActivityType(isElective ? 'elective' : 'lesson'); setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds: lessonClasses(selected), day: selected.day, period: selected.period, blockId, blockName, ...(isElective ? { eligibleGrades: selected.eligibleGrades || [], audience: { kind: 'students', student_ids: [] }, confirmedParticipantIds: [] } : {}) }); setNewTeacherManuallySelected(false); setCreationMode('form'); }}>+ Параллельное занятие</button>{selected.blockId ? <span>{selected.blockName || 'Параллельные занятия'} · {payload.lessons.filter((item) => item.blockId === selected.blockId).length}</span> : null}</div>
+                      {selected.blockId && selectedActivityType !== 'elective' ? <label>Название блока <input value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, blockName: event.target.value } : item) }))} /></label> : null}
                       {isLunch(selected) ? <p className="constructor-special-mark">Обед</p> : <>
                       <label>
                         Предмет
@@ -3099,12 +3164,26 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           <option key={item} value={item} />
                         ))}
                       </datalist>
-                      <label>Тип активности <select value={selected.activityType || (selected.kind === 'event' ? 'event' : 'lesson')} onChange={(event) => { const type = event.target.value as Lesson['activityType']; const explicitOnly = type === 'club'; const participants = selected.confirmedParticipantIds || []; updateLesson(selected.id, { activityType: type, kind: type === 'event' ? 'event' : 'lesson', ...(explicitOnly ? { audience: { kind: 'students', student_ids: type === 'club' ? [] : participants }, groupId: '', groupIds: [], ...(type === 'club' ? { confirmedParticipantIds: undefined, displayClassIds: visualClasses(selected, groups), classIds: [], classId: '' } : {}) } : {}) }); }}><option value="lesson">Урок</option><option value="club">Кружок</option><option value="elective">Курс по выбору</option><option value="event">Событие</option></select></label>
+                      <label>Тип активности <select value={selectedActivityType || 'lesson'} onChange={(event) => { const type = event.target.value as Lesson['activityType']; const explicitOnly = type === 'club'; const participants = selected.confirmedParticipantIds || []; updateLesson(selected.id, { activityType: type, kind: type === 'event' ? 'event' : 'lesson', ...(explicitOnly ? { audience: { kind: 'students', student_ids: type === 'club' ? [] : participants }, groupId: '', groupIds: [], ...(type === 'club' ? { confirmedParticipantIds: undefined, displayClassIds: visualClasses(selected, groups), classIds: [], classId: '' } : {}) } : {}) }); }}><option value="lesson">Урок</option><option value="club">Кружок</option><option value="elective">Курс по выбору</option><option value="event">Событие</option></select></label>
                       </>}
-                      {(selected.activityType === 'club' || selected.activityType === 'elective') ? <>
-                      <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selected.activityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
-                        {selected.activityType === 'elective' ? <ElectiveClassFields groups={groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id))} classIds={lessonClasses(selected)} eligibleGrades={selected.eligibleGrades || []} onClassIdsChange={(classIds) => updateLesson(selected.id, { classIds, classId: classIds[0] || '' })} onEligibleGradesChange={(eligibleGrades) => updateLesson(selected.id, { eligibleGrades })} /> : null}
-                        {selected.activityType === 'elective' ? <><label>Направление <select value={selected.electiveDirection || ''} onChange={(event) => updateLesson(selected.id, { electiveDirection: event.target.value === 'digital' ? 'digital' : undefined })}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label></> : null}
+                      {(selectedActivityType === 'club' || selectedActivityType === 'elective') ? <>
+                      <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selectedActivityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
+                        {selectedActivityType === 'elective' ? <ElectiveClassFields groups={groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id))} classIds={lessonClasses(selected)} eligibleGrades={selected.eligibleGrades || []} onClassIdsChange={(classIds) => updateLesson(selected.id, { classIds, classId: classIds[0] || '' })} onEligibleGradesChange={(eligibleGrades) => updateLesson(selected.id, { eligibleGrades })} /> : null}
+                      {selectedActivityType === 'elective' ? <>
+                        <label>Общий блок курсов по выбору <select aria-label="Общий блок курсов по выбору" value={selected.blockId || ''} onChange={(event) => {
+                          const target = event.target.value;
+                          if (target === '__create__') {
+                            updateLesson(selected.id, { blockId: freshId(), blockName: selected.blockName || 'Курс по выбору' });
+                          } else if (!target) {
+                            updateLesson(selected.id, { blockId: undefined, blockName: undefined });
+                          } else {
+                            const source = payload.lessons.find((item) => item.blockId === target && item.id !== selected.id);
+                            updateLesson(selected.id, { blockId: target, blockName: source?.blockName || 'Курс по выбору' });
+                          }
+                        }}><option value="">Не сопоставлен</option><option value="__create__">Создать новый общий блок</option>{Array.from(new Map(payload.lessons.filter((item) => editorActivityType(item) === 'elective' && item.blockId).map((item) => [item.blockId!, item])).values()).map((item) => <option key={item.blockId} value={item.blockId}>{item.blockName || 'Курс по выбору'} · {item.day + 1}, {item.start || payload.slots[item.period]?.start || ''}</option>)}</select></label>
+                        {selected.blockId ? <label>Название общего блока <input aria-label="Название общего блока" value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, ...(editorActivityType(item) === 'elective' ? { activityType: 'elective' as const } : {}), blockName: event.target.value } : item) }))} placeholder="Курс по выбору" /></label> : <small>Укажите общий блок, чтобы связанные параллельные направления показывались ученикам одной карточкой.</small>}
+                        <label>Направление <select value={selected.electiveDirection || ''} onChange={(event) => updateLesson(selected.id, { electiveDirection: event.target.value === 'digital' ? 'digital' : undefined })}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label>
+                      </> : null}
                       </> : null}
                       {selected.kind === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.informational)} onChange={(event) => updateLesson(selected.id, event.target.checked ? { informational: true, audience: undefined, groupId: '', groupIds: [] } : { informational: false, ...audiencePatch({ kind: 'classes', class_ids: lessonClasses(selected) }, groups, students) })} /> Информационное событие без назначенных учеников</label> : null}
 
@@ -3174,7 +3253,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           <option key={item} value={item} />
                         ))}
                       </datalist>
-                      {selected.activityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selected.activityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
+                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
                       <div className="constructor-field-row">
                         <label>
                           День

@@ -5,7 +5,7 @@ const ROOT='.local-test/consolidation/results',API='http://127.0.0.1:8041',URL='
 const auth=JSON.parse(await fs.readFile('.local-test/consolidation/auth.json','utf8'));
 const fixture=JSON.parse(await fs.readFile('.local-test/consolidation/fixture.json','utf8'));
 const headers={'Content-Type':'application/json','X-School-Admin-Session':auth.admin_browser_session,'X-Admin-Browser-Session':auth.admin_browser_session};
-async function call(path,method='GET',body){const r=await fetch(API+path,body===undefined?{method,headers}:{method,headers,body:JSON.stringify(body)});const value=await r.json();assert(r.ok,`${method} ${path}: ${r.status} ${JSON.stringify(value)}`);return value;}
+async function call(path,method='GET',body,extraHeaders={}){const requestHeaders={...headers,...extraHeaders};const r=await fetch(API+path,body===undefined?{method,headers:requestHeaders}:{method,headers:requestHeaders,body:JSON.stringify(body)});const value=await r.json();assert(r.ok,`${method} ${path}: ${r.status} ${JSON.stringify(value)}`);return value;}
 for(let attempt=0;attempt<60;attempt++){try{const response=await fetch(URL);if(response.ok)break;}catch{}await new Promise(resolve=>setTimeout(resolve,500));}
 const browser=await chromium.launch();
 const context=await browser.newContext({viewport:{width:1366,height:768}});
@@ -15,23 +15,87 @@ await context.route('**/*',route=>{const u=new globalThis.URL(route.request().ur
 context.on('response',r=>{if(r.url().startsWith(API+'/api/'))requests.push({method:r.request().method(),path:new globalThis.URL(r.url()).pathname,status:r.status()});});
 const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
 async function shot(name){await page.waitForTimeout(200);await page.screenshot({path:`${ROOT}/screenshots/${name}.png`,fullPage:false});shots.push(name);}
-async function open(name){await page.goto(URL);await page.locator('.constructor-start,.constructor-grid-wrap').first().waitFor();if(await page.locator('.constructor-grid-wrap').count()){await page.locator('.constructor-draft-menu > summary').click();await page.getByRole('button',{name:'Все черновики',exact:true}).click();}await page.locator('.constructor-draft').filter({has:page.getByText(name,{exact:true})}).first().locator('.constructor-draft-open').click();await page.locator('.constructor-grid-wrap').waitFor();}
-async function publication(scope){await page.getByRole('button',{name:'Открыть публикацию расписания'}).click();await page.getByRole('button',{name:'Проверить изменения',exact:true}).click();await page.getByLabel('Проверка публикации',{exact:true}).waitFor();await shot(`publication-${scope}-preview-1366`);await page.locator('.constructor-publication-confirm input').check();await page.getByRole('button',{name:scope==='week'?'Опубликовать неделю':'Опубликовать шаблон',exact:true}).click();await page.getByText(/Опубликовано\. Чтение через canonical подтверждено/).waitFor();await shot(`publication-${scope}-success-1366`);await page.getByRole('button',{name:'К конструктору',exact:true}).click();}
+async function open(name){await page.goto(URL);await page.locator('.constructor-start,.constructor-grid-wrap').first().waitFor();if(await page.locator('.constructor-grid-wrap').count()){await page.locator('.constructor-draft-menu > summary').click();await page.getByRole('button',{name:/К шаблону и неделям|Все черновики/}).click();}if(name==='Elective block full-path check'){await page.getByRole('button',{name:/Недели/}).click();const row=page.locator('.constructor-week-row').filter({hasText:/2 ноября.*8 ноября 2026/});await row.getByRole('button',{name:'Открыть черновик',exact:true}).click();}else{const card=page.locator('.constructor-draft').filter({has:page.getByText(name,{exact:true})}).first();if(await card.count()&&!await card.isVisible()){const section=card.locator('xpath=ancestor::details[1]');if(await section.count())await section.locator('summary').click();}await card.locator('.constructor-draft-open').click();}await page.locator('.constructor-grid-wrap').waitFor();}
+async function publication(scope){await page.getByRole('button',{name:'Открыть публикацию расписания'}).click();await page.getByRole('button',{name:'Проверить изменения',exact:true}).click();await page.getByLabel('Проверка публикации',{exact:true}).waitFor();await shot(`publication-${scope}-preview-1366`);await page.locator('.constructor-publication-confirm input').check();await page.getByRole('button',{name:scope==='week'?/Опубликовать.*неделю/:/Опубликовать шаблон/}).click();await page.getByText(/Опубликовано.*неделя с/).waitFor();await shot(`publication-${scope}-success-1366`);await page.getByRole('button',{name:'К конструктору',exact:true}).click();}
 try{
  await fs.mkdir(`${ROOT}/screenshots`,{recursive:true});
- await open('Synthetic template publication');
- const initial=await call('/api/admin/schedule/experiments/school/'+fixture.template_publication_draft_id);const lesson=initial.payload.lessons.find(x=>x.teacherId);
- const card=page.locator(`[data-lesson-id="${lesson.id}"]`).first();await card.click();await page.getByLabel('Кабинет',{exact:true}).fill('LOCAL-315');
- await Promise.all([page.waitForResponse(r=>r.url().endsWith(fixture.template_publication_draft_id)&&r.request().method()==='PUT'&&r.status()===200),page.getByRole('button',{name:'Сохранить черновик',exact:true}).first().click()]);
- const saved=await call('/api/admin/schedule/experiments/school/'+initial.id);assert.equal(saved.payload.lessons.find(x=>x.id===lesson.id).room,'LOCAL-315');steps.push('UI edit → save → real backend readback');
- const remotePayload=structuredClone(saved.payload);const other=remotePayload.lessons.find(x=>x.id!==lesson.id&&x.teacherId);other.room='REMOTE-316';await call('/api/admin/schedule/experiments/school/'+initial.id,'PUT',{expected_revision:saved.revision,payload:remotePayload});
- await page.getByLabel('Кабинет',{exact:true}).fill('LOCAL-317');await Promise.all([page.waitForResponse(r=>r.url().endsWith(initial.id)&&r.request().method()==='PUT'&&r.status()===200),page.getByRole('button',{name:'Сохранить черновик',exact:true}).first().click()]);
- const merged=await call('/api/admin/schedule/experiments/school/'+initial.id);assert.equal(merged.payload.lessons.find(x=>x.id===lesson.id).room,'LOCAL-317');assert.equal(merged.payload.lessons.find(x=>x.id===other.id).room,'REMOTE-316');assert(requests.some(x=>x.method==='PUT'&&x.status===409));steps.push('Real HTTP409 → existing React merge → both independent edits persist');
- await open('Synthetic template publication');await page.locator(`[data-lesson-id="${lesson.id}"]`).first().click();assert.equal(await page.getByLabel('Кабинет',{exact:true}).inputValue(),'LOCAL-317');steps.push('Page reload → persisted edit confirmed');await shot('inspector-parallel-1366');
- await page.locator('.constructor-draft-menu > summary').click();await page.getByLabel('Понедельник новой недели').fill('2026-11-02');const weekResponse=page.waitForResponse(r=>r.url().endsWith('/week')&&r.request().method()==='POST'&&r.status()===200);await page.getByRole('button',{name:'Создать неделю',exact:true}).click();const newWeek=await (await weekResponse).json();await page.waitForTimeout(400);steps.push('Created independent weekly copy in existing React menu');
- await publication('week');await open('Synthetic template publication');await publication('template');
- const after=await call('/api/admin/schedule/experiments/school/'+initial.id);assert(after.revision>merged.revision);assert.notEqual(after.base_version_id,initial.base_version_id);const readWeek=await call('/api/admin/schedule/observability?week_start=2026-11-02&editor=true');assert.equal(readWeek.effective_week.version_id,initial.base_version_id);steps.push('UI weekly and template publish → readback verified → previous week keeps independent base');
- await open('Synthetic template publication');await page.getByRole('button',{name:'Открыть публикацию расписания'}).click();await page.getByRole('button',{name:'Проверить изменения',exact:true}).click();await page.getByLabel('Проверка публикации',{exact:true}).waitFor();assert(await page.getByText('Я проверил изменения',{exact:false}).isVisible());steps.push('Same draft remains publishable after atomic base/revision advance');await page.getByRole('button',{name:'Закрыть публикацию',exact:true}).click();
- report.newWeekId=newWeek.id;report.templateRevision=after.revision;
+ await open('Elective block full-path check');
+ await page.getByRole('button',{name:'Таблица недели',exact:true}).click();
+ const bulk=page.locator('.constructor-elective-bulk-map');await bulk.locator('summary').click();
+ for(let lane=1;lane<=4;lane++)await page.getByRole('checkbox',{name:new RegExp(`Course choice lane ${lane}`)}).check();
+ await page.getByLabel('Целевой общий блок').selectOption('legacy-choice-5-6');
+ await bulk.getByRole('button',{name:'Предпросмотр · 4 направлений',exact:true}).click();
+ const choicePreview=page.getByLabel('Предпросмотр сопоставления курсов');await choicePreview.waitFor();
+ assert((await choicePreview.innerText()).includes('5 класс'));assert((await choicePreview.innerText()).includes('6 класс'));
+ await choicePreview.getByRole('button',{name:'Подтвердить сопоставление выбранных направлений',exact:true}).click();
+ await page.locator('tr').filter({hasText:'Legacy workshop lane'}).getByRole('button',{name:'Открыть',exact:true}).click();
+ await page.getByLabel('Название общего блока',{exact:true}).fill('Мастерские');
+ await Promise.all([page.waitForResponse(r=>r.url().endsWith(fixture.elective_workflow_draft_id)&&r.request().method()==='PUT'&&r.status()===200),page.getByRole('button',{name:'Сохранить черновик',exact:true}).first().click()]);
+ await page.getByRole('button',{name:'Таблица недели',exact:true}).click();
+ await page.locator('.constructor-elective-bulk-map').locator('summary').click();
+ await bulk.getByRole('button',{name:'Отметить направления с цифровым признаком · 4',exact:true}).click();
+ await page.getByLabel('Целевой общий блок').selectOption('__new__');
+ await bulk.getByRole('button',{name:'Предпросмотр · 4 направлений',exact:true}).click();
+ const digitalPreview=page.getByLabel('Предпросмотр сопоставления курсов');await digitalPreview.waitFor();
+ for(const value of ['F54 · Programming','G54 · Graphics','F55 · Media','ШУМ · Медиамастерская','7-А synthetic','7-Б synthetic','8-А synthetic'])assert((await digitalPreview.innerText()).includes(value),value);
+ await digitalPreview.getByRole('button',{name:'Подтвердить сопоставление выбранных направлений',exact:true}).click();
+ await page.getByRole('button',{name:'Закрыть таблицу недели',exact:true}).click();
+ const electiveId=fixture.elective_workflow_draft_id;
+ await Promise.all([page.waitForResponse(r=>r.url().endsWith(electiveId)&&r.request().method()==='PUT'&&r.status()===200),page.getByRole('button',{name:'Сохранить черновик',exact:true}).first().click()]);
+ if(await page.getByRole('button',{name:'К сетке',exact:true}).count())await page.getByRole('button',{name:'К сетке',exact:true}).click();
+ if(await page.getByRole('button',{name:'Закрыть панель',exact:true}).count())await page.getByRole('button',{name:'Закрыть панель',exact:true}).click();
+ const mapped=await call('/api/admin/schedule/experiments/school/'+electiveId);
+ const choiceLanes=mapped.payload.lessons.filter(x=>x.id.startsWith('e2e-choice-'));
+ const legacyLane=mapped.payload.lessons.find(x=>x.id==='e2e-legacy-choice');
+ const digitalLanes=mapped.payload.lessons.filter(x=>x.id.startsWith('e2e-digital-'));
+ assert.equal(new Set([...choiceLanes,legacyLane].map(x=>x.blockId)).size,1);assert.equal(new Set(digitalLanes.map(x=>x.blockId)).size,1);
+ assert.notEqual(choiceLanes[0].blockId,digitalLanes[0].blockId);assert(digitalLanes.every(x=>x.blockName==='Цифровой трек'));
+ assert.equal(legacyLane.activityType,'elective');assert.equal(legacyLane.blockName,'Мастерские');
+ await open('Elective block full-path check');
+ await page.getByRole('button',{name:'Таблица недели',exact:true}).click();
+ assert((await page.getByRole('dialog').innerText()).includes('Legacy workshop lane'));
+ await page.getByRole('button',{name:'Закрыть таблицу недели',exact:true}).click();
+ steps.push('Recognized legacy label → arbitrary block rename → save/re-open keeps explicit type; digital bulk mapping saved in isolated SQLite');
+ const week=fixture.elective_workflow_week;
+ const publishPath=`/api/admin/schedule/constructor/${electiveId}/publication`;
+ const preview=await call(publishPath+'/preview','POST',{scope_kind:'week',week_start:week,expected_revision:mapped.revision});
+ assert(preview.can_publish,JSON.stringify(preview.blockers));
+ const diagnosticCodes=(preview.diagnostics||[]).map(x=>x.code);
+ assert(diagnosticCodes.includes('teacher_overlap'));assert(diagnosticCodes.includes('room_overlap'));
+ assert.equal(preview.summary.clubs_hidden,1);
+ await shot('elective-blocks-preview-1366');
+ await publication('week');
+ const adminHeaders={'X-Dev-Auth':'admin:1'};
+ async function campus(role,identityId){
+   const started=await call('/api/admin/previews','POST',{target_identity_id:identityId,role},adminHeaders);
+   const authRole=role==='student'?'student':'teacher';
+   return call(`/api/${authRole}/schedule?start_day=${week}&end_day=${week}`,'GET',undefined,{'X-Dev-Auth':'admin:1','X-Preview-Id':started.id});
+ }
+ for(const label of ['5-А synthetic','6-А synthetic']){
+   const body=await campus('student',fixture.students[label][0]);
+   const cards=body.items.filter(x=>x.activity_type==='elective');assert.equal(cards.length,1,label);
+   assert.equal(cards[0].activity,'Мастерские');assert.equal(cards[0].start_time,'09:00');
+   assert(!JSON.stringify(cards[0]).includes('Course choice lane'));assert(!JSON.stringify(cards[0]).includes('Legacy workshop lane'));
+ }
+ for(const label of ['7-А synthetic','7-Б synthetic','8-А synthetic']){
+   const body=await campus('student',fixture.students[label][0]);
+   const cards=body.items.filter(x=>x.activity_type==='elective');assert.equal(cards.length,2,label);
+   assert(cards.every(x=>x.activity==='Цифровой трек'));
+   assert.deepEqual(cards.map(x=>x.start_time).sort(),['09:55','10:55']);
+   assert(!JSON.stringify(cards).includes('Медиамастерская'));assert(!JSON.stringify(cards).includes('F54'));
+   assert(!body.items.some(x=>String(x.activity||'').includes('Theatre club')));assert.deepEqual(body.optional_activities,[]);
+ }
+ for(let lane=0;lane<4;lane++){
+   const subject=['F54 · Programming','G54 · Graphics','F55 · Media','ШУМ · Медиамастерская'][lane];
+   const teacherId=fixture.teachers[4+lane];const body=await campus('teacher',teacherId);
+   const items=body.items.filter(x=>x.activity===subject);assert.equal(items.length,1,subject);
+   assert(body.items.every(x=>!x.activity.startsWith('F54 · Programming')||teacherId===fixture.teachers[4]));
+ }
+ const legacyTeacher=fixture.teachers[14];const legacyTeacherCampus=await campus('teacher',legacyTeacher);
+ assert.equal(legacyTeacherCampus.items.filter(x=>x.activity==='Legacy workshop lane').length,1);
+ steps.push('Published isolated week → Student Campus: 5–6 one neutral block; 7–8 one digital card per slot; clubs absent; Teacher Campus retains each teacher lane');
+ steps.push('Preview retains actual teacher and room collision diagnostics');
+ await page.getByRole('button',{name:'Таблица недели',exact:true}).click();await page.screenshot({path:`${ROOT}/screenshots/elective-blocks-admin-table-1366.png`,fullPage:false});
+ report.draftId=electiveId;report.publishedWeek=week;
  assert.deepEqual(errors,[]);report.status='PASS';
 }catch(error){report.status='FAIL';report.failure=String(error.stack||error);await shot('failure');throw error;}finally{await fs.writeFile(`${ROOT}/react-integration-report.json`,JSON.stringify(report,null,2));await context.close();await browser.close();}

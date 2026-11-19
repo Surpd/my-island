@@ -113,6 +113,22 @@ class PartialPublicationPostgresTests(unittest.TestCase):
             **overrides,
         }
 
+    def test_admin_week_history_parameterizes_percent_pattern(self):
+        from backend.services.canonical_schedule import _admin_week_history
+
+        with self.database.connection() as connection:
+            self.database.execute(connection, """INSERT INTO schedule_publication_heads
+                (scope_key,published_id,version_id,revision,updated_at) VALUES (?,?,?,?,?)""",
+                (f"week:2026-11-16-{self.suffix}", "synthetic-published", "synthetic-version", 1, "2026-11-19T00:00:00Z"))
+            self.database.execute(connection, """INSERT INTO schedule_publication_heads
+                (scope_key,published_id,version_id,revision,updated_at) VALUES (?,?,?,?,?)""",
+                (f"template:{self.suffix}", "synthetic-template", "synthetic-version", 1, "2026-11-19T00:00:00Z"))
+        _, _ = _admin_week_history(self.database)
+        with self.database.connection() as connection:
+            selected = self.database.execute(connection,
+                "SELECT scope_key FROM schedule_publication_heads WHERE scope_key LIKE ?", ("week:%",)).fetchall()
+        self.assertEqual({str(row["scope_key"]) for row in selected}, {f"week:2026-11-16-{self.suffix}"})
+
     def draft(self, lessons, *, slots=None):
         return create_experiment(self.database, name=f"PG partial {self.suffix}", source="import", payload={
             "reference_date": "2026-10-19",

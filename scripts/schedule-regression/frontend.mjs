@@ -7,12 +7,14 @@ import { spawn } from 'node:child_process';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const target = path.join(root, '.local-test/consolidation/frontend');
 await mkdir(target, { recursive: true });
-for (const name of ['app', 'components', 'hooks', 'lib', 'public']) {
+for (const name of ['app', 'components', 'public']) {
   await cp(path.join(root, name), path.join(target, name), { recursive: true, force: true });
 }
 for (const name of ['package.json', 'package-lock.json', 'vite.config.ts', 'tsconfig.json', 'next.config.ts']) {
   await cp(path.join(root, name), path.join(target, name));
 }
+await mkdir(path.join(target, '.openai'), { recursive: true });
+await cp(path.join(root, '.openai/hosting.json'), path.join(target, '.openai/hosting.json'));
 await rm(path.join(target, 'components/schedule-admin.tsx'), { force: true });
 if (!await lstat(path.join(target, 'node_modules')).catch(() => null)) {
   await symlink(path.join(root, 'node_modules'), path.join(target, 'node_modules'), 'junction');

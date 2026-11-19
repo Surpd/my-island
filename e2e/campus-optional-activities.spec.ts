@@ -12,15 +12,14 @@ async function installCampusApi(page: Page) {
       body = { schedule: [], homework: [], announcements: [] };
     } else if (url.pathname === '/api/student/schedule') {
       body = {
-        state: 'published',
-        items: [],
-        days: [{ date: DAY, state: 'scheduled', items: [{ date: DAY, state: 'lesson', slot: { start: '09:00', end: '09:45' }, canonical_title: 'Математика', teacher: 'Елена Петрова', room: '12' }] }],
-        day_blocks: [],
-        optional_activities: [
-          { date: DAY, type: 'elective', title: 'Робототехника', start_time: '10:00', end_time: '10:45', room: '24', teachers: ['Иван Сидоров'] },
-          { date: DAY, type: 'elective', title: 'Шахматы', start_time: '10:00', end_time: '10:45', room: '31', teachers: ['Анна Волкова'] },
+        state: 'published', items: [], day_blocks: [], optional_activities: [
           { date: DAY, type: 'club', title: 'Театральная студия', start_time: '14:00', end_time: '15:00', room: '18', teachers: ['Мария Смирнова'] },
         ],
+        days: [{ date: DAY, state: 'scheduled', items: [
+          { date: DAY, state: 'lesson', slot: { start: '09:00', end: '09:45' }, canonical_title: 'Математика', teacher: 'Елена Петрова', room: '12' },
+          { date: DAY, state: 'lesson', slot: { start: '10:00', end: '10:45' }, canonical_title: 'Цифровой трек', activity_type: 'elective' },
+          { date: DAY, state: 'lesson', slot: { start: '11:00', end: '11:45' }, canonical_title: 'Курс по выбору', activity_type: 'elective' },
+        ] }],
       };
     } else if (url.pathname === '/api/student/homework') {
       body = { items: [] };
@@ -37,50 +36,20 @@ async function openCampusSchedule(page: Page) {
   await page.goto(`/?role=student&date=${DAY}`);
   await page.locator('.scene-hotspot.hotspot--schedule').click();
   await page.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-  await expect(page.locator('.student-schedule-views')).toBeVisible();
+  await expect(page.locator('.student-schedule-stack')).toBeVisible();
 }
 
-test('Campus shows concurrent electives as one expandable block inline with lessons', async ({ page }) => {
+test('Campus shows shared elective block names inline without lane details or clubs', async ({ page }) => {
   await installCampusApi(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await openCampusSchedule(page);
 
   const stack = page.locator('.student-schedule-stack');
-  await expect(stack.locator('.student-schedule-lesson')).toHaveCount(1);
-  const elective = stack.locator('.student-elective-block');
-  await expect(elective).toHaveCount(1);
-  await expect(elective.locator('summary')).toContainText('10:00–10:45');
-  await expect(elective.locator('summary')).toContainText('Курсы по выбору');
-  await expect(elective.locator('summary')).toContainText('2 варианта');
-  await elective.locator('summary').click();
-  await expect(elective).toContainText('Робототехника');
-  await expect(elective).toContainText('Иван Сидоров');
-  await expect(elective).toContainText('каб. 24');
-  await expect(elective).toContainText('Шахматы');
-  await expect(elective).toContainText('Анна Волкова');
-  await expect(elective).toContainText('каб. 31');
-  await expect(elective.getByRole('button')).toHaveCount(0);
+  await expect(stack.locator('.student-schedule-lesson')).toHaveCount(3);
+  await expect(stack).toContainText('Цифровой трек');
+  await expect(stack).toContainText('Курс по выбору');
   await expect(stack).not.toContainText('Театральная студия');
-  await page.screenshot({ path: 'artifacts/campus-optional-activities/campus-electives.png', fullPage: true });
-});
-
-test('Campus places clubs in a separate schedule tab away from required lessons', async ({ page }) => {
-  await installCampusApi(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await openCampusSchedule(page);
-
-  const lessonsTab = page.getByRole('tab', { name: 'Уроки и курсы по выбору' });
-  const clubsTab = page.getByRole('tab', { name: 'Кружки' });
-  await expect(lessonsTab).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('.student-schedule-stack')).not.toContainText('Театральная студия');
-  await clubsTab.click();
-  await expect(clubsTab).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('.student-schedule-stack')).toHaveCount(0);
-  const clubView = page.getByRole('tabpanel', { name: 'Кружки' });
-  await expect(clubView).toContainText('Театральная студия');
-  await expect(clubView).toContainText('14:00–15:00');
-  await expect(clubView).toContainText('Мария Смирнова');
-  await expect(clubView).toContainText('каб. 18');
-  await expect(clubView).not.toContainText('Робототехника');
-  await page.screenshot({ path: 'artifacts/campus-optional-activities/campus-clubs.png', fullPage: true });
+  await expect(page.getByRole('tab', { name: 'Кружки' })).toHaveCount(0);
+  await expect(stack).not.toContainText('Мария Смирнова');
+  await page.screenshot({ path: 'artifacts/campus-optional-activities/campus-shared-blocks.png', fullPage: true });
 });
