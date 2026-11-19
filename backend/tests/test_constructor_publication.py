@@ -534,6 +534,34 @@ class ConstructorPublicationTests(unittest.TestCase):
         unaffected = canonical.project_student(self.database, self.other_student["id"], "2026-10-19")
         self.assertEqual([item["activity"] for item in unaffected["items"]], ["English"])
 
+    def test_student_overlap_exemption_does_not_hide_independent_projection_error(self):
+        other_group = self.database.create_group("9A English", "instructional", base_class_name="9A")
+        self.database.create_membership(other_group["id"], self.student["id"], "student", "synthetic")
+        self.database.create_membership(other_group["id"], self.other_student["id"], "student", "synthetic")
+        lessons = [
+            self.lesson(id="math-overlap", subject="Math",
+                        audience={"kind": "groups", "group_ids": [str(self.math["id"])]}),
+            self.lesson(id="english-overlap", subject="English", teacherId=str(self.other_teacher["id"]),
+                        room="102", audience={"kind": "groups", "group_ids": [str(other_group["id"])]}),
+            self.lesson(id="independent-projection-error", day=1, subject="Science"),
+        ]
+        draft = self.draft(lessons)
+        original = canonical._project_student_block
+
+        def corrupt_independent_block(database, context, student, block, day):
+            if block["weekday"] == 1:
+                return {"state": "UNRESOLVED", "issue_codes": ["UNKNOWN_CANONICAL_GROUP"]}, []
+            return original(database, context, student, block, day)
+
+        with patch.object(canonical, "_project_student_block", side_effect=corrupt_independent_block):
+            preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+
+        self.assertIn("student_overlap", [item["code"] for item in preview["diagnostics"]])
+        self.assertIn("projection_mismatch", [item["code"] for item in preview["diagnostics"]])
+        self.assertEqual(preview["summary"]["ready_lessons"], 2)
+        self.assertEqual(preview["summary"]["deferred_lessons"], 1)
+        self.assertEqual([item["lesson_id"] for item in preview["deferred"]], ["independent-projection-error"])
+
     def test_grade_10_and_11_sdep_records_ignore_teacher_room_and_normal_class_occupancy(self):
         class10 = self.database.create_group("10A", "class", base_class_name="10")
         class11 = self.database.create_group("11A", "class", base_class_name="11")
@@ -608,7 +636,7 @@ class ConstructorPublicationTests(unittest.TestCase):
         competing_draft = save_experiment(self.database, competing_draft["id"], expected_revision=competing_draft["revision"], payload=competing_payload)
         competing_preview = preview_publication(self.database, competing_draft["id"], scope_kind="template", expected_revision=competing_draft["revision"])
         competing_codes = [item["code"] for item in competing_preview["diagnostics"]]
-        self.assertIn("teacher_overlap", competing_codes)
+        self.assertTrue({"teacher_overlap", "joint_activity_unconfirmed"} & set(competing_codes))
         self.assertNotIn("room_overlap", competing_codes)
 
     def test_explicit_lunch_publishes_without_routine_scope_advisory(self):

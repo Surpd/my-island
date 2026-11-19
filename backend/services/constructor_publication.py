@@ -232,7 +232,8 @@ def _class_grade(group: Mapping[str, Any]) -> str | None:
 
 
 def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: Mapping[str, Any],
-                           reference: date, conflict_student_ids: set[str] | None = None) -> set[str]:
+                           reference: date,
+                           conflict_student_ids_by_block: Mapping[str, set[str]] | None = None) -> set[str]:
     """Use the real projector in memory, before any immutable artifact is written.
 
     In particular a removed partition must never widen a remaining audience.
@@ -284,10 +285,14 @@ def _projection_mismatches(database: Any, blocks: Mapping[str, Any], audience: M
                                 or set(a["teacher_ids"]) == set(str(t) for t in projected.get("teacher_ids") or []))]
                 if not matches:
                     mismatches.add(key)
-            elif projected["state"] == "UNRESOLVED" and sid in (conflict_student_ids or set()):
+            elif (projected["state"] == "UNRESOLVED"
+                  and set(projected.get("issue_codes") or []) == {"MULTIPLE_ACTIVITY_CLAIMS"}
+                  and sid in (conflict_student_ids_by_block or {}).get(key, set())):
                 # The exact student has a confirmed timetable collision. Keep
-                # the assignments for unaffected classmates and attach a
-                # personal conflict marker in the immutable source archive.
+                # this block's assignments for unaffected classmates and attach
+                # a personal conflict marker in the immutable source archive.
+                # Other projection failures, even for the same student, remain
+                # blocking and are handled by the normal mismatch path.
                 continue
             elif projected["state"] == "UNRESOLVED" or expected_activities:
                 mismatches.add(key)
@@ -687,10 +692,23 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         issue["action"] = "excluded" if issue.get("block_key") in excluded else "blocked" if issue["severity"] == "critical" else "published"
     blocks = {key: value for key, value in blocks.items() if key not in excluded}
     invalid_projections: set[str] = set()
-    conflicted_students = {str(sid) for issue in blockers if issue.get("code") == "student_overlap"
-                           for sid in issue.get("affected_student_ids") or []}
+    conflicted_students_by_block: dict[str, set[str]] = {}
+    for issue in blockers:
+        if issue.get("code") != "student_overlap":
+            continue
+        related_keys = {lesson_keys[lesson_id] for lesson_id in issue.get("related_lesson_ids") or []
+                        if lesson_id in lesson_keys}
+        # A projection can only be unresolved by conflicting assignments within
+        # the same canonical block. Cross-block overlaps are handled by the
+        # personal unresolved marker and must not exempt another block.
+        if len(related_keys) != 1:
+            continue
+        block_key = next(iter(related_keys))
+        conflicted_students_by_block.setdefault(block_key, set()).update(
+            str(sid) for sid in issue.get("affected_student_ids") or []
+        )
     while blocks:
-        invalid = _projection_mismatches(database, blocks, audience, reference, conflicted_students)
+        invalid = _projection_mismatches(database, blocks, audience, reference, conflicted_students_by_block)
         if not invalid:
             break
         # Projector mismatches invalidate only the affected immutable block.
