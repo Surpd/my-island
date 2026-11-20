@@ -239,7 +239,8 @@ test('показывает имя из справочника в единой к
   await expect(issue).toHaveCount(1);
   await expect(issue).toContainText('Мария Тестова');
   await expect(issue).not.toContainText('student-fixture');
-  await page.keyboard.press('Escape');
+  await dialog.getByRole('button', {name: 'Закрыть проверку', exact: true}).click();
+  await expect(dialog).toBeHidden();
   await expect(page.getByRole('link', {name: 'Открыть таблицу', exact: true})).toHaveAttribute('href', /#gid=1088$/);
   let writes = 0;
   await page.route(`${API}/api/admin/schedule/experiments/school/${DRAFT_ID}/export`, route => {

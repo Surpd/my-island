@@ -197,7 +197,16 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await expect(page.locator('.constructor-card')).toHaveCount(3);
   await expect(page.locator('[data-cell="1:0"] .constructor-card')).toHaveCount(1);
   await expect(page.locator('[data-cell="2:0"] .constructor-card')).toHaveCount(2);
-  await page.locator('[data-cell="2:0"] .constructor-card').first().dragTo(page.locator('[data-cell="3:0"]'), { sourcePosition: { x: 4, y: 20 }, targetPosition: { x: 20, y: 20 } });
+  const source = page.locator('[data-cell="2:0"] .constructor-card').first();
+  const target = page.locator('[data-cell="3:0"]');
+  await target.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
+  const [from, to] = await Promise.all([source.boundingBox(), target.boundingBox()]);
+  if (!from || !to) throw new Error('Drag source and destination must be on screen');
+  await page.mouse.move(from.x + 20, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 30, to.y + to.height / 2, { steps: 12 });
+  await page.mouse.move(to.x + 32, to.y + to.height / 2);
+  await page.mouse.up();
   await expect(page.locator('[data-cell="3:0"] .constructor-card')).toHaveCount(
     1,
   );
