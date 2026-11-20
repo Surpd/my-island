@@ -267,7 +267,7 @@ class ConstructorResolutionTests(unittest.TestCase):
 
     def test_independent_practice_keeps_responsibility_without_physical_overlap(self):
         from backend.services import canonical_schedule as canonical
-        d=self.draft([self.lesson(id='lesson',audience={'kind':'students','student_ids':[str(self.student['id'])]}),self.lesson(id='practice',subject='Practice',audience={'kind':'students','student_ids':[str(self.other_student['id'])]})])
+        d=self.draft([self.lesson(id='lesson',audience={'kind':'students','student_ids':[str(self.student['id'])]}),self.lesson(id='practice',subject='Practice',room='202',audience={'kind':'students','student_ids':[str(self.other_student['id'])]})])
         d=self.apply(d,['practice'],'independent_practice');self.publish(d);self.publish(d,'week',week_start='2026-10-19')
         student=canonical.project_student(self.database,self.other_student['id'],'2026-10-19')
         self.assertEqual(student['items'][0]['activity_format'],'independent_practice')

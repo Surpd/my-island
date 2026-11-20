@@ -77,6 +77,7 @@ type Lesson = {
   exam_track?: string | null;
   lesson_type?: string | null;
   delivery_mode?: string | null;
+  connection_info?: string;
   activity_format?: string | null;
   physical_presence?: boolean;
   responsible_teacher?: string | null;
@@ -97,6 +98,7 @@ type StudentScheduleItem = {
   room?: string | null;
   teacher?: string | null;
   group_context?: string[] | string | null;
+  connection_info?: string;
   activity_format?: string | null;
   responsible_teacher?: string | null;
   no_lesson?: { reason?: 'before_first_lesson' | 'break' | 'end_of_day' };
@@ -384,12 +386,13 @@ function LessonRow({ lesson }: { lesson: Lesson }) {
             ? [
                 lesson.audience,
                 lesson.room,
+                lesson.connection_info,
                 lesson.responsible_teacher
                   ? `Ответственный за задание: ${lesson.responsible_teacher}`
                   : 'Самостоятельная практика',
                 lesson.physical_presence === false ? 'Вы не ведёте это занятие' : '',
               ].filter(Boolean).join(' · ')
-            : [lesson.audience, lesson.room, lesson.teacher]
+            : [lesson.audience, lesson.room, lesson.teacher, lesson.connection_info]
             .filter(Boolean)
             .join(' · ') || 'Детали уточняются'}
         </span>
@@ -484,7 +487,7 @@ function ScheduleItemRow({ item, index, onOpen }: { item: StudentScheduleItem; i
   }
   if (item.state === 'conflict') {
     const title = item.conflict?.alternatives.map((alternative) => alternative.title).join(' / ') || 'Расписание уточняется';
-    const content = <><span className="student-schedule-conflict__mark" aria-hidden="true">?</span><div><small>Уточняется</small><strong>{title}</strong><span>{formatLessonTimeRange(item.slot.start, item.slot.end)}</span></div></>;
+    const content = <><span className="student-schedule-conflict__mark" aria-hidden="true">?</span><div><small>{item.conflict?.label || 'Уточняется'}</small><strong>{title}</strong><span>{formatLessonTimeRange(item.slot.start, item.slot.end)}</span></div></>;
     return onOpen ? <button type="button" className="student-schedule-conflict student-schedule-lesson--button" onClick={() => onOpen(scheduleDetailKey(item, index))} aria-label={`Подробности занятия: ${title}`}>{content}</button> : <article className="student-schedule-conflict">{content}</article>;
   }
   if (item.state !== 'lesson') return null;
@@ -514,7 +517,7 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
   if (navigationLevel === 'detail' && selectedDetail) {
     const context = Array.isArray(selectedDetail.group_context) ? selectedDetail.group_context.join(' · ') : selectedDetail.group_context;
     const title = selectedDetail.state === 'special_event' ? selectedDetail.special_event?.title || 'Событие' : selectedDetail.state === 'conflict' ? selectedDetail.conflict?.alternatives.map(item => item.title).join(' / ') || 'Занятие уточняется' : selectedDetail.canonical_title || 'Занятие';
-  return <div className="section-panel student-lesson-detail"><button type="button" className="student-journal-back" aria-label="Назад к расписанию" onClick={onBack}><ChevronLeft size={23} aria-hidden="true" /></button><p className="eyebrow">Подробности занятия</p><h2>{title}</h2><dl><div><dt>Дата</dt><dd>{formatDate(selectedDetail.date, true)}</dd></div><div><dt>Время</dt><dd>{formatLessonTimeRange(selectedDetail.slot.start, selectedDetail.slot.end)}</dd></div>{selectedDetail.activity_format === 'independent_practice' ? <div><dt>Формат</dt><dd>Самостоятельная практика</dd></div> : null}{selectedDetail.activity_format === 'independent_practice' && selectedDetail.responsible_teacher ? <div><dt>Ответственный за задание</dt><dd>{selectedDetail.responsible_teacher}</dd></div> : selectedDetail.teacher ? <div><dt>Преподаватель</dt><dd>{selectedDetail.teacher}</dd></div> : null}{selectedDetail.room ? <div><dt>Кабинет</dt><dd>{normalizeRoomDisplay(selectedDetail.room)}</dd></div> : null}{context ? <div><dt>Группа</dt><dd>{context}</dd></div> : null}{selectedDetail.special_event?.metadata ? <div><dt>Сведения</dt><dd>{Object.values(selectedDetail.special_event.metadata).filter(value => typeof value === 'string' || typeof value === 'number').join(' · ')}</dd></div> : null}</dl></div>;
+  return <div className="section-panel student-lesson-detail"><button type="button" className="student-journal-back" aria-label="Назад к расписанию" onClick={onBack}><ChevronLeft size={23} aria-hidden="true" /></button><p className="eyebrow">Подробности занятия</p><h2>{title}</h2><dl><div><dt>Дата</dt><dd>{formatDate(selectedDetail.date, true)}</dd></div><div><dt>Время</dt><dd>{formatLessonTimeRange(selectedDetail.slot.start, selectedDetail.slot.end)}</dd></div>{selectedDetail.activity_format === 'independent_practice' ? <div><dt>Формат</dt><dd>Самостоятельная практика</dd></div> : null}{selectedDetail.activity_format === 'independent_practice' && selectedDetail.responsible_teacher ? <div><dt>Ответственный за задание</dt><dd>{selectedDetail.responsible_teacher}</dd></div> : null}{selectedDetail.teacher ? <div><dt>Преподаватель</dt><dd>{selectedDetail.teacher}</dd></div> : null}{selectedDetail.connection_info ? <div><dt>Подключение</dt><dd>{selectedDetail.connection_info}</dd></div> : null}{selectedDetail.room ? <div><dt>Кабинет</dt><dd>{normalizeRoomDisplay(selectedDetail.room)}</dd></div> : null}{context ? <div><dt>Группа</dt><dd>{context}</dd></div> : null}{selectedDetail.special_event?.metadata ? <div><dt>Сведения</dt><dd>{Object.values(selectedDetail.special_event.metadata).filter(value => typeof value === 'string' || typeof value === 'number').join(' · ')}</dd></div> : null}</dl></div>;
   }
   return (
     <div className="section-panel" ref={attachScroll}>
@@ -559,7 +562,7 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
       {visibleItems.length ? <div className="student-schedule-stack">
         {visibleItems.map((item) => item.state === 'no_lesson'
           ? <div className="student-schedule-gap" key={`${item.date}-${item.slot.start}`}><span />Перерыв</div>
-          : <ScheduleItemRow item={item} index={day?.items.indexOf(item) ?? 0} onOpen={key => { const scrollTop = document.querySelector<HTMLElement>('.sheet-full')?.scrollTop || 0; onSaveScroll?.(scrollTop); onOpenLesson?.(key, scrollTop); }} key={`${item.date}-${item.slot.start}-${item.state}`} />)}
+          : <ScheduleItemRow item={item} index={day?.items.indexOf(item) ?? 0} onOpen={key => { const scrollTop = document.querySelector<HTMLElement>('.sheet-full')?.scrollTop || 0; onSaveScroll?.(scrollTop); onOpenLesson?.(key, scrollTop); }} key={scheduleDetailKey(item, day?.items.indexOf(item) ?? 0)} />)}
       </div> : <EmptyState icon={CalendarDays} title={emptyTitle} detail={emptyDetail} />}
     </div>
   );

@@ -9,7 +9,7 @@ export function shouldWarnMissingTeacher(
   lesson: { activityType?: string; kind?: string; informational?: boolean; teacherId?: string; teacherIds?: string[] },
   independentPractice = false,
 ): boolean {
-  if (lesson.activityType === 'club' || lesson.activityType === 'elective' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
+  if (lesson.activityType === 'practice' || lesson.activityType === 'club' || lesson.activityType === 'elective' || lesson.activityType === 'event' || lesson.kind === 'event' || lesson.informational === true || independentPractice) return false;
   return !lesson.teacherId && !(lesson.teacherIds || []).length;
 }
 

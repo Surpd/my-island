@@ -25,7 +25,7 @@ from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import (
     get_experiment, experiment_week_audience_preview, _is_lunch_lesson, _lesson_activity_type, _lesson_audience,
     _lesson_interval, _lesson_weekday, _canonical_time,
-    resolve_payload_day_mode, payload_day_mode_conflicts,
+    _lesson_day_modes, lesson_is_online, payload_day_mode_conflicts,
 )
 from backend.services.constructor_resolution import validated_exceptions
 from backend.services.schedule_rooms import room_key
@@ -74,38 +74,13 @@ class _TransactionDatabase:
 
 
 def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: bool = False) -> bool:
-    if independent_practice or lesson.get("activityType") in {"club", "elective", "event"}:
+    if independent_practice or lesson.get("activityType") in {"practice", "club", "elective", "event"}:
         return False
     if lesson.get("kind") == "event" or lesson.get("informational") is True:
         return False
     if lesson.get("specialMark") in {"lunch", "no_lesson"}:
         return False
     return True
-
-
-def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], class_grades: Mapping[str, str]) -> set[str]:
-    rule = _lesson_audience(lesson)
-    class_ids = {str(value) for value in (lesson.get("classIds") or []) if value}
-    class_ids.update(str(value) for value in (rule.get("class_ids") or rule.get("group_ids") or []) if value)
-    class_ids.update(str(value) for value in (lesson.get("groupIds") or []) if value)
-    class_ids.update(str(value) for value in (lesson.get("classId"), lesson.get("groupId")) if value)
-    try:
-        weekday = int(lesson.get("day", lesson.get("weekday", -1)))
-    except (TypeError, ValueError):
-        return set()
-    grades = {class_grades.get(str(class_id), "") for class_id in class_ids}
-    if rule.get("grade"):
-        grades.add(str(rule["grade"]))
-    grades.discard("")
-    modes = {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] for grade in grades}
-    return {str(mode) for mode in modes if mode is not None}
-
-
-def _sdep_independent_lesson(payload: Mapping[str, Any], lesson: Mapping[str, Any], teacher_ids: set[str], class_grades: Mapping[str, str]) -> bool:
-    class_modes = _lesson_day_modes(payload, lesson, class_grades)
-    # The saved grade/day mode is authoritative. Imported teacher, room, format,
-    # and legacy per-lesson flags describe source data, not physical presence.
-    return bool(class_modes) and class_modes == {"sdep"}
 
 
 def initialize_publication_schema(database: Any) -> None:
@@ -145,6 +120,7 @@ def _semantic(block: Mapping[str, Any]) -> dict[str, Any]:
                 "metadata": {"room": str((a.get("metadata") or {}).get("room") or ""),
                              "note": str((a.get("metadata") or {}).get("note") or ""),
                              "activity_type": (a.get("metadata") or {}).get("activity_type") or "lesson",
+                             "day_plan_mode": (a.get("metadata") or {}).get("day_plan_mode") or "normal",
                              "audience_coverage": (a.get("metadata") or {}).get("audience_coverage"),
                              "joint_activity_id": (a.get("metadata") or {}).get("joint_activity_id"),
                              "activity_format": (a.get("metadata") or {}).get("activity_format"),
@@ -541,20 +517,20 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             # Old staffing fields on a grid marker carry no teaching assignment.
             teacher_ids = []
         responsible_source = [] if is_display_marker else (
-            lesson.get("responsible_teacher_ids") or lesson.get("responsibleTeacherIds") or teacher_ids)
+            lesson.get("responsible_teacher_ids") or lesson.get("responsibleTeacherIds") or ([] if activity_type == "practice" else teacher_ids))
         if not isinstance(responsible_source, (list, tuple, set)):
             responsible_source = teacher_ids
         responsible_teacher_ids = sorted({str(value) for value in responsible_source if value})
-        teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice else set())
+        teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice or activity_type == "practice" else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
         rule_groups = _lesson_audience(lesson).get("group_ids") or []
         stale_math_groups = [groups[str(group_id)] for group_id in rule_groups if str(group_id) in groups
             and str(groups[str(group_id)].get("subject") or "").strip().casefold() == "математика"
             and str(lesson.get("subject") or "").strip().casefold() != "математика"]
         class_modes = _lesson_day_modes(payload, lesson, class_grades)
-        online_only = bool(class_modes) and class_modes == {"online"}
-        sdep_independent = _sdep_independent_lesson(payload, lesson, set(teacher_ids), class_grades)
-        if len(class_modes) > 1:
+        online_only = lesson_is_online(lesson, class_modes)
+        sdep_independent = activity_type != "consultation" and class_modes == {"sdep"}
+        if len(class_modes) > 1 and (lesson.get("format") not in {"offline", "online"} or "sdep" in class_modes):
             block("mixed_day_modes_unsupported", "Занятие охватывает классы с разными режимами дня; разделите аудитории или режимы")
         if stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
             class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
@@ -594,7 +570,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 teacher_ids = [teacher_id for teacher_id in teacher_ids if teacher_id in teachers]
             else:
                 block("unknown_teacher", "An assigned teacher is missing or inactive")
-        if not teacher_ids and not sdep_independent and not is_optional and not is_event and _requires_physical_teacher(lesson, practice):
+        if activity_type == "consultation" and not teacher_ids:
+            block("missing_consultation_teacher", "Назначьте преподавателя консультации")
+        elif not teacher_ids and not sdep_independent and not is_optional and not is_event and _requires_physical_teacher(lesson, practice):
             blockers.append({"code": "missing_teacher", "lesson_id": lesson_id,
                              "message": "Преподаватель занятия не подтверждён", "severity": "info"})
         elif not teacher_ids and activity_type == "elective" and not teacher_evidence:
@@ -610,9 +588,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set() if sdep_independent or practice else set(teacher_ids),
                               "students": (set(result.get("student_ids") or []) | elective_student_ids
-                                           if activity_type == "elective" else set() if is_optional or sdep_independent
+                                           if activity_type == "elective" else set() if is_optional or sdep_independent or activity_type == "consultation"
                                            else set(result.get("student_ids") or [])),
-                              "subject": subject, "room": "" if practice or sdep_independent or online_only else room_key(lesson.get("room")),
+                              "subject": subject, "room": "" if sdep_independent or online_only or room_key(lesson.get("room")) in {"онлайн", "online"} else room_key(lesson.get("room")),
                               "activity_type": "event" if is_event else activity_type,
                               "elective_block_id": elective_block_id,
                               "sdep_independent": sdep_independent})
@@ -702,6 +680,9 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         class_scope = sorted({str(g) for g in class_ids or display_class_ids
                               if str(g) in groups and groups[str(g)]["group_type"] == "class"})
         elective_block_id = str(lesson.get("blockId") or "") if activity_type == "elective" else ""
+        if activity_type == "consultation":
+            elective_block_id = f"consultation:{lesson_id}"
+            same_slot = False
         key = origin_key if same_slot else "constructor-" + _hash([day, start, end, grade, class_scope, elective_block_id])[:24]
         lesson_keys[lesson_id] = key
         contexts[lesson_id] = {"day": day, "start": start, "end": end, "subject": subject or "Обед", "grade_scope": grade,
@@ -716,10 +697,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         for duplicate in ("id", "block_id", "ordinal", "assignment_kind", "audience_kind",
                           "canonical_group_ids", "teacher_ids", "audience", "source_cells", "joint_activity_id"):
             preserved_metadata.pop(duplicate, None)
+        if not practice and activity_type != "practice" and preserved_metadata.get("activity_format") == "independent_practice":
+            for field in ("activity_format", "responsible_teacher_ids", "responsible_teachers"):
+                preserved_metadata.pop(field, None)
         # Retain authored descriptive/activity fields separately from audience
         # rules; no UI preference or teacher-color field enters lesson payloads.
         constructor_details = {**deepcopy(preserved_metadata.get("constructor_details") or {}), **{k: deepcopy(lesson[k]) for k in (
-            "description", "place", "format", "activityCatalogId", "activityNameSnapshot",
+            "description", "place", "format", "connectionInfo", "responsible_teacher_ids", "activityCatalogId", "activityNameSnapshot",
             "eligibleGrades", "confirmedParticipantIds", "electiveDirection", "audience_snapshot", "blockId", "blockName",
             "kind", "informational", "sdepIndependent", "allDay", "activityType") if k in lesson}}
         assignment = {"activity": "NO_LESSON" if special == "no_lesson" else subject or "Обед",
@@ -735,7 +719,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                                    "activity_type": "event" if is_event else activity_type,
                                    "day_plan_mode": "sdep" if sdep_independent else "online" if online_only else "normal",
                                    **({"activity_format":"independent_practice", "responsible_teacher_ids":responsible_teacher_ids,
-                                       "responsible_teachers":[teachers[t] for t in responsible_teacher_ids if t in teachers]} if practice else {}),
+                                       "responsible_teachers":[teachers[t] for t in responsible_teacher_ids if t in teachers]} if practice or activity_type == "practice" else {}),
                                    "special_mark": special}}
         if lesson.get("protected"):
             original_assignment = origin.get("assignment") or {}
@@ -791,7 +775,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             # Duplicate source cells may omit the teacher/room on one copy.
             # Only compatible copies of the exact same roster are equivalent;
             # equal subject text alone must not hide two teachers or rooms.
-            if (left["subject"] == right["subject"] and lesson_keys.get(left["id"]) == lesson_keys.get(right["id"])
+            if (not {"consultation", "practice", "laboratory"}.intersection({left["activity_type"], right["activity_type"]}) and left["subject"] == right["subject"] and lesson_keys.get(left["id"]) == lesson_keys.get(right["id"])
                     and left["students"] == right["students"]
                     and (not left["teachers"] or not right["teachers"] or left["teachers"] == right["teachers"])
                     and (not left["room"] or not right["room"] or left["room"] == right["room"])):
@@ -1011,7 +995,7 @@ def _build_publication_preview(database: Any, draft_id: str, scope_kind: str, ex
             issue["action"] = "retained_unresolved"
         code = issue["code"]
         message = issue.get("message") if code in {"review_required", "stale_group_subject_mismatch", "elective_block_unlinked",
-            "elective_block_name_conflict", "unknown_teacher", "missing_teacher", "day_mode_conflict"} else None
+            "elective_block_name_conflict", "unknown_teacher", "missing_teacher", "missing_consultation_teacher", "day_mode_conflict"} else None
         issue["message"] = message or _ISSUE_MESSAGES.get(code, "Проверьте исходную запись в конструкторе")
         for lesson_id in issue.get("related_lesson_ids") or [issue.get("lesson_id")]:
             messages_by_lesson.setdefault((lesson_id, code), issue["message"])

@@ -313,6 +313,14 @@ class ScheduleExperimentSavePayload(BaseModel):
     term_comparison_key: str | None = Field(default=None, min_length=1, max_length=360)
 
 
+class LaboratoryRequest(BaseModel):
+    expected_revision: int
+    blueprint_id: str
+    meeting: dict = Field(default_factory=dict)
+    deactivate: bool = False
+    token: str | None = None
+
+
 class ScheduleExperimentAudiencePreviewPayload(BaseModel):
     payload: dict
 
@@ -1985,6 +1993,27 @@ def create_router(database: Database) -> APIRouter:
             return duplicate_experiment(store, experiment_id, actor_user_id=actor["id"])
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/laboratory")
+    @router.post("/admin/schedule/experiments/{experiment_id}/laboratory")
+    def admin_laboratory(experiment_id: str, payload: LaboratoryRequest, request: Request, init_data: str | None = None,
+                         x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None),
+                         x_school_admin_session: str | None = Header(default=None)):
+        from backend.services.schedule_laboratories import laboratory_action
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        store = source = database
+        if "/experiments/school/" in request.scope["route"].path:
+            require_real_school_admin(x_school_admin_session, actor)
+            source, store = school_stores()
+        try:
+            return laboratory_action(store, source, experiment_id, payload.expected_revision, payload.blueprint_id,
+                                     payload.meeting, token=payload.token, deactivate=payload.deactivate, actor=actor["id"])
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail="Редакция изменилась. Откройте черновик заново.") from error
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail="Черновик не найден") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.put("/admin/schedule/experiments/school/{experiment_id}")
     def admin_school_save(experiment_id: str, payload: ScheduleExperimentSavePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):

@@ -1443,6 +1443,8 @@ def _student_busy_in_slot(
                         and str(student["id"]) not in {str(i) for i in other_rule.get("exclude_student_ids") or []}
                         and not _student_busy_in_slot(database, context, student, membership_groups, other_block, other_index, exact_intervals=exact_intervals)):
                     return True
+            if _assignment_metadata(other_assignment.get("metadata") or {}).get("activity_type") == "consultation":
+                continue
             if _other_assignment_occupies_slot(context, student, membership_groups, other_assignment, str(other_block.get("grade_scope") or "")):
                 return True
     return False
@@ -1739,6 +1741,8 @@ def _project_student_block(
                 "room": display_room(metadata.get("room")),
                 "provenance": {**provenance, "source_cells": selected["source_cells"]},
             }
+            if metadata.get("day_plan_mode") == "online":
+                result.update(delivery_mode="online", room="", connection_info=(metadata.get("constructor_details") or {}).get("connectionInfo", ""))
             if metadata.get("audience_coverage") == "explicit" and metadata.get("joint_activity_id"):
                 result["provenance"]["joint_activity_id"] = metadata["joint_activity_id"]
             if metadata.get('activity_format')=='independent_practice':
@@ -1762,6 +1766,11 @@ def _project_student_block(
                 note = next((str(trace.get("note") or "") for trace in assignment_traces if trace["matched"] and trace["activity"] == _NO_LESSON and trace.get("note")), "")
                 result = {"state": "NO_LESSON", "activity": _NO_LESSON, "reason": "no applicable canonical activity", "note": note, "provenance": provenance}
     assert result is not None
+    if result["state"] == "UNRESOLVED" and set(result.get("issue_codes") or []) & {
+            "MULTIPLE_ACTIVITY_CLAIMS", "INCOMPATIBLE_MEMBERSHIP_OVERLAP"}:
+        personal = [claim for claim in claims if claim["activity"] != _NO_LESSON and claim["role"] == "primary"]
+        if len(personal) > 1:
+            result["activities"] = [{"activity": c["activity"], "activity_type": c["activity_type"]} for c in personal]
     result["trace"] = {"memberships": sorted(membership_groups), "assignments": assignment_traces, "final_state": result["state"], "selected_activity": result.get("activity")}
     if result["state"] == "NO_LESSON" and any(trace["matched"] and trace["activity"] != _NO_LESSON for trace in assignment_traces):
         trace = {"source_cells": sorted({str(cell) for item in assignment_traces for cell in item["source_cells"]}), "final_state": "NO_LESSON", "assignments": assignment_traces}
@@ -1776,6 +1785,7 @@ def _published_unresolved_items(source: Mapping[str, Any] | None, publication_id
     """Own-identity conflict markers from the exact immutable publication only."""
     records=(source or {}).get('records') or []
     grouped={}
+    lessons = {lesson.get("id"): lesson for lesson in ((source or {}).get("payload") or {}).get("lessons", [])}
     for record in records:
         if kind == 'student':
             owns_marker = identity_id in {str(i) for i in record.get('conflict_student_ids') or []}
@@ -1786,6 +1796,10 @@ def _published_unresolved_items(source: Mapping[str, Any] | None, publication_id
         if record.get('day') not in range(7) or not record.get('start') or not record.get('end'):continue
         key=(record['day'],record['start'],record['end'])
         entry=grouped.setdefault(key,{'date':(date.fromisoformat(week_start)+timedelta(days=key[0])).isoformat(),'weekday':key[0],'start_time':key[1],'end_time':key[2], 'state':'UNRESOLVED','activity':None,'reason':'Занятие ожидает уточнения администратора','issue_codes':[],'provenance':{'publication_id':publication_id,'unresolved_record_ids':[]}})
+        if kind == "student" and identity_id in {str(i) for i in record.get("conflict_student_ids") or []}:
+            lesson = lessons.get(record["lesson_id"]) or {}
+            if lesson.get("subject") and identity_id in {str(i) for i in record.get("known_student_ids") or []}:
+                entry.setdefault("activities", []).append({"activity": lesson["subject"], "activity_type": lesson.get("activityType", "lesson")})
         entry['issue_codes']=sorted(set(entry['issue_codes'])|set(record.get('diagnostic_codes') or []))
         entry['provenance']['unresolved_record_ids'].append(record['lesson_id'])
     return list(grouped.values())
@@ -1892,7 +1906,7 @@ def _event_priority_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     events = [item for item in items if item.get("state") == "ACTIVITY" and item.get("activity_type") == "event"]
     result: list[dict[str, Any]] = []
     for item in items:
-        if item in events or item.get("state") != "ACTIVITY" or item.get("activity_type") in {"club", "elective"}:
+        if item in events or item.get("state") != "ACTIVITY" or item.get("activity_type") in {"club", "elective", "consultation"}:
             result.append(item)
             continue
         start, end = _clock_minutes(item.get("start_time")), _clock_minutes(item.get("end_time"))
@@ -1966,11 +1980,15 @@ def project_student(
             state.pop("trace", None)
         day_mode = day_modes_by_date.get(day)
         assignments = _assignments(database, block.get("canonical_block_id"), block.get("patch") or {})
+        if state["state"] != "ACTIVITY" and assignments and all(
+            _assignment_metadata(a.get("metadata") or {}).get("activity_type") == "consultation" for a in assignments
+        ):
+            continue
         sdep_plan = bool(assignments) and all(
             _assignment_metadata(assignment.get("metadata") or {}).get("day_plan_mode") == "sdep"
             for assignment in assignments
         )
-        if day_mode == "sdep" or sdep_plan:
+        if state.get("activity_type") != "consultation" and (day_mode == "sdep" or sdep_plan):
             state = {key: value for key, value in state.items() if key not in {"teacher_ids", "teacher_names", "room"}}
         joint_id = (state.get("provenance") or {}).get("joint_activity_id")
         if state["state"] == "ACTIVITY" and joint_id:
@@ -1982,7 +2000,7 @@ def project_student(
     unresolved=_published_unresolved_items(published_source,publication_id,student_id,week_start,'student')
     if unresolved:
         intervals={(i['date'],i['start_time'],i['end_time']) for i in unresolved}
-        items=[i for i in items if (i['date'],i['start_time'],i['end_time']) not in intervals]
+        items=[i for i in items if i.get("activity_type") == "consultation" or (i['date'],i['start_time'],i['end_time']) not in intervals]
         items.extend(unresolved)
     items = _event_priority_items(items)
     optional_activities = _published_optional_activities(database, effective, student, context, week_start)
@@ -2026,7 +2044,7 @@ def student_campus_projection(database: Database, identity_id: Any, start_day: s
     """Expose only student-facing fields of the already personal schedule."""
     result = project_student_range(database, identity_id, start_day, end_day)
     display_fields = ("date", "weekday", "start_time", "end_time", "state", "activity", "activity_type",
-                      "day_mode", "teacher_names", "room", "activity_format", "responsible_teachers")
+                      "day_mode", "delivery_mode", "connection_info", "teacher_names", "room", "activity_format", "responsible_teachers")
     items = []
     for row in result["items"]:
         item = {key: row[key] for key in display_fields if key in row}
@@ -2095,7 +2113,10 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
                     "grade_scope": block.get("grade_scope"), "teacher_ids": teacher_ids,
                     "teacher_names": metadata.get("teachers") or [], "room": display_room(metadata.get("room")),
                     "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
-            if responsible_ids:
+            item["activity_type"] = metadata.get("activity_type", "lesson")
+            if metadata.get("day_plan_mode") == "online":
+                item.update(delivery_mode="online", room="", connection_info=(metadata.get("constructor_details") or {}).get("connectionInfo", ""))
+            if metadata.get("activity_format") == "independent_practice":
                 item['activity_format']='independent_practice'
                 item['responsible_teacher_ids']=responsible_ids
                 item['responsible_teachers']=metadata.get('responsible_teachers') or []

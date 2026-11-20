@@ -189,8 +189,8 @@ def validate_activity_lessons(lessons: list[Any], catalog: list[Mapping[str, Any
                           legacySubject=legacy_subject, subject=display,
                           displayClassIds=lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else []))
             activity_type = "club"
-        if activity_type is not None and activity_type not in {"lesson", "club", "elective", "event"}:
-            raise ValueError("activityType must be lesson, club, elective or event")
+        if activity_type is not None and activity_type not in {"lesson", "club", "elective", "event", "consultation", "practice", "laboratory"}:
+            raise ValueError("Неизвестный тип занятия")
         if activity_type in {"club", "elective"}:
             cid = str(lesson.get("activityCatalogId") or "")
             explicitly_detached = "activityCatalogId" in lesson and not cid

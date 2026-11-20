@@ -22,3 +22,15 @@ test('legacy normalized lessons keep their dates and events keep their source st
   assert.equal(campusStudentDays(raw)[0].items[0].special_event.title, 'Экскурсия');
   assert.deepEqual(campusLessons(null), []);
 });
+
+test('personal conflicts keep each assigned title and mark voluntary consultations', () => {
+  const rows = [
+    { date: '2026-10-19', start_time: '09:55', state: 'UNRESOLVED', activities: [{activity:'Английский'}, {activity:'Физика'}] },
+    { date: '2026-10-19', start_time: '09:55', state: 'ACTIVITY', activity: 'Русский', activity_type: 'consultation', delivery_mode: 'online' },
+  ];
+  const [english, physics, consultation] = campusStudentDays(rows)[0].items;
+  assert.equal(english.conflict.alternatives[0].title, 'Английский');
+  assert.equal(physics.conflict.alternatives[0].title, 'Физика');
+  assert.equal(consultation.room, 'Онлайн');
+  assert.match(consultation.canonical_title, /по желанию/);
+});
