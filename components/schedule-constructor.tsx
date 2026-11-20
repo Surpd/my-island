@@ -1534,8 +1534,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       const instructional = linkedInstructionalGroups(lesson, groups);
       const ids = instructional.length ? instructional.map(group => group.id) : lessonClasses(lesson);
       const group = instructional.length === 1 ? instructional[0] : undefined;
-      return {id: lesson.id, key: [...ids].sort().join('|'), rank: group && subgroupRank(group.canonicalName || group.name, group.semantic_dimension, group.subject_subgroup),
-        whole: !instructional.length && ids.length === 1 && audienceOf(lesson, groups).kind === 'classes'};
+      return {id: lesson.id, key: [...ids].sort().join('|'), rank: group && subgroupRank(group.canonicalName || group.name, group.subject_subgroup)};
     })))));
   const gradeScopeAtColumn = (column: number) => {
     const grades = new Set((gridColumns[column]?.classIds || [])
@@ -1548,9 +1547,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       (payload?.lessons || []).filter((lesson) => overlapsSlot(lesson, candidateDay, period, payload!.slots) && displayedClasses(lesson).some((id) => column.classIds.includes(id))).length)));
     return Math.min(2.2, 1 + Math.max(0, peak - 1) * 0.22);
   };
-  const gridColumnTemplate = `68px ${gridColumns.map((column) => {
+  const horizontalDay = viewMode === "day" && gridColumns.length > 1 && columnLanes.some(group => group.width > 1);
+  const gridColumnTemplate = `68px ${gridColumns.map((column, index) => {
     const width = resizePreview?.[column.key] ?? (payload?.column_width_mode === 'manual' ? payload.column_widths?.[column.key] : undefined);
-    return width ? `${width}px` : `minmax(${fitWidth ? '0px' : `${Math.max(density === 'compact' ? 115 : 145, (columnLanes[gridColumns.indexOf(column)]?.width || 1) * 106)}px`}, ${columnWeight(column)}fr)`;
+    const minimum = horizontalDay ? columnLanes[index].width * 184 : fitWidth ? 0 : density === 'compact' ? 115 : 145;
+    return width ? `${width}px` : `minmax(${minimum}px, ${columnWeight(column)}fr)`;
+
   }).join(' ')}`;
   const beginColumnResize = (event: ReactPointerEvent<HTMLSpanElement>, key: string) => {
     if (event.button !== 0 || !payload) return;
@@ -3154,7 +3156,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <button onClick={backToIssues}>К проверке</button>
           </section> : null}
           <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
-            <div ref={gridWrap} className={`constructor-grid-wrap ${density}`} onScroll={(event) => {
+            <div ref={gridWrap} className={`constructor-grid-wrap ${density} ${horizontalDay ? "horizontal-day" : ""}`} onScroll={(event) => {
               if (!restoringGridScroll.current) gridScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
             }}>
               <div
@@ -3298,9 +3300,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             setContext({ x: event.clientX, y: event.clientY });
                           }}
                         >
-                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${lanes.width}, minmax(0, 1fr))` }}>
+                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${Math.max(1, lessons.length)}, minmax(0, 1fr))` }}>
                             {lessons.map((item) => {
-                              const placement = placements?.get(item.id);
                               const roomCaption = lessonOnline(payload, item, groups) ? 'Онлайн' : normalizeRoomDisplay(item.room);
                               const localGroups = linkedInstructionalGroupsForColumn(item, groups, students, column.classIds);
                               const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups, localGroups);
@@ -3314,7 +3315,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   key={item.id}
                                   data-lesson-id={item.id}
                                   title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${roomCaption || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
-                                  style={{ gridRow: 1, gridColumn: placement?.whole ? "1 / -1" : (placement?.lane ?? 0) + 1, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
+                                  style={{ gridRow: 1, order: placements?.get(item.id) ?? 0, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
                                   className={`constructor-card ${item.kind === 'event' ? 'event' : ''} ${item.kind === 'event' || item.end && item.end !== payload.slots[item.period]?.end ? `multislot ${item.period !== period ? 'event-continuation' : ''} ${overlapsSlot(item, cellDay, period + 1, payload.slots) ? 'event-continues' : ''}` : ''} ${selectedId === item.id ? 'active' : ''} ${conflictsOpen && issues.some((issue) => (issue.lessonId === item.id || issue.related === item.id) && issue.severity === 'error') ? 'error' : conflictsOpen && issues.some((issue) => issue.lessonId === item.id || issue.related === item.id) ? 'warning' : ''}`}
                                   draggable
                                   onDragStart={(event) => {

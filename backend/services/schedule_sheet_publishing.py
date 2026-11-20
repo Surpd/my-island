@@ -134,7 +134,7 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
     with database.connection() as connection:
         existing = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?", (digest,)).fetchone()
         if existing is None:
-            for policy in (PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
+            for policy in ("school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
                 if policy == EXPORT_POLICY:
                     continue
                 legacy = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?",

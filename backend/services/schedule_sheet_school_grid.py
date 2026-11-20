@@ -10,7 +10,7 @@ from backend.services.schedule_sheet_layout_v3 import activity_semantics
 
 GRID_LAYOUT = "school-grid"
 _MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
-GRADE_WIDTH = 148
+GRADE_WIDTH = 184
 TIME_WIDTH = 98
 
 
@@ -25,16 +25,33 @@ def week_caption(week, days):
 
 def subgroup_rank(group):
     name = str(group.get("name") or "")
-    split = re.fullmatch(r"grade7:split:([12])", name)
+    split = re.fullmatch(r"(?:grade[0-9]+:split:|english:)([1-9][0-9]*)", name)
     if split:
         return int(split[1]) - 1
     math = re.fullmatch(r"grade9-math-([ABC])", name)
     if math:
         return "ABC".index(math[1])
     value = str(group.get("subject_subgroup") or "").strip().upper()
-    if group.get("semantic_dimension") and value in ("1", "2", "3", "A", "B", "C"):
-        return ("123" if value.isdigit() else "ABC").index(value)
+    if re.fullmatch(r"[1-9][0-9]*", value):
+        return int(value) - 1
+    if re.fullmatch(r"[A-Z]", value):
+        return ord(value) - ord("A")
     return None
+
+
+def group_order(lesson, groups):
+    audience = lesson.get("audience") or {}
+    assignment = (lesson.get("canonical") or {}).get("assignment") or {}
+    metadata = assignment.get("metadata") or {}
+    linked = set((lesson.get("groupIds") or []) + (audience.get("group_ids") or []) +
+                 (assignment.get("canonical_group_ids") or []) +
+                 ((metadata.get("audience") or {}).get("canonical_group_ids") or []) +
+                 ((metadata.get("audience_rule") or {}).get("group_ids") or []))
+    if lesson.get("groupId"):
+        linked.add(lesson["groupId"])
+    ids = sorted(key for key in linked if groups.get(key, {}).get("group_type") != "class")
+    rank = subgroup_rank(groups.get(ids[0], {})) if len(ids) == 1 else None
+    return (rank if rank is not None else 100, tuple(ids or sorted(lesson["classIds"])))
 
 
 def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, sheet_id,
@@ -50,6 +67,18 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     if extra:
         grades.append(None)
         captions[None] = "Общие занятия"
+    # Continue a long lesson into each occupied bell interval without creating
+    # another occurrence or duplicating its source IDs in the hidden map.
+    bell_starts = sorted({str(slot["start"])[:5] for slot in payload["slots"]})
+    segments = defaultdict(list)
+    for day, lessons in by_day.items():
+        for lesson in lessons:
+            segments[day].append(lesson)
+            for bell in bell_starts:
+                if lesson["start"] < bell < lesson["end"]:
+                    segments[day].append({**lesson, "start": bell, "continuation": True})
+    by_day = segments
+    anchors = {}
     slots_by_grade = defaultdict(lambda: defaultdict(list))
     for day, lessons in by_day.items():
         for lesson in lessons:
@@ -63,42 +92,13 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     columns = 1
     for grade in grades:
         slots = slots_by_grade[grade]
-        neighbors = defaultdict(set)
-        ranks = {}
-        identities = {}
-        for lessons in slots.values():
-            keys = []
-            for lesson in lessons:
-                audience = lesson.get("audience") or {}
-                ids = sorted(set((audience.get("group_ids") or []) + (lesson.get("groupIds") or []) +
-                                 ([lesson["groupId"]] if lesson.get("groupId") else [])))
-                ids = tuple(i for i in ids if groups.get(i, {}).get("group_type") != "class")
-                key = ids or tuple(sorted(lesson["classIds"]))
-                identities[lesson["id"]] = key
-                keys.append(key)
-                group = groups.get(ids[0], {}) if len(ids) == 1 else {}
-                rank = subgroup_rank(group)
-                if rank is not None:
-                    ranks[key] = rank
-            for key in keys:
-                neighbors[key].update(other for other in keys if other != key)
-        lanes = dict(ranks)
-        for key in sorted(neighbors):
-            if key not in lanes:
-                occupied = {lanes[n] for n in neighbors[key] if n in lanes}
-                lanes[key] = next(i for i in range(len(occupied)+1) if i not in occupied)
-        width = max(lanes.values(), default=0) + 1
-        for lessons in slots.values():
-            used = set()
-            reserved = {lanes[identities[item["id"]]] for item in lessons}
-            for lesson in sorted(lessons, key=lambda item: identities[item["id"]]):
-                lane = lanes[identities[lesson["id"]]]
-                collision = lane in used
-                if collision:
-                    lane = next(i for i in range(len(used) + len(reserved) + 1) if i not in used | reserved)
-                used.add(lane)
-                placements[grade, lesson["id"]] = lane, collision
-                width = max(width, lane + 1)
+        width = max((len(lessons) for lessons in slots.values()), default=1)
+        for (_, start), lessons in slots.items():
+            ordered = sorted(lessons, key=lambda lesson: group_order(lesson, groups))
+            for index, lesson in enumerate(ordered):
+                left = index * width // len(ordered)
+                right = (index + 1) * width // len(ordered)
+                placements[grade, start, lesson["id"]] = left, right - left
         spans[grade] = width
         positions[grade] = columns
         columns += width
@@ -151,11 +151,18 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
             start_row = row
             ends = {item["end"] for item in slots[start]}
             cell(row, 0, f"{start}–{next(iter(ends))}" if len(ends) == 1 else start, bg="#EEF3F8", bold=True)
-            heights[row] = 60
+            heights[row] = 66
             for lesson in sorted(slots[start], key=lambda item: (item["end"], item["subject"], str(item["id"]))):
                 lesson_id = str(lesson["id"])
                 targets = sorted({grade_by_class[c] for c in lesson["classIds"]}, key=positions.__getitem__) or [None]
                 anchor = targets[0]
+                if lesson.get("continuation"):
+                    original = anchors[lesson_id]
+                    for grade in targets:
+                        col = positions[grade] + placements[grade, start, lesson_id][0]
+                        cell(row, col, f"Продолжение · {column_name(original['col'])}{original['row']+1}", size=9, width=placements[grade, start, lesson_id][1])
+                        original["references"].append({"row": row, "col": col, "continuation": True})
+                    continue
                 audience = lesson.get("audience") or {}
                 group_ids = list(dict.fromkeys([*(audience.get("group_ids") or []),
                     *(lesson.get("groupIds") or ([lesson["groupId"]] if lesson.get("groupId") else []))]))
@@ -186,7 +193,9 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 interval = f"{start}–{lesson['end']}" if len(ends) > 1 else ""
                 detail = " · ".join(filter(None, (", ".join(staff), lesson.get("room"))))
                 full = "\n".join(filter(None, (name, scope, *group_labels, detail, interval)))
-                compact = "\n".join(filter(None, (name, detail, interval)))
+                # Keep the confirmed group visible when adjacent subjects swap.
+                caption_group = ", ".join(group_labels) or scope
+                compact = "\n".join(filter(None, (name, caption_group, detail, interval)))
                 bg = _teacher_fill(teacher_ids, teachers, staff)
                 rgb = [int(bg[i:i+2], 16) for i in (1, 3, 5)]
                 bg = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in rgb)
@@ -195,22 +204,19 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 notes = ["\n".join(line for line in note.splitlines() if not line.lstrip().startswith("MY_ISLAND:")).strip()
                          for sid in lesson["_source_ids"] for note in existing_notes.get(sid, [])]
                 notes = list(dict.fromkeys(filter(None, notes)))
-                lane, collision = placements[anchor, lesson_id]
+                lane, width = placements[anchor, start, lesson_id]
                 col = positions[anchor] + lane
                 first_row = row
-                whole = (not group_labels and audience.get("kind") in (None, "classes") and
-                         len(slots_by_grade[anchor][day, start]) == 1 and not lane and len(labels) <= 1)
-                width = spans[anchor] if whole else 1
-                caption = ("⚠ " if collision else "") + compact
-                if len(caption) > 52:
-                    caption = "\n".join(shorten(part, width=23, placeholder="…") for part in caption.splitlines())
+                caption = compact
+                if len(caption) > 76:
+                    caption = "\n".join(shorten(part, width=24, placeholder="…") for part in caption.splitlines())
                 if full != caption:
                     notes.append(full)
                 cell(row, col, caption, width=width, bg=bg, bold=True, size=9, note="\n".join(notes))
                 references = []
                 for other in targets[1:]:
-                    target_col = positions[other] + placements[other, lesson_id][0]
-                    cell(row, target_col, f"Совместное занятие · {column_name(col)}{row+1}", size=9)
+                    target_col = positions[other] + placements[other, start, lesson_id][0]
+                    cell(row, target_col, f"Совместное занятие · {column_name(col)}{row+1}", size=9, width=placements[other, start, lesson_id][1])
                     references.append({"row": row, "col": target_col})
                 mapping.append(dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
                                     source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
@@ -218,6 +224,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                                     day=day, class_ids=lesson["classIds"], grade_numbers=targets if anchor is not None else [],
                                     group_ids=group_ids, teacher_ids=teacher_ids, references=references,
                                     rows=1))
+                anchors[lesson_id] = mapping[-1]
             row += 1
             slot_ranges.append({"start": start_row, "end": row})
 

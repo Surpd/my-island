@@ -236,6 +236,28 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(client.sheets[gid]["title"], plan["title"] + " (2)")
         self.assertEqual(self.confirm(self.draft["id"], client=client)["url"], result["url"])
 
+    def test_group_order_survives_subject_swaps_and_empty_left_lane(self):
+        from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template
+        families = json.loads((Path(__file__).parent / "fixtures/schedule_lane_order.json").read_text())
+        for names in families:
+            groups = [{"id": "class", "name": "7", "group_type": "class"}]
+            groups.extend({"id": name, "name": name, "group_type": "subject"} for name in names)
+            lessons = []
+            for day, keys in enumerate([names, names[::-1], names[-1:]]):
+                for offset, key in enumerate(keys):
+                    lessons.append({"id": f"{day}-{key}", "day": day, "period": 0, "classId": "class",
+                                    "groupId": key, "subject": ["История", "Литература", "Физика"][offset]})
+            snapshot = freeze_template({"groups": groups, "teachers": [], "source": {},
+                "payload": {"classes": ["class"], "days": [0, 1, 2], "lessons": lessons,
+                            "slots": [{"start": "09:00", "end": "09:45"}]}})
+            plan = build_sheet_plan(snapshot, layout="school-grid", title="Демо", sheet_id=1, mapping_sheet_id=2)
+            for item in plan["mapping"]:
+                self.assertEqual(item["col"], 1 if item["day"] == 2 else 1 + names.index(item["group_ids"][0]))
+            solo = next(item for item in plan["mapping"] if item["day"] == 2)
+            self.assertEqual(next(c["width"] for c in plan["cells"] if c["row"] == solo["row"] and c["col"] == solo["col"]), len(names))
+            for day in range(3):
+                self.assertEqual(len({item["row"] for item in plan["mapping"] if item["day"] == day}), 1)
+
     def test_school_grid_keeps_parallel_cards_and_hidden_source_map(self):
         from backend.services.schedule_sheet_export import sheets_requests
         another = str(self.db.create_group("8", "class")["id"])
@@ -381,7 +403,7 @@ class SchedulePublishingTests(unittest.TestCase):
             export = prepare_export(self.db, self.draft['id'], expected_revision=1, directory_database=self.db)
         draft = get_experiment(self.db, self.draft['id'])
         with self.db.connection() as connection:
-            groups = [dict(row) for row in self.db.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject FROM groups ORDER BY id").fetchall()]
+            groups = [dict(row) for row in self.db.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject,subject_subgroup,semantic_dimension FROM groups ORDER BY id").fetchall()]
             teachers = [dict(row) for row in self.db.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' ORDER BY id").fetchall()]
         for row in groups + teachers:
             row['id'] = str(row['id'])
