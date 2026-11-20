@@ -201,6 +201,62 @@ class ScheduleTermChoiceTests(unittest.TestCase):
         self.assertEqual(restored["payload"]["lessons"][0]["room"], "8")
         self.assertEqual(get_experiment(self.database, self.original["id"]), self.original)
 
+    def _seed_whole_class_comparison(self, *, track=None):
+        klass = str(self.database.create_group("11", "class", display_name="11 · базовый класс")["id"])
+        subgroup = str(self.database.create_group("Обществознание · 11 класс · База", "instructional")["id"])
+        teacher = str(self.database.create_identity("teacher", "Татьяна")["id"])
+        members = [str(self.database.create_identity("student", f"Ученик {index}", "11")["id"])
+                   for index in range(3)]
+        for student_id in members:
+            self.database.create_membership(klass, student_id, "student", "admin_override")
+        self.database.create_membership(subgroup, members[0], "student", "admin_override")
+        with self.database.connection() as connection:
+            connection.execute("""INSERT INTO teacher_assignments
+                (teacher_identity_id,group_id,subject,exam_track)
+                VALUES (?,?,'Русский язык',?)""", (teacher, klass, track))
+            connection.execute("""INSERT INTO membership_overrides
+                (identity_id,group_id,action,member_role) VALUES (?,?,'exclude','student')""", (members[2], klass))
+        lesson = {**self.payload["lessons"][0], "id": "author-s7", "subject": "Обществознание",
+                  "classId": klass, "classIds": [klass], "groupId": subgroup, "groupIds": [subgroup],
+                  "audience": {"kind": "groups", "group_ids": [subgroup]},
+                  "audience_snapshot": {"student_ids": members[:1]},
+                  "resolution_history": [{"kind": "test-history"}]}
+        target = {"day": 0, "start": "11:50", "end": "12:35", "classes": ["11 · базовый класс"],
+                  "subject": "Русский", "kind": "lesson", "room": "каб.15", "teachers": ["Татьяна"], "groups": []}
+        payload = {"days": [0], "slots": [{"start": "11:50", "end": "12:35"}],
+                   "classes": [klass], "lessons": [lesson],
+                   "school_source": {"term2_preparation": {"first_week": "2026-11-23", "comparison": {
+                       "items": [{"key": "cells:S7", "kind": "changed", "lesson_id": lesson["id"], "after": target}],
+                   }}}}
+        self.draft = create_experiment(self.database, name="S7 fixture", source="import", payload=payload,
+                                       _trusted_resolution_history=True)
+        return klass, teacher, members[:2]
+
+    def test_sheet_without_instructional_group_uses_confirmed_whole_class_assignment(self):
+        klass, teacher, members = self._seed_whole_class_comparison()
+        plan = self.preview("cells:S7")["sheet"]
+        self.assertEqual(plan["before"][0]["student_count"], 1)
+        self.assertEqual(plan["after"][0]["teachers"], ["Татьяна"])
+        self.assertTrue(plan["after"][0]["whole_class"])
+        self.assertEqual(plan["after"][0]["student_count"], 2)
+        self.assertEqual(get_experiment(self.database, self.draft["id"])["revision"], 1)
+        saved = self.apply("sheet", plan, key="cells:S7")
+        lesson = saved["payload"]["lessons"][0]
+        self.assertEqual(lesson["id"], "author-s7")
+        self.assertEqual(lesson["room"], "каб.15")
+        self.assertEqual(lesson["teacherIds"], [teacher])
+        self.assertEqual(lesson["audience"], {"kind": "classes", "class_ids": [klass]})
+        self.assertEqual(set(lesson["audience_snapshot"]["student_ids"]), set(members))
+        self.assertEqual(lesson["resolution_history"], [{"kind": "test-history"}])
+        self.assertEqual(comparison_of(saved)["decisions"][0]["choice"], "sheet")
+
+    def test_sheet_cannot_use_exam_only_or_expired_assignment_for_whole_class(self):
+        _, teacher, _ = self._seed_whole_class_comparison(track="ЕГЭ")
+        self.assertIn("нет назначения", self.preview("cells:S7")["sheet"]["unavailable"])
+        with self.database.connection() as connection:
+            connection.execute("UPDATE teacher_assignments SET exam_track=NULL,valid_until='2026-11-22' WHERE teacher_identity_id=?", (teacher,))
+        self.assertIn("нет назначения", self.preview("cells:S7")["sheet"]["unavailable"])
+
     def test_manual_save_closes_only_position_whose_slot_and_class_are_resolved(self):
         edited = deepcopy(self.draft["payload"])
         edited["lessons"][0]["room"] = "17"

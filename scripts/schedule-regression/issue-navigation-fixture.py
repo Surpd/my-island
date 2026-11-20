@@ -29,9 +29,10 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
     class_ids, people = {}, {}
     teacher_ids = fixture["teachers"]
     teacher_names = {tid: f"Synthetic Teacher {i:02d}" for i, tid in enumerate(teacher_ids, 1)}
-    for label in ("5-Т", "6-Т", "7-А", "7-Б", "8-Т", "9-Ан", "9-Д", "10-Т", "11-Т"):
+    for label in ("5-Т", "6-Т", "7-А", "7-Б", "8-Т", "9-Ан", "9-Д", "10-Т", "11-Т", "11"):
         class_ids[label] = str(database.create_group(
-            f"Fixture UX class {label}", "class", display_name=label, base_class_name=label,
+            f"Fixture UX class {label}", "class",
+            display_name="11 · базовый класс" if label == "11" else label, base_class_name=label,
         )["id"])
         people[label] = []
         for index in range(5):
@@ -82,6 +83,8 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
 
     english_lunch = group("Английский · смешанная группа", "Английский",
                           [*people["7-А"], *people["7-Б"], *people["8-Т"]], teacher_ids[0])
+    social = group("Обществознание · 11 класс · База", "Обществознание", people["11"][:3], teacher_ids[5])
+    database.set_teacher_assignment(teacher_ids[6], class_ids["11"], "Русский язык", True, None)
     cases = {
         "G8": lesson("G8", 0, 4, "Английский", teacher_ids[0], "8", ["7-А", "7-Б", "8-Т"], group_id=english_lunch),
         "Q53": lesson("Q53", 4, 1, "Английский ЕГЭ", teacher_ids[0], "18", ["10-Т", "11-Т"], group_id=eng),
@@ -102,10 +105,12 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
         lesson(f"filler-{day}-{period}-{column}", day, period, SUBJECTS[period], teacher_ids[column + 10],
                str(101 + column), [name])
         for day in range(5) for period in range(len(SLOTS)) if (day, period) not in occupied_slots
-        for column, name in enumerate(class_ids) if (day, period, name) not in {(3, 8, "9-Д"), (2, 8, "9-Д")}
+        for column, name in enumerate(class_ids) if name != "11" and (day, period, name) not in {(3, 8, "9-Д"), (2, 8, "9-Д")}
     ]
+    cases["S7"] = lesson("S7", 0, 3, "Обществознание", teacher_ids[5], "16", ["11"], group_id=social)
     lessons = [*fillers, *cases.values()]
     labels_by_class = {value: label for label, value in class_ids.items()}
+    labels_by_class[class_ids["11"]] = "11 · базовый класс"
 
     def side(value):
         return {
@@ -141,6 +146,9 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
                       "room": "", "classIds": [class_ids["7-Б"]],
                       "clarificationReason": "Уточните, относится ли обед ко всему классу."}
     items = [
+        item("S7", cases["S7"], {**cases["S7"], "subject": "Русский язык", "room": "15",
+                                "teacherIds": [teacher_ids[6]], "groupIds": []},
+             "Русский язык для всего класса подтверждён в справочнике.", "Группа и классы", cases["S7"]),
         item("G8", cases["G8"], lunch_proposal, "Обед для 7-Б вместо части общего занятия.",
              "Связь исходных ячеек", cases["G8"]),
         item("J8", cases["G8"], {**lunch_proposal, "classIds": [class_ids["8-Т"]]},

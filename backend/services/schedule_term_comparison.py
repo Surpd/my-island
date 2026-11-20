@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -22,6 +22,7 @@ from backend.services.schedule_experiments import (
     experiment_week_audience_preview,
     get_experiment,
 )
+from backend.services.schedule_parser_v2 import SUBJECT_PREFIX_ALIASES
 
 
 def term_comparison_lesson_fingerprint(lesson: Mapping[str, Any]) -> str:
@@ -288,12 +289,50 @@ def _with_classes(lesson, classes):
 def _projection(payload, lesson, group_labels, teacher_labels):
     interval = _lesson_interval(lesson, payload.get("slots") or [])
     times = [f"{value // 60:02d}:{value % 60:02d}" for value in interval] if interval else ["", ""]
+    audience = _lesson_audience(lesson)
+    snapshot = lesson.get("audience_snapshot")
+    whole_class = audience["kind"] == "classes" and not any(
+        audience.get(key) for key in ("include_student_ids", "exclude_student_ids")
+    )
     return {"subject": lesson.get("subject") or "Занятие", "day": lesson.get("day", lesson.get("weekday")),
             "start": times[0], "end": times[1], "room": lesson.get("room") or "",
             "classes": [group_labels.get(key, "Класс требует уточнения") for key in _class_ids(lesson)],
             "teachers": [teacher_labels.get(str(key), "Преподаватель требует уточнения")
                          for key in lesson.get("teacherIds") or ([lesson["teacherId"]] if lesson.get("teacherId") else [])],
-            "groups": [group_labels.get(key, "Группа требует уточнения") for key in _lesson_audience(lesson)["group_ids"]]}
+            "groups": [group_labels.get(key, "Группа требует уточнения") for key in audience["group_ids"]],
+            "whole_class": whole_class,
+            **({"student_count": len(snapshot.get("student_ids") or [])} if isinstance(snapshot, Mapping) else {})}
+
+
+def _verify_class_teaching(database, teacher_ids, classes, subject, lesson_date):
+    # Compare complete subject names/known abbreviations. Exam and subgroup
+    # assignments do not prove that the same teacher teaches the whole class.
+    aliases = dict(SUBJECT_PREFIX_ALIASES)
+    subject_key = _label(subject)
+    subject_key = aliases.get(subject_key, subject_key)
+    class_placeholders = ", ".join("?" for _ in classes)
+    with database.connection() as connection:
+        rows = database.execute(connection, f"""SELECT teacher_identity_id, group_id, subject FROM teacher_assignments
+            WHERE active IS TRUE AND capability = 'teach' AND group_id IN ({class_placeholders})
+              AND classroom_course_id IS NULL AND COALESCE(TRIM(exam_track), '') = ''
+              AND COALESCE(TRIM(subject_subgroup), '') = ''
+              AND (valid_from IS NULL OR valid_from <= ?) AND (valid_until IS NULL OR valid_until >= ?)""",
+            (*classes, lesson_date, lesson_date)).fetchall()
+    matching = {(str(row["teacher_identity_id"]), str(row["group_id"])) for row in rows
+                if aliases.get(_label(row["subject"]), _label(row["subject"])) == subject_key}
+    if not {(teacher_id, class_id) for teacher_id in teacher_ids for class_id in classes} <= matching:
+        raise ValueError("В таблице не указана учебная группа. В справочнике нет назначения этих преподавателей на предмет для всего указанного класса.")
+
+
+def _resolve_class_roster(database, payload, replacement, reference):
+    resolved = experiment_week_audience_preview(database, {**payload, "lessons": [replacement]}, reference)
+    roster = resolved["lessons"][replacement["id"]]
+    students = roster.get("proposed_student_ids")
+    if roster["status"] != "ok" or students is None:
+        raise ValueError("Назначение на весь класс найдено. Проверьте действующий состав класса в справочнике.")
+    replacement["audience_snapshot"] = {"student_ids": students,
+                                        "fingerprint": _audience_fingerprint(replacement, payload),
+                                        "resolved_at": ""}
 
 
 def _sheet_lessons(database, draft_id, payload, term, item, current, groups, teachers):
@@ -325,8 +364,16 @@ def _sheet_lessons(database, draft_id, payload, term, item, current, groups, tea
     group_ids = _match_names(target.get("groups"), [g for g in groups if g["group_type"] != "class"], "группу")
     if current and (_lesson_activity_type(current) != "lesson" or current.get("blockId")):
         raise ValueError("Занятие входит в отдельный блок или каталог. Уточните тип в конструкторе.")
-    if kind == "lesson" and (target.get("warning") or not teacher_ids or not group_ids):
-        raise ValueError("В таблице не подтверждены преподаватель или учебная группа.")
+    whole_class = kind == "lesson" and not group_ids
+    if kind == "lesson":
+        if target.get("warning"):
+            raise ValueError(str(target["warning"]))
+        if not teacher_ids:
+            raise ValueError("В таблице не указан преподаватель. Выберите преподавателя в конструкторе.")
+    if whole_class:
+        reference = date.fromisoformat(str(term.get("first_week") or payload.get("reference_date") or date.today()))
+        lesson_date = reference + timedelta(days=target["day"] - reference.weekday())
+        _verify_class_teaching(database, teacher_ids, classes, subject, lesson_date)
     replacement = {"id": str(current["id"]) if current else str(uuid5(NAMESPACE_URL, f"{draft_id}/{item['key']}")),
                    "subject": subject, "day": target["day"], "period": periods[0],
                    "start": target["start"], "end": target["end"], "room": target.get("room") or "",
@@ -342,6 +389,8 @@ def _sheet_lessons(database, draft_id, payload, term, item, current, groups, tea
         if any(_slot_matches(other, target, payload) and _label(other.get("subject")) == _label(subject)
                and set(_class_ids(other)) & set(classes) for other in payload["lessons"]):
             raise ValueError("В этом слоте уже есть похожее занятие. Укажите нужную запись в конструкторе.")
+        if whole_class:
+            _resolve_class_roster(database, payload, replacement, reference)
         return [], [replacement]
 
     current_classes = _class_ids(current)
@@ -358,7 +407,8 @@ def _sheet_lessons(database, draft_id, payload, term, item, current, groups, tea
         rest = _with_classes(deepcopy(current), remaining)
         _split_lunch_audience(database, payload, term, current, rest, replacement)
         return [str(current["id"])], [rest, replacement]
-    if kind == "lesson" and set(classes) == set(current_classes) and set(group_ids) == set(rule["group_ids"]):
+    if (kind == "lesson" and set(classes) == set(current_classes)
+            and rule["kind"] == replacement["audience"]["kind"] and set(group_ids) == set(rule["group_ids"])):
         # Preserve the precise rule and confirmed roster when only timetable fields change.
         replacement["audience"] = deepcopy(current.get("audience") or replacement["audience"])
         if isinstance(current.get("audience_snapshot"), Mapping):
@@ -367,6 +417,8 @@ def _sheet_lessons(database, draft_id, payload, term, item, current, groups, tea
         rule.get(key) for key in ("include_student_ids", "exclude_student_ids")
     ):
         raise ValueError("Сохранён индивидуальный состав. Уточните изменения состава в конструкторе.")
+    if whole_class and "audience_snapshot" not in replacement:
+        _resolve_class_roster(database, payload, replacement, reference)
     preserved = ("resolution_history", "source", "format") if kind == "lesson" else ("resolution_history", "source")
     for field in preserved:
         if field in current:

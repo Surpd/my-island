@@ -25,6 +25,10 @@ test('normalizes common subject names and class labels', () => {
   assert.equal(classLabel('9-Ан'), '9-Ан');
   assert.equal(classLabel('7-А'), '7-А');
   assert.equal(classLabel('5 класс'), '5 класс');
+  assert.equal(classLabel('11 · базовый класс'), '11 класс');
+  assert.equal(classLabel('9 · базовый класс'), '9 класс');
+  assert.equal(classLabel('9 A · базовый класс'), '9-А');
+  assert.equal(classLabel('9-D · базовый класс'), '9-D');
 });
 
 test('keeps group subject separate from lesson subject and audience suffix', () => {

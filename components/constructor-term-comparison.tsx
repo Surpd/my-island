@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { classLabel } from './school-audience';
 
 export type TermComparisonSide = {
   day: number;
@@ -12,6 +13,8 @@ export type TermComparisonSide = {
   room: string;
   teachers: string[];
   groups: string[];
+  whole_class?: boolean;
+  student_count?: number;
   kind: string;
   warning: string;
 };
@@ -102,10 +105,7 @@ const noDay = weekdays.length;
 function itemClasses(item: TermComparisonItem) {
   return [...new Set([...(item.before?.classes || []), ...(item.after?.classes || []),
     ...(item.assessment?.original_candidates || []).flatMap(side => side.classes)]
-    .map(label => {
-      const short = label.replace(/\s*·\s*базовый класс$/iu, '').trim();
-      return /^\d+$/.test(short) ? `${short} класс` : short;
-    }).filter(Boolean))].sort((a, b) => collator.compare(a, b));
+    .map(classLabel).filter(Boolean))].sort((a, b) => collator.compare(a, b));
 }
 const fieldLabels: Record<string, string> = { activityType: 'Тип занятия', needsClarification: 'Требует уточнения', clarificationReason: 'Причина уточнения' };
 function normalizationValue(value: unknown) {
@@ -163,10 +163,13 @@ function RosterEvidenceDetails({ evidence }: { evidence: RosterEvidence }) {
 function SideDetails({ side }: { side: PreviewLesson & { warning?: string } }) {
   return <>
     <strong>{side.subject || 'Запись без названия'}</strong>
-    <p>{[days[side.day], side.start && side.end ? `${side.start}–${side.end}` : side.start, ...side.classes].filter(Boolean).join(' · ')}</p>
+    <p>{[days[side.day], side.start && side.end ? `${side.start}–${side.end}` : side.start, ...side.classes.map(classLabel)].filter(Boolean).join(' · ')}</p>
     <dl>
       <dt>Преподаватели</dt><dd>{side.teachers.join(', ') || 'Не указаны'}</dd>
-      <dt>Группы</dt><dd>{side.groups.join(', ') || 'Не указаны'}</dd>
+      {side.whole_class
+        ? <><dt>Участники</dt><dd>{side.classes.length === 1 ? 'Весь класс' : 'Все указанные классы'}</dd></>
+        : <><dt>Группы</dt><dd>{side.groups.join(', ') || 'Не указаны'}</dd></>}
+      {side.student_count != null ? <><dt>Состав</dt><dd>{side.student_count} чел.</dd></> : null}
       <dt>Кабинет</dt><dd>{side.room || 'Не указан'}</dd>
     </dl>
     {side.warning ? <p className="constructor-term-warning">{side.warning}</p> : null}

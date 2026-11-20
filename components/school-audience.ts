@@ -36,8 +36,8 @@ export function subjectLabel(value: unknown): string {
 }
 
 export function classLabel(value: unknown): string {
-  const source = text(value).replace(/\s*класс$/iu, '');
-  const match = source.match(/^(5|6|7|8|9|10|11)(?:\s*[-–—]\s*([\p{L}\d]+))?$/iu);
+  const source = text(value).replace(/\s*·\s*базовый класс$/iu, '').replace(/\s*класс$/iu, '');
+  const match = source.match(/^(5|6|7|8|9|10|11)(?:(?:\s*[-–—]\s*|\s+)([\p{L}\d]+))?$/iu);
   if (!match) return source;
   if (!match[2]) return `${match[1]} класс`;
   const suffix = match[2].replace(/^a$/iu, 'А').replace(/^b$/iu, 'Б').replace(/^c$/iu, 'В');
@@ -53,7 +53,7 @@ const audienceParts = (group: DirectoryRow) => {
   const key = text(group.name);
   const rawName = text(group.display_name || group.name);
   const isClass = String(group.group_type || '') === 'class';
-  if (isClass) return [classLabel(group.base_class_name || rawName.replace(/ · базовый класс$/iu, ''))];
+  if (isClass) return [classLabel(group.base_class_name || rawName)];
   if (String(group.semantic_dimension || '') === 'grade7_shared_split' && String(group.role || '') === 'instructional_partition') {
     const split = text(group.subject_subgroup || key.match(/^grade7:split:(\d+)$/u)?.[1]);
     return [split ? `Математика · 7-${split}` : rawName];

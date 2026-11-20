@@ -468,6 +468,38 @@ async function confirmLunchVariant() {
   }
 }
 
+async function confirmWholeClassVariant() {
+  step = 'apply Russian to the whole 11th grade from S7';
+  const { context, page, errors } = await session(390);
+  try {
+    const initial = await readApi(experiment + fixture.id);
+    await openDraft(page);
+    const comparison = await openTerm(page);
+    const detail = await openTermPosition(comparison, 'S7');
+    assert.equal(await detail.getByText('Пн · 11:50–12:35 · 11 класс', { exact: true }).count(), 3);
+    await button(detail, 'Взять вариант из таблицы').click();
+    const result = detail.getByRole('region', { name: 'Что изменится', exact: true });
+    await result.getByText('Русский язык', { exact: true }).waitFor();
+    await result.getByText('Весь класс', { exact: true }).waitFor();
+    await result.getByText('5 чел.', { exact: true }).waitFor();
+    await screenshot(page, 's7-whole-class-preview-390.png');
+    assert.deepEqual(await readApi(experiment + fixture.id), initial);
+    await button(comparison, 'Подтвердить вариант').click();
+    await comparison.getByText('Решение сохранено в рабочей копии.', { exact: true }).waitFor();
+    const saved = await readApi(experiment + fixture.id);
+    const lesson = saved.payload.lessons.find(row => row.id === fixture.cases.S7);
+    assert.equal(saved.revision, initial.revision + 1);
+    assert.equal(lesson.subject, 'Русский язык');
+    assert.deepEqual(lesson.audience, { kind: 'classes', class_ids: [fixture.classes['11']] });
+    assert.equal(lesson.audience_snapshot.student_ids.length, 5);
+    assert.equal(await comparison.locator('[data-term-row="cells:S7"]').count(), 0);
+    assert.deepEqual(errors, []);
+    console.log('PASS S7 uses the verified teacher and whole-class roster in the mobile comparison');
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   const initial = await readApi(experiment + fixture.id);
   const primary = await readApi(experiment + fixture.primary_id);
@@ -500,6 +532,7 @@ try {
   assert.deepEqual(await readApi(experiment + fixture.id), initial, 'Review and slot navigation leave the draft unchanged');
   if (!before && widths.includes(1366)) await correctRoom(initial);
   if (!before && widths.includes(390)) await confirmLunchVariant();
+  if (!before && widths.includes(390)) await confirmWholeClassVariant();
   assert.deepEqual(violations, []);
   assert.deepEqual(await readApi(experiment + fixture.primary_id), primary);
   await writeFile(dataDir + `/issue-navigation-${before ? 'before' : 'after'}.json`, JSON.stringify({ results, shots, trace }, null, 2));
