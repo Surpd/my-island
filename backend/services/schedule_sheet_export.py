@@ -15,6 +15,8 @@ import re
 from typing import Any, Mapping
 
 
+from backend.services.schedule_rooms import room_label
+from backend.services.schedule_subjects import subject_label
 from backend.services.canonical_schedule import canonical_group_grade
 from backend.services.schedule_experiments import _lesson_day_modes, lesson_is_online
 
@@ -131,6 +133,8 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         raise ValueError("Lesson IDs must be nonempty and unique")
     by_day: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for lesson in lessons:
+        lesson["subject"] = subject_label(lesson.get("subject"))
+        lesson["room"] = room_label(lesson.get("room"))
         marker = lesson.get("specialMark")
         if marker in {"lunch", "no_lesson"} and not str(lesson.get("subject") or "").strip():
             lesson["subject"] = "Обед" if marker == "lunch" else "Нет занятий"
@@ -263,7 +267,7 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
                 lines.append(", ".join(teacher_names))
             room = str(lesson.get("room") or "").strip()
             if room:
-                lines.append(room if re.match(r"каб|зал|онлайн", room, re.I) else f"каб. {room}")
+                lines.append(room)
             if lesson.get("audienceMode") == "remainder" or (lesson.get("audience") or {}).get("kind") == "available_slot":
                 lines.append("Для свободных учеников")
             # Expand a lone lesson across that class's free lanes. Parallel records stay distinct.

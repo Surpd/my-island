@@ -17,6 +17,7 @@ from typing import Any, Iterator
 
 from backend.database import Database
 from backend.services.canonical_schedule import canonical_version, project_teacher, read_canonical_template
+from backend.services.schedule_rooms import physical_room_options
 from backend.services.google_contract import SCHOOL_SCHEDULE_SPREADSHEET_ID
 from backend.services.schedule_experiments import (
     _canonical_payload, create_experiment, get_experiment, list_experiments,
@@ -200,6 +201,7 @@ def school_directory(source: ReadOnlySchoolDatabase) -> dict[str, Any]:
             FROM canonical_schedule_assignments a JOIN canonical_schedule_blocks b ON b.id=a.block_id
             WHERE b.version_id=? AND COALESCE(a.metadata->>'room','') <> '' ORDER BY room""",
             (str(version["version_id"]) if version else "",)).fetchall()]
+    rooms = list(physical_room_options(rooms).values())
     group_by_id = {str(group["id"]): group for group in groups}
     by_teacher: dict[str, list[dict[str, str]]] = {}
     for item in assignments:

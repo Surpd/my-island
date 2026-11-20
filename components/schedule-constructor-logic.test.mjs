@@ -47,10 +47,10 @@ test('quick entry treats a numbered cross-grade English group as a group marker,
   assert.deepEqual(parsed.unknown, []);
 });
 
-test('quick entry asks for an explicit subject when the same token names multiple subjects', () => {
+test('quick entry resolves the two recorded spellings of English to one subject', () => {
   const parsed = parseQuick('Английский 7', 'class-7b', groups, teachers, students, ['Английский язык', 'Английский']);
-  assert.equal(parsed.subject, '');
-  assert.deepEqual(parsed.subjects, ['Английский язык', 'Английский']);
+  assert.equal(parsed.subject, 'Английский язык');
+  assert.deepEqual(parsed.subjects, ['Английский язык']);
   assert.deepEqual(parsed.unknown, []);
 });
 

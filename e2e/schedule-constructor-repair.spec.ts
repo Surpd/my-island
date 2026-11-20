@@ -111,7 +111,7 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Русский язык');
-  await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('каб. 8');
+  await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('каб. 8');
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
 
   const sourceLesson = page.locator('.constructor-card').filter({ hasText: 'Русский язык' });
@@ -239,7 +239,7 @@ test('constructor edit preserves horizontal grid position', async ({ page }) => 
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Геометрия прокрутки');
-  await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('8');
+  await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('8');
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
   const lesson = page.locator('.constructor-card').filter({ hasText: 'Геометрия прокрутки' });
   await expect(lesson).toBeVisible();
@@ -278,7 +278,7 @@ test('constructor electives: parallel courses use class availability without stu
     await availability.getByRole('checkbox', { name: '5 класс' }).check();
     await availability.getByRole('checkbox', { name: '6 класс' }).check();
     await placement.getByRole('checkbox', { name: `6-А elective ${suffix}` }).check();
-    await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill(`E-${name.slice(-1)}`);
+    await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill(`E-${name.slice(-1)}`);
     await expect(page.getByText('Именной состав курсов по выбору не ведётся')).toBeVisible();
     await expect(inspector.getByRole('region', { name: 'Участники занятия' })).toHaveCount(0);
     await page.getByRole('button', { name: 'Добавить курс по выбору', exact: true }).click();
@@ -385,7 +385,7 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await page.getByRole('button', { name: 'Кружок', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Айкидо без каталога');
   await expect(page.getByRole('combobox', { name: 'Преподаватель нового занятия' })).toHaveValue('');
-  await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('Зал');
+  await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('Зал');
   await expect(page.getByRole('combobox', { name: 'Запись каталога' })).toHaveValue('');
   await page.setViewportSize({ width: 1600, height: 1100 });
   await screenshot(page, 'club-aikido-no-catalog-before-add');
@@ -508,4 +508,32 @@ test('constructor repair: grade nine all-others audience displays a live class s
   await screenshot(page, 'all-others-grade9');
   await page.getByRole('button', { name: 'Добавить обед' }).click();
   await expect(page.locator('.constructor-card')).toContainText('Все остальные');
+});
+
+test('вид занятия и онлайн сохраняются через обычную форму', async ({page}) => {
+  await openEmptyWeek(page);
+  await page.locator('[data-cell="0:0"]').click();
+  await openScheduleInspector(page);
+  await page.getByRole('button', {name: 'Форма', exact: true}).click();
+  const kind = page.getByLabel('Вид занятия', {exact: true});
+  await expect(kind).toHaveValue('lesson');
+  await kind.selectOption('consultation');
+  await page.getByLabel('Название активности').fill('Самостоятельное чтение');
+  await page.getByRole('button', {name: 'Добавить занятие', exact: true}).click();
+  await expect(page.getByRole('alert').filter({hasText: 'Выберите преподавателя консультации'})).toBeVisible();
+  await kind.selectOption('practice');
+  await page.getByLabel('Кабинет нового занятия').fill('Кабинет 15');
+  await page.getByRole('checkbox', {name: 'Онлайн', exact: true}).check();
+  await expect(page.getByLabel('Кабинет нового занятия')).toBeDisabled();
+  await page.getByText('Подключение', {exact: true}).click();
+  await page.getByLabel('Ссылка или сведения для подключения').fill('Школьная видеокомната');
+  await page.getByRole('button', {name: 'Добавить занятие', exact: true}).click();
+  const card = page.locator('.constructor-card').filter({hasText: 'Самостоятельное чтение'});
+  await expect(card).toContainText('Практикум');
+  await expect(card).toContainText('Онлайн');
+  await expect(card).not.toContainText('каб. 15');
+  await card.dblclick();
+  await expect(page.getByRole('checkbox', {name: 'Онлайн', exact: true})).toBeChecked();
+  await page.getByText('Подключение', {exact: true}).click();
+  await expect(page.getByLabel('Ссылка или сведения для подключения')).toHaveValue('Школьная видеокомната');
 });

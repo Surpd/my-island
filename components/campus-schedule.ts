@@ -1,4 +1,5 @@
 /** View adapters for the published canonical API. No resolution or membership logic lives here. */
+import { subjectLabel } from './school-audience.ts';
 import { normalizeRoomDisplay } from './schedule-rooms.ts';
 
 type RawLesson = Record<string, unknown>;
@@ -17,7 +18,7 @@ export function campusLessons(value: unknown): CampusLesson[] {
     const isPractice = activityFormat === 'independent_practice';
     return {
       lesson_date: string(row.lesson_date || row.date), start_time: string(row.start_time), end_time: string(row.end_time),
-      subject: isConflict(row) ? 'Расписание уточняется' : (string(row.subject || row.activity || row.canonical_title || row.title) || 'Занятие') + (row.activity_type === 'consultation' ? ' · Консультация' : row.activity_type === 'laboratory' ? ' · Лаборатория' : ''),
+      subject: isConflict(row) ? 'Расписание уточняется' : (subjectLabel(row.subject || row.activity || row.canonical_title || row.title) || 'Занятие') + (row.activity_type === 'consultation' ? ' · Консультация' : row.activity_type === 'laboratory' ? ' · Лаборатория' : ''),
       teacher: string(row.teacher) || list(row.teacher_names),
       responsible_teacher: isPractice ? list(row.responsible_teachers) : '',
       physical_presence: typeof row.physical_presence === 'boolean' ? row.physical_presence : undefined,

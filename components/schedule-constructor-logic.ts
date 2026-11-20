@@ -1,4 +1,4 @@
-import { audienceGrade, subjectLabel } from './school-audience.ts';
+import { audienceGrade, subjectLabel, subjectAliases } from './school-audience.ts';
 import { assignmentIsActive } from './teacher-directory-logic.ts';
 
 export type ScheduleGroup = { id: string; name: string; group_type: string; subject?: string; base_class_name?: string; subject_subgroup?: string; role?: string; semantic_dimension?: string; course?: string; exam_track?: string; archived_at?: string | null };
@@ -426,11 +426,17 @@ export function mergeScheduleDrafts<T extends { id: string; name: string; revisi
   };
 }
 
+// Single-word aliases can be consumed without swallowing an explicitly typed teacher name.
+const quickSubjectAliases = new Map<string, string[]>();
+for (const [alias, label] of Object.entries(subjectAliases)) {
+  if (!alias.includes(' ')) quickSubjectAliases.set(label, [...(quickSubjectAliases.get(label) || []), alias]);
+}
+
 export function parseQuick(text: string, contextClassId: string, groups: ScheduleGroup[], teachers: ScheduleTeacher[], students: ScheduleStudent[], subjects: string[]): QuickParse {
   const words = normalize(text).split(/\s+/).filter(Boolean);
   const used = new Set<number>();
-  const subjectPool = [...new Set([...subjects, ...Object.keys(SUBJECT_ALIASES)])];
-  const subjectMatches = subjectPool.flatMap((subject) => [subject, ...(SUBJECT_ALIASES[subject] || [])].map((alias) => ({ subject, alias: normalize(alias).split(' ') })));
+  const subjectPool = [...new Set([...subjects.map(subjectLabel), ...Object.keys(SUBJECT_ALIASES)])];
+  const subjectMatches = subjectPool.flatMap((subject) => [subject, ...(quickSubjectAliases.get(subject) || [])].map((alias) => ({ subject, alias: normalize(alias).split(' ') })));
   const matchedSubjects = subjectMatches.filter(({ alias }) => alias.length <= words.length && alias.every((word, index) => words[index] === word)).sort((a, b) => b.alias.join('').length - a.alias.join('').length);
   const longestSubjectMatch = matchedSubjects[0]?.alias.join('').length || 0;
   const subjectCandidates = [...new Set(matchedSubjects.filter((item) => item.alias.join('').length === longestSubjectMatch).map((item) => item.subject))];

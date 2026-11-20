@@ -7,7 +7,8 @@ from uuid import uuid4
 from collections.abc import Mapping
 
 from backend.services.schedule_experiments import ExperimentConflict, get_experiment, save_experiment, experiment_week_audience_preview, _lesson_activity_type, _lesson_interval, _lesson_audience, _class_grade_map, physical_room_key
-from backend.services.schedule_rooms import display_room, room_key
+from backend.services.schedule_rooms import physical_room_options, room_key, room_label
+from backend.services.schedule_subjects import subject_label
 
 
 def fingerprint(lesson, slots=None):
@@ -45,7 +46,7 @@ def room_options(payload, lesson_ids, grades=None):
     if len(selected)!=1: return []
     target=selected[0]; interval=_lesson_interval(target,payload['slots'])
     if not interval: return []
-    rooms={room_key(l.get('room')):display_room(l.get('room')) for l in payload['lessons'] if room_key(l.get('room'))}
+    rooms = physical_room_options(l.get('room') for l in payload['lessons'])
     occupied={physical_room_key(l, payload, grades or {}) for l in payload['lessons'] if l['id'] not in lesson_ids and l.get('day')==target.get('day') and (other:=_lesson_interval(l,payload['slots'])) and interval[0]<other[1] and other[0]<interval[1] and room_key(l.get('room'))}
     return [{'room':label,'available':key not in occupied,'availability':'schedule_only'} for key,label in sorted(rooms.items())]
 
@@ -115,11 +116,13 @@ def apply_resolution(database,draft_id,*,expected_revision,preview_token,lesson_
         for other in payload['lessons']:
             oi=_lesson_interval(other,payload['slots'])
             if other['id']!=target['id'] and other.get('day')==target.get('day') and physical_room_key(other,payload,grades)==requested and requested and oi and interval[0]<oi[1] and oi[0]<interval[1]: raise ValueError('Кабинет занят в этом интервале. Выберите другой или проверьте совместность занятий.')
-        target['room']=value
+        if not requested:
+            raise ValueError('Физический кабинет здесь не резервируется. Уточните формат занятия в конструкторе.')
+        target['room'] = room_label(value)
     elif action=='joint':
         if len(selected)<2: raise ValueError('Выберите не менее двух связанных занятий.')
         def teachers(l): return sorted(set(l.get('teacherIds') or [])|({l['teacherId']} if l.get('teacherId') else set()))
-        signatures={(l.get('day'),_lesson_interval(l,payload['slots']),tuple(teachers(l)),room_key(l.get('room')),l.get('subject')) for l in selected}
+        signatures={(l.get('day'),_lesson_interval(l,payload['slots']),tuple(teachers(l)),room_key(l.get('room')),subject_label(l.get('subject')).casefold()) for l in selected}
         if len(signatures)!=1 or not teachers(selected[0]) or not str(selected[0].get('room') or '').strip(): raise ValueError('Сначала уточните одинаковые время, предмет, преподавателей и общий кабинет.')
         if any(preview['audiences'][l['id']]['status']!='ok' or preview['audiences'][l['id']]['needs_recalculation'] for l in selected): raise ValueError('Сначала проверьте и подтвердите состав участников.')
     elif action=='independent_practice':

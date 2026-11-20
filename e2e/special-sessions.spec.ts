@@ -8,13 +8,18 @@ test('лаборатория в конструкторе на трёх шири�
   await page.locator('.constructor-draft-menu summary').click();
   await page.getByRole('button', { name: 'Лаборатории', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Лаборатории' });
-  await dialog.getByLabel('Тема', { exact: true }).fill('Прошлое и настоящее');
-  await dialog.getByLabel('Направление').fill('История и искусство');
+  await dialog
+    .locator('article')
+    .filter({ hasText: 'Прошлое и настоящее' })
+    .getByRole('button', { name: 'Настроить' })
+    .click();
   await dialog
     .getByLabel('Ведущий', { exact: true })
     .selectOption({ index: 1 });
-  await dialog.getByLabel('Классы в сетке').selectOption({ index: 0 });
+  await dialog.getByLabel('Классы', { exact: true }).selectOption({ index: 1 });
+  await dialog.getByText('Дополнительные настройки', { exact: true }).click();
   await dialog.getByLabel('Кабинет или площадка').fill('205');
+  await dialog.getByText('Дополнительные настройки', { exact: true }).click();
   await mkdir('artifacts/special-sessions', { recursive: true });
   for (const width of [1366, 390, 320]) {
     await page.setViewportSize({ width, height: 850 });
@@ -113,9 +118,8 @@ test('Недельная лаборатория — предпросмотр, а
   await page.locator('.constructor-draft-menu summary').click();
   await page.getByRole('button', { name: 'Лаборатории', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Лаборатории' });
-  await dialog
-    .getByRole('button', { name: 'Посмотреть замещение уроков' })
-    .click();
+  await expect(dialog.getByRole('switch')).toHaveCount(3);
+  await dialog.getByRole('switch', { name: 'Прошлое и настоящее' }).click();
   await expect(
     dialog.getByRole('button', { name: 'Провести на этой неделе' }),
   ).toHaveCount(0);
@@ -128,11 +132,12 @@ test('Недельная лаборатория — предпросмотр, а
   await dialog
     .getByLabel('Ведущий', { exact: true })
     .selectOption(String(staff[1].id));
+  await dialog.getByText('Дополнительные настройки', { exact: true }).click();
   await dialog.getByLabel('Кабинет или площадка').fill('205');
   await dialog
     .getByRole('button', { name: 'Посмотреть замещение уроков' })
     .click();
-  await expect(dialog.locator('article')).toHaveCount(2);
+  await expect(dialog.locator('section article')).toHaveCount(2);
   await dialog
     .getByRole('button', { name: 'Провести на этой неделе' })
     .scrollIntoViewIfNeeded();
@@ -142,6 +147,9 @@ test('Недельная лаборатория — предпросмотр, а
   });
   await dialog.getByRole('button', { name: 'Провести на этой неделе' }).click();
   await expect(dialog.getByText('Неделя сохранена')).toBeVisible();
+  await page.screenshot({
+    path: 'artifacts/special-sessions/weekly-enabled.png',
+  });
   const read = async () =>
     (
       await (
@@ -153,15 +161,19 @@ test('Недельная лаборатория — предпросмотр, а
   expect(
     (await read()).map((lesson: { subject: string }) => lesson.subject),
   ).toEqual(['Консультация по истории', 'Прошлое и настоящее']);
-  await dialog
-    .getByRole('button', { name: 'Посмотреть восстановление уроков' })
-    .click();
+  await dialog.getByRole('switch', { name: 'Прошлое и настоящее' }).click();
   await dialog
     .getByRole('button', { name: 'Отключить и восстановить уроки' })
     .click();
   await expect
     .poll(async () => (await read()).map((lesson: { id: string }) => lesson.id))
     .toEqual(['history', 'literature', 'help']);
+  await expect(
+    dialog.getByRole('switch', { name: 'Прошлое и настоящее' }),
+  ).toHaveAttribute('aria-checked', 'false');
+  await page.screenshot({
+    path: 'artifacts/special-sessions/weekly-restored.png',
+  });
 });
 
 for (const role of ['student', 'teacher'] as const) {

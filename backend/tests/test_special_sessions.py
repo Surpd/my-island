@@ -137,7 +137,7 @@ class SpecialSessionTests(TestCase):
                 id="science",
                 subject="Science",
                 teacherId=str(self.other_teacher["id"]),
-                room="205",
+                room="",
             ),
             "start": "09:00",
             "end": "10:45",

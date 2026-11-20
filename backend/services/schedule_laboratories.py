@@ -12,7 +12,6 @@ from backend.services.schedule_experiments import (
     _lesson_interval,
     physical_room_key,
     _lesson_day_modes,
-    lesson_is_online,
     _write_experiment_revision,
     experiment_week_audience_preview,
     get_experiment,
@@ -75,6 +74,9 @@ def laboratory_action(
             ),
             None,
         )
+        if not blueprint and blueprint_id in {"school-lab-0", "school-lab-1", "school-lab-2"}:
+            directions = ["Текст и смысл", "Прошлое и настоящее", "Мир вокруг нас"]
+            blueprint = {"subject": directions[int(blueprint_id[-1])]}
         if not blueprint:
             raise ValueError("Заготовка не найдена")
         allowed = {
@@ -152,10 +154,6 @@ def laboratory_action(
             and meeting.get("format") not in {"online", "offline"}
         ):
             raise ValueError("Проверьте режимы дня у выбранных классов лаборатории")
-        if not lesson_is_online(meeting, modes) and not physical_room_key(
-            meeting, payload, grades
-        ):
-            raise ValueError("Для очной лаборатории укажите кабинет или площадку")
         changes, originals, conflicts, effective = [], [], [], []
         for index, lesson in enumerate(lessons):
             time = _lesson_interval(lesson, payload["slots"])

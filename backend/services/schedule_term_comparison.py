@@ -10,6 +10,8 @@ import unicodedata
 from uuid import NAMESPACE_URL, uuid5
 from typing import Any
 
+from backend.services.schedule_rooms import room_key
+from backend.services.schedule_subjects import subject_label
 from backend.services.schedule_experiments import (
     ExperimentConflict,
     ExperimentNotFound,
@@ -22,10 +24,9 @@ from backend.services.schedule_experiments import (
     experiment_week_audience_preview,
     get_experiment,
 )
-from backend.services.schedule_parser_v2 import SUBJECT_PREFIX_ALIASES
 
 
-def term_comparison_lesson_fingerprint(lesson: Mapping[str, Any]) -> str:
+def term_comparison_lesson_fingerprint(lesson: Mapping[str, Any], *, semantic=False) -> str:
     fields = (
         "day", "weekday", "period", "start", "end", "subject", "teacherId", "teacherIds",
         "room", "place", "classId", "classIds", "displayClassIds", "groupId", "groupIds",
@@ -33,6 +34,9 @@ def term_comparison_lesson_fingerprint(lesson: Mapping[str, Any]) -> str:
         "specialMark", "blockId", "blockName", "format", "informational", "allDay",
     )
     author_fields = {key: lesson[key] for key in fields if key in lesson}
+    if semantic:
+        for key in ("subject", "room", "place"):
+            author_fields[key] = _field_value(lesson, key)
     encoded = json.dumps(author_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -46,8 +50,8 @@ def _term_preparation(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return {}
 
 
-def _lesson_digests(payload: Mapping[str, Any]) -> dict[str, str]:
-    return {str(row["id"]): term_comparison_lesson_fingerprint(row)
+def _lesson_digests(payload: Mapping[str, Any], *, semantic=False) -> dict[str, str]:
+    return {str(row["id"]): term_comparison_lesson_fingerprint(row, semantic=semantic)
             for row in payload.get("lessons") or [] if row.get("id")}
 
 
@@ -64,10 +68,19 @@ def retain_term_comparison(payload: dict[str, Any], previous: Mapping[str, Any] 
         term.update(deepcopy(_term_preparation(previous)))
         comparison = term.get("comparison")
         if record_edits and isinstance(comparison, dict):
-            before = _lesson_digests(previous)
-            after = _lesson_digests(payload)
-            changes = {key: after.get(key) for key in before.keys() | after.keys()
+            before = _lesson_digests(previous, semantic=True)
+            after = _lesson_digests(payload, semantic=True)
+            raw_digests = _lesson_digests(payload)
+            changes = {key: raw_digests.get(key) for key in before.keys() | after.keys()
                        if before.get(key) != after.get(key)}
+            # Receipts from older revisions use the raw author-field digest. Keep a
+            # verified previous edit actionable across a subsequent spelling edit.
+            receipts = comparison.get("manual_edits") or {}
+            if receipts:
+                previous_raw = _lesson_digests(previous)
+                for key in receipts.keys() & raw_digests.keys() - changes.keys():
+                    if receipts[key] == previous_raw.get(key):
+                        receipts[key] = raw_digests[key]
             if changes:
                 comparison.setdefault("manual_edits", {}).update(changes)
                 _close_reviewed_edits(comparison, previous, payload, changes, review_key, actor_user_id, audience_database)
@@ -153,6 +166,15 @@ def record_term_comparison_decision(database: Any, draft_id: str, *, expected_re
                                       actor_user_id=actor_user_id)
 
 
+def _field_value(row, key):
+    value = row.get(key)
+    if key == "subject":
+        return subject_label(value).casefold()
+    if key in {"room", "place"}:
+        return room_key(value)
+    return value
+
+
 def _close_reviewed_edits(comparison, previous, payload, changes, review_key, actor_user_id, audience_database):
     receipts = comparison.setdefault("decisions", [])
     closed = {row["key"] for row in receipts if row.get("status") in {"accepted", "rejected"}}
@@ -180,8 +202,8 @@ def _close_reviewed_edits(comparison, previous, payload, changes, review_key, ac
                     "groups": ("groupId", "groupIds", "audience"), "classes": ("classIds", "classId", "audience"),
                     "day": ("day",), "start": ("start", "period"), "end": ("end", "period"),
                 }
-                relevant = {field for key, names in fields.items() if a.get(key) != b.get(key) for field in names}
-                if not any((before or {}).get(field) != after.get(field) for field in relevant):
+                relevant = {field for key, names in fields.items() if _field_value(a, key) != _field_value(b, key) for field in names}
+                if not any(_field_value(before or {}, field) != _field_value(after, field) for field in relevant):
                     continue
         elif not lesson_id and review_key == item["key"] and isinstance(item.get("after"), Mapping):
             resolved = _matching_saved_rows(item, payload, new, changes, audience_database)
@@ -204,7 +226,7 @@ def _matching_saved_rows(item, payload, lessons, changes, database):
         return []
     return [key for key in changes if key in lessons
             and _slot_matches(lessons[key], target, payload)
-            and _label(lessons[key].get("subject")) == _label(target.get("subject"))
+            and _field_value(lessons[key], "subject") == _field_value(target, "subject")
             and set(_class_ids(lessons[key])) == set(classes)]
 
 
@@ -307,9 +329,7 @@ def _projection(payload, lesson, group_labels, teacher_labels):
 def _verify_class_teaching(database, teacher_ids, classes, subject, lesson_date):
     # Compare complete subject names/known abbreviations. Exam and subgroup
     # assignments do not prove that the same teacher teaches the whole class.
-    aliases = dict(SUBJECT_PREFIX_ALIASES)
-    subject_key = _label(subject)
-    subject_key = aliases.get(subject_key, subject_key)
+    subject_key = subject_label(subject).casefold()
     class_placeholders = ", ".join("?" for _ in classes)
     with database.connection() as connection:
         rows = database.execute(connection, f"""SELECT teacher_identity_id, group_id, subject FROM teacher_assignments
@@ -319,7 +339,7 @@ def _verify_class_teaching(database, teacher_ids, classes, subject, lesson_date)
               AND (valid_from IS NULL OR valid_from <= ?) AND (valid_until IS NULL OR valid_until >= ?)""",
             (*classes, lesson_date, lesson_date)).fetchall()
     matching = {(str(row["teacher_identity_id"]), str(row["group_id"])) for row in rows
-                if aliases.get(_label(row["subject"]), _label(row["subject"])) == subject_key}
+                if subject_label(row["subject"]).casefold() == subject_key}
     if not {(teacher_id, class_id) for teacher_id in teacher_ids for class_id in classes} <= matching:
         raise ValueError("В таблице не указана учебная группа. В справочнике нет назначения этих преподавателей на предмет для всего указанного класса.")
 
@@ -386,7 +406,7 @@ def _sheet_lessons(database, draft_id, payload, term, item, current, groups, tea
     if kind == "lunch":
         replacement["specialMark"] = "lunch"
     if current is None:
-        if any(_slot_matches(other, target, payload) and _label(other.get("subject")) == _label(subject)
+        if any(_slot_matches(other, target, payload) and _field_value(other, "subject") == subject_label(subject).casefold()
                and set(_class_ids(other)) & set(classes) for other in payload["lessons"]):
             raise ValueError("В этом слоте уже есть похожее занятие. Укажите нужную запись в конструкторе.")
         if whole_class:

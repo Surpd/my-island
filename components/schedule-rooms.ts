@@ -23,3 +23,7 @@ export function normalizeRoomInput(value: unknown): string {
   if (!source) return '';
   return source.match(numberedRoom)?.[1] || source;
 }
+
+export function isVirtualRoom(value: unknown): boolean {
+  return ['name:онлайн', 'name:online'].includes(normalizeRoomKey(value));
+}

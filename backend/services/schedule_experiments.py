@@ -417,8 +417,8 @@ def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], cla
 
 
 def lesson_is_online(lesson: Mapping[str, Any], modes: set[str]) -> bool:
-    if lesson.get("format") in {"online", "offline"}:
-        return lesson["format"] == "online"
+    if lesson.get("format") == "online":
+        return True
     return str(lesson.get("room") or "").strip().casefold() in {"онлайн", "online"} or modes == {"online"}
 
 

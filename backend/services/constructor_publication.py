@@ -21,6 +21,7 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from backend.services.schedule_subjects import subject_label
 from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import (
     get_experiment, experiment_week_audience_preview, _is_lunch_lesson, _lesson_activity_type, _lesson_audience,
@@ -113,11 +114,11 @@ def _semantic(block: Mapping[str, Any]) -> dict[str, Any]:
             "start": _canonical_time(block.get("start_time") or slot.get("start")) or None,
             "end": _canonical_time(block.get("end_time") or slot.get("end")) or None,
             "grade": str(block.get("grade_scope") or ""),
-            "assignments": [{"activity": a.get("activity"),
+            "assignments": [{"activity": subject_label(a.get("activity")),
                 "role": a.get("assignment_kind") or a.get("role") or "primary",
                 "groups": sorted(str(i) for i in a.get("canonical_group_ids") or (a.get("audience") or {}).get("canonical_group_ids") or []),
                 "teachers": sorted(str(i) for i in a.get("teacher_ids") or []),
-                "metadata": {"room": str((a.get("metadata") or {}).get("room") or ""),
+                "metadata": {"room": room_key((a.get("metadata") or {}).get("room")),
                              "note": str((a.get("metadata") or {}).get("note") or ""),
                              "activity_type": (a.get("metadata") or {}).get("activity_type") or "lesson",
                              "day_plan_mode": (a.get("metadata") or {}).get("day_plan_mode") or "normal",

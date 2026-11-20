@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 from backend.database import Database
+from backend.services.schedule_subjects import program_key, subject_label
 from backend.services.schedule_rooms import display_room
 
 
@@ -1450,6 +1451,16 @@ def _student_busy_in_slot(
     return False
 
 
+def _activity_choices(claims):
+    """Collapse spelling aliases only when they refer to the same assignment."""
+    raw = {claim["activity"] for claim in claims}
+    if len(raw) <= 1 and len({program_key(claim["assignment"]) for claim in claims}) <= 1:
+        return raw
+    return {(subject_label(claim["activity"]).casefold(), tuple(sorted(claim["group_ids"])),
+             tuple(sorted(map(str, claim["assignment"].get("teacher_ids") or []))),
+             claim.get("activity_type"), program_key(claim["assignment"])) for claim in claims}
+
+
 def _project_student_block(
     database: Database,
     context: StudentProjectionContext,
@@ -1702,7 +1713,7 @@ def _project_student_block(
                 selected = None
             else:
                 selected = None
-            activities = {claim["activity"] for claim in best}
+            activities = _activity_choices(best)
             if result is not None:
                 pass
             elif len(activities) > 1:
@@ -1751,7 +1762,7 @@ def _project_student_block(
                 result['responsible_teachers']=metadata.get('responsible_teachers') or []
         elif result is None:
             non_no_lesson = [claim for claim in residual_claims if claim["activity"] and claim["activity"] != _NO_LESSON]
-            residual_activities = {claim["activity"] for claim in non_no_lesson}
+            residual_activities = _activity_choices(non_no_lesson)
             if len(residual_activities) > 1:
                 trace = {"assignment_ids": sorted(claim["assignment_id"] for claim in non_no_lesson), "source_cells": sorted({str(cell) for claim in non_no_lesson for cell in claim["source_cells"]}), "final_state": "UNRESOLVED", "assignments": assignment_traces}
                 issue = _projection_issue("MULTIPLE_ACTIVITY_CLAIMS", "multiple residual activities apply", student=student, block=block, day=day, trace=trace)
