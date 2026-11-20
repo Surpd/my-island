@@ -500,6 +500,42 @@ async function confirmWholeClassVariant() {
   }
 }
 
+async function moveSharedEnglish() {
+  step = 'drag shared English to a new time';
+  const { context, page } = await session(1366);
+  try {
+    await openDraft(page);
+    const id = fixture.cases.G8;
+    const initial = await readApi(experiment + fixture.id);
+    const source = initial.payload.lessons.find(lesson => lesson.id === id);
+    const cards = page.locator(`[data-lesson-id="${id}"]`);
+    await cards.first().waitFor();
+    const positions = () => cards.evaluateAll(nodes => nodes.map(node => node.closest('[data-cell]').dataset.cell));
+    const before = await positions();
+    assert.ok(before.length >= 2);
+    const [row, col] = before[0].split(':').map(Number);
+    const destination = page.locator(`[data-cell="${row + 1}:${col}"]`);
+    await cards.first().dragTo(destination);
+    await destination.locator(`[data-lesson-id="${id}"]`).waitFor();
+    assert.deepEqual(await positions(), before.map(cell => `${row + 1}:${cell.split(':')[1]}`));
+    const persisted = page.waitForResponse(response =>
+      response.url() === backend + experiment + fixture.id && response.request().method() === 'PUT');
+    await button(page.locator('.constructor-inspector'), 'Сохранить правку').click();
+    assert.ok((await persisted).ok());
+    const saved = await readApi(experiment + fixture.id);
+    const moved = saved.payload.lessons.find(lesson => lesson.id === id);
+    assert.equal(saved.payload.lessons.length, initial.payload.lessons.length);
+    assert.equal(moved.period, source.period + 1);
+    for (const field of ['classIds', 'groupIds', 'audience', 'teacherIds']) {
+      assert.deepEqual(moved[field], source[field], field);
+    }
+    assert.deepEqual(moved.audience_snapshot.student_ids, source.audience_snapshot.student_ids);
+    console.log('PASS shared lesson moved and saved across its original class columns');
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   const initial = await readApi(experiment + fixture.id);
   const primary = await readApi(experiment + fixture.primary_id);
@@ -533,6 +569,7 @@ try {
   if (!before && widths.includes(1366)) await correctRoom(initial);
   if (!before && widths.includes(390)) await confirmLunchVariant();
   if (!before && widths.includes(390)) await confirmWholeClassVariant();
+  if (!before && widths.includes(1366)) await moveSharedEnglish();
   assert.deepEqual(violations, []);
   assert.deepEqual(await readApi(experiment + fixture.primary_id), primary);
   await writeFile(dataDir + `/issue-navigation-${before ? 'before' : 'after'}.json`, JSON.stringify({ results, shots, trace }, null, 2));

@@ -738,6 +738,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const clip = useRef<Clip | null>(null);
   const dragging = useRef<{
     id: string;
+    sourceCol: number;
     destination?: Cell;
     handled?: boolean;
     duplicate?: boolean;
@@ -2199,20 +2200,21 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     const sourceClasses = displayedClasses(lesson);
     const explicitlySelectedClass = targetClassId && destination.classIds.includes(targetClassId) ? targetClassId : '';
     const targetClassIds = explicitlySelectedClass ? [explicitlySelectedClass] : destination.classIds;
-    const audienceAlreadyFits = sourceClasses.length > 0 && sourceClasses.every((id) => targetClassIds.includes(id));
-    const wholeClass = isWholeClassAudience(lesson);
-    const needsAudienceConfirmation = !audienceAlreadyFits && lesson.activityType !== 'club' && !wholeClass
-      || destination.classIds.length > 1 && !explicitlySelectedClass;
+    const samePlacement = (dragging.current?.id === lessonId && dragging.current.sourceCol === col)
+      || targetClassIds.length > 0 && targetClassIds.every(id => sourceClasses.includes(id));
+    const needsAudienceConfirmation = !samePlacement && (
+      lesson.activityType !== 'club' && !isWholeClassAudience(lesson)
+      || destination.classIds.length > 1 && !explicitlySelectedClass
+    );
     const targetLabel = targetClassIds.map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'выбранной аудитории';
     if (needsAudienceConfirmation) {
       const sourceLabel = sourceClasses.map((id) => groups.find((group) => group.id === id)?.name || id).join(', ') || 'исходная аудитория';
       if (!window.confirm(`${lesson.subject || 'Занятие'}: ${sourceLabel} → ${targetLabel}.\n\nПодтвердить новый охват?`)) return;
     }
-    const destinationClassId = targetClassIds.length === 1 ? targetClassIds[0] : '';
     const newId = duplicate ? freshId() : lesson.id;
-    const remapped = remapPastedLessonAudience(
+    const remapped = samePlacement ? { ...lesson, id: newId } : remapPastedLessonAudience(
       lesson,
-      audienceAlreadyFits && !explicitlySelectedClass ? sourceClasses : targetClassIds,
+      targetClassIds,
       newId,
       needsAudienceConfirmation,
     );
@@ -2224,7 +2226,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           ...remapped,
           day: dayAtRow(row),
           period: periodAtRow(row),
-          ...(lesson.activityType === 'club' ? { classId: '', classIds: [], displayClassIds: targetClassIds } : { classId: remapped.classId || destinationClassId }),
           ...(lesson.start && lesson.end && payload.slots[lesson.period] && payload.slots[periodAtRow(row)]
             ? { start: addMinutes(lesson.start, minutes(payload.slots[periodAtRow(row)].start) - minutes(payload.slots[lesson.period].start)), end: addMinutes(lesson.end, minutes(payload.slots[periodAtRow(row)].start) - minutes(payload.slots[lesson.period].start)) }
             : {}),
@@ -3233,7 +3234,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     );
                                     event.dataTransfer.effectAllowed =
                                       'copyMove';
-                                    dragging.current = { id: item.id };
+                                    dragging.current = { id: item.id, sourceCol: col };
                                   }}
                                   onDragEnd={(event) => {
                                     const active = dragging.current;
