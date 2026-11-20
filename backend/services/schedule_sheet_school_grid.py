@@ -124,8 +124,20 @@ def describe_lesson(lesson, groups, teachers, existing_notes, bell_times):
         reasons.append("Преподаватель отсутствует в справочнике")
     if activity["section"] == "activity_review":
         reasons.append("Уточните тип дополнительного занятия")
-    if lesson.get("importError") or lesson.get("needsClarification") and lesson.get("specialMark") != "lunch":
-        reasons.append("Проверьте исходные данные в My Island")
+    if not reasons and (lesson.get("importError") or lesson.get("needsClarification") and lesson.get("specialMark") != "lunch"):
+        source_reason = str(lesson.get("clarificationReason") or "").casefold()
+        if re.search(r"групп|состав|аудитор|участник|класс", source_reason):
+            reasons.append("Уточните класс или состав группы")
+        elif re.search(r"врем|день|слот", source_reason):
+            reasons.append("Уточните день или время занятия")
+        elif re.search(r"учител|педагог|преподавател", source_reason):
+            reasons.append("Уточните преподавателя")
+        elif re.search(r"кабинет|помещен", source_reason):
+            reasons.append("Уточните кабинет")
+        elif lesson.get("importError"):
+            reasons.append("Ошибка сопоставления при импорте")
+        else:
+            reasons.append("В черновике сохранена пометка о проверке. Причина не указана.")
     bg = _teacher_fill(teacher_ids, teachers, staff)
     rgb = [int(bg[i:i+2], 16) for i in (1, 3, 5)]
     bg = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in rgb)
@@ -145,10 +157,11 @@ def describe_lesson(lesson, groups, teachers, existing_notes, bell_times):
 
 def card_caption(info, width, *, shared, continuation):
     mark = ("↳" if continuation else "↔" if shared else "") + ("?" if info["notice"] else "")
+    narrow = width < 47
     if width >= 92 and len(info["name"]) <= (width - 12) // 6:
         title = " ".join(filter(None, (mark, info["name"])))
     else:
-        title = f"{mark[:1]}{info['short']}" if width >= 34 else info["short"]
+        title = info["short"] if narrow else f"{mark[:1]}{info['short']}"
     if width < 30:
         return title, 7
     if info["atypical"] and width >= 89:
@@ -160,6 +173,8 @@ def card_caption(info, width, *, shared, continuation):
             secondary = info["group_short"] or info["room_short"]
         if info["atypical"] and width >= 34:
             secondary = info["interval"].split("–")[1]
+    if narrow and mark:
+        secondary = f"{mark[-1]}{secondary}" if len(secondary) <= 4 else mark[-1]
     return "\n".join(filter(None, (title, secondary))), 8
 
 

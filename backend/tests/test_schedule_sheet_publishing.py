@@ -275,7 +275,7 @@ class SchedulePublishingTests(unittest.TestCase):
         cells = "\n".join(c["text"] for c in plan["cells"])
         self.assertIn("Математика", cells)
         self.assertIn("Онлайн", cells)
-        self.assertIn("Уточнить · Проверьте исходные данные в My Island", cells)
+        self.assertIn("Уточнить · В черновике сохранена пометка о проверке.", cells)
         requests = sheets_requests(plan)
         self.assertTrue(requests[1]["addSheet"]["properties"]["hidden"])
         visible = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == plan["sheet_id"])

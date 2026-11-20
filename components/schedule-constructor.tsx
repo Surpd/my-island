@@ -3319,9 +3319,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                               const groupCode = group?.subject_subgroup || (rank === undefined ? '' :
                                 (group?.canonicalName || group?.name || '').startsWith('grade9-math-') ? 'ABC'[rank] : String(rank + 1));
                               const subject = subjectLabel(item.subject) || 'Занятие';
-                              const compactLabel = lessons.length > 2 ? (item.activityType === 'laboratory' ? 'Лаб' :
+                              const schoolLabel = shortSubject(subject);
+                              const words = subject.match(/[\p{L}\d]+/gu) || [];
+                              const abbreviation = words.length > 1 ? words.slice(0, 4).map(word => word[0].toUpperCase()).join('') : `${words[0]?.slice(0, 3) || 'Зан'}.`;
+                              const compactLabel = item.activityType === 'laboratory' ? 'Лаб' :
                                 item.activityType === 'consultation' ? 'Конс' : item.activityType === 'practice' ? 'Пр' :
-                                shortSubject(subject).match(/[\p{L}\d]{1,4}/u)?.[0] || 'Зан.') : shortSubject(subject);
+                                schoolLabel.length <= (lessons.length > 2 ? 5 : 12) && !schoolLabel.includes('…') ? schoolLabel : abbreviation;
+                              const sessionMark = item.period !== period ? '↳' : lessonClasses(item).length > 1 ? '↔' : '';
                               const roomCode = roomCaption === 'Онлайн' ? 'Онл' : roomCaption.match(/^(?:каб\.\s*)?(\d+\p{L}?)$/u)?.[1];
                               const optional = ['club', 'elective', 'consultation'].includes(item.activityType || '');
                               return (
@@ -3373,7 +3377,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                 >
                                   {compactDay ? <span>
                                     <strong>{compactLabel}</strong>
-                                    <small>{[groupCode, roomCode, optional ? '＋' : ''].filter(Boolean).join(' ')}</small>
+                                    <small>{[sessionMark, groupCode, roomCode, optional ? '＋' : ''].filter(Boolean).join(' ')}</small>
                                   </span> : <span>
                                     <strong>
                                       {item.kind === 'event' ? <>◆ {item.subject}{item.period !== period ? ' ↳' : ''}</> : <><span className="constructor-subject-short">{item.period !== period ? '↳ ' : ''}{englishCaption?.short || shortSubject(subjectLabel(item.subject) || 'Новый урок')}</span><span className="constructor-subject-full">{item.period !== period ? '↳ ' : ''}{englishCaption?.full || subjectLabel(item.subject) || 'Новый урок'}</span></>}
@@ -3873,11 +3877,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             >{panelOpen ? <ChevronRight size={18} aria-hidden="true" /> : <ChevronLeft size={18} aria-hidden="true" />}</button>
           </div>
           <footer className="constructor-footer">
-            <span>
+            {compactDay ? <span>Нажмите на занятие для деталей · ＋ кружок или занятие по выбору · ↔ совместное · ↳ продолжение</span> : <span>
               Клик — ячейка · Enter — урок · Esc — весь слот · Shift+стрелки —
               диапазон · Ctrl/Cmd+C/X/V — копировать, вырезать, вставить ·
               Alt+перетаскивание — копия
-            </span>
+            </span>}
 
           </footer>
           {context ? (
