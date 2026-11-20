@@ -15,6 +15,7 @@ import json
 import re
 from typing import Any, Mapping
 
+from backend.services.schedule_subjects import subject_label
 from backend.config import Settings
 from backend.database import Database
 from backend.services.canonical_schedule import (
@@ -35,7 +36,6 @@ from backend.services.weekly_schedule_ingestion import (
     meta_map, normalized_source_rows, parse_structure, parse_weekly_lessons,
     source_change_keys, source_rows, comparison_key,
 )
-from backend.services.schedule_parser_v2 import normalize_subject
 
 
 def _title(titles: list[str], wanted: str) -> str | None:
@@ -158,7 +158,7 @@ def _inherit_canonical_group_context(
         }
         column = int(cell.get("source_column") or -1)
         matching_group_ids: set[str] = set()
-        subject = normalize_subject(lesson.get("subject"))
+        subject = subject_label(lesson.get("subject")).casefold()
         for assignment in block.get("assignments") or []:
             coordinates = [str(value) for value in assignment.get("source_cells") or []]
             if not any(source_columns.get(coordinate) == column for coordinate in coordinates):
@@ -166,7 +166,7 @@ def _inherit_canonical_group_context(
             for group_id in (assignment.get("audience") or {}).get("canonical_group_ids") or []:
                 group = groups_by_id.get(str(group_id))
                 if (group and str(group.get("group_type") or "").casefold() != "class"
-                        and normalize_subject(group.get("subject")) == subject):
+                        and subject_label(group.get("subject")).casefold() == subject):
                     matching_group_ids.add(str(group_id))
         if matching_group_ids:
             lesson["resolved_group_ids"] = sorted(matching_group_ids)

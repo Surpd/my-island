@@ -215,9 +215,22 @@ def _clean_payload(value: Mapping[str, Any] | None) -> dict[str, Any]:
         result["fixture_version"] = str(raw["fixture_version"])
     # The school import is reviewable only while its source and unresolved
     # records survive normal edits, renames, and reloads of the draft.
-    for key in ("school_source", "import_review", "transfer_result"):
+    for key in ("school_source", "import_review", "transfer_result", "laboratory_blueprints", "laboratory_meetings", "laboratory_history"):
         if isinstance(raw.get(key), (dict, list)):
             result[key] = raw[key]
+    blueprints = raw.get("laboratory_blueprints", [])
+    if not isinstance(blueprints, list) or any(not isinstance(b, Mapping) or not isinstance(b.get("id"), str)
+                                               or not b["id"] or not isinstance(b.get("subject"), str)
+                                               or not b["subject"].strip() for b in blueprints):
+        raise ValueError("Для заготовки лаборатории нужны название и идентификатор")
+    if len({b["id"] for b in blueprints}) != len(blueprints):
+        raise ValueError("Идентификаторы заготовок должны быть уникальны")
+    meetings = raw.get("laboratory_meetings", {})
+    if not isinstance(meetings, Mapping) or meetings and not result.get("week_start"):
+        raise ValueError("Лабораторию можно активировать только в недельном черновике")
+    active_ids = {m.get("meeting_id") for m in meetings.values() if isinstance(m, Mapping)}
+    if any(l.get("activityType") == "laboratory" and l.get("id") not in active_ids for l in lessons):
+        raise ValueError("Добавьте лабораторию через предпросмотр замещения")
     if isinstance(raw.get("source_template"), Mapping):
         result["source_template"] = dict(raw["source_template"])
     return result
@@ -385,6 +398,39 @@ def _time_minutes(value: Any) -> int | None:
     return hour * 60 + minute if 0 <= hour < 24 and 0 <= minute < 60 else None
 
 
+def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], class_grades: Mapping[str, str]) -> set[str]:
+    rule = _lesson_audience(lesson)
+    class_ids = {str(value) for value in (lesson.get("classIds") or []) if value}
+    class_ids.update(str(value) for value in (rule.get("class_ids") or rule.get("group_ids") or []) if value)
+    class_ids.update(str(value) for value in (lesson.get("groupIds") or []) if value)
+    class_ids.update(str(value) for value in (lesson.get("classId"), lesson.get("groupId")) if value)
+    try:
+        weekday = int(lesson.get("day", lesson.get("weekday", -1)))
+    except (TypeError, ValueError):
+        return set()
+    grades = {class_grades.get(str(class_id), "") for class_id in class_ids}
+    if rule.get("grade"):
+        grades.add(str(rule["grade"]))
+    grades.discard("")
+    modes = {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] for grade in grades}
+    return {str(mode) for mode in modes if mode is not None}
+
+
+def lesson_is_online(lesson: Mapping[str, Any], modes: set[str]) -> bool:
+    if lesson.get("format") == "online":
+        return True
+    return str(lesson.get("room") or "").strip().casefold() in {"онлайн", "online"} or modes == {"online"}
+
+
+def physical_room_key(lesson, payload, grades):
+    from backend.services.schedule_rooms import room_key
+    modes = _lesson_day_modes(payload, lesson, grades)
+    if lesson_is_online(lesson, modes) or modes == {"sdep"}:
+        return ""
+    key = room_key(lesson.get("room"))
+    return "" if key in {"онлайн", "online"} else key
+
+
 def _lesson_interval(lesson: Mapping[str, Any], slots: list[Any]) -> tuple[int, int] | None:
     try:
         slot = slots[int(lesson.get("period", -1))]
@@ -495,7 +541,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         for student_id in members:
             student_classes.setdefault(student_id, set()).add(class_id)
 
-    def resolve_explicit(rule: Mapping[str, Any]) -> tuple[set[str], str | None]:
+    def resolve_explicit(rule: Mapping[str, Any], *, allow_empty: bool = False) -> tuple[set[str], str | None]:
         kind = rule["kind"]
         if kind == "students":
             requested = (set(rule["student_ids"]) | set(rule.get("include_student_ids") or [])) - set(rule.get("exclude_student_ids") or [])
@@ -527,7 +573,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         empty = [item for item in ids if not by_group.get(item)
                  and (kind == "groups" or bool(raw_members_by_group.get(item))
                       or not can_skip_unpopulated_grade_class)]
-        if empty:
+        if empty and not allow_empty:
             return set(), f"Неизвестен состав аудитории «{', '.join(str(groups[item]['name'] or item) for item in empty)}»."
         resolved = set().union(*(by_group.get(item, set()) for item in ids))
         if kind == "legacy_remaining":
@@ -560,7 +606,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         lesson_id = str(lesson.get("id") or index)
         rule = _lesson_audience(lesson)
         interval = _lesson_interval(lesson, slots)
-        base, reason = resolve_explicit(rule)
+        base, reason = resolve_explicit(rule, allow_empty=_lesson_activity_type(lesson) == "consultation")
         if not rule["kind"] and (_lesson_special_mark(lesson) == "no_lesson"
                                   or lesson.get("kind") == "event" and lesson.get("informational") is True
                                   or _is_lunch_lesson(lesson) and lesson.get("needsClarification") is True):
@@ -568,7 +614,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         if rule["kind"] == "available_slot" and not interval:
             reason = "Не задан корректный временной интервал"
         activity_type = _lesson_activity_type(lesson)
-        optional_roster = activity_type in {"club", "elective"}
+        optional_roster = activity_type in {"club", "elective", "consultation"}
         snapshot_value = None if optional_roster else lesson.get("audience_snapshot")
         saved_snapshot = dict(snapshot_value) if isinstance(snapshot_value, Mapping) else None
         snapshot_ids = set(_ids(saved_snapshot.get("student_ids"))) if saved_snapshot else set()
@@ -577,7 +623,8 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
                          "base": base, "occupancy_base": snapshot_ids if saved_snapshot is not None else base,
                          "snapshot": saved_snapshot, "snapshot_ids": snapshot_ids,
                          "fingerprint": _audience_fingerprint(lesson, payload), "reason": reason}
-        states_by_day.setdefault(day, []).append(index)
+        if activity_type != "consultation":
+            states_by_day.setdefault(day, []).append(index)
         if activity_type == "elective" and lesson.get("blockId") and interval:
             key = (day, interval, str(lesson["blockId"]))
             class_ids = _ids(lesson.get("classIds") or lesson.get("displayClassIds"))
@@ -649,7 +696,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         blockers: list[dict[str, Any]] = []
         is_lunch = _is_lunch_lesson(state["lesson"])
         if (rule["kind"] == "available_slot" or is_lunch) and not reason:
-            for other_key in states_by_day[_lesson_weekday(state["lesson"])]:
+            for other_key in states_by_day.get(_lesson_weekday(state["lesson"]), []):
                 if other_key == state_key:
                     continue
                 other = states[other_key]
@@ -840,11 +887,11 @@ def _canonical_payload(database: Database, version_id: str, *, source_blocks: Ma
         metadata = assignment.get("metadata") or {}
         details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
         descriptive = {key: details[key] for key in (
-            "description", "place", "format", "kind", "informational",
+            "description", "place", "format", "connectionInfo", "responsible_teacher_ids", "kind", "informational",
             "activityCatalogId", "activityNameSnapshot", "eligibleGrades",
             "confirmedParticipantIds", "electiveDirection", "blockId", "blockName") if key in details}
         activity_type = metadata.get("activity_type")
-        if activity_type in {"club", "elective", "event"}:
+        if activity_type in {"club", "elective", "event", "consultation", "practice", "laboratory"}:
             descriptive["activityType"] = activity_type
         if metadata.get("special_mark") in {"lunch", "no_lesson"}:
             descriptive["specialMark"] = metadata["special_mark"]
@@ -917,6 +964,10 @@ def list_experiments(database: Database) -> list[dict[str, Any]]:
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_constructor_publications'").fetchone()
         published_draft_ids = {str(row["draft_id"]) for row in database.execute(connection,
             "SELECT DISTINCT draft_id FROM schedule_constructor_publications").fetchall()} if publication_table else set()
+        archived_ids = [str(row["id"]) for row in rows if _payload(row["payload"]).get("draft_archive")]
+        deletable_ids = {draft_id for draft_id in archived_ids
+                         if not _draft_links(database, connection, draft_id)
+                         and not any(str(row["id"]) != draft_id and draft_id in str(row["payload"]) for row in rows)}
     result = []
     for row in rows:
         item = dict(row)
@@ -940,6 +991,9 @@ def list_experiments(database: Database) -> list[dict[str, Any]]:
                      # tags can remain on superseded copies and must not promote them.
                      "is_primary_template": bool(selected_template_id and str(item["id"]) == selected_template_id),
                      "has_publications": str(item["id"]) in published_draft_ids,
+                     "archived_at": (payload.get("draft_archive") or {}).get("at"),
+                     "has_active_laboratories": bool(payload.get("laboratory_meetings")),
+                     "can_delete": str(item["id"]) in deletable_ids and not payload.get("laboratory_meetings"),
                      "source_template": payload.get("source_template")})
         result.append(item)
     return result
@@ -999,10 +1053,17 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     now = datetime.now(timezone.utc).isoformat()
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
+    if _trusted_resolution_history and payload.get("laboratory_blueprint_history"):
+        clean_payload["laboratory_blueprint_history"] = payload["laboratory_blueprint_history"]
     _validate_day_modes(database, clean_payload)
     from backend.services.schedule_term_comparison import retain_term_comparison
     if not _trusted_resolution_history:
-        for lesson in clean_payload['lessons']:lesson.pop('resolution_history',None)
+        if clean_payload.get("laboratory_meetings") or clean_payload.get("laboratory_history"):
+            raise ValueError("Активируйте лабораторию через предпросмотр замещения")
+        for lesson in clean_payload["lessons"]:
+            lesson.pop("resolution_history", None)
+            lesson.pop("attendance_history", None)
+            lesson.pop("attendance_week_baseline", None)
     if not _trusted_resolution_history or clean_payload.get("week_start"):
         retain_term_comparison(clean_payload, None)
     provenance = clean_payload.get("school_source")
@@ -1010,7 +1071,7 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     if provenance.get("role") == "primary_school_template" and not provenance.get("primary_draft_id"):
         clean_payload["school_source"] = {**provenance, "primary_draft_id": experiment_id}
     clean_payload["lessons"] = validate_activity_lessons(clean_payload["lessons"], list_activities(database, include_archived=True))
-    encoded = json.dumps(_clean_payload(clean_payload), ensure_ascii=False, separators=(",", ":"))
+    encoded = json.dumps(clean_payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     actor_id = _draft_actor_id(database, actor_user_id)
     params = (experiment_id, normalized_name, base_version_id, encoded, actor_id, actor_id, now, now)
@@ -1106,31 +1167,57 @@ def create_effective_week_experiment(database: Database, effective_week_id: str,
             "start_time": slot.get("start") or patch.get("start_time") or block.get("start_time"),
             "end_time": slot.get("end") or patch.get("end_time") or block.get("end_time"), "assignments": assignments}
     version_id = str(row["version_id"])
-    payload = _canonical_payload(database, version_id, source_blocks=blocks)
+    from backend.services.canonical_schedule import _published_source_for_effective
+    source, _ = _published_source_for_effective(database, dict(row))
+    archived = (source or {}).get("payload") or {}
+    has_special_history = archived.get("laboratory_blueprints") or archived.get("laboratory_meetings") or archived.get("laboratory_history")
+    payload = dict(archived) if has_special_history else _canonical_payload(database, version_id, source_blocks=blocks)
     payload.update({"draft_kind": "school", "week_start": str(row["week_start"]),
                     "reference_date": str(row["week_start"]), "school_source": {
                         "kind": "effective_week", "effective_week_id": effective_week_id, "canonical_version_id": version_id}})
     return create_experiment(database, name=f"Неделя {row['week_start']} · черновик исторической версии", source="import",
-                             payload=payload, actor_user_id=actor_user_id, _base_version_id=version_id)
+                             payload=payload, actor_user_id=actor_user_id, _base_version_id=version_id,
+                             _trusted_resolution_history=bool(has_special_history))
 
 
-def duplicate_experiment(database: Database, experiment_id: str, *, name: str | None = None, actor_user_id: Any = None) -> dict[str, Any]:
+def duplicate_experiment(database: Database, experiment_id: str, *, expected_revision: int | None = None, copy_request_id: str | None = None, name: str | None = None, actor_user_id: Any = None) -> dict[str, Any]:
     source = get_experiment(database, experiment_id)
+    copy_id = str(uuid4())
+    if copy_request_id:
+        copy_id = str(uuid5(NAMESPACE_URL, f"my-island/draft-copy/{source['id']}/{expected_revision}/{actor_user_id}/{copy_request_id}"))
+        try:
+            return get_experiment(database, copy_id)
+        except ExperimentNotFound:
+            pass
+    if expected_revision is not None and int(source["revision"]) != expected_revision:
+        raise ExperimentConflict(source)
     normalized_name = str(name or f"{source['name']} — копия").strip()
     if not normalized_name:
         raise ValueError("name is required")
-    experiment_id = str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
     duplicate_payload = dict(source["payload"])
     if duplicate_payload.get("draft_kind") == "demo":
         duplicate_payload["draft_kind"] = "user"
-    encoded = json.dumps(_clean_payload(duplicate_payload), ensure_ascii=False, separators=(",", ":"))
+    clean_copy = _clean_payload(duplicate_payload)
+    if "laboratory_blueprint_history" in duplicate_payload:
+        clean_copy["laboratory_blueprint_history"] = duplicate_payload["laboratory_blueprint_history"]
+    if clean_copy.get("week_start"):
+        clean_copy["week_variant"] = True
+    encoded = json.dumps(clean_copy, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
+    source_lock = " FOR SHARE" if database.database_url else ""
     with database.connection() as connection:
         row = database.execute(connection, f"""INSERT INTO schedule_experiment_drafts
             (id,name,base_version_id,revision,payload,created_by,updated_by,created_at,updated_at)
-            VALUES (?,?,?,1,{encoded_sql},?,?,?,?) RETURNING *""",
-            (experiment_id, normalized_name, source.get("base_version_id"), encoded, _draft_actor_id(database, actor_user_id), _draft_actor_id(database, actor_user_id), now, now)).fetchone()
+            SELECT ?,?,?,1,{encoded_sql},?,?,?,? WHERE EXISTS (
+                SELECT 1 FROM schedule_experiment_drafts WHERE id=? AND revision=?{source_lock})
+            ON CONFLICT (id) DO NOTHING RETURNING *""",
+            (copy_id, normalized_name, source.get("base_version_id"), encoded, _draft_actor_id(database, actor_user_id),
+             _draft_actor_id(database, actor_user_id), now, now, source["id"], source["revision"])).fetchone()
+        if row is None:
+            row = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (copy_id,)).fetchone()
+        if row is None:
+            raise ExperimentConflict(source)
     return _item(row)
 
 
@@ -1140,6 +1227,7 @@ def create_experiment_week(database: Database, experiment_id: str, *, week_start
         if database.database_url:
             key = f"my-island:week:{week_start}"
             with database.connection() as connection:
+                database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", ("my-island:school-template-selection",))
                 database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
                 return _create_experiment_week_locked(database, experiment_id, week_start=week_start,
                     expected_revision=expected_revision, actor_user_id=actor_user_id)
@@ -1156,26 +1244,51 @@ def _create_experiment_week_locked(database: Database, experiment_id: str, *, we
     source = get_experiment(database, experiment_id)
     if int(source["revision"]) != expected_revision:
         raise ExperimentConflict(source)
+    if source["payload"].get("draft_archive"):
+        raise ValueError("Выберите действующий шаблон для создания недели.")
     # Treat the source template and calendar week as an idempotency key. A
     # repeated request (for example after a lost response) must reopen the
     # independent draft already created for that exact template revision.
+    calendar_drafts = False
     for summary in list_experiments(database):
-        if summary.get("week_start") != start.isoformat():
+        if summary.get("week_start") != start.isoformat() or summary.get("archived_at"):
             continue
+        calendar_drafts = True
         existing = get_experiment(database, summary["id"])
         provenance = existing["payload"].get("source_template") or {}
-        if (str(provenance.get("id") or "") == str(source["id"])
+        if (not existing["payload"].get("week_variant") and str(provenance.get("id") or "") == str(source["id"])
                 and int(provenance.get("revision") or 0) == int(source["revision"])):
             existing["already_exists"] = True
             return existing
-        raise ValueError(f"Неделя с {start.isoformat()} уже сохранена. Откройте существующий черновик или историю, чтобы не создавать дубликат.")
+
+    if calendar_drafts:
+        raise ValueError(f"Неделя с {start.isoformat()} уже сохранена. Выберите черновик из списка.")
     payload = json.loads(json.dumps(source["payload"], ensure_ascii=False))
+    if payload.get("laboratory_meetings"):
+        from backend.services.schedule_laboratories import restore_lessons
+        enabled = payload.pop("laboratory_meetings")
+        # Replay the inverse operations in reverse activation order (also after JSONB roundtrips).
+        for entry in reversed(payload.get("laboratory_history", [])):
+            receipt = enabled.pop(entry["blueprint_id"], None)
+            if receipt:
+                payload["lessons"] = restore_lessons(payload["lessons"], receipt)
+    payload.pop("laboratory_history", None)
+    for lesson in payload["lessons"]:
+        if "attendance_week_baseline" in lesson:
+            baseline = lesson.pop("attendance_week_baseline")
+            rule = _lesson_audience(lesson)
+            rule["exclude_student_ids"] = baseline
+            lesson["audience"] = rule
+            lesson.pop("audience_snapshot", None)
+    original_by_id = {lesson["id"]: lesson for lesson in payload["lessons"] if lesson.get("id")}
+    original_context = dict(payload)
     payload["week_start"] = start.isoformat()
     payload["reference_date"] = start.isoformat()
     payload["source_template"] = {"id": source["id"], "revision": int(source["revision"])}
-    for original, copied in zip(source["payload"].get("lessons") or [], payload.get("lessons") or []):
+    for copied in payload.get("lessons") or []:
+        original = original_by_id.get(copied.get("id"), copied)
         snapshot = copied.get("audience_snapshot")
-        if isinstance(snapshot, dict) and snapshot.get("fingerprint") == _audience_fingerprint(original, source["payload"]):
+        if isinstance(snapshot, dict) and snapshot.get("fingerprint") == _audience_fingerprint(original, original_context):
             # A trusted date-only copy preserves confirmed participants. Rebind
             # the rule fingerprint, never recompute/fill the roster here. A
             # changed target-week membership still requires explicit review.
@@ -1185,11 +1298,89 @@ def _create_experiment_week_locked(database: Database, experiment_id: str, *, we
                              _base_version_id=source.get("base_version_id"), _trusted_resolution_history=True)
 
 
+_DRAFT_LINKS = {
+    "school_template_selection": ("draft_id", "source_draft_id"),
+    "school_template_selection_history": ("previous_draft_id", "next_draft_id"),
+    "school_template_baseline_approvals": ("draft_id",),
+    "schedule_constructor_publications": ("draft_id",),
+    "schedule_sheet_exports": ("draft_id",),
+}
+
+
+def _draft_links(database, connection, experiment_id):
+    table_query = ("SELECT table_name AS name FROM information_schema.tables WHERE table_schema=current_schema()"
+                   if database.database_url else "SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row["name"] for row in database.execute(connection, table_query).fetchall()}
+    return {table for table, columns in _DRAFT_LINKS.items() if table in tables
+            and database.execute(connection, f"SELECT 1 FROM {table} WHERE "
+                + " OR ".join(f"{column}=?" for column in columns) + " LIMIT 1",
+                (experiment_id,) * len(columns)).fetchone()}
+
+
+def manage_experiment(database, experiment_id, *, expected_revision, action, confirmed=False, name=None, actor_user_id=None):
+    if action not in {"rename", "archive", "restore", "delete"}:
+        raise ValueError("Неизвестное действие с черновиком.")
+    with _week_creation_lock, database.connection() as connection:
+        if database.database_url:
+            database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                             ("my-island:school-template-selection",))
+        else:
+            database.execute(connection, "BEGIN IMMEDIATE")
+        suffix = " FOR UPDATE" if database.database_url else ""
+        row = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?" + suffix, (experiment_id,)).fetchone()
+        if not row:
+            raise ExperimentNotFound(experiment_id)
+        draft = _item(row)
+        if draft["revision"] != expected_revision:
+            raise ExperimentConflict(draft)
+        payload = draft["payload"]
+        if action == "rename":
+            if payload.get("draft_archive"):
+                raise ValueError("Сначала восстановите черновик из архива.")
+            title = str(name or "").strip()
+            if not title:
+                raise ValueError("Введите название черновика.")
+            if title == draft["name"]:
+                return draft
+            updated = database.execute(connection, """UPDATE schedule_experiment_drafts
+                SET name=?,revision=revision+1,updated_at=?,updated_by=? WHERE id=? RETURNING *""",
+                (title, datetime.now(timezone.utc).isoformat(), _draft_actor_id(database, actor_user_id), experiment_id)).fetchone()
+            return _item(updated)
+        links = _draft_links(database, connection, experiment_id)
+        if action != "restore" and "school_template_selection" in links:
+            raise ValueError("Сначала назначьте другой основной шаблон.")
+        if action != "restore" and payload.get("laboratory_meetings"):
+            raise ValueError("Сначала отключите лаборатории и восстановите заменённые уроки.")
+        if action == "delete":
+            if not confirmed or not payload.get("draft_archive"):
+                raise ValueError("Сначала архивируйте запись, затем подтвердите окончательное удаление.")
+            references = database.execute(connection, "SELECT payload FROM schedule_experiment_drafts WHERE id<>?", (experiment_id,)).fetchall()
+            if links or any(experiment_id in json.dumps(_payload(ref["payload"])) for ref in references):
+                raise ValueError("Есть связанные черновики или история. Запись можно оставить в архиве или восстановить.")
+            database.execute(connection, "DELETE FROM schedule_experiment_drafts WHERE id=?", (experiment_id,))
+            return {"deleted": experiment_id}
+        if bool(payload.get("draft_archive")) == (action == "archive"):
+            return draft
+        now = datetime.now(timezone.utc).isoformat()
+        if action == "archive":
+            payload["draft_archive"] = {"at": now, "by": str(actor_user_id or "")}
+        else:
+            payload.pop("draft_archive", None)
+        payload.setdefault("draft_lifecycle_history", []).append({"action": action, "at": now, "by": str(actor_user_id or "")})
+        encoded = json.dumps(payload, ensure_ascii=False)
+        parameter = "?::jsonb" if database.database_url else "?"
+        updated = database.execute(connection, f"""UPDATE schedule_experiment_drafts
+            SET payload={parameter},revision=revision+1,updated_at=?,updated_by=? WHERE id=? RETURNING *""",
+            (encoded, now, _draft_actor_id(database, actor_user_id), experiment_id)).fetchone()
+        return _item(updated)
+
+
 def delete_experiment(database: Database, experiment_id: str) -> None:
-    with database.connection() as connection:
-        row = database.execute(connection, "DELETE FROM schedule_experiment_drafts WHERE id=? RETURNING id", (experiment_id,)).fetchone()
-    if not row:
-        raise ExperimentNotFound(experiment_id)
+    """Delete disposable local experiments using the same dependency checks."""
+    current = get_experiment(database, experiment_id)
+    if not current["payload"].get("draft_archive"):
+        current = manage_experiment(database, experiment_id, expected_revision=current["revision"], action="archive")
+    manage_experiment(database, experiment_id, expected_revision=current["revision"], action="delete", confirmed=True)
 
 
 def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, term_comparison_key: str | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -1202,6 +1393,41 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     current = get_experiment(database, experiment_id)
     if int(current["revision"]) != expected_revision:
         raise ExperimentConflict(current)
+    if current["payload"].get("draft_archive"):
+        raise ValueError("Восстановите черновик из архива перед редактированием.")
+    previous_blueprints = {b["id"]: b for b in current["payload"].get("laboratory_blueprints", [])}
+    next_blueprints = {b["id"]: b for b in clean.get("laboratory_blueprints", [])}
+    active_blueprints = current["payload"].get("laboratory_meetings", {})
+    if any(previous_blueprints.get(key) != next_blueprints.get(key) for key in active_blueprints):
+        raise ValueError("Сначала отключите лабораторию и восстановите уроки.")
+    blueprint_history = list(current["payload"].get("laboratory_blueprint_history", []))
+    for key in dict.fromkeys([*previous_blueprints, *next_blueprints]):
+        before, after = previous_blueprints.get(key), next_blueprints.get(key)
+        if before != after:
+            blueprint_history.append({"revision": expected_revision + 1, "actor": str(actor_user_id or ""),
+                            "before": before, "after": after})
+    for field in ("laboratory_meetings", "laboratory_history"):
+        if clean.get(field) != current["payload"].get(field) and field in clean:
+            raise ValueError("Измените лабораторию через предпросмотр замещения")
+        if field in current["payload"]:
+            clean[field] = current["payload"][field]
+    if current["payload"].get("laboratory_meetings"):
+        meetings = [lesson for lesson in current["payload"]["lessons"] if lesson.get("laboratoryOrigin")]
+        def affected_rows(value):
+            matches = {}
+            for lesson in value["lessons"]:
+                interval = _lesson_interval(lesson, value["slots"])
+                for meeting in meetings:
+                    lab = _lesson_interval(meeting, current["payload"]["slots"])
+                    if (lesson.get("id") == meeting["id"] or lesson.get("day") == meeting["day"]
+                            and interval and lab and interval[0] < lab[1] and lab[0] < interval[1]):
+                        matches[lesson["id"]] = lesson
+            return matches
+        if affected_rows(clean) != affected_rows(current["payload"]) or any(
+                clean.get(k) != current["payload"].get(k) for k in ("days", "slots", "grade_modes", "day_modes")):
+            raise ValueError("Для изменения замещения или режима дня отключите лабораторию и проверьте новый предпросмотр")
+    if "source_template" in current["payload"]:
+        clean["source_template"] = current["payload"]["source_template"]
     current_week = current["payload"].get("week_start")
     if clean.get("week_start") and clean["week_start"] != current_week:
         raise ValueError("Чтобы начать работу над другой неделей, создайте отдельный черновик.")
@@ -1221,11 +1447,39 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
+        lesson.pop("attendance_week_baseline", None)
+        if "attendance_week_baseline" in previous:
+            lesson["attendance_week_baseline"] = previous["attendance_week_baseline"]
+        history = list(previous.get("attendance_history") or [])
+        lesson.pop("attendance_history", None)
+        reason = str(lesson.pop("attendance_reason", "") or "").strip()
+        if current_week and "attendance_week_baseline" in previous and _lesson_weekday(lesson) != _lesson_weekday(previous):
+            rule = _lesson_audience(lesson)
+            rule["exclude_student_ids"] = lesson.pop("attendance_week_baseline")
+            lesson.update(audience=rule, audience_snapshot=None)
+            reason = "Персональное исключение завершено при переносе на другую дату"
+        old_exclusions = set(_lesson_audience(previous).get("exclude_student_ids") or [])
+        new_exclusions = set(_lesson_audience(lesson).get("exclude_student_ids") or [])
+        if previous and old_exclusions != new_exclusions:
+            if not reason:
+                reason = "Изменение правила состава в конструкторе"
+            if current_week and "attendance_week_baseline" not in lesson:
+                lesson["attendance_week_baseline"] = sorted(old_exclusions)
+            history.append({"scope": current_week or "template", "at": datetime.now(timezone.utc).isoformat(), "actor": str(actor_user_id or ""),
+                            "reason": reason, "excluded": sorted(new_exclusions - old_exclusions),
+                            "restored": sorted(old_exclusions - new_exclusions)})
+        if history:
+            lesson["attendance_history"] = history
+        if lesson.get("activityType") == "consultation" and not (lesson.get("teacherId") or lesson.get("teacherIds")):
+            raise ValueError("Выберите преподавателя консультации")
         if not _trusted_resolution_history:
             lesson.pop('resolution_history',None)
             if previous.get('resolution_history'):
                 from copy import deepcopy
                 lesson['resolution_history']=deepcopy(previous['resolution_history'])
+        if _lesson_activity_type(lesson) == "consultation":
+            lesson.pop("audience_snapshot", None)
+            continue
         if _lesson_activity_type(lesson) in {"club", "elective"}:
             # Keep historical evidence while using no personal roster.
             existing = previous.get("audience_snapshot")
@@ -1250,7 +1504,7 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
-        if _lesson_activity_type(lesson) in {"club", "elective"}:
+        if _lesson_activity_type(lesson) in {"club", "elective", "consultation"}:
             continue
         had_snapshot = isinstance(previous.get("audience_snapshot"), Mapping)
         explicit_reset = key in reset_keys
@@ -1280,7 +1534,13 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         lesson["audience_snapshot"] = {"student_ids": _ids(student_ids),
                                        "fingerprint": _audience_fingerprint(lesson, clean),
                                        "resolved_at": datetime.now(timezone.utc).isoformat()}
-    return _write_experiment_revision(database, experiment_id, expected_revision, _clean_payload(clean),
+    clean = _clean_payload(clean)
+    if blueprint_history:
+        clean["laboratory_blueprint_history"] = blueprint_history
+    for field in ("week_variant", "draft_lifecycle_history"):
+        if field in current["payload"]:
+            clean[field] = current["payload"][field]
+    return _write_experiment_revision(database, experiment_id, expected_revision, clean,
                                       normalized_name=normalized_name, actor_user_id=actor_user_id)
 
 
@@ -1290,14 +1550,18 @@ def _write_experiment_revision(database: Database, experiment_id: str, expected_
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     now = datetime.now(timezone.utc).isoformat()
+    archived = "payload->'draft_archive' IS NULL" if database.database_url else "json_extract(payload, '$.draft_archive') IS NULL"
     with database.connection() as connection:
         row = database.execute(connection, f"""UPDATE schedule_experiment_drafts
             SET payload={encoded_sql},name=COALESCE(?,name),revision=revision+1,updated_by=?,updated_at=?
-            WHERE id=? AND revision=? RETURNING *""",
+            WHERE id=? AND revision=? AND {archived} RETURNING *""",
             (encoded, normalized_name, _draft_actor_id(database, actor_user_id), now, experiment_id, expected_revision)).fetchone()
         if row:
             return _item(row)
         current = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
     if current:
-        raise ExperimentConflict(_item(current))
+        item = _item(current)
+        if item["revision"] == expected_revision and item["payload"].get("draft_archive"):
+            raise ValueError("Восстановите черновик из архива перед редактированием.")
+        raise ExperimentConflict(item)
     raise ExperimentNotFound(experiment_id)

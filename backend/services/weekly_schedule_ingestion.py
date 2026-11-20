@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import re
 from typing import Any, Mapping, Sequence
 
+from backend.services.schedule_subjects import program_key, subject_label
 from backend.services.schedule_parser_v2 import NO_LESSON, classify_simple_activity, normalize_no_lesson, normalize_subject
 from backend.services.teacher_directory import TEACHER_ALIASES, resolve_teacher_id
 
@@ -397,8 +398,8 @@ def assignment_signature(block: Mapping[str, Any]) -> set[tuple[Any, ...]]:
         if rule.get("kind") == "remaining" or rule.get("partition_group_ids"):
             groups += ("remaining:" + ":".join((str(rule.get("grade") or ""), str(rule.get("class_group_id") or ""), ",".join(sorted(str(x) for x in rule.get("partition_group_ids") or [])))),)
         activity = item.get("activity") or ""
-        activity = NO_LESSON if normalize_no_lesson(activity) or norm(activity) == norm(NO_LESSON) else classify_simple_activity(activity) or normalize_subject(activity)
-        result.add((activity, groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or []))))
+        activity = NO_LESSON if normalize_no_lesson(activity) or norm(activity) == norm(NO_LESSON) else classify_simple_activity(activity) or subject_label(activity).casefold()
+        result.add((activity, groups, tuple(sorted(str(x) for x in item.get("teacher_ids") or [])), program_key(item)))
     return result
 
 
@@ -504,7 +505,7 @@ def _remainder_membership_conflict(
 
 
 def _source_text_signature(value: Any) -> str:
-    return NO_LESSON if normalize_no_lesson(value) or norm(value) == norm(NO_LESSON) else semantic_norm(value)
+    return NO_LESSON if normalize_no_lesson(value) or norm(value) == norm(NO_LESSON) else subject_label(semantic_norm(value)).casefold()
 
 
 def build_weekly_diff(

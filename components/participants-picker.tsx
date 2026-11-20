@@ -10,6 +10,7 @@ export type AudienceRule = {
   class_ids?: string[];
   grade?: string;
   student_ids?: string[];
+  exclude_student_ids?: string[];
 };
 
 export type AudiencePreview = {

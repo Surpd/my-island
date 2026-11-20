@@ -159,3 +159,47 @@ test('legacy baseline approval identifies the missing revision and requires a se
   await approve.click();
   await expect(page.getByRole('alert')).toContainText('Историческая ревизия 45 не восстановлена');
 });
+
+test('открывает выбранный черновик недели и восстанавливает архив после обновления', async ({page}) => {
+  const items = [
+    { id: 'variant-a', name: 'Вариант А', revision: 1, lesson_count: 0, draft_kind: 'school', week_start: '2027-08-02' },
+    { id: 'variant-b', name: 'Вариант Б', revision: 1, lesson_count: 0, draft_kind: 'school', week_start: '2027-08-02' },
+    { id: 'archived', name: 'Шаблон из архива', revision: 2, lesson_count: 0, draft_kind: 'school', archived_at: '2027-08-01', can_delete: true },
+  ];
+  let restored = false;
+  let opened: string | null = null;
+  await openWithPreview(page, {}, false);
+  await page.route('**/api/admin/schedule/experiments/school**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    const headers = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-credentials': 'true',
+      'access-control-allow-headers': 'authorization, content-type, x-dev-auth, x-admin-browser-session, x-school-admin-session, x-telegram-init-data', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({status: 204, headers});
+    if (path.endsWith('/school')) return route.fulfill({ headers, json: {items: items.map(item => restored && item.id === 'archived' ? {...item, archived_at: null, revision: 3} : item)} });
+    if (path.endsWith('/archived/lifecycle')) {
+      expect(route.request().postDataJSON()).toMatchObject({ action: 'restore', expected_revision: 2 });
+      restored = true;
+      return route.fulfill({ headers, json: {id: 'archived', revision: 3} });
+    }
+    if (path.endsWith('/variant-a') || path.endsWith('/variant-b')) {
+      const item = items.find(candidate => path.endsWith('/' + candidate.id))!;
+      opened = item.id;
+      return route.fulfill({ headers, json: { ...item, payload: { days: [0], classes: ['1'], slots: [{start: '09:00', end: '09:45'}], lessons: [] } } });
+    }
+    return route.fallback();
+  });
+  await page.reload();
+  await page.getByText('Архив и тестовые записи', {exact: false}).click();
+  await page.getByRole('button', {name: 'Восстановить', exact: true}).click();
+  await expect(page.locator('#schedule-start-drafts + .schedule-start-list').getByText('Шаблон из архива')).toBeVisible();
+  await page.getByRole('button', {name: 'Недели', exact: true}).click();
+  await page.getByRole('button', {name: 'Выбрать черновик', exact: true}).click();
+  const history = page.getByRole('dialog', {name: /История/});
+  await expect(history.getByRole('heading', {name: 'Вариант А'})).toBeVisible();
+  await expect(history.getByRole('heading', {name: 'Вариант Б'})).toBeVisible();
+  for (const width of [1366, 390, 320]) {
+    await page.setViewportSize({width, height: 820});
+    await page.screenshot({path: resolve(output, `draft-lifecycle-${width}.png`)});
+  }
+  await history.locator('article').filter({hasText: 'Вариант Б'}).getByRole('button', {name: 'Открыть черновик'}).click();
+  await expect.poll(() => opened).toBe('variant-b');
+});

@@ -1,0 +1,112 @@
+.dialog {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(42rem, 96vw);
+  max-height: 90dvh;
+  margin: auto;
+  overflow: auto;
+  padding: 1.25rem;
+  color: #202139;
+  background: white;
+  border: 1px solid #cfd4e2;
+  border-radius: 14px;
+  box-shadow: 0 12px 60px #141c3929;
+}
+.dialog::backdrop {
+  background: #16182b65;
+}
+.dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.dialog h2,
+.dialog h3 {
+  margin: 0 0 0.6rem;
+}
+.dialog fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #d9ddeb;
+  border-radius: 0.6rem;
+}
+.dialog label {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+.dialog :is(select, input, textarea) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.45rem;
+  border: 1px solid #cdd4e2;
+  border-radius: 0.4rem;
+}
+.dialog button {
+  border: 1px solid #cdd4e2;
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.85rem;
+}
+.dialog article {
+  border-bottom: 1px solid #d9ddeb;
+  padding: 0.65rem 0;
+}
+@media (max-width: 480px) {
+  .dialog {
+    padding: 0.8rem;
+  }
+  .dialog fieldset {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0.65rem;
+  }
+}
+
+.dialog article:has([role='switch']),
+.dialog article:has(> button) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.dialog [aria-checked='true'] {
+  background: #224c40;
+  color: white;
+}
+.dialog details {
+  grid-column: 1 / -1;
+}
+.dialog fieldset label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+}
+.dialog input[type='checkbox'] {
+  width: auto;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.actions details {
+  position: relative;
+}
+.actions summary {
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+.actions button {
+  margin: 0.15rem;
+}
+.dialog section + section {
+  margin-top: 0.7rem;
+}

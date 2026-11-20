@@ -6,8 +6,9 @@ import json
 from uuid import uuid4
 from collections.abc import Mapping
 
-from backend.services.schedule_experiments import ExperimentConflict, get_experiment, save_experiment, experiment_week_audience_preview, _lesson_activity_type, _lesson_interval, _lesson_audience
-from backend.services.schedule_rooms import display_room, room_key
+from backend.services.schedule_experiments import ExperimentConflict, get_experiment, save_experiment, experiment_week_audience_preview, _lesson_activity_type, _lesson_interval, _lesson_audience, _class_grade_map, physical_room_key
+from backend.services.schedule_rooms import physical_room_options, room_key, room_label
+from backend.services.schedule_subjects import subject_label
 
 
 def fingerprint(lesson, slots=None):
@@ -40,13 +41,13 @@ def validated_exceptions(lessons, lesson, scope=None, slots=None):
     return valid
 
 
-def room_options(payload, lesson_ids):
+def room_options(payload, lesson_ids, grades=None):
     selected=[l for l in payload['lessons'] if l['id'] in lesson_ids]
     if len(selected)!=1: return []
     target=selected[0]; interval=_lesson_interval(target,payload['slots'])
     if not interval: return []
-    rooms={room_key(l.get('room')):display_room(l.get('room')) for l in payload['lessons'] if room_key(l.get('room'))}
-    occupied={room_key(l.get('room')) for l in payload['lessons'] if l['id'] not in lesson_ids and l.get('day')==target.get('day') and (other:=_lesson_interval(l,payload['slots'])) and interval[0]<other[1] and other[0]<interval[1] and room_key(l.get('room'))}
+    rooms = physical_room_options(l.get('room') for l in payload['lessons'])
+    occupied={physical_room_key(l, payload, grades or {}) for l in payload['lessons'] if l['id'] not in lesson_ids and l.get('day')==target.get('day') and (other:=_lesson_interval(l,payload['slots'])) and interval[0]<other[1] and other[0]<interval[1] and room_key(l.get('room'))}
     return [{'room':label,'available':key not in occupied,'availability':'schedule_only'} for key,label in sorted(rooms.items())]
 
 
@@ -90,7 +91,7 @@ def resolution_preview(database,draft_id,*,expected_revision,lesson_ids,audience
             'old_count':len((lesson.get('audience_snapshot') or {}).get('student_ids') or []),
             'current_count':len(audiences[lesson['id']].get('proposed_student_ids') or [])})
     roster={'affected_lessons':affected_rows}
-    return {'draft_id':draft_id,'revision':expected_revision,'lesson_ids':ids,'preview_token':token,'lessons':selected,'rooms':room_options(draft['payload'],ids),'room_limitation':'Проверены только кабинеты, уже указанные в черновике. Фактическая доступность, вместимость и оснащение не подтверждены.','audiences':{i:audiences[i] for i in ids},'roster':roster,'exceptions':{i:validated_exceptions(draft['payload']['lessons'],by_id[i],scope=draft['payload'].get('week_start') or 'template',slots=draft['payload']['slots']) for i in ids}}
+    return {'draft_id':draft_id,'revision':expected_revision,'lesson_ids':ids,'preview_token':token,'lessons':selected,'rooms':room_options(draft['payload'],ids,_class_grade_map(audience_database or database,draft['payload'])),'room_limitation':'Проверены только кабинеты, уже указанные в черновике. Фактическая доступность, вместимость и оснащение не подтверждены.','audiences':{i:audiences[i] for i in ids},'roster':roster,'exceptions':{i:validated_exceptions(draft['payload']['lessons'],by_id[i],scope=draft['payload'].get('week_start') or 'template',slots=draft['payload']['slots']) for i in ids}}
 
 
 def apply_resolution(database,draft_id,*,expected_revision,preview_token,lesson_ids,action,reason,actor_user_id,room=None,exception_id=None,audience_database=None):
@@ -110,14 +111,18 @@ def apply_resolution(database,draft_id,*,expected_revision,preview_token,lesson_
         if len(selected)!=1 or not str(room or '').strip(): raise ValueError('Выберите одно занятие и укажите кабинет.')
         value=str(room).strip(); target=selected[0]; interval=_lesson_interval(target,payload['slots'])
         if not interval: raise ValueError('У занятия неверно указан интервал времени.')
+        grades = _class_grade_map(audience_database or database, payload)
+        requested = physical_room_key({**target, "room": value}, payload, grades)
         for other in payload['lessons']:
             oi=_lesson_interval(other,payload['slots'])
-            if other['id']!=target['id'] and other.get('day')==target.get('day') and room_key(other.get('room'))==room_key(value) and room_key(value) and oi and interval[0]<oi[1] and oi[0]<interval[1]: raise ValueError('Кабинет занят в этом интервале. Выберите другой или проверьте совместность занятий.')
-        target['room']=value
+            if other['id']!=target['id'] and other.get('day')==target.get('day') and physical_room_key(other,payload,grades)==requested and requested and oi and interval[0]<oi[1] and oi[0]<interval[1]: raise ValueError('Кабинет занят в этом интервале. Выберите другой или проверьте совместность занятий.')
+        if not requested:
+            raise ValueError('Физический кабинет здесь не резервируется. Уточните формат занятия в конструкторе.')
+        target['room'] = room_label(value)
     elif action=='joint':
         if len(selected)<2: raise ValueError('Выберите не менее двух связанных занятий.')
         def teachers(l): return sorted(set(l.get('teacherIds') or [])|({l['teacherId']} if l.get('teacherId') else set()))
-        signatures={(l.get('day'),_lesson_interval(l,payload['slots']),tuple(teachers(l)),room_key(l.get('room')),l.get('subject')) for l in selected}
+        signatures={(l.get('day'),_lesson_interval(l,payload['slots']),tuple(teachers(l)),room_key(l.get('room')),subject_label(l.get('subject')).casefold()) for l in selected}
         if len(signatures)!=1 or not teachers(selected[0]) or not str(selected[0].get('room') or '').strip(): raise ValueError('Сначала уточните одинаковые время, предмет, преподавателей и общий кабинет.')
         if any(preview['audiences'][l['id']]['status']!='ok' or preview['audiences'][l['id']]['needs_recalculation'] for l in selected): raise ValueError('Сначала проверьте и подтвердите состав участников.')
     elif action=='independent_practice':

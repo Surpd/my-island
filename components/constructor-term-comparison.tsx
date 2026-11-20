@@ -1,8 +1,9 @@
 'use client';
 
+import { normalizeRoomDisplay } from './schedule-rooms';
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
-import { classLabel } from './school-audience';
+import { classLabel, subjectLabel } from './school-audience';
 
 export type TermComparisonSide = {
   day: number;
@@ -162,7 +163,7 @@ function RosterEvidenceDetails({ evidence }: { evidence: RosterEvidence }) {
 
 function SideDetails({ side }: { side: PreviewLesson & { warning?: string } }) {
   return <>
-    <strong>{side.subject || 'Запись без названия'}</strong>
+    <strong>{subjectLabel(side.subject) || 'Запись без названия'}</strong>
     <p>{[days[side.day], side.start && side.end ? `${side.start}–${side.end}` : side.start, ...side.classes.map(classLabel)].filter(Boolean).join(' · ')}</p>
     <dl>
       <dt>Преподаватели</dt><dd>{side.teachers.join(', ') || 'Не указаны'}</dd>
@@ -170,7 +171,7 @@ function SideDetails({ side }: { side: PreviewLesson & { warning?: string } }) {
         ? <><dt>Участники</dt><dd>{side.classes.length === 1 ? 'Весь класс' : 'Все указанные классы'}</dd></>
         : <><dt>Группы</dt><dd>{side.groups.join(', ') || 'Не указаны'}</dd></>}
       {side.student_count != null ? <><dt>Состав</dt><dd>{side.student_count} чел.</dd></> : null}
-      <dt>Кабинет</dt><dd>{side.room || 'Не указан'}</dd>
+      <dt>Кабинет</dt><dd>{normalizeRoomDisplay(side.room) || 'Не указан'}</dd>
     </dl>
     {side.warning ? <p className="constructor-term-warning">{side.warning}</p> : null}
   </>;
@@ -475,7 +476,7 @@ export function ConstructorTermComparison({
             <ul className="constructor-review-list constructor-term-list">
               {group.rows.map(row => <li key={row.item.key}>
                 <div>
-                  <strong>{(row.item.after || row.item.before)?.subject || 'Занятие'}</strong>
+                  <strong>{subjectLabel((row.item.after || row.item.before)?.subject) || 'Занятие'}</strong>
                   <small>{[row.item.cells.join(', '), row.type, search ? itemStatusLabels[row.status] : ''].filter(Boolean).join(' · ')}</small>
                   {row.item.assessment?.reason ? <p>{row.item.assessment.reason}</p> : null}
                   {row.item.assessment?.original_candidates?.length ? <small>Возможные исходные занятия · {row.item.assessment.original_candidates.length}</small> : null}

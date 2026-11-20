@@ -15,6 +15,12 @@ import re
 from typing import Any, Mapping
 
 
+from backend.services.schedule_rooms import room_label
+from backend.services.schedule_subjects import subject_label
+from backend.services.canonical_schedule import canonical_group_grade
+from backend.services.schedule_experiments import _lesson_day_modes, lesson_is_online
+
+
 FORMAT_VERSION = 1
 DAY_NAMES = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 # School teacher palette. Identity lookup uses directory labels, never cell text.
@@ -64,7 +70,8 @@ def _frozen_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
                 "include_student_ids", "exclude_student_ids", "includeStudentIds", "excludeStudentIds",
                 "known_student_ids", "affected_student_ids", "conflict_student_ids",
                 "audience_snapshot", "resolution_history", "term2_preparation", "normalization_copy",
-                "import_review", "raw_text", "raw_text_by_cell"}}
+                "laboratory_blueprints", "laboratory_meetings", "laboratory_history",
+                "attendance_history", "attendance_week_baseline", "attendance_reason", "import_review", "raw_text", "raw_text_by_cell"}}
             participants = value.get("confirmedParticipantIds", value.get("confirmed_participant_ids"))
             if participants:
                 result["confirmed_participants_fingerprint"] = _hash(sorted(set(map(str, participants))))
@@ -120,11 +127,14 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
     if len(class_ids) != len(set(class_ids)) or not class_ids:
         raise ValueError("Expected unique, resolved school classes")
     slots = payload["slots"]
+    class_grades = {cid: canonical_group_grade(groups[cid]) for cid in class_ids}
     lessons = deepcopy(payload["lessons"])
     if len({str(l["id"]) for l in lessons}) != len(lessons):
         raise ValueError("Lesson IDs must be nonempty and unique")
     by_day: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for lesson in lessons:
+        lesson["subject"] = subject_label(lesson.get("subject"))
+        lesson["room"] = room_label(lesson.get("room"))
         marker = lesson.get("specialMark")
         if marker in {"lunch", "no_lesson"} and not str(lesson.get("subject") or "").strip():
             lesson["subject"] = "Обед" if marker == "lunch" else "Нет занятий"
@@ -147,6 +157,13 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         independent_activity = lesson.get("activityType") in {"club", "elective", "event"}
         if (not targets and not independent_activity) or any(cid not in class_ids for cid in targets):
             raise ValueError(f"Unresolved class placement: {lesson['id']}")
+        if lesson_is_online(lesson, _lesson_day_modes(payload, lesson, class_grades)):
+            lesson["room"] = "Онлайн"
+        if lesson.get("activityType") == "laboratory":
+            lesson["teacherIds"] = list(dict.fromkeys([lesson["teacherId"], *(lesson.get("teacherIds") or [])]))
+        label = {"practice": "Практикум", "consultation": "Консультация по желанию", "laboratory": "Лаборатория"}.get(lesson.get("activityType"))
+        if label:
+            lesson["subject"] = f"{label} · {lesson['subject']}"
         lesson["classIds"] = targets
         by_day[day].append(lesson)
 
@@ -250,7 +267,7 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
                 lines.append(", ".join(teacher_names))
             room = str(lesson.get("room") or "").strip()
             if room:
-                lines.append(room if re.match(r"каб|зал|онлайн", room, re.I) else f"каб. {room}")
+                lines.append(room)
             if lesson.get("audienceMode") == "remainder" or (lesson.get("audience") or {}).get("kind") == "available_slot":
                 lines.append("Для свободных учеников")
             # Expand a lone lesson across that class's free lanes. Parallel records stay distinct.

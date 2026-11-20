@@ -157,7 +157,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.locator('.constructor-create-form').locator(`input[type="checkbox"][value="${mixed!.id}"]`).check();
   await expect(page.locator('.constructor-create-form')).toContainText('Затронутые классы:');
   await page.getByRole('combobox', { name: 'Преподаватель нового занятия' }).fill(teacher!.display_name);
-  await page.getByRole('textbox', { name: 'Кабинет нового занятия' }).fill('17');
+  await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('17');
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
   const mixedId = await (await gridCell(0, 5)).locator('.constructor-card').getAttribute('data-lesson-id');
   const mixedGradeSix = (await gridCell(0, 6)).locator(`[data-lesson-id="${mixedId}"]`);
