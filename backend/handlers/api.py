@@ -1853,6 +1853,27 @@ def create_router(database: Database) -> APIRouter:
         except GoogleLiveError as error:
             raise HTTPException(status_code=502, detail="Google Sheets временно недоступен. Повторный экспорт безопасен.") from error
 
+    @router.get("/admin/schedule/experiments/{experiment_id}/export/link")
+    @router.get("/admin/schedule/experiments/school/{experiment_id}/export/link")
+    def admin_schedule_export_link(experiment_id: str, expected_revision: int, request: Request,
+                                   init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                                   x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+                                   x_school_admin_session: str | None = Header(default=None)):
+        from backend.services.schedule_sheet_publishing import saved_export_link
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        store = database
+        if "/experiments/school/" in request.scope["route"].path:
+            require_real_school_admin(x_school_admin_session, actor)
+            _, store = school_stores()
+        try:
+            return saved_export_link(store, experiment_id, expected_revision=expected_revision)
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail="Черновик изменился. Откройте текущую редакцию.") from error
+        except ExperimentNotFound as error:
+            raise HTTPException(status_code=404, detail="Черновик не найден.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
     @router.post("/admin/schedule/experiments/{experiment_id}/export/preview")
     def admin_schedule_export_preview(experiment_id: str, payload: ScheduleExportPayload, init_data: str | None = None,
                               x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

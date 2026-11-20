@@ -40,7 +40,7 @@ import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
-import { ConstructorScheduleExport } from './constructor-schedule-export';
+import { ConstructorScheduleExport, ScheduleExportLink } from './constructor-schedule-export';
 import { ConstructorTermComparison, type TermComparisonChoice, type TermComparisonChoices, type TermComparisonSide, type TermComparisonSource } from './constructor-term-comparison';
 import { normalizeRoomKey, normalizeRoomDisplay, normalizeRoomInput, isVirtualRoom } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
@@ -286,6 +286,7 @@ type Issue = {
   message: string;
   related?: string;
   category: 'conflict' | 'review' | 'incomplete' | 'import' | 'critical';
+  affectedStudentIds?: string[];
 };
 
 const DAYS = [
@@ -528,11 +529,13 @@ function issuesFor(
     message: string,
     related?: string,
     category?: Issue['category'],
+    affectedStudentIds?: string[],
   ) => result.push({
     lessonId,
     severity,
     message,
     related,
+    affectedStudentIds,
     category: category || (/уже ведёт|кабинет .+ занят|назначено одновременно/i.test(message) ? 'conflict' : 'incomplete'),
     type: /преподавател/i.test(message) ? 'teacher' : /кабинет/i.test(message) ? 'room' : /ученик|группа «|группа одновременно|межклассов/i.test(message) ? 'audience' : 'data',
   });
@@ -566,7 +569,7 @@ function issuesFor(
       if (!sa.start || !sb.start || sa.start >= sb.end || sb.start >= sa.end) continue;
       const describe = (lesson: Lesson) =>
         `${lessonClasses(lesson).map((id) => groups.find((item) => item.id === id)?.name || 'класс не уточнён').join(', ') || 'класс'} в ${lessonTimes(lesson,payload.slots).start || 'неуказанное время'}`;
-      const pair = (message: string) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id);
+      const pair = (message: string, studentIds?: string[]) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id, 'conflict', studentIds);
       const teacherIdsA = new Set([...(a.teacherIds || []), a.teacherId].filter(Boolean));
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
       const independentA = isSdepIndependentLesson(payload, a, groups);
@@ -584,7 +587,7 @@ function issuesFor(
       if (!independentA && !independentB && !optionalAudience && overlappingStudents.length) {
         const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || 'ученик');
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
-        pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
+        pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`, overlappingStudents);
       }
     }
   return result.concat(payload.lessons.filter((lesson) => lesson.needsClarification || lesson.importError).filter((lesson) => !(lesson.specialMark === 'lunch' && !lesson.importError && (previews[lesson.id]?.status === 'ok' || confirmedClassLunchMarker(lesson, groups)))).map((lesson) => {
@@ -2577,6 +2580,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               <button aria-label="Сохранить черновик" onClick={() => void save()} disabled={!dirty || saving}>
                 <Save size={16} />Сохранить
               </button>
+              <ScheduleExportLink api={api} path={schedulePath(`/${encodeURIComponent(draft.id)}/export`)}
+                revision={draft.revision} dirty={dirty} refresh={exportOpen} />
+              <button type="button" disabled={dirty || saving} onClick={() => setExportOpen(true)}>Экспортировать</button>
               {schoolReview
                 ? <button className="constructor-review-trigger" disabled={saving} onClick={() => openReviewCenter('all')}><BookOpenCheck size={16} />Проверить расписание</button>
                 : <button onClick={() => setRecalculationOpen(true)} disabled={saving}>Пересчитать аудитории</button>}
@@ -2651,6 +2657,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         day={day} classId={rosterClassId} classLabel={rosterClassLabel}
         teacherNames={Object.fromEntries(teachers.map(item => [item.id, item.name]))}
         groupNames={Object.fromEntries(groups.map(item => [item.id, item.name]))}
+        studentNames={Object.fromEntries(students.map(item => [item.id, item.name]))}
         lessonLabels={Object.fromEntries(draft.payload.lessons.map(lesson => [lesson.id, `${lesson.subject || 'Занятие'} · ${DAYS[lesson.day]}, ${lesson.start || draft.payload.slots[lesson.period]?.start || 'время не указано'}`]))}
         onClose={() => setReviewMode(null)}
         onSave={save}

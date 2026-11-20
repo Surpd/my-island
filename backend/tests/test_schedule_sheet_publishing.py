@@ -206,6 +206,60 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(self.confirm(self.draft["id"], client=client)["status"], "existing")
         self.assertEqual(len(client.writes), 1)
 
+    def test_exact_revision_link_and_rename_after_lost_receipt(self):
+        from backend.services.schedule_sheet_publishing import saved_export_link
+        from backend.services.schedule_experiments import save_experiment
+
+        draft_id = self.draft["id"]
+        client = FakeSheets()
+        first = self.confirm(draft_id, client=client)
+        gid = int(first["url"].split("=")[-1])
+        self.assertEqual(saved_export_link(self.db, draft_id, expected_revision=1)["url"], first["url"])
+        client.sheets[gid]["title"] = "Изменено вручную"
+        with self.db.connection() as conn:
+            conn.execute("UPDATE schedule_sheet_exports SET status='prepared',url=NULL")
+        self.assertEqual(self.confirm(draft_id, client=client)["url"], first["url"])
+        self.assertEqual(len(client.writes), 1)
+        save_experiment(self.db, draft_id, expected_revision=1, payload=self.payload)
+        link = saved_export_link(self.db, draft_id, expected_revision=2)
+        self.assertFalse(link["current"])
+        self.assertEqual(link["previous_revision"], 1)
+        self.assertNotIn("#gid=", link["url"])
+
+    def test_export_title_collision_adds_a_suffix_without_touching_existing_tabs(self):
+        client = FakeSheets()
+        plan = prepare_export(self.db, self.draft["id"], expected_revision=1)
+        client.sheets[7] = {"sheetId": 7, "title": plan["title"]}
+        result = self.confirm(self.draft["id"], client=client)
+        gid = int(result["url"].split("=")[-1])
+        self.assertEqual(client.sheets[7]["title"], plan["title"])
+        self.assertEqual(client.sheets[gid]["title"], plan["title"] + " (2)")
+        self.assertEqual(self.confirm(self.draft["id"], client=client)["url"], result["url"])
+
+    def test_school_grid_keeps_parallel_cards_and_hidden_source_map(self):
+        from backend.services.schedule_sheet_export import sheets_requests
+        another = str(self.db.create_group("8", "class")["id"])
+        one = {**self.payload["lessons"][0], "classIds": [self.group, another],
+               "note": "Возьмите тетрадь.\nMY_ISLAND:{\"internal\":true}", "needsClarification": True}
+        two = {**self.payload["lessons"][0], "id": "parallel", "subject": "Практикум по физике",
+               "activityType": "practice", "format": "online"}
+        draft = create_experiment(self.db, name="Неделя", source="import",
+                                  payload={**self.payload, "classes": [self.group, another], "lessons": [one, two]})
+        plan = prepare_export(self.db, draft["id"], expected_revision=1)["plan"]
+        self.assertEqual(plan["columns"], 3)
+        self.assertEqual(len(plan["mapping"]), 2)
+        self.assertEqual(len(next(m for m in plan["mapping"] if m["lesson_id"] == "original")["references"]), 1)
+        cells = "\n".join(c["text"] for c in plan["cells"])
+        self.assertIn("Математика", cells)
+        self.assertIn("Онлайн", cells)
+        self.assertIn("⚠", cells)
+        requests = sheets_requests(plan)
+        self.assertTrue(requests[1]["addSheet"]["properties"]["hidden"])
+        visible = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == plan["sheet_id"])
+        notes = [c["note"] for r in visible["rows"] for c in r["values"] if c.get("note")]
+        self.assertEqual(notes, ["Возьмите тетрадь."])
+        self.assertLessEqual(max(plan["row_heights"].values()), 88)
+
     def test_legacy_week_with_missing_receipt_is_recovered_without_upload(self):
         client = FakeSheets()
         with patch("backend.services.schedule_sheet_publishing.EXPORT_POLICY", "compact-activities-v2"):
@@ -239,7 +293,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(preview["summary"]["lessons"], 1)
         sample = preview["sample"]
         self.assertEqual({cell["text"] for cell in sample["cells"] if cell["row"] in {1, 2} and cell["col"] == 0},
-                         {"Шаблон", "Пн"})
+                         {"Снимок", "Время"})
         self.assertFalse(any("note" in cell for cell in sample["cells"]))
         with self.db.connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM schedule_sheet_exports").fetchone()[0], 0)
@@ -269,8 +323,8 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(len(grid["cells"]), len(plan["cells"]))
         self.assertEqual(grid["column_widths"], plan["column_widths"])
         self.assertEqual(grid["row_heights"], [plan["row_heights"][row] for row in range(plan["rows"])])
-        self.assertEqual(grid["days"][-1], {"row": plan["day_rows"][-1], "label": "Пятница"})
-        self.assertTrue(all(cell.keys() == {"row", "col", "height", "width", "text", "bg", "fg", "bold"}
+        self.assertEqual(grid["days"][-1], {"row": plan["day_rows"][-1], "label": "Пятница · 23.10"})
+        self.assertTrue(all(cell.keys() == {"row", "col", "height", "width", "text", "bg", "fg", "bold", "align"}
                             for cell in grid["cells"]))
         self.assertNotIn("hidden-audit-note", json.dumps(preview))
 
@@ -338,7 +392,8 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(export['snapshot']['snapshot_id'], baseline['snapshot_id'])
         self.assertEqual(export['snapshot']['payload'], baseline['payload'])
         self.assertFalse(any('ui_color' in row for row in export['snapshot']['payload']['lessons']))
-        self.assertTrue(any(cell['bg'] == "#12ABEF" for cell in export['plan']['cells']))
+        card_color = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in (18, 171, 239))
+        self.assertTrue(any(cell["bg"] == card_color for cell in export["plan"]["cells"]))
 
 
 if __name__ == '__main__':

@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--week-start", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--title", help="New worksheet title; defaults to MI + week start")
-    parser.add_argument("--layout", choices=("classic", "compact-v2", "readable-v3", "final-compact"), default="classic")
+    parser.add_argument("--layout", choices=("classic", "compact-v2", "readable-v3", "final-compact", "school-grid"), default="classic")
     parser.add_argument("--audience-evidence", type=Path, help="Matching cached group/class scope evidence; no live roster lookup")
     parser.add_argument("--existing-notes", type=Path, help="Prior annotations keyed by logical lesson ID")
     parser.add_argument("--sheet-id", type=int, default=1910232601)

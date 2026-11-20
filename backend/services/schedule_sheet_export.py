@@ -70,7 +70,8 @@ def _frozen_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
                 "include_student_ids", "exclude_student_ids", "includeStudentIds", "excludeStudentIds",
                 "known_student_ids", "affected_student_ids", "conflict_student_ids",
                 "audience_snapshot", "resolution_history", "term2_preparation", "normalization_copy",
-                "laboratory_blueprints", "laboratory_meetings", "laboratory_history",
+                "laboratory_blueprints", "laboratory_meetings", "laboratory_history", "laboratory_blueprint_history",
+                "draft_archive", "draft_lifecycle_history",
                 "attendance_history", "attendance_week_baseline", "attendance_reason", "import_review", "raw_text", "raw_text_by_cell"}}
             participants = value.get("confirmedParticipantIds", value.get("confirmed_participant_ids"))
             if participants:
@@ -115,7 +116,7 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
                      sheet_id: int, mapping_sheet_id: int, layout: str = "classic",
                      audience_evidence: Mapping[str, Any] | None = None,
                      existing_notes: Mapping[str, list[str]] | None = None) -> dict[str, Any]:
-    if layout not in {"classic", "compact-v2", "readable-v3", "final-compact"}:
+    if layout not in {"classic", "compact-v2", "readable-v3", "final-compact", "school-grid"}:
         raise ValueError("Unknown schedule sheet layout")
     payload = snapshot["payload"]
     groups = {str(g["id"]): g for g in snapshot["groups"]}
@@ -164,9 +165,17 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         label = {"practice": "Практикум", "consultation": "Консультация по желанию", "laboratory": "Лаборатория"}.get(lesson.get("activityType"))
         if label:
             lesson["subject"] = f"{label} · {lesson['subject']}"
+        lesson["day"] = day
         lesson["classIds"] = targets
         by_day[day].append(lesson)
 
+    if layout == "school-grid":
+        from backend.services.schedule_sheet_occurrences import logical_occurrences
+        from backend.services.schedule_sheet_school_grid import build_school_grid
+        logical, audit = logical_occurrences(by_day, groups, str(payload.get("week_start") or "template"))
+        return build_school_grid(snapshot, logical, groups, teachers, classes, title=title,
+                                 sheet_id=sheet_id, mapping_sheet_id=mapping_sheet_id,
+                                 existing_notes=existing_notes or {}, logical_audit=audit)
     if layout in {"readable-v3", "final-compact"}:
         from backend.services.schedule_sheet_layout_v3 import build_readable_plan
         audit = None
@@ -586,13 +595,13 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                 entry["content_hash"] = entry["source_hashes"][source_id]
             placements.append(entry)
         internal_rows.append([source_id, json.dumps(lesson, ensure_ascii=False), json.dumps(placements, ensure_ascii=False)])
-    if plan.get("layout") in {"readable-v3", "final-compact"}:
+    if plan.get("layout") in {"readable-v3", "final-compact", "school-grid"}:
         context = json.dumps(plan["presentation_context"], ensure_ascii=False)
         for offset in range(0, len(context), 25000):
             internal_rows.append([f"presentation_context:{offset//25000}", context[offset:offset+25000],
                                   plan["presentation_fingerprint"]])
     requests = [{"addSheet": {"properties": {"sheetId": sid, "title": plan["title"], "gridProperties": {
-        "rowCount": plan["rows"], "columnCount": plan["columns"], "frozenRowCount": 2,
+        "rowCount": plan["rows"], "columnCount": plan["columns"], "frozenRowCount": 3 if plan.get("layout") == "school-grid" else 2,
         "frozenColumnCount": 1, "hideGridlines": True}}}},
         {"addSheet": {"properties": {"sheetId": mid, "title": f"_MI {sid}", "hidden": True,
                                      "gridProperties": {"rowCount": len(internal_rows), "columnCount": 3}}}},
@@ -602,7 +611,7 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                                        "properties": {"pixelSize": 166}, "fields": "pixelSize"}}]
     matrix = [[{} for _ in range(plan["columns"])] for _ in range(plan["rows"])]
     for c in plan["cells"]:
-        matrix[c["row"]][c["col"]] = {"userEnteredValue": {"stringValue": c["text"]}, "note": c["note"],
+        matrix[c["row"]][c["col"]] = {"userEnteredValue": {"stringValue": c["text"]}, **({"note": c["note"]} if c["note"] else {}),
             "userEnteredFormat": {"backgroundColor": color(c["bg"]), "textFormat": {"fontFamily": "Arial", "fontSize": c["size"], "bold": c["bold"], "foregroundColor": color(c["fg"])},
                                   "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE", "horizontalAlignment": c["align"]}}
         if c["height"] > 1 or c["width"] > 1:
@@ -664,4 +673,11 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
             requests.append({"updateBorders": {"range": grid(row, 0, row+1, plan["columns"]),
                 "top": {"style": "SOLID_MEDIUM", "color": color("#344054")},
                 "bottom": {"style": "SOLID_MEDIUM", "color": color("#344054")}}})
+    if plan.get("layout") == "school-grid":
+        for index, width in enumerate(plan["column_widths"]):
+            requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+                "startIndex": index, "endIndex": index + 1}, "properties": {"pixelSize": width}, "fields": "pixelSize"}})
+        for slot in plan["slot_ranges"]:
+            requests.append({"updateBorders": {"range": grid(slot["start"], 0, slot["end"], plan["columns"]),
+                             "top": {"style": "SOLID", "color": color("#A2B2C1")}}})
     return requests

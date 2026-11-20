@@ -55,7 +55,7 @@ export type ConstructorReviewLesson = {
   groups?: string[];
 };
 export type ConstructorReviewNavigation = { title: string; relatedIds: string[] };
-export type ConstructorLocalIssue = { lessonId: string; related?: string; severity: 'error' | 'warning'; type: 'teacher' | 'room' | 'audience' | 'data'; category?: string; code?: string; message: string };
+export type ConstructorLocalIssue = { lessonId: string; related?: string; severity: 'error' | 'warning'; type: 'teacher' | 'room' | 'audience' | 'data'; category?: string; code?: string; message: string; affectedStudentIds?: string[] };
 export type ConstructorReviewFilter = 'all' | 'critical' | 'conflict' | 'warning' | 'info' | 'deferred';
 type Severity = Exclude<ConstructorReviewFilter, 'all'>;
 type ReviewSection = 'issues' | 'fixes' | 'publication';
@@ -184,7 +184,7 @@ function localDiagnostic(issue: ConstructorLocalIssue): Diagnostic {
   return {
     code, message: overlapCount ? '' : issue.message,
     lesson_id: issue.lessonId, related_lesson_ids: issue.related ? [issue.related] : [],
-    affected_student_count: overlapCount,
+    affected_student_count: overlapCount, affected_student_ids: issue.affectedStudentIds,
     severity: issue.category === 'critical' ? 'critical' : issue.related ? 'conflict' : 'warning',
   };
 }
@@ -253,7 +253,7 @@ function storedDeferred(item:Publication) { return item.deferred||item.preview?.
 export function ConstructorPublicationPanel({
   api, draftId, revision, draftName, weekStart, dirty, readOnly, publicationEnabled, mode, day, classId, classLabel,
   onClose, onSave, onRostersUpdated, onNormalizedCopy, onPublished, onOpenLesson,
-  teacherNames, groupNames, lessonLabels, lessonDetails = {}, localIssues = [],
+  teacherNames, groupNames, studentNames = {}, lessonLabels, lessonDetails = {}, localIssues = [],
   onOpenComparison, onOpenGridDecisions, onResolveIssue, initialFilter,
 }: {
   api: Api;
@@ -279,6 +279,7 @@ export function ConstructorPublicationPanel({
   onResolveIssue?: (ids: string[], code: string) => boolean;
   initialFilter?: ConstructorReviewFilter;
   teacherNames: Record<string, string>;
+  studentNames?: Record<string, string>;
   groupNames: Record<string, string>;
   lessonLabels: Record<string, string>;
   lessonDetails?: Record<string, ConstructorReviewLesson>;
@@ -422,7 +423,12 @@ export function ConstructorPublicationPanel({
       ...issue.diagnostics.flatMap(item => (item.class_ids || item.context?.class_ids || []).map(id => groupNames[id]).filter(Boolean))]);
     const days = [...new Set([...targets.map(target => target.day),
       ...issue.diagnostics.map(item => item.weekday ?? item.context?.day)].filter((day): day is number => typeof day === 'number'))];
-    return { ...issue, targets, descriptions, classNames, days };
+    const overlaps = issue.diagnostics.filter(item => item.code === 'student_overlap');
+    const studentIds = [...new Set(overlaps.flatMap(item => item.affected_student_ids || []))];
+    const affectedNames = studentIds.flatMap(id => Object.hasOwn(studentNames, id) && studentNames[id] ? [studentNames[id]] : [])
+      .sort((left, right) => left.localeCompare(right, 'ru'));
+    const affectedCount = Math.max(studentIds.length, ...overlaps.map(item => item.affected_student_count || 0));
+    return { ...issue, targets, descriptions, classNames, days, affectedNames, affectedCount, hasStudentOverlap: overlaps.length > 0 };
   };
   const allIssues = issues.map(toDisplayIssue);
   const allDeferred = deferredIssues.map(toDisplayIssue);
@@ -437,7 +443,7 @@ export function ConstructorPublicationPanel({
     (classFilter === '' || issue.classNames.includes(classFilter)) &&
     (typeFilter === '' || issue.descriptions.some(item => item.type === typeFilter)) &&
     (normalizedQuery === '' || normalizeText([
-      ...issue.descriptions.map(item => item.title), ...issue.classNames,
+      ...issue.descriptions.map(item => item.title), ...issue.classNames, ...issue.affectedNames,
       ...issue.days.map(item => fullDayNames[item]),
       ...issue.targets.flatMap(target => [target.subject, target.start, target.end, target.room, ...target.teachers, ...target.groups]),
     ].filter(Boolean).join(' ')).includes(normalizedQuery))
@@ -756,7 +762,7 @@ export function ConstructorPublicationPanel({
                   <option key={value} value={value}>{label}</option>)}
               </select></label>
               <label className="constructor-review-search">Поиск по вопросам
-                <input type="search" placeholder="Предмет, кабинет или преподаватель" value={query} onChange={event => setQuery(event.target.value)} />
+                <input type="search" placeholder="Предмет, кабинет, преподаватель или фамилия ученика" value={query} onChange={event => setQuery(event.target.value)} />
               </label>
             </div>
             <div className="constructor-review-result-line">
@@ -771,7 +777,6 @@ export function ConstructorPublicationPanel({
               const related = issue.targets.length > 1;
               const primaryDiagnostic = issue.diagnostics.find(item => diagnosticText(item).type === typeFilter) || issue.diagnostics[0];
               const primaryCode = primaryDiagnostic?.code;
-              const affectedStudents = Math.max(0, ...issue.diagnostics.map(item => item.affected_student_ids?.length || item.affected_student_count || 0));
               const statusText = [...new Set(issue.deferred.map(item => deferredOutcome(item.action, item.exclusion_scope)))];
               const note = primaryCode === 'review_required' || primaryDiagnostic && !issueText[primaryDiagnostic.code]
                 ? readableNote(primaryDiagnostic?.message) : issue.diagnostics.length ? '' : readableNote(issue.deferred[0]?.cause_codes?.length ? '' : issue.deferred[0]?.reason);
@@ -799,6 +804,10 @@ export function ConstructorPublicationPanel({
                       : [issue.days.map(day => dayNames[day]).filter(Boolean).join(', '),
                         contextText && [formatLessonTimeRange(contextText.start, contextText.end, ''), contextText.subject].filter(Boolean).join(' · '),
                         issue.classNames.join(', ')].filter(Boolean).join(' · ') || 'Проверка черновика'}</p>
+                    {issue.hasStudentOverlap ? <p>{issue.affectedCount
+                      ? <>Учеников с пересечением — <b>{issue.affectedCount}</b>{issue.affectedNames.length
+                        ? ` · ${issue.affectedNames.slice(0, 3).join(', ')}${issue.affectedNames.length > 3 ? '…' : ''}` : ''}</>
+                      : 'Состав пересечения пока не определён.'}</p> : null}
                     {!expanded && first?.available && !related ?
                       <button type="button" className="constructor-review-jump" disabled={busy}
                         aria-label={`Показать в расписании — ${first.subject}. ${issueTitle}`}
@@ -816,7 +825,10 @@ export function ConstructorPublicationPanel({
                     {text.guidance ? <p>{text.guidance}</p> : null}
                   </div>)}
                   {note && !issue.descriptions.some(item => item.title === note || item.guidance === note) ? <p>{note}</p> : null}
-                  {affectedStudents > 0 ? <p>Учеников с пересечением — <b>{affectedStudents}</b>.</p> : null}
+                  {issue.affectedNames.length > 3 ? <details><summary>Все ученики с пересечением</summary>
+                    <ul>{issue.affectedNames.map((name, index) => <li key={index}>{name}</li>)}</ul>
+                  </details> : null}
+                  {issue.affectedCount > issue.affectedNames.length ? <p>Для {issue.affectedCount - issue.affectedNames.length} учеников имя ещё не подтверждено в справочнике.</p> : null}
                   {roster?.changed && roster.proposed_count !== null ? <p>В черновике — <b>{roster.old_count}</b>, в текущем составе — <b>{roster.proposed_count}</b>.</p> : null}
                   {statusText.map(text => <p className="constructor-review-outcome" key={text}>{text}</p>)}
                   {issue.targets.length ? <ul className="constructor-review-targets" aria-label="Связанные занятия">
