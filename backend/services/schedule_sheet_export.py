@@ -13,6 +13,7 @@ import json
 import math
 import re
 from typing import Any, Mapping
+from urllib.parse import urlencode
 
 
 from backend.services.schedule_rooms import room_label
@@ -570,7 +571,7 @@ def _compact_sheet_plan(snapshot: Mapping[str, Any], by_day: Mapping[int, list[d
                         "missing_groups": sorted({g for l in all_lessons for g in (l.get("groupIds") or []) if g not in groups})}}
 
 
-def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+def sheets_requests(plan: Mapping[str, Any], *, spreadsheet_url: str = "", frontend_url: str = "") -> list[dict[str, Any]]:
     """Add-only atomic batch: existing worksheets are never copied or edited."""
     sid, mid = plan["sheet_id"], plan["mapping_sheet_id"]
     def grid(r1: int, c1: int, r2: int, c2: int) -> dict[str, int]:
@@ -611,8 +612,15 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                                        "properties": {"pixelSize": 166}, "fields": "pixelSize"}}]
     matrix = [[{} for _ in range(plan["columns"])] for _ in range(plan["rows"])]
     for c in plan["cells"]:
+        link = ""
+        if spreadsheet_url and "link_row" in c:
+            link = f"{spreadsheet_url}#gid={sid}&range=A{c['link_row'] + 1}"
+        if frontend_url.startswith("https://") and c.get("lesson_link"):
+            lesson = c["lesson_link"]
+            link = f"{frontend_url.rstrip('/')}/admin/schedule/constructor?{urlencode({'draft': lesson['draft_id'], 'lesson': lesson['lesson_id']})}"
         matrix[c["row"]][c["col"]] = {"userEnteredValue": {"stringValue": c["text"]}, **({"note": c["note"]} if c["note"] else {}),
-            "userEnteredFormat": {"backgroundColor": color(c["bg"]), "textFormat": {"fontFamily": "Arial", "fontSize": c["size"], "bold": c["bold"], "foregroundColor": color(c["fg"])},
+            "userEnteredFormat": {"backgroundColor": color(c["bg"]), "textFormat": {"fontFamily": "Arial", "fontSize": c["size"], "bold": c["bold"], "foregroundColor": color(c["fg"]),
+                                                 **({"link": {"uri": link}} if link else {})},
                                   "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE", "horizontalAlignment": c["align"]}}
         if c["height"] > 1 or c["width"] > 1:
             requests.append({"mergeCells": {"range": grid(c["row"], c["col"], c["row"]+c["height"], c["col"]+c["width"]), "mergeType": "MERGE_ALL"}})
@@ -675,7 +683,7 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "bottom": {"style": "SOLID_MEDIUM", "color": color("#344054")}}})
     if plan.get("layout") == "school-grid":
         for c in plan["class_columns"]:
-            requests.append({"updateBorders": {"range": grid(2, c["start"], plan["rows"], c["start"]+c["width"]),
+            requests.append({"updateBorders": {"range": grid(2, c["start"], plan.get("overview_rows", plan["rows"]), c["start"]+c["width"]),
                 "left": {"style": "SOLID_THICK", "color": color("#53687C")},
                 "innerVertical": {"style": "SOLID", "color": color("#AAB8C5")}}})
         for index, width in enumerate(plan["column_widths"]):

@@ -275,14 +275,54 @@ class SchedulePublishingTests(unittest.TestCase):
         cells = "\n".join(c["text"] for c in plan["cells"])
         self.assertIn("Математика", cells)
         self.assertIn("Онлайн", cells)
-        self.assertIn("⚠", cells)
+        self.assertIn("Уточнить · Проверьте исходные данные в My Island", cells)
         requests = sheets_requests(plan)
         self.assertTrue(requests[1]["addSheet"]["properties"]["hidden"])
         visible = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == plan["sheet_id"])
         notes = [c["note"] for r in visible["rows"] for c in r["values"] if c.get("note")]
         self.assertTrue(any("Возьмите тетрадь." in note for note in notes))
-        self.assertFalse(any("MY_ISLAND:" in note for note in notes))
+        self.assertEqual(notes, ["Возьмите тетрадь."])
         self.assertLessEqual(max(plan["row_heights"].values()), 88)
+
+    def test_bell_times_and_colored_links_survive_a_friday_laboratory_and_optional_activity(self):
+        from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, sheets_requests
+        groups = [{"id": str(grade), "name": str(grade), "group_type": "class"} for grade in range(5, 12)]
+        lessons = [
+            {"id": "lab", "day": 4, "period": 0, "end": "10:40", "classIds": ["5", "6"],
+             "subject": "Лаборатория текста", "activityType": "laboratory", "teacherId": "teacher"},
+            {"id": "math", "day": 4, "period": 0, "classIds": ["5"], "subject": "Математика"},
+            {"id": "art", "day": 4, "period": 1, "classIds": ["5"], "subject": "Литература"},
+            {"id": "club", "day": 4, "period": 1, "classIds": ["5"], "subject": "Медиамастерская",
+             "activityType": "club"},
+        ]
+        snapshot = freeze_template({"groups": groups, "teachers": [{"id": "teacher", "display_name": "Тест"}],
+            "source": {"draft_id": "draft"}, "payload": {"classes": [g["id"] for g in groups], "days": [4],
+            "lessons": lessons, "slots": [{"start": "09:00", "end": "09:45"}, {"start": "09:55", "end": "10:40"}]}})
+        plan = build_sheet_plan(snapshot, layout="school-grid", title="Пятница", sheet_id=70, mapping_sheet_id=71)
+        self.assertLessEqual(sum(plan["column_widths"]), 1223)
+        cells = {(c["row"], c["col"]): c for c in plan["cells"]}
+        friday = plan["day_rows"][0]
+        self.assertEqual([cells[friday+offset, 0]["text"] for offset in (1, 2)], ["09:00–09:45", "09:55–10:40"])
+        self.assertEqual(len(plan["mapping"]), len(lessons))
+        lab = next(m for m in plan["mapping"] if m["lesson_id"] == "lab")
+        cards = [cells[r["row"], r["col"]] for r in [lab, *lab["references"]]]
+        self.assertEqual(len(cards), 4)
+        self.assertTrue(all(c["bg"] == cards[0]["bg"] and c["link_row"] == lab["details_row"] and "Лаб" in c["text"]
+                            for c in cards))
+        self.assertTrue(any(c["text"].startswith("↳") for c in cards))
+        self.assertIn("09:00–10:40", cells[lab["details_row"], 1]["text"])
+        self.assertIn("Кружки и дополнительные занятия", cells[friday+3, 1]["text"])
+        club = next(m for m in plan["mapping"] if m["lesson_id"] == "club")
+        self.assertGreater(club["row"], friday+3)
+        self.assertFalse(any(c["note"] for c in cells.values()))
+        sheet = "https://docs.google.com/spreadsheets/d/test/edit"
+        requests = sheets_requests(plan, spreadsheet_url=sheet, frontend_url="https://schedule.example")
+        overview = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == 70)
+        native_cell = overview["rows"][lab["row"]]["values"][lab["col"]]
+        self.assertEqual(native_cell["userEnteredFormat"]["textFormat"]["link"]["uri"],
+                         f"{sheet}#gid=70&range=A{lab['details_row']+1}")
+        details = overview["rows"][lab["details_row"]]["values"][1]
+        self.assertTrue(details["userEnteredFormat"]["textFormat"]["link"]["uri"].endswith("?draft=draft&lesson=lab"))
 
     def test_legacy_week_with_missing_receipt_is_recovered_without_upload(self):
         client = FakeSheets()
@@ -317,7 +357,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(preview["summary"]["lessons"], 1)
         sample = preview["sample"]
         self.assertEqual({cell["text"] for cell in sample["cells"] if cell["row"] in {1, 2} and cell["col"] == 0},
-                         {"Снимок", "Время"})
+                         {"Ред. 1", "Время"})
         self.assertFalse(any("note" in cell for cell in sample["cells"]))
         with self.db.connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM schedule_sheet_exports").fetchone()[0], 0)
@@ -348,7 +388,8 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(grid["column_widths"], plan["column_widths"])
         self.assertEqual(grid["row_heights"], [plan["row_heights"][row] for row in range(plan["rows"])])
         self.assertEqual(grid["days"][-1], {"row": plan["day_rows"][-1], "label": "Пятница · 23.10"})
-        self.assertTrue(all(cell.keys() == {"row", "col", "height", "width", "text", "bg", "fg", "bold", "align"}
+        visible_keys = {"row", "col", "height", "width", "text", "bg", "fg", "bold", "align", "size"}
+        self.assertTrue(all(visible_keys <= cell.keys() <= visible_keys | {"link_row"}
                             for cell in grid["cells"]))
         self.assertNotIn("hidden-audit-note", json.dumps(preview))
 

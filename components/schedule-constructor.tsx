@@ -700,6 +700,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [colorPanelOpen, setColorPanelOpen] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [fullScreen, setFullScreen] = useState(false);
+  const [dayOverview, setDayOverview] = useState(false);
   const [fitWidth, setFitWidth] = useState(true);
   const [conflictsOpen, setConflictsOpen] = useState(false);
   const [adminTableOpen, setAdminTableOpen] = useState(false);
@@ -1548,8 +1549,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return Math.min(2.2, 1 + Math.max(0, peak - 1) * 0.22);
   };
   const horizontalDay = viewMode === "day" && gridColumns.length > 1 && columnLanes.some(group => group.width > 1);
-  const gridColumnTemplate = `68px ${gridColumns.map((column, index) => {
+  const compactDay = dayOverview && viewMode === "day";
+  const gridColumnTemplate = `${compactDay ? 86 : 68}px ${gridColumns.map((column, index) => {
     const width = resizePreview?.[column.key] ?? (payload?.column_width_mode === 'manual' ? payload.column_widths?.[column.key] : undefined);
+    if (compactDay) return "minmax(108px, 1fr)";
     const minimum = horizontalDay ? columnLanes[index].width * 184 : fitWidth ? 0 : density === 'compact' ? 115 : 145;
     return width ? `${width}px` : `minmax(${minimum}px, ${columnWeight(column)}fr)`;
 
@@ -2888,6 +2891,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               </details>
             </div>
             <div className="constructor-edit-tools" role="group" aria-label="Редактирование расписания">
+            {viewMode === 'day' ? <button type="button" aria-pressed={compactDay} onClick={() => {
+              setDayOverview(!dayOverview);
+              if (!dayOverview) { setPanelOpen(false); setFocus(null); setAnchor(null); }
+            }}>Обзор дня</button> : null}
             <button
               onClick={undo}
               disabled={!history.length}
@@ -3156,14 +3163,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <button onClick={backToIssues}>К проверке</button>
           </section> : null}
           <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
-            <div ref={gridWrap} className={`constructor-grid-wrap ${density} ${horizontalDay ? "horizontal-day" : ""}`} onScroll={(event) => {
+            <div ref={gridWrap} className={`constructor-grid-wrap ${density} ${compactDay ? "constructor-day-overview" : ""}`} onScroll={(event) => {
               if (!restoringGridScroll.current) gridScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
             }}>
               <div
                 className="constructor-grid"
                 style={{
                   gridTemplateColumns: gridColumnTemplate,
-                  zoom: fitWidth ? 1 : zoom / 100,
+                  zoom: compactDay || fitWidth ? 1 : zoom / 100,
                 }}
               >
                 <div className="constructor-corner">Время</div>
@@ -3307,6 +3314,16 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                               const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups, localGroups);
                               const isAvailableSlot = audienceOf(item, groups).kind === 'available_slot';
                               const classCaption = visualClasses(item, groups).filter((id) => column.classIds.includes(id)).map((id) => groups.find((g) => g.id === id)?.name || id).join(', ');
+                              const group = localGroups.length === 1 ? localGroups[0] : undefined;
+                              const rank = group && subgroupRank(group.canonicalName || group.name, group.subject_subgroup);
+                              const groupCode = group?.subject_subgroup || (rank === undefined ? '' :
+                                (group?.canonicalName || group?.name || '').startsWith('grade9-math-') ? 'ABC'[rank] : String(rank + 1));
+                              const subject = subjectLabel(item.subject) || 'Занятие';
+                              const compactLabel = lessons.length > 2 ? (item.activityType === 'laboratory' ? 'Лаб' :
+                                item.activityType === 'consultation' ? 'Конс' : item.activityType === 'practice' ? 'Пр' :
+                                shortSubject(subject).match(/[\p{L}\d]{1,4}/u)?.[0] || 'Зан.') : shortSubject(subject);
+                              const roomCode = roomCaption === 'Онлайн' ? 'Онл' : roomCaption.match(/^(?:каб\.\s*)?(\d+\p{L}?)$/u)?.[1];
+                              const optional = ['club', 'elective', 'consultation'].includes(item.activityType || '');
                               return (
                                 <button
                                   id={`lesson-${item.id}-${row}-${col}`}
@@ -3314,6 +3331,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   data-issue-target={route?.active === item.id ? 'current' : route?.ids.includes(item.id) ? 'related' : undefined}
                                   key={item.id}
                                   data-lesson-id={item.id}
+                                  data-optional={optional || undefined}
+                                  aria-label={compactDay ? `${subject} · ${classCaption}${groupCode ? ` · группа ${groupCode}` : ''}` : undefined}
                                   title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${roomCaption || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
                                   style={{ gridRow: 1, order: placements?.get(item.id) ?? 0, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
                                   className={`constructor-card ${item.kind === 'event' ? 'event' : ''} ${item.kind === 'event' || item.end && item.end !== payload.slots[item.period]?.end ? `multislot ${item.period !== period ? 'event-continuation' : ''} ${overlapsSlot(item, cellDay, period + 1, payload.slots) ? 'event-continues' : ''}` : ''} ${selectedId === item.id ? 'active' : ''} ${conflictsOpen && issues.some((issue) => (issue.lessonId === item.id || issue.related === item.id) && issue.severity === 'error') ? 'error' : conflictsOpen && issues.some((issue) => issue.lessonId === item.id || issue.related === item.id) ? 'warning' : ''}`}
@@ -3343,6 +3362,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     selectCell(row, col);
                                     setSelectedId(item.id);
                                     setPanelMode('lesson');
+                                    if (compactDay) setPanelOpen(true);
                                   }}
                                   onDoubleClick={(event) => {
                                     event.stopPropagation();
@@ -3351,14 +3371,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     setPanelOpen(true);
                                   }}
                                 >
-                                  <span>
+                                  {compactDay ? <span>
+                                    <strong>{compactLabel}</strong>
+                                    <small>{[groupCode, roomCode, optional ? '＋' : ''].filter(Boolean).join(' ')}</small>
+                                  </span> : <span>
                                     <strong>
                                       {item.kind === 'event' ? <>◆ {item.subject}{item.period !== period ? ' ↳' : ''}</> : <><span className="constructor-subject-short">{item.period !== period ? '↳ ' : ''}{englishCaption?.short || shortSubject(subjectLabel(item.subject) || 'Новый урок')}</span><span className="constructor-subject-full">{item.period !== period ? '↳ ' : ''}{englishCaption?.full || subjectLabel(item.subject) || 'Новый урок'}</span></>}
                                     </strong>
                                     {item.activityType === 'practice' || item.activityType === 'consultation' || item.activityType === 'laboratory' ? <small>{item.activityType === 'practice' ? 'Практикум' : item.activityType === 'consultation' ? 'Консультация' : 'Лаборатория'}</small> : null}
                                     {item.activityType !== 'club' ? <small>{lessonClasses(item).length > 1 ? <span title="Совместное занятие">↔ </span> : null}{isAvailableSlot ? 'Все остальные' : localGroups.length ? localGroups.map((group) => audienceShortLabel(group)).join(', ') : classCaption || 'Участники требуют уточнения'}</small> : null}
                                     {item.activityType !== 'club' || item.teacherId || item.room || item.place || item.teacherIds?.length ? <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || (item.activityType === 'club' ? '' : '—'))}{roomCaption ? ` · ${roomCaption}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small> : null}
-                                  </span>
+                                  </span>}
                                   {conflictsOpen && issues.some(
                                     (issue) => issue.lessonId === item.id || issue.related === item.id,
                                   ) ? (

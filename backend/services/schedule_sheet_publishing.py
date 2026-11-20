@@ -22,7 +22,7 @@ from backend.services.schedule_experiments import ExperimentConflict, get_experi
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, freeze_week, sheets_requests
 
 TEST_EXPORT_TARGET = "11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ"
-EXPORT_POLICY = "school-grid-horizontal-v2"
+EXPORT_POLICY = "school-grid-day-v3"
 PREVIOUS_POLICY = "compact-activities-v3"
 LEGACY_WEEK_POLICY = "compact-activities-v2"
 
@@ -134,7 +134,7 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
     with database.connection() as connection:
         existing = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?", (digest,)).fetchone()
         if existing is None:
-            for policy in ("school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
+            for policy in ("school-grid-horizontal-v2", "school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
                 if policy == EXPORT_POLICY:
                     continue
                 legacy = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?",
@@ -219,6 +219,11 @@ def preview_saved_export(database: Database, experiment_id: str, *, expected_rev
     summary.update(rows=plan["rows"], columns=plan["columns"])
     visible_fields = ("row", "col", "height", "width", "text", "bg", "fg", "bold", "align")
     visible_cells = [{key: cell[key] for key in visible_fields} for cell in plan["cells"]]
+    if "overview_rows" in plan:
+        for visible, original in zip(visible_cells, plan["cells"]):
+            visible["size"] = original["size"]
+            if "link_row" in original:
+                visible["link_row"] = original["link_row"]
     rows, columns = min(plan["rows"], 8), min(plan["columns"], 5)
     sample = [{**cell,
                "height": min(cell["height"], rows - cell["row"]),
@@ -297,7 +302,8 @@ def publish_export(database: Database, export: dict[str, Any], client: Any) -> d
         while title in titles:
             title = f"{preferred[:90]} ({suffix})"
             suffix += 1
-        requests = sheets_requests({**export["plan"], "title": title})
+        requests = sheets_requests({**export["plan"], "title": title}, spreadsheet_url=_spreadsheet_url(target),
+                                   frontend_url=os.getenv("FRONTEND_PUBLIC_URL", ""))
         try:
             client.batch_update_spreadsheet(_check_selected_target(export), requests)
         except GoogleLiveError:

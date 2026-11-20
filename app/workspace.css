@@ -1330,3 +1330,26 @@
 .campus-shell .constructor-ux .constructor-cell { border-inline-start:2px solid #64768b; border-block-start:2px solid #a3afbd; }
 .campus-shell .constructor-ux .constructor-cell-lessons { column-gap:2px; }
 .campus-shell .constructor-ux .constructor-cell-lessons > .constructor-card { border-inline-end:1px solid #9aa9b9; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-grid { min-width: max-content; }
+.campus-shell .constructor-ux .constructor-day-overview :is(.constructor-cell,.constructor-time) { min-height:37px; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell:not(:has(.constructor-cell-entry-wrap)) {
+  position:relative; grid-template-rows:1fr; padding:2px;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell:not(:has(.constructor-cell-entry-wrap)) .constructor-cell-add {
+  position:absolute; bottom:1px; right:2px; opacity:0; pointer-events:none;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell-add:focus-visible { opacity:1; pointer-events:auto; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell-lessons { gap:1px; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card {
+  min-height:31px; min-width:0; padding:2px; text-align:center; align-items:center;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card strong {
+  font-size:10px; line-height:1.1; white-space:normal; overflow-wrap:anywhere;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card small { font-size:9px; line-height:1.1; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card[data-optional] { border-bottom:2px solid #8557ad; }
+.constructor-export-sample .constructor-export-cell-link {
+  background:transparent; color:inherit; font:inherit; text-align:inherit; padding:0; width:100%; min-height:0;
+  line-height:inherit; white-space:inherit; border:0; border-radius:0; cursor:pointer;
+}
+.constructor-export-sample .constructor-export-cell-link:hover { text-decoration:underline; }

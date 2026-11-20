@@ -7,7 +7,7 @@ type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type ExportGrid = {
   rows: number;
   columns: number;
-  cells: { row: number; col: number; height: number; width: number; text: string; bg: string; fg: string; bold: boolean; align?: 'LEFT' | 'CENTER' | 'RIGHT' }[];
+  cells: { row: number; col: number; height: number; width: number; text: string; bg: string; fg: string; bold: boolean; size?: number; link_row?: number; align?: 'LEFT' | 'CENTER' | 'RIGHT' }[];
   column_widths?: number[];
   row_heights?: number[];
   days?: { row: number; label: string }[];
@@ -65,7 +65,7 @@ export function ScheduleExportLink({api, path, revision, dirty, refresh}: {
   </span>;
 }
 
-function ScheduleGrid({ grid, gridRef }: { grid: ExportGrid; gridRef?: Ref<HTMLDivElement> }) {
+function ScheduleGrid({ grid, gridRef, onJump }: { grid: ExportGrid; gridRef?: Ref<HTMLDivElement>; onJump?: (row: number) => void }) {
   const columns = grid.column_widths?.length === grid.columns
     ? grid.column_widths.map(width => `${width}px`).join(' ')
     : `repeat(${grid.columns}, minmax(118px, 1fr))`;
@@ -76,9 +76,12 @@ function ScheduleGrid({ grid, gridRef }: { grid: ExportGrid; gridRef?: Ref<HTMLD
     {grid.cells.map(cell => <div key={`${cell.row}:${cell.col}`} data-sheet-row={cell.row} data-sheet-time={cell.col === 0 || undefined} style={{
       gridColumn: `${cell.col + 1} / span ${cell.width}`, gridRow: `${cell.row + 1} / span ${cell.height}`,
       backgroundColor: cell.bg, color: cell.fg, fontWeight: cell.bold ? 650 : 400,
+      fontSize: cell.size ? `${cell.size * 4 / 3}px` : undefined,
       textAlign: cell.align === 'LEFT' ? 'left' : cell.align === 'RIGHT' ? 'right' : 'center',
       justifyItems: cell.align === 'LEFT' ? 'start' : cell.align === 'RIGHT' ? 'end' : 'center',
-    }}>{cell.text}</div>)}
+    }}>{cell.link_row !== undefined && onJump
+      ? <button type="button" className="constructor-export-cell-link" onClick={() => onJump(cell.link_row!)}>{cell.text}</button>
+      : cell.text}</div>)}
   </div>;
 }
 
@@ -100,7 +103,7 @@ function FullSchedulePreview({ grid }: { grid: ExportGrid }) {
       {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Enable keyboard scrolling of both axes. */}
       <section ref={viewport} className="constructor-export-sample-wrap constructor-export-full-wrap" tabIndex={0}
         aria-label="Лист экспорта целиком" aria-describedby="constructor-export-grid-help">
-        <ScheduleGrid grid={grid} gridRef={sheet} />
+        <ScheduleGrid grid={grid} gridRef={sheet} onJump={goToDay} />
       </section>
     </> : null}
   </details>;
