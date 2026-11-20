@@ -199,7 +199,7 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
   await expect(page.locator('[data-cell="2:0"] .constructor-card')).toHaveCount(2);
   const source = page.locator('[data-cell="2:0"] .constructor-card').first();
   const target = page.locator('[data-cell="3:0"]');
-  await target.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
+  await source.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
   const [from, to] = await Promise.all([source.boundingBox(), target.boundingBox()]);
   if (!from || !to) throw new Error('Drag source and destination must be on screen');
   await page.mouse.move(from.x + 20, from.y + from.height / 2);
