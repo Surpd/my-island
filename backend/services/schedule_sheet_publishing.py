@@ -22,7 +22,7 @@ from backend.services.schedule_experiments import ExperimentConflict, get_experi
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, freeze_week, sheets_requests
 
 TEST_EXPORT_TARGET = "11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ"
-EXPORT_POLICY = "school-grid-v1"
+EXPORT_POLICY = "school-grid-horizontal-v2"
 PREVIOUS_POLICY = "compact-activities-v3"
 LEGACY_WEEK_POLICY = "compact-activities-v2"
 
@@ -149,7 +149,7 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
         _check_selected_target(receipt)
         return receipt
     with directory_database.connection() as connection:
-        groups = [dict(r) for r in directory_database.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject FROM groups ORDER BY id").fetchall()]
+        groups = [dict(r) for r in directory_database.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject,subject_subgroup,semantic_dimension FROM groups ORDER BY id").fetchall()]
         teachers = [dict(r) for r in directory_database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' ORDER BY id").fetchall()]
     for group in groups:
         group["id"] = str(group["id"])

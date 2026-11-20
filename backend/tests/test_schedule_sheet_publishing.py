@@ -246,7 +246,8 @@ class SchedulePublishingTests(unittest.TestCase):
         draft = create_experiment(self.db, name="Неделя", source="import",
                                   payload={**self.payload, "classes": [self.group, another], "lessons": [one, two]})
         plan = prepare_export(self.db, draft["id"], expected_revision=1)["plan"]
-        self.assertEqual(plan["columns"], 3)
+        self.assertEqual(plan["columns"], 4)
+        self.assertEqual(len({m["row"] for m in plan["mapping"]}), 1)
         self.assertEqual(len(plan["mapping"]), 2)
         self.assertEqual(len(next(m for m in plan["mapping"] if m["lesson_id"] == "original")["references"]), 1)
         cells = "\n".join(c["text"] for c in plan["cells"])
@@ -257,7 +258,8 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertTrue(requests[1]["addSheet"]["properties"]["hidden"])
         visible = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == plan["sheet_id"])
         notes = [c["note"] for r in visible["rows"] for c in r["values"] if c.get("note")]
-        self.assertEqual(notes, ["Возьмите тетрадь."])
+        self.assertTrue(any("Возьмите тетрадь." in note for note in notes))
+        self.assertFalse(any("MY_ISLAND:" in note for note in notes))
         self.assertLessEqual(max(plan["row_heights"].values()), 88)
 
     def test_legacy_week_with_missing_receipt_is_recovered_without_upload(self):

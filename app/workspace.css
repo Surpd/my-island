@@ -1327,3 +1327,6 @@
 .constructor-sheet-link { display: inline-grid; align-items: start; gap: 2px; }
 .constructor-sheet-link a { padding: 5px 8px; color: var(--cp-ink, #20334a); text-decoration: underline; }
 .constructor-sheet-link small { max-width: 24ch; font-size: 11px; line-height: 1.2; }
+.campus-shell .constructor-ux .constructor-cell { border-inline-start:2px solid #64768b; border-block-start:2px solid #a3afbd; }
+.campus-shell .constructor-ux .constructor-cell-lessons { column-gap:2px; }
+.campus-shell .constructor-ux .constructor-cell-lessons > .constructor-card { border-inline-end:1px solid #9aa9b9; }

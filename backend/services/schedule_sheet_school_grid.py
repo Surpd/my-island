@@ -1,7 +1,8 @@
 """Editable school timetable: a physical column per grade and stacked slot cards."""
 from collections import defaultdict
 from datetime import date, timedelta
-from textwrap import wrap
+from textwrap import shorten
+import re
 
 from backend.services.canonical_schedule import canonical_group_grade
 from backend.services.schedule_sheet_export import DAY_NAMES, FORMAT_VERSION, _class_key, _hash, _label, _teacher_fill, column_name
@@ -9,9 +10,9 @@ from backend.services.schedule_sheet_layout_v3 import activity_semantics
 
 GRID_LAYOUT = "school-grid"
 _MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
-GRADE_WIDTH = 146
+GRADE_WIDTH = 148
 TIME_WIDTH = 98
-CARD_LINES = 4
+
 
 
 def week_caption(week, days):
@@ -20,6 +21,20 @@ def week_caption(week, days):
     if first.month == last.month:
         return f"{first.day}–{last.day} {_MONTHS[last.month-1]}"
     return f"{first.day} {_MONTHS[first.month-1]} – {last.day} {_MONTHS[last.month-1]}"
+
+
+def subgroup_rank(group):
+    name = str(group.get("name") or "")
+    split = re.fullmatch(r"grade7:split:([12])", name)
+    if split:
+        return int(split[1]) - 1
+    math = re.fullmatch(r"grade9-math-([ABC])", name)
+    if math:
+        return "ABC".index(math[1])
+    value = str(group.get("subject_subgroup") or "").strip().upper()
+    if group.get("semantic_dimension") and value in ("1", "2", "3", "A", "B", "C"):
+        return ("123" if value.isdigit() else "ABC").index(value)
+    return None
 
 
 def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, sheet_id,
@@ -35,9 +50,59 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     if extra:
         grades.append(None)
         captions[None] = "Общие занятия"
-    columns = len(grades) + 1
-    positions = {grade: i for i, grade in enumerate(grades, 1)}
-    widths = [TIME_WIDTH, *[GRADE_WIDTH for _ in grades]]
+    slots_by_grade = defaultdict(lambda: defaultdict(list))
+    for day, lessons in by_day.items():
+        for lesson in lessons:
+            targets = {grade_by_class[c] for c in lesson["classIds"]} or {None}
+            for grade in targets:
+                slots_by_grade[grade][day, lesson["start"]].append(lesson)
+
+    placements = {}
+    spans = {}
+    positions = {}
+    columns = 1
+    for grade in grades:
+        slots = slots_by_grade[grade]
+        neighbors = defaultdict(set)
+        ranks = {}
+        identities = {}
+        for lessons in slots.values():
+            keys = []
+            for lesson in lessons:
+                audience = lesson.get("audience") or {}
+                ids = sorted(set((audience.get("group_ids") or []) + (lesson.get("groupIds") or []) +
+                                 ([lesson["groupId"]] if lesson.get("groupId") else [])))
+                ids = tuple(i for i in ids if groups.get(i, {}).get("group_type") != "class")
+                key = ids or tuple(sorted(lesson["classIds"]))
+                identities[lesson["id"]] = key
+                keys.append(key)
+                group = groups.get(ids[0], {}) if len(ids) == 1 else {}
+                rank = subgroup_rank(group)
+                if rank is not None:
+                    ranks[key] = rank
+            for key in keys:
+                neighbors[key].update(other for other in keys if other != key)
+        lanes = dict(ranks)
+        for key in sorted(neighbors):
+            if key not in lanes:
+                occupied = {lanes[n] for n in neighbors[key] if n in lanes}
+                lanes[key] = next(i for i in range(len(occupied)+1) if i not in occupied)
+        width = max(lanes.values(), default=0) + 1
+        for lessons in slots.values():
+            used = set()
+            reserved = {lanes[identities[item["id"]]] for item in lessons}
+            for lesson in sorted(lessons, key=lambda item: identities[item["id"]]):
+                lane = lanes[identities[lesson["id"]]]
+                collision = lane in used
+                if collision:
+                    lane = next(i for i in range(len(used) + len(reserved) + 1) if i not in used | reserved)
+                used.add(lane)
+                placements[grade, lesson["id"]] = lane, collision
+                width = max(width, lane + 1)
+        spans[grade] = width
+        positions[grade] = columns
+        columns += width
+    widths = [TIME_WIDTH] + [GRADE_WIDTH] * (columns - 1)
     cells, mapping, day_rows, slot_ranges = [], [], [], []
     heights = {}
     clarification_count = 0
@@ -59,7 +124,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     heights[1] = 88 if columns == 2 else 64 if columns == 3 else 49
     cell(2, 0, "Время", bg="#DFE9F1", bold=True)
     for grade, col in positions.items():
-        cell(2, col, captions[grade], bg="#DFE9F1", bold=True)
+        cell(2, col, captions[grade], width=spans[grade], bg="#DFE9F1", bold=True)
     heights[2] = 25
     row = 3
 
@@ -84,7 +149,9 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 row += 1
                 continue
             start_row = row
-            stacks = defaultdict(list)
+            ends = {item["end"] for item in slots[start]}
+            cell(row, 0, f"{start}–{next(iter(ends))}" if len(ends) == 1 else start, bg="#EEF3F8", bold=True)
+            heights[row] = 60
             for lesson in sorted(slots[start], key=lambda item: (item["end"], item["subject"], str(item["id"]))):
                 lesson_id = str(lesson["id"])
                 targets = sorted({grade_by_class[c] for c in lesson["classIds"]}, key=positions.__getitem__) or [None]
@@ -118,8 +185,8 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 ends = {item["end"] for item in slots[start]}
                 interval = f"{start}–{lesson['end']}" if len(ends) > 1 else ""
                 detail = " · ".join(filter(None, (", ".join(staff), lesson.get("room"))))
-                lines = [line for part in (name, scope, *dict.fromkeys(group_labels), detail, interval) if part
-                         for line in wrap(part, 19)]
+                full = "\n".join(filter(None, (name, scope, *group_labels, detail, interval)))
+                compact = "\n".join(filter(None, (name, detail, interval)))
                 bg = _teacher_fill(teacher_ids, teachers, staff)
                 rgb = [int(bg[i:i+2], 16) for i in (1, 3, 5)]
                 bg = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in rgb)
@@ -128,34 +195,30 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 notes = ["\n".join(line for line in note.splitlines() if not line.lstrip().startswith("MY_ISLAND:")).strip()
                          for sid in lesson["_source_ids"] for note in existing_notes.get(sid, [])]
                 notes = list(dict.fromkeys(filter(None, notes)))
-                col = positions[anchor]
-                offsets = stacks[col]
-                first_row = start_row + len(offsets)
-                for i in range(0, len(lines), CARD_LINES):
-                    offsets.append((lines[i:i+CARD_LINES], bg, i == 0, "\n".join(dict.fromkeys(notes)) if not i else ""))
+                lane, collision = placements[anchor, lesson_id]
+                col = positions[anchor] + lane
+                first_row = row
+                whole = (not group_labels and audience.get("kind") in (None, "classes") and
+                         len(slots_by_grade[anchor][day, start]) == 1 and not lane and len(labels) <= 1)
+                width = spans[anchor] if whole else 1
+                caption = ("⚠ " if collision else "") + compact
+                if len(caption) > 52:
+                    caption = "\n".join(shorten(part, width=23, placeholder="…") for part in caption.splitlines())
+                if full != caption:
+                    notes.append(full)
+                cell(row, col, caption, width=width, bg=bg, bold=True, size=9, note="\n".join(notes))
                 references = []
                 for other in targets[1:]:
-                    target_col = positions[other]
-                    target_row = start_row + len(stacks[target_col])
-                    reference = f"Совместное занятие · {column_name(col)}{first_row+1}"
-                    stacks[target_col].append((wrap(reference, 19), "#EFF4F9", False, ""))
-                    references.append({"row": target_row, "col": target_col})
+                    target_col = positions[other] + placements[other, lesson_id][0]
+                    cell(row, target_col, f"Совместное занятие · {column_name(col)}{row+1}", size=9)
+                    references.append({"row": row, "col": target_col})
                 mapping.append(dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
                                     source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
                                     row=first_row, col=col, segment_start=start, segment_end=lesson["end"],
                                     day=day, class_ids=lesson["classIds"], grade_numbers=targets if anchor is not None else [],
                                     group_ids=group_ids, teacher_ids=teacher_ids, references=references,
-                                    rows=(len(lines)+CARD_LINES-1)//CARD_LINES))
-            for offset in range(max(map(len, stacks.values()))):
-                active = [(col, stack[offset]) for col, stack in stacks.items() if offset < len(stack)]
-                heights[row] = max(31, 10 + 16 * max(len(card[0]) for _, card in active))
-                if not offset:
-                    ends = {lesson["end"] for lesson in slots[start]}
-                    cell(row, 0, f"{start}–{next(iter(ends))}" if len(ends) == 1 else start,
-                         bg="#EEF3F8", bold=True, size=9)
-                for col, (lines, bg, bold, note) in active:
-                    cell(row, col, "\n".join(lines), bg=bg, bold=bold, note=note, size=9)
-                row += 1
+                                    rows=1))
+            row += 1
             slot_ranges.append({"start": start_row, "end": row})
 
     if clarification_count:
@@ -168,6 +231,6 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
             "mapping_sheet_id": mapping_sheet_id, "snapshot_id": snapshot["snapshot_id"], "snapshot": snapshot,
             "rows": row, "columns": columns, "column_widths": widths, "row_heights": heights,
             "day_rows": day_rows, "slot_ranges": slot_ranges, "cells": cells, "mapping": mapping,
-            "class_columns": [{"start": col, "width": 1} for col in positions.values()],
+            "class_columns": [{"start": col, "width": spans[grade]} for grade, col in positions.items()],
             "presentation_context": context, "presentation_fingerprint": _hash(context),
             "summary": {"lessons": len(source_ids), "placements": len(mapping), "clarifications": clarification_count}}

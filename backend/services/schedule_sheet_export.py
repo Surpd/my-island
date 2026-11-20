@@ -674,10 +674,14 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "top": {"style": "SOLID_MEDIUM", "color": color("#344054")},
                 "bottom": {"style": "SOLID_MEDIUM", "color": color("#344054")}}})
     if plan.get("layout") == "school-grid":
+        for c in plan["class_columns"]:
+            requests.append({"updateBorders": {"range": grid(2, c["start"], plan["rows"], c["start"]+c["width"]),
+                "left": {"style": "SOLID_THICK", "color": color("#53687C")},
+                "innerVertical": {"style": "SOLID", "color": color("#AAB8C5")}}})
         for index, width in enumerate(plan["column_widths"]):
             requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
                 "startIndex": index, "endIndex": index + 1}, "properties": {"pixelSize": width}, "fields": "pixelSize"}})
         for slot in plan["slot_ranges"]:
             requests.append({"updateBorders": {"range": grid(slot["start"], 0, slot["end"], plan["columns"]),
-                             "top": {"style": "SOLID", "color": color("#A2B2C1")}}})
+                             "top": {"style": "SOLID_MEDIUM", "color": color("#708396")}}})
     return requests

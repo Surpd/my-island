@@ -38,6 +38,7 @@ import Link from 'next/link';
 import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
+import { subgroupRank, timetableLanes } from './schedule-lanes';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
 import { ConstructorScheduleExport, ScheduleExportLink } from './constructor-schedule-export';
@@ -59,6 +60,7 @@ const scheduleDataSourceLabel = String((import.meta as ImportMeta & { env?: Reco
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Raw = Record<string, any>;
 type Group = {
+  canonicalName?: string;
   id: string;
   name: string;
   group_type: string;
@@ -865,7 +867,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       const demoGroups =
       (groupData.items || []).map((item) => ({
         id: String(item.id),
-        name: audienceLabel(item),
+        name: audienceLabel(item), canonicalName: String(item.name || ''),
         group_type: String(item.group_type),
         role: String(item.role || ''),
         semantic_dimension: String(item.semantic_dimension || ''),
@@ -895,7 +897,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         groups: [...new Set([...(item.groups || []).map((g: Raw) => String(typeof g === 'object' ? g.id : g)), ...studentMemberships(item).map((g: Raw) => String(g.group_id || g.id))])],
         classes: (item.base_classes || []).map((g: Raw) => String(g.id)),
       }));
-    const mapGroups = (items: Raw[] = []) => items.map((item) => ({ id: String(item.id), name: audienceLabel(item), group_type: String(item.group_type), role: String(item.role || ''), semantic_dimension: String(item.semantic_dimension || ''), subject: subjectLabel(item.subject), archived_at: item.archived_at || null, subject_subgroup: String(item.subject_subgroup || ''), base_class_name: String(item.base_class_name || ''), course: String(item.course || item.course_name || ''), exam_track: groupCourseContext(item) }));
+    const mapGroups = (items: Raw[] = []) => items.map((item) => ({ id: String(item.id), name: audienceLabel(item), canonicalName: String(item.name || ''), group_type: String(item.group_type), role: String(item.role || ''), semantic_dimension: String(item.semantic_dimension || ''), subject: subjectLabel(item.subject), archived_at: item.archived_at || null, subject_subgroup: String(item.subject_subgroup || ''), base_class_name: String(item.base_class_name || ''), course: String(item.course || item.course_name || ''), exam_track: groupCourseContext(item) }));
     const schoolGroups = mapGroups(schoolDirectory.groups || []);
     const schoolTeachers = (schoolDirectory.teachers || []).map((item) => ({ id: String(item.id), name: String(item.display_name || item.name), assignments: (item.assignments || item.teacher_assignments || []).filter((a: Raw) => assignmentIsActive(a)).map((a: Raw) => ({ group_id: a.group_id ? String(a.group_id) : '', subject: subjectLabel(a.subject), course: String(a.course || a.course_name || ''), grade_level: a.grade_level == null ? '' : String(a.grade_level), exam_track: String(a.exam_track || '') })) }));
     const schoolStudents = (schoolDirectory.students || []).map((item) => ({ id: String(item.id), name: String(item.display_name || item.name), groups: [...new Set([...(item.groups || []).map((g: Raw) => String(typeof g === 'object' ? g.id : g)), ...studentMemberships(item).map((g: Raw) => String(g.group_id || g.id))])], classes: (item.base_classes || item.classes || []).map((g: Raw) => String(typeof g === 'object' ? g.id : g)) }));
@@ -1525,6 +1527,16 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return { label: item?.name || 'Класс', classIds: item ? [item.id] : [] };
   })();
   const gridColumns: GridColumn[] = classColumns;
+  const columnLanes = gridColumns.map(column => timetableLanes((payload?.days || []).flatMap(d =>
+    payload!.slots.map((_, period) => payload!.lessons.filter(lesson =>
+      overlapsSlot(lesson, d, period, payload!.slots) && displayedClasses(lesson).some(id => column.classIds.includes(id))
+    ).map(lesson => {
+      const instructional = linkedInstructionalGroups(lesson, groups);
+      const ids = instructional.length ? instructional.map(group => group.id) : lessonClasses(lesson);
+      const group = instructional.length === 1 ? instructional[0] : undefined;
+      return {id: lesson.id, key: [...ids].sort().join('|'), rank: group && subgroupRank(group.canonicalName || group.name, group.semantic_dimension, group.subject_subgroup),
+        whole: !instructional.length && ids.length === 1 && audienceOf(lesson, groups).kind === 'classes'};
+    })))));
   const gradeScopeAtColumn = (column: number) => {
     const grades = new Set((gridColumns[column]?.classIds || [])
       .map((id) => canonicalGradeOfGroup(groups.find((item) => item.id === id)))
@@ -1538,7 +1550,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   };
   const gridColumnTemplate = `68px ${gridColumns.map((column) => {
     const width = resizePreview?.[column.key] ?? (payload?.column_width_mode === 'manual' ? payload.column_widths?.[column.key] : undefined);
-    return width ? `${width}px` : `minmax(${fitWidth ? '0px' : `${density === 'compact' ? 115 : 145}px`}, ${columnWeight(column)}fr)`;
+    return width ? `${width}px` : `minmax(${fitWidth ? '0px' : `${Math.max(density === 'compact' ? 115 : 145, (columnLanes[gridColumns.indexOf(column)]?.width || 1) * 106)}px`}, ${columnWeight(column)}fr)`;
   }).join(' ')}`;
   const beginColumnResize = (event: ReactPointerEvent<HTMLSpanElement>, key: string) => {
     if (event.button !== 0 || !payload) return;
@@ -3222,7 +3234,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           (!teacherFilter || item.teacherId === teacherFilter || item.teacherIds?.includes(teacherFilter)) &&
                           (!subjectFilter || subjectLabel(item.subject) === subjectFilter) &&
                           (!query || `${item.subject} ${item.room} ${groups.find((g) => g.id === item.groupId)?.name || ''} ${teachers.find((t) => t.id === item.teacherId)?.name || ''}`.toLocaleLowerCase('ru').includes(query.toLocaleLowerCase('ru'))),
-                      ).sort((a, b) => a.classId.localeCompare(b.classId));
+                      );
+                      const lanes = columnLanes[col];
+                      const placements = lanes.positions[payload.days.indexOf(cellDay) * payload.slots.length + period];
                       return (
                         <div
                           key={column.key}
@@ -3284,8 +3298,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             setContext({ x: event.clientX, y: event.clientY });
                           }}
                         >
-                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${lessons.length > 3 ? 2 : Math.max(1, lessons.length)}, minmax(0, 1fr))` }}>
+                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${lanes.width}, minmax(0, 1fr))` }}>
                             {lessons.map((item) => {
+                              const placement = placements?.get(item.id);
                               const roomCaption = lessonOnline(payload, item, groups) ? 'Онлайн' : normalizeRoomDisplay(item.room);
                               const localGroups = linkedInstructionalGroupsForColumn(item, groups, students, column.classIds);
                               const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups, localGroups);
@@ -3299,7 +3314,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   key={item.id}
                                   data-lesson-id={item.id}
                                   title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${roomCaption || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
-                                  style={{ backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
+                                  style={{ gridRow: 1, gridColumn: placement?.whole ? "1 / -1" : (placement?.lane ?? 0) + 1, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
                                   className={`constructor-card ${item.kind === 'event' ? 'event' : ''} ${item.kind === 'event' || item.end && item.end !== payload.slots[item.period]?.end ? `multislot ${item.period !== period ? 'event-continuation' : ''} ${overlapsSlot(item, cellDay, period + 1, payload.slots) ? 'event-continues' : ''}` : ''} ${selectedId === item.id ? 'active' : ''} ${conflictsOpen && issues.some((issue) => (issue.lessonId === item.id || issue.related === item.id) && issue.severity === 'error') ? 'error' : conflictsOpen && issues.some((issue) => issue.lessonId === item.id || issue.related === item.id) ? 'warning' : ''}`}
                                   draggable
                                   onDragStart={(event) => {
