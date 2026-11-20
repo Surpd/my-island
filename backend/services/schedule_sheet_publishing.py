@@ -22,7 +22,7 @@ from backend.services.schedule_experiments import ExperimentConflict, get_experi
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, freeze_week, sheets_requests
 
 TEST_EXPORT_TARGET = "11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ"
-EXPORT_POLICY = "school-grid-day-v3"
+EXPORT_POLICY = "school-grid-class-v4"
 PREVIOUS_POLICY = "compact-activities-v3"
 LEGACY_WEEK_POLICY = "compact-activities-v2"
 
@@ -134,7 +134,7 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
     with database.connection() as connection:
         existing = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?", (digest,)).fetchone()
         if existing is None:
-            for policy in ("school-grid-horizontal-v2", "school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
+            for policy in ("school-grid-day-v3", "school-grid-horizontal-v2", "school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
                 if policy == EXPORT_POLICY:
                     continue
                 legacy = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?",
@@ -230,7 +230,8 @@ def preview_saved_export(database: Database, experiment_id: str, *, expected_rev
                "width": min(cell["width"], columns - cell["col"])}
               for cell in visible_cells if cell["row"] < rows and cell["col"] < columns]
     row_heights = {int(row): height for row, height in plan["row_heights"].items()}
-    day_labels = {cell["row"]: cell["text"] for cell in visible_cells if cell["col"] == 1}
+    day_labels = {int(row): label for row, label in plan.get("day_labels", {}).items()} or {
+        cell["row"]: cell["text"] for cell in visible_cells if cell["col"] == 1}
     grid = {"rows": plan["rows"], "columns": plan["columns"], "cells": visible_cells,
             "column_widths": plan.get("column_widths") or [122] + [166] * (plan["columns"] - 1),
             "row_heights": [row_heights.get(row, 21) for row in range(plan["rows"])],

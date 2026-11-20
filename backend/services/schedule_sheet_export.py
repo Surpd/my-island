@@ -602,7 +602,7 @@ def sheets_requests(plan: Mapping[str, Any], *, spreadsheet_url: str = "", front
             internal_rows.append([f"presentation_context:{offset//25000}", context[offset:offset+25000],
                                   plan["presentation_fingerprint"]])
     requests = [{"addSheet": {"properties": {"sheetId": sid, "title": plan["title"], "gridProperties": {
-        "rowCount": plan["rows"], "columnCount": plan["columns"], "frozenRowCount": 3 if plan.get("layout") == "school-grid" else 2,
+        "rowCount": plan["rows"], "columnCount": plan["columns"], "frozenRowCount": plan.get("frozen_rows", 3 if plan.get("layout") == "school-grid" else 2),
         "frozenColumnCount": 1, "hideGridlines": True}}}},
         {"addSheet": {"properties": {"sheetId": mid, "title": f"_MI {sid}", "hidden": True,
                                      "gridProperties": {"rowCount": len(internal_rows), "columnCount": 3}}}},
@@ -683,7 +683,7 @@ def sheets_requests(plan: Mapping[str, Any], *, spreadsheet_url: str = "", front
                 "bottom": {"style": "SOLID_MEDIUM", "color": color("#344054")}}})
     if plan.get("layout") == "school-grid":
         for c in plan["class_columns"]:
-            requests.append({"updateBorders": {"range": grid(2, c["start"], plan.get("overview_rows", plan["rows"]), c["start"]+c["width"]),
+            requests.append({"updateBorders": {"range": grid(plan.get("frozen_rows", 2), c["start"], plan.get("overview_rows", plan["rows"]), c["start"]+c["width"]),
                 "left": {"style": "SOLID_THICK", "color": color("#53687C")},
                 "innerVertical": {"style": "SOLID", "color": color("#AAB8C5")}}})
         for index, width in enumerate(plan["column_widths"]):

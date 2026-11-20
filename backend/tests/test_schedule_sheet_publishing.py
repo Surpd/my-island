@@ -294,12 +294,14 @@ class SchedulePublishingTests(unittest.TestCase):
             {"id": "art", "day": 4, "period": 1, "classIds": ["5"], "subject": "Литература"},
             {"id": "club", "day": 4, "period": 1, "classIds": ["5"], "subject": "Медиамастерская",
              "activityType": "club"},
+            {"id": "elective", "day": 4, "period": 1, "classIds": ["5"], "subject": "История искусства",
+             "activityType": "elective", "teacherId": "teacher", "room": "каб. 12"},
         ]
         snapshot = freeze_template({"groups": groups, "teachers": [{"id": "teacher", "display_name": "Тест"}],
             "source": {"draft_id": "draft"}, "payload": {"classes": [g["id"] for g in groups], "days": [4],
-            "lessons": lessons, "slots": [{"start": "09:00", "end": "09:45"}, {"start": "09:55", "end": "10:40"}]}})
+            "grade_modes": {"5": {"4": "online"}, "10": {"4": "sdep"}}, "lessons": lessons, "slots": [{"start": "09:00", "end": "09:45"}, {"start": "09:55", "end": "10:40"}]}})
         plan = build_sheet_plan(snapshot, layout="school-grid", title="Пятница", sheet_id=70, mapping_sheet_id=71)
-        self.assertLessEqual(sum(plan["column_widths"]), 1223)
+        self.assertLessEqual(sum(plan["column_widths"]), 1258)
         cells = {(c["row"], c["col"]): c for c in plan["cells"]}
         friday = plan["day_rows"][0]
         self.assertEqual([cells[friday+offset, 0]["text"] for offset in (1, 2)], ["09:00–09:45", "09:55–10:40"])
@@ -309,11 +311,24 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(len(cards), 4)
         self.assertTrue(all(c["bg"] == cards[0]["bg"] and c["link_row"] == lab["details_row"] and "Лаб" in c["text"]
                             for c in cards))
-        self.assertTrue(any(c["text"].startswith("↳") for c in cards))
+        self.assertEqual(sum(bool(ref.get("continuation")) for ref in lab["references"]), 2)
         self.assertIn("09:00–10:40", cells[lab["details_row"], 1]["text"])
-        self.assertIn("Кружки и дополнительные занятия", cells[friday+3, 1]["text"])
+        self.assertIn("Курсы по выбору, кружки и консультации", cells[friday+3, 1]["text"])
         club = next(m for m in plan["mapping"] if m["lesson_id"] == "club")
         self.assertGreater(club["row"], friday+3)
+        elective = next(m for m in plan["mapping"] if m["lesson_id"] == "elective")
+        self.assertEqual(elective["col"], club["col"])
+        self.assertNotEqual(elective["row"], club["row"])
+        self.assertIn("Тест", cells[elective["row"], elective["col"]]["text"])
+        class_cols = {cells[0, c["start"]]["text"]: c for c in plan["class_columns"]}
+        self.assertEqual(cells[friday, class_cols["5 класс"]["start"]]["text"], "Онлайн")
+        self.assertEqual(cells[friday, class_cols["10 класс"]["start"]]["text"], "СДЭП")
+        def width(grade):
+            col = class_cols[f"{grade} класс"]
+            return sum(plan["column_widths"][col["start"]:col["start"] + col["width"]])
+        self.assertGreater(width(7), width(5))
+        self.assertGreater(width(9), width(8))
+        self.assertEqual(plan["frozen_rows"], 1)
         self.assertFalse(any(c["note"] for c in cells.values()))
         sheet = "https://docs.google.com/spreadsheets/d/test/edit"
         requests = sheets_requests(plan, spreadsheet_url=sheet, frontend_url="https://schedule.example")
@@ -356,8 +371,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertIn("Шаблон", preview["title"])
         self.assertEqual(preview["summary"]["lessons"], 1)
         sample = preview["sample"]
-        self.assertEqual({cell["text"] for cell in sample["cells"] if cell["row"] in {1, 2} and cell["col"] == 0},
-                         {"Ред. 1", "Время"})
+        self.assertEqual(next(cell["text"] for cell in sample["cells"] if cell["row"] == 0 and cell["col"] == 0), "Время")
         self.assertFalse(any("note" in cell for cell in sample["cells"]))
         with self.db.connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM schedule_sheet_exports").fetchone()[0], 0)
