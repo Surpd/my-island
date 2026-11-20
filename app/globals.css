@@ -1961,10 +1961,6 @@ button {
 .admin-error-text { margin-top: 10px; color: #9b413a; font-size: 11px; line-height: 1.45; }
 .admin-callout--safe { background: #eaf7f0; color: #27624d; }
 .admin-system-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; color: #6c858d; font-size: 11px; }
-.admin-legacy-nav { margin-top: 9px; border-top: 1px solid rgb(255 255 255 / 10%); padding-top: 8px; }
-.admin-legacy-nav summary { display: flex; align-items: center; gap: 9px; padding: 10px 11px; color: #a9c2ca; cursor: pointer; list-style: none; font-size: 11px; }
-.admin-legacy-nav summary::-webkit-details-marker { display: none; }
-.admin-legacy-nav > button { padding-left: 23px !important; font-size: 10px !important; }
 .school-editor { padding-bottom: 36px; }
 .school-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 2px 0 6px; }
 .school-editor-heading h2 { margin: 3px 0 4px; color: #193f49; font: 700 28px var(--font-display), Georgia, serif; }
@@ -2186,7 +2182,7 @@ button {
 .school-move-dialog > p { margin: 0; color: #607a81; font-size: 12px; }
 .school-move-dialog > footer { flex-wrap: wrap; justify-content: flex-start; }
 @media (max-width: 720px) { .school-editor-heading { align-items: flex-start; } .school-class-detail-heading { grid-template-columns: 1fr; align-items: start; } .school-student-class-row { grid-template-columns: 1fr; } .school-class-roster-row { grid-template-columns: 1fr auto; } .school-class-roster-row > span:nth-child(2) { grid-column: 1 / -1; } .school-editor-toolbar > select { width: 100%; max-width: none; } }
-@media (max-width: 720px) { .school-editor-heading { align-items: flex-start; flex-direction: column; } .school-editor-heading h2 { font-size: 24px; } .school-editor-toolbar { align-items: stretch; } .school-editor-toolbar select { width: 100%; } .school-editor-tabs { width: 100%; } .school-editor-dialog { padding: 16px; } .admin-legacy-nav > button { min-width: max-content; } }
+@media (max-width: 720px) { .school-editor-heading { align-items: flex-start; flex-direction: column; } .school-editor-heading h2 { font-size: 24px; } .school-editor-toolbar { align-items: stretch; } .school-editor-toolbar select { width: 100%; } .school-editor-tabs { width: 100%; } .school-editor-dialog { padding: 16px; } }
 .admin-status { display: inline-flex; width: fit-content; align-items: center; min-height: 22px; padding: 3px 8px; border-radius: 99px; background: #edf2f3; color: #587078; font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
 .admin-status--good { background: #e4f5ed; color: #22684d; }
 .admin-status--warn { background: #fff0d0; color: #855e17; }

@@ -30,7 +30,14 @@ class RetiredScheduleRoutesTests(unittest.TestCase):
             with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
                 initial = client.get(path, headers=headers).json()
                 self.assertFalse(initial["manual_publication_active"])
-                self.assertTrue(initial["automatic_application_enabled"])
+                self.assertFalse(initial["automatic_application_enabled"])
+                refresh = client.post("/api/admin/schedule/refresh?week_start=2026-10-19", headers=headers)
+                self.assertEqual(refresh.status_code, 200)
+                self.assertEqual(refresh.json()["status"], "blocked")
+                preview = client.post("/api/admin/schedule/preview?week_start=2026-10-19", headers=headers)
+                self.assertEqual(preview.json()["status"], "blocked")
+                template = client.post("/api/admin/schedule/template/preview", headers=headers, json={"expected_version_id": "fixture"})
+                self.assertEqual(template.json()["status"], "blocked")
                 with database.connection() as connection:
                     connection.execute("INSERT INTO schedule_publication_heads VALUES ('template','synthetic','version',1,'2026-10-19')")
                 response = client.get(path, headers=headers)

@@ -9,29 +9,67 @@ function lesson(id: number, subject = `Предмет ${id}`) {
   return { id: `lesson-${id}`, subject, start: '10:00', end: '10:45', groups: ['9А'], members: ['student-1'], teachers: ['Преподаватель'], room: '204', problems: [] };
 }
 
-async function openWithPreview(page: Page, preview: Record<string, unknown>) {
-  await page.route('**/api/admin/**', async (route) => {
-    const url = new URL(route.request().url());
+async function openWithPreview(page: Page, preview: Record<string, unknown>, promote = true) {
+  await page.context().route('**/*', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (!['localhost', '127.0.0.1'].includes(url.hostname)) return route.abort();
     const path = url.pathname;
-    if (path.endsWith('/auth/session')) return route.fulfill({ json: { state: 'approved', user: { id: 1, role: 'admin', roles: ['admin'] } } });
-    if (path.endsWith('/experiments/capabilities')) return route.fulfill({ json: { demo_available: false, school_available: true, consolidated_schedule: true } });
-    if (path === '/api/admin/schedule/experiments/school') return route.fulfill({ json: { items: [
+    if (!path.startsWith('/api/')) return route.continue();
+    const headers = {
+      'access-control-allow-origin': new URL(page.url()).origin,
+      'access-control-allow-credentials': 'true',
+      'access-control-allow-headers': 'authorization, content-type, x-dev-auth, x-admin-browser-session, x-school-admin-session, x-telegram-init-data',
+      'access-control-allow-methods': 'GET, POST, OPTIONS',
+    };
+    if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
+    const fulfill = (json: unknown, status = 200) => route.fulfill({ json, status, headers });
+    if (path.endsWith('/auth/session')) return fulfill({ state: 'approved', user: { id: 1, role: 'admin', roles: ['admin'] } });
+    if (path.endsWith('/experiments/capabilities')) return fulfill({ demo_available: false, school_available: true, consolidated_schedule: true });
+    if (path === '/api/admin/schedule/experiments/school') return fulfill({ items: [
       { id: 'primary-old', name: 'Основной шаблон', revision: 3, lesson_count: 1, is_primary_template: true, draft_kind: 'school' },
       { id: 'candidate-new', name: 'Шаблон на проверку', revision: 2, lesson_count: 2, is_primary_template: false, draft_kind: 'school' },
-    ] } });
-    if (path.endsWith('/selection-preview')) return route.fulfill({ json: preview });
-    if (path.endsWith('/select-primary')) return route.fulfill({ status: 409, json: { detail: 'Шаблон изменился с момента сравнения. Обновите данные.' } });
-    if (path.endsWith('/approve-legacy-baseline')) return route.fulfill({ json: { approved: true } });
-    if (path.endsWith('/directory')) return route.fulfill({ json: { groups: [{ id: 1, name: '9А', display_name: '9А', group_type: 'class' }], teachers: [], students: [], rooms: [] } });
-    if (path.endsWith('/observability')) return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [] } });
-    return route.fulfill({ json: { items: [] } });
+    ] });
+    if (path.endsWith('/school/candidate-new')) return fulfill({ id: 'candidate-new', payload: {} });
+    if (path.endsWith('/selection-preview')) return fulfill(preview);
+    if (path.endsWith('/select-primary')) return fulfill({ detail: 'Шаблон изменился с момента сравнения. Обновите данные.' }, 409);
+    if (path.endsWith('/approve-legacy-baseline')) return fulfill({ approved: true });
+    if (path.endsWith('/directory')) return fulfill({ groups: [{ id: 1, name: '9А', display_name: '9А', group_type: 'class' }], teachers: [], students: [], rooms: [] });
+    if (path.endsWith('/observability')) return fulfill({ blocks: [], weeks: [], effective_weeks: [], week_publications: [] });
+    return fulfill({ items: [] });
   });
-  await page.goto('/admin/schedule/constructor?role=admin');
+  await page.goto('/admin/schedule/constructor?role=admin&editor=1');
   await expect(page.getByRole('heading', { name: 'Основной шаблон' })).toBeVisible();
-  await page.getByText('Другие черновики шаблона · 1').click();
-  const candidate = page.locator('.constructor-draft').filter({ hasText: 'Шаблон на проверку' });
-  await candidate.getByRole('button', { name: 'Сделать основным шаблоном' }).click();
+  const candidate = page.locator('.schedule-start-row').filter({ has: page.getByRole('heading', { name: 'Шаблон на проверку' }) });
+  if (promote) {
+    await candidate.getByText('Ещё', { exact: true }).click();
+    await candidate.getByRole('button', { name: 'Сделать основным шаблоном' }).click();
+  }
+  return candidate;
 }
+
+test('the comparison action never requests promotion and restores keyboard focus on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 760 });
+  const writes: string[] = [];
+  page.on('request', request => {
+    if (/\/(select-primary|approve-legacy-baseline|publish)$/.test(new URL(request.url()).pathname)) writes.push(request.url());
+  });
+  const candidate = await openWithPreview(page, standardPreview(), false);
+  const compare = candidate.getByRole('button', { name: 'Сравнить', exact: true });
+  await expect(candidate.getByRole('button', { name: 'Сделать основным шаблоном' })).toBeHidden();
+  await compare.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Сравнение шаблонов' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByText('Добавленные занятия · 1').click();
+  await expect(dialog.getByText(/Физика/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: /опубликовать|подтвердить/i })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(compare).toBeFocused();
+  expect(writes).toEqual([]);
+});
 
 function standardPreview() {
   const added = lesson(1, 'Физика');

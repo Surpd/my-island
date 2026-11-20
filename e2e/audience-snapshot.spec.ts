@@ -114,13 +114,15 @@ test('available-slot roster stays factual until recalculation is confirmed, then
     .getByRole('button', { name: new RegExp(draftName) }).click();
   const availableCard = page.locator('.constructor-card[data-lesson-id="available-slot"]');
   await expect(availableCard).toBeVisible();
-  await availableCard.click();
+  await availableCard.dblclick();
   const participants = page.getByRole('region', { name: 'Участники занятия' });
   await expect(participants.getByText('Изменился расчёт участников')).toBeVisible();
   await expect(participants.getByText('Сейчас по правилу получилось бы 2 учеников')).toBeVisible();
-  page.once('dialog', (dialog) => dialog.accept());
   await participants.getByRole('button', { name: 'Пересчитать и подтвердить состав' }).click();
-  await page.getByRole('button', { name: 'Сохранить черновик', exact: true }).click();
+  const recalculation = page.getByRole('dialog', { name: 'Пересчитать аудитории' });
+  await recalculation.getByRole('button', { name: 'Показать изменения' }).click();
+  await recalculation.getByRole('button', { name: 'Подтвердить проверенные составы' }).click();
+  await expect(recalculation).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Сохранить черновик', exact: true })).toBeDisabled();
 
   const readSavedRoster = async () => {
@@ -138,7 +140,7 @@ test('available-slot roster stays factual until recalculation is confirmed, then
     .getByRole('button', { name: new RegExp(draftName) }).click();
   const reopenedCard = page.locator('.constructor-card[data-lesson-id="available-slot"]');
   await expect(reopenedCard).toBeVisible();
-  await reopenedCard.click();
+  await reopenedCard.dblclick();
   const reopenedParticipants = page.getByRole('region', { name: 'Участники занятия' });
   await expect(reopenedParticipants.getByText('Изменился расчёт участников')).toHaveCount(0);
   await reopenedParticipants.getByText('Показать состав (2)').click();

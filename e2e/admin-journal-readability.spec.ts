@@ -172,7 +172,8 @@ test('compact journal menu shares layout space and can be pinned', async ({ page
   await page.mouse.move(800, 200);
   await assertLayout(58);
   await expect(sidebar.getByRole('button', { name: 'Журналы и оценки', exact: true })).toHaveAttribute('aria-current', 'page');
-  await expect(sidebar.locator('.admin-legacy-nav summary').first()).toHaveAttribute('title', 'Обслуживание');
+  await expect(sidebar.getByRole('navigation', { name: 'Основные разделы' }).locator('button')).toHaveCount(7);
+  await expect(sidebar.locator('.admin-legacy-nav')).toHaveCount(0);
   await wrap.scrollIntoViewIfNeeded();
   const screenshot = async (name: string) => page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
   const countVisible = async () => page.locator('.journal-table').evaluate(table => {

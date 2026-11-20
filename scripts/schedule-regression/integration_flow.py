@@ -197,8 +197,10 @@ def main() -> None:
     results["shared_colors"] = {"teacher_count": len(color_list), "updated_revision": updated_color["revision"],
         "second_device_readback": second_device_color["color"], "stale_update_status": stale_color["status_code"]}
 
-    export_result = request(base, f"/api/admin/schedule/experiments/school/{week_id}/export", method="POST",
+    export_preview = request(base, f"/api/admin/schedule/experiments/school/{week_id}/export/preview", method="POST",
         body={"expected_revision": 1}, headers=device_a)["data"]
+    export_result = request(base, f"/api/admin/schedule/experiments/school/{week_id}/export", method="POST",
+        body={"expected_revision": 1, "preview_token": export_preview["preview_token"], "confirmed": True}, headers=device_a)["data"]
     if export_result.get("status") != "authorization_required":
         raise FlowError("Local export must prepare safely and stop before Google writes")
     results["export_http"] = {"status": export_result["status"], "revision": export_result["revision"],
@@ -206,8 +208,8 @@ def main() -> None:
 
     before_refresh = database_snapshot(db_path)
     refresh = request(base, "/api/admin/schedule/refresh?week_start=2026-10-26", method="POST", headers=admin)["data"]
-    if refresh.get("status") != "manual_publication_protected" or database_snapshot(db_path) != before_refresh:
-        raise FlowError("Source refresh did not hold the manual publication without writes")
+    if refresh.get("status") != "blocked" or database_snapshot(db_path) != before_refresh:
+        raise FlowError("Legacy source refresh must be disabled without schedule writes")
     results["source_refresh_protection"] = refresh
 
     with sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True) as connection:

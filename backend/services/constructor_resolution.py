@@ -1,12 +1,12 @@
 """Explicit, revision-bound draft corrections; never changes school memberships."""
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 from uuid import uuid4
 from collections.abc import Mapping
 
-from backend.services.schedule_experiments import ExperimentConflict, get_experiment, save_experiment, experiment_audience_preview, _lesson_interval, _lesson_audience
+from backend.services.schedule_experiments import ExperimentConflict, get_experiment, save_experiment, experiment_week_audience_preview, _lesson_activity_type, _lesson_interval, _lesson_audience
 from backend.services.schedule_rooms import display_room, room_key
 
 
@@ -25,9 +25,12 @@ def active_exceptions(lesson, scope=None, slots=None):
 
 def validated_exceptions(lessons, lesson, scope=None, slots=None):
     """Return receipts whose entire linked set still carries the same valid decision."""
+    receipts = active_exceptions(lesson, scope=scope, slots=slots)
+    if not receipts:
+        return []
     by_id={str(item.get('id')):item for item in lessons}
     valid=[]
-    for receipt in active_exceptions(lesson,scope=scope,slots=slots):
+    for receipt in receipts:
         linked=[str(value) for value in receipt.get('lesson_ids') or []]
         if not linked or any(value not in by_id for value in linked):
             continue
@@ -53,7 +56,9 @@ def resolution_preview(database,draft_id,*,expected_revision,lesson_ids,audience
     ids=sorted(set(lesson_ids)); by_id={l['id']:l for l in draft['payload']['lessons']}
     if not ids or set(ids)-by_id.keys(): raise ValueError('Выберите существующие занятия.')
     selected=[by_id[i] for i in ids]
-    audiences=experiment_audience_preview(audience_database or database,draft['payload'])['lessons']
+    audiences=_bulk_audience_resolution(audience_database or database,draft['payload'])['lessons']
+    for lesson_id in by_id.keys() - audiences.keys():
+        audiences[lesson_id] = {'status': 'incomplete', 'reason': 'Укажите день занятия.'}
     meaningful={'revision':expected_revision,'lessons':{i:fingerprint(by_id[i],draft['payload']['slots']) for i in ids},'audiences':{i:audiences[i] for i in ids}}
     token=hashlib.sha256(json.dumps(meaningful,sort_keys=True,default=str).encode()).hexdigest()
     rule=_lesson_audience(selected[0])
@@ -148,6 +153,8 @@ def _bulk_audience_scope(draft, scope, day=None, class_id=None):
     lessons = draft['payload'].get('lessons') or []
     chosen = []
     for lesson in lessons:
+        if _lesson_activity_type(lesson) in {'club', 'elective'}:
+            continue
         rule = _lesson_audience(lesson)
         if not rule.get('kind'):
             continue
@@ -166,38 +173,10 @@ def _bulk_audience_scope(draft, scope, day=None, class_id=None):
 
 
 def _bulk_audience_resolution(database, payload):
-    """Resolve a weekly draft on each lesson's effective calendar date."""
-    week_start = str(payload.get('week_start') or '').strip()
-    if not week_start:
-        return experiment_audience_preview(database, payload)
-    try:
-        monday = date.fromisoformat(week_start[:10])
-    except ValueError as error:
-        raise ValueError('Некорректная дата начала недели в черновике.') from error
-    monday -= timedelta(days=monday.weekday())
-    lessons = payload.get('lessons') or []
-    by_day = {}
-    for index, lesson in enumerate(lessons):
-        try:
-            day = int(lesson.get('day', lesson.get('weekday', -1)))
-        except (TypeError, ValueError):
-            continue
-        if day in range(7):
-            by_day.setdefault(day, []).append((str(lesson.get('id') or index), lesson))
-    if not by_day:
-        return experiment_audience_preview(database, payload)
-    resolved = {}
-    directory_fingerprints = {}
-    for day, rows in sorted(by_day.items()):
-        reference_date = (monday + timedelta(days=day)).isoformat()
-        day_result = experiment_audience_preview(database, {**payload, 'reference_date': reference_date})
-        directory_fingerprints[str(day)] = day_result.get('directory_fingerprint') or ''
-        for lesson_id, lesson in rows:
-            result = day_result['lessons'].get(lesson_id)
-            if result is not None:
-                resolved[lesson_id] = result
-    fingerprint = hashlib.sha256(json.dumps(directory_fingerprints, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-    return {'lessons': resolved, 'directory_fingerprint': fingerprint}
+    """Confirm rosters on the same dates used for publication validation."""
+    reference_date = payload.get('week_start') or payload.get('reference_date')
+    reference = date.fromisoformat(str(reference_date)[:10]) if reference_date else date.today()
+    return experiment_week_audience_preview(database, payload, reference)
 
 
 def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=None,

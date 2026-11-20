@@ -7,9 +7,33 @@ const apiRoot = 'http://127.0.0.1:8011';
 const fixturePath = process.env.MY_ISLAND_REV45_FIXTURE;
 const artifactDirectory = process.env.MY_ISLAND_REV45_ARTIFACTS || '.local-test/artifacts/resolution-audit';
 
+function syntheticArchive() {
+  const classes = Array.from({ length: 12 }, (_, index) => `archive-class-${index}`);
+  const teachers = classes.map((_, index) => ({
+    id: `archive-teacher-${index}`,
+    name: `Преподаватель ${index + 1}`,
+  }));
+  const groups = classes.map((id, index) => ({ id, name: `Класс ${index + 1}`, group_type: 'class' }));
+  const lessons = Array.from({ length: 386 }, (_, index) => {
+    const classIndex = index % classes.length;
+    const classId = classes[classIndex];
+    const slot = Math.floor(index / classes.length);
+    return {
+      id: `archive-lesson-${index}`, day: Math.floor(slot / 8), period: slot % 8,
+      subject: `Предмет ${classIndex + 1}`, classId,
+      classIds: index >= 2 && index < 43 ? [classId, classes[(classIndex + 1) % classes.length]] : [classId],
+      teacherId: teachers[index === 1 ? 0 : classIndex].id,
+      groupId: classId, room: String(100 + classIndex),
+    };
+  });
+  return { id: 'synthetic-archive', name: 'Архивная тестовая копия', revision: 45, lesson_count: lessons.length,
+    groups, teachers, rooms: [], payload: { classes, lessons, days: [0, 1, 2, 3, 4],
+      slots: Array.from({ length: 8 }, (_, index) => ({ start: `${String(9 + index).padStart(2, '0')}:00`, end: `${String(9 + index).padStart(2, '0')}:45` })),
+    } };
+}
+
 test('capture masked rev45 diagnostics, lesson context, and mobile confirmation', async ({ page }) => {
-  test.skip(!fixturePath, 'Set MY_ISLAND_REV45_FIXTURE to a sanitized local snapshot fixture.');
-  const fixture = JSON.parse(await readFile(fixturePath!, 'utf8'));
+  const fixture = fixturePath ? JSON.parse(await readFile(fixturePath, 'utf8')) : syntheticArchive();
   const lessons = fixture.payload.lessons as Array<Record<string, unknown> & { id: string }>;
   const draft = { id: fixture.id, name: fixture.name, revision: fixture.revision, payload: fixture.payload };
   await mkdir(artifactDirectory, { recursive: true });
@@ -39,12 +63,19 @@ test('capture masked rev45 diagnostics, lesson context, and mobile confirmation'
 
   const artifact = (name: string) => path.join(artifactDirectory, name);
   await page.goto('/admin/schedule/constructor?role=admin&editor=1');
-  await page.getByRole('button', { name: 'Открыть и редактировать', exact: true }).click();
+  await page.getByRole('button', { name: 'Открыть расписание', exact: true }).click();
   await page.locator('.constructor-issue-count').click();
+  const review = page.getByRole('dialog', { name: 'Проверка расписания' });
+  await review.getByRole('button', { name: 'Составы и старые записи' }).click();
+  await review.getByRole('button', { name: 'История решений в сетке' }).click();
   await expect(page.getByText('Центр решений расписания', { exact: true })).toBeVisible();
   await page.screenshot({ path: artifact('rev45-sanitized-diagnostics.png'), fullPage: true });
 
-  const teacherIssue = page.locator('.constructor-conflict-list article').filter({ hasText: 'Преподаватель уже ведёт урок' }).first();
+  const teacherReason = page.locator('.constructor-issue-reason').filter({
+    has: page.locator('summary').filter({ hasText: 'Преподаватель уже ведёт урок' }),
+  }).first();
+  await teacherReason.locator('summary').click();
+  const teacherIssue = teacherReason.locator('article').first();
   await expect(teacherIssue).toBeVisible();
   await teacherIssue.getByRole('button', { name: 'Разобрать проблему' }).click();
   const dialog = page.getByRole('dialog', { name: 'Назначение преподавателя' });

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
-from collections.abc import Mapping
+from datetime import date, datetime, time, timedelta, timezone
+from collections.abc import Callable, Mapping
 import hashlib
 import json
 import os
 from typing import Any
 import re
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from threading import Lock
 
 from backend.database import Database
 from backend.services.schedule_rooms import display_room
-from backend.services.canonical_schedule import canonical_group_grade, canonical_version, read_canonical_template
+from backend.services.canonical_schedule import _assignment_metadata, canonical_group_grade, canonical_version, read_canonical_template
 from backend.services.schedule_activities import list_activities, validate_activity_lessons
 
 
@@ -90,8 +90,11 @@ def resolve_payload_day_mode(payload: Mapping[str, Any], grade: str, weekday: in
     return (next(iter(values)) if values else "normal"), []
 
 
-def payload_day_mode_conflicts(database: Database, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
-    class_grades = _class_grade_map(database, payload)
+def payload_day_mode_conflicts(database: Database, payload: Mapping[str, Any], *,
+                               groups: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    class_grades = (_class_grade_map(database, payload) if groups is None else
+                    {class_id: canonical_group_grade(groups[class_id])
+                     for class_id in map(str, payload.get("classes") or []) if class_id in groups})
     grades = sorted({grade for grade in class_grades.values() if grade}, key=int)
     conflicts = []
     for grade in grades:
@@ -279,16 +282,29 @@ def _is_lunch_lesson(lesson: Mapping[str, Any]) -> bool:
     return role in {"lunch", "special_lunch"} or role == "residual" and label in {"обед", "lunch"}
 
 
+def _lesson_activity_type(lesson: Mapping[str, Any]) -> str:
+    if lesson.get("activityType"):
+        return str(lesson["activityType"])
+    canonical = lesson.get("canonical")
+    assignment = canonical.get("assignment") if isinstance(canonical, Mapping) else None
+    origin_metadata = _assignment_metadata(assignment.get("metadata")) if isinstance(assignment, Mapping) else {}
+    origin_type = origin_metadata.get("activity_type")
+    if origin_type and origin_type != "lesson":
+        return str(origin_type)
+    details = origin_metadata.get("constructor_details")
+    details = details if isinstance(details, Mapping) else {}
+    block_id = lesson.get("blockId", details.get("blockId"))
+    block_name = lesson.get("blockName", details.get("blockName"))
+    if block_id and str(block_name or "").strip().casefold() in {"курс по выбору", "курсы по выбору", "цифровой трек"}:
+        return "elective"
+    return "event" if lesson.get("kind") == "event" else "lesson"
+
+
 def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     """Read both the current ID rule and persisted pre-rule constructor lessons."""
-    # Clubs currently target teachers and time only; historical class, roster,
-    # and grade eligibility fields must never turn them into student occupancy.
-    if lesson.get("activityType") == "club":
-        return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
-    # Elective availability and grid placement are administrative metadata.
-    # Electives do not track or infer student rosters, including from legacy
-    # audience rules or confirmedParticipantIds fields.
-    if lesson.get("activityType") == "elective":
+    # The direction itself never has an inferred student roster. An elective
+    # can still occupy the slot through its shared class card.
+    if _lesson_activity_type(lesson) in {"club", "elective"}:
         return {"kind": "students", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     mark = _lesson_special_mark(lesson)
     if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping):
@@ -305,7 +321,7 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
         if kind == "remaining":
             kind = "available_slot"
         display_class_ids = _ids(lesson.get("classIds")) or _ids([lesson.get("classId")] if lesson.get("classId") else [])
-        return {
+        result = {
             "kind": kind,
             "group_ids": _ids(raw.get("group_ids") or raw.get("groupIds")),
             "class_ids": _ids(raw.get("class_ids") or raw.get("classIds")) or ([] if raw.get("grade") else display_class_ids),
@@ -315,6 +331,12 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
             "grade": str(raw.get("grade") or lesson.get("grade_scope") or ""),
             "student_ids": _ids(raw.get("student_ids") or raw.get("studentIds") or raw.get("include_student_ids")),
         }
+        for field in ("include_student_ids", "exclude_student_ids", "partition_group_ids"):
+            if raw.get(field):
+                result[field] = _ids(raw[field])
+        if raw.get("partition_dimension"):
+            result["partition_dimension"] = str(raw["partition_dimension"])
+        return result
     group_ids = _ids(lesson.get("groupIds")) or _ids([lesson.get("groupId")] if lesson.get("groupId") else [])
     class_ids = _ids(lesson.get("classIds")) or _ids([lesson.get("classId")] if lesson.get("classId") else [])
     canonical = lesson.get("canonical") if isinstance(lesson.get("canonical"), Mapping) else {}
@@ -394,6 +416,34 @@ def _grade_number(value: Any) -> str | None:
     return match.group(1) if match else None
 
 
+def _lesson_weekday(lesson: Mapping[str, Any]) -> int | None:
+    raw_day = lesson.get("day", lesson.get("weekday"))
+    if str(raw_day) in {"0", "1", "2", "3", "4", "5", "6"}:
+        return int(raw_day)
+    return None
+
+
+def _load_experiment_audience_snapshot(database: Database, start: str, end: str) -> dict[str, Any]:
+    with database.connection() as connection:
+        return {
+            "students": database.execute(connection,
+                "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall(),
+            "groups": database.execute(connection, """SELECT id,name AS raw_name,display_name,
+                COALESCE(display_name,name) AS name,group_type,base_class_name,semantic_dimension
+                FROM groups WHERE canonical IS TRUE""").fetchall(),
+            "memberships": database.execute(connection, """SELECT m.identity_id,m.group_id,m.valid_from,m.valid_until FROM memberships m
+                JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
+                WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student'
+                  AND i.status='active' AND g.canonical IS TRUE
+                  AND (m.valid_from IS NULL OR m.valid_from <= ?)
+                  AND (m.valid_until IS NULL OR m.valid_until >= ?)""", (end, start)).fetchall(),
+            "membership_overrides": database.execute(connection, """SELECT identity_id,group_id,action,valid_from,valid_until
+                FROM membership_overrides WHERE active IS TRUE AND member_role='student' AND action IN ('include','exclude')
+                  AND (valid_from IS NULL OR valid_from <= ?)
+                  AND (valid_until IS NULL OR valid_until >= ?)""", (end, start)).fetchall(),
+        }
+
+
 def experiment_audience_preview(database: Database, payload: Mapping[str, Any], *, snapshot: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Resolve all audiences from one experimental snapshot, without writing data."""
     import logging
@@ -406,29 +456,15 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
     if not isinstance(lessons, list) or not isinstance(slots, list):
         raise ValueError("lessons and slots must be lists")
     query_ms = 0.0
-    if snapshot is not None:
-        students = {str(row["id"]): dict(row) for row in snapshot["students"]}
-        groups = {str(row["id"]): dict(row) for row in snapshot["groups"]}
-        memberships = snapshot["memberships"]
-        membership_overrides = snapshot["membership_overrides"]
-    else:
+    if snapshot is None:
         query_started = perf_counter()
-        with database.connection() as connection:
-            students = {str(row["id"]): dict(row) for row in database.execute(connection,
-                "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall()}
-            groups = {str(row["id"]): dict(row) for row in database.execute(connection,
-                "SELECT id,name AS raw_name,display_name,COALESCE(display_name,name) AS name,group_type,base_class_name,semantic_dimension FROM groups WHERE canonical IS TRUE").fetchall()}
-            memberships = database.execute(connection, """SELECT m.identity_id,m.group_id,m.valid_from,m.valid_until FROM memberships m
-                JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
-                WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student'
-                  AND i.status='active' AND g.canonical IS TRUE
-                  AND (m.valid_from IS NULL OR m.valid_from <= ?)
-                  AND (m.valid_until IS NULL OR m.valid_until >= ?)""", (reference_date.isoformat(), reference_date.isoformat())).fetchall()
-            membership_overrides = database.execute(connection, """SELECT identity_id,group_id,action,valid_from,valid_until FROM membership_overrides
-                WHERE active IS TRUE AND member_role='student' AND action IN ('include','exclude')
-                  AND (valid_from IS NULL OR valid_from <= ?)
-                  AND (valid_until IS NULL OR valid_until >= ?)""", (reference_date.isoformat(), reference_date.isoformat())).fetchall()
+        day = reference_date.isoformat()
+        snapshot = _load_experiment_audience_snapshot(database, day, day)
         query_ms = (perf_counter() - query_started) * 1000
+    students = {str(row["id"]): dict(row) for row in snapshot["students"]}
+    groups = {str(row["id"]): dict(row) for row in snapshot["groups"]}
+    memberships = snapshot["memberships"]
+    membership_overrides = snapshot["membership_overrides"]
     calculation_started = perf_counter()
     directory_state = {
         "students": sorted(students.values(), key=lambda row: str(row.get("id"))),
@@ -462,7 +498,7 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
     def resolve_explicit(rule: Mapping[str, Any]) -> tuple[set[str], str | None]:
         kind = rule["kind"]
         if kind == "students":
-            requested = set(rule["student_ids"])
+            requested = (set(rule["student_ids"]) | set(rule.get("include_student_ids") or [])) - set(rule.get("exclude_student_ids") or [])
             missing = requested - students.keys()
             return requested & students.keys(), (f"Ученики не найдены: {', '.join(sorted(missing))}" if missing else None)
         if kind not in {"groups", "classes", "available_slot", "legacy_remaining"}:
@@ -486,13 +522,13 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         wrong = [item for item in ids if item not in groups or (kind != "groups" and groups[item]["group_type"] != "class")
                  or (kind == "groups" and not rule.get("legacy") and groups[item]["group_type"] == "class")]
         if wrong:
-            return set(), f"Не найдены подходящие canonical группы: {', '.join(wrong)}"
+            return set(), "Не найдены выбранные группы или классы в школьном справочнике."
         can_skip_unpopulated_grade_class = ids_from_grade and any(by_group.get(item) for item in ids)
         empty = [item for item in ids if not by_group.get(item)
                  and (kind == "groups" or bool(raw_members_by_group.get(item))
                       or not can_skip_unpopulated_grade_class)]
         if empty:
-            return set(), f"Неизвестен состав групп или классов: {', '.join(empty)}"
+            return set(), f"Неизвестен состав аудитории «{', '.join(str(groups[item]['name'] or item) for item in empty)}»."
         resolved = set().union(*(by_group.get(item, set()) for item in ids))
         if kind == "legacy_remaining":
             partition_ids = set(rule.get("partition_group_ids") or [])
@@ -515,6 +551,9 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         return resolved, None
 
     states: dict[int, dict[str, Any]] = {}
+    states_by_day: dict[int | None, list[int]] = {}
+    elective_classes: dict[tuple[int | None, tuple[int, int], str], set[str]] = {}
+    elective_indexes: dict[tuple[int | None, tuple[int, int], str], list[int]] = {}
     for index, lesson in enumerate(lessons):
         if not isinstance(lesson, Mapping):
             raise ValueError("Each lesson must be an object")
@@ -528,14 +567,30 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
             reason = None  # An informational event has no assigned students.
         if rule["kind"] == "available_slot" and not interval:
             reason = "Не задан корректный временной интервал"
-        optional_roster = lesson.get("activityType") in {"club", "elective"}
+        activity_type = _lesson_activity_type(lesson)
+        optional_roster = activity_type in {"club", "elective"}
         snapshot_value = None if optional_roster else lesson.get("audience_snapshot")
-        snapshot = dict(snapshot_value) if isinstance(snapshot_value, Mapping) else None
-        snapshot_ids = set(_ids(snapshot.get("student_ids"))) if snapshot else set()
+        saved_snapshot = dict(snapshot_value) if isinstance(snapshot_value, Mapping) else None
+        snapshot_ids = set(_ids(saved_snapshot.get("student_ids"))) if saved_snapshot else set()
+        day = _lesson_weekday(lesson)
         states[index] = {"id": lesson_id, "lesson": lesson, "rule": rule, "interval": interval,
-                         "base": base, "occupancy_base": snapshot_ids if snapshot is not None else base,
-                         "snapshot": snapshot, "snapshot_ids": snapshot_ids,
+                         "base": base, "occupancy_base": snapshot_ids if saved_snapshot is not None else base,
+                         "snapshot": saved_snapshot, "snapshot_ids": snapshot_ids,
                          "fingerprint": _audience_fingerprint(lesson, payload), "reason": reason}
+        states_by_day.setdefault(day, []).append(index)
+        if activity_type == "elective" and lesson.get("blockId") and interval:
+            key = (day, interval, str(lesson["blockId"]))
+            class_ids = _ids(lesson.get("classIds") or lesson.get("displayClassIds"))
+            if lesson.get("classId"):
+                class_ids.append(str(lesson["classId"]))
+            elective_classes.setdefault(key, set()).update(class_ids)
+            elective_indexes.setdefault(key, []).append(index)
+    for key, classes in elective_classes.items():
+        cohort = set().union(*(by_class.get(class_id, set()) for class_id in classes))
+        for index in elective_indexes[key]:
+            # Only the common class card occupies the slot. A direction
+            # never acquires a personal roster through this calculation.
+            states[index]["occupancy_base"] = cohort
 
     def possible_cohort(rule: Mapping[str, Any]) -> set[str] | None:
         """Narrow an unknown assignment only when its class context is certain."""
@@ -588,16 +643,17 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
         reason = state["reason"]
         status = "ok"
         if reason:
-            invalid_id = reason.startswith(("Не найдены подходящие canonical группы", "Ученики не найдены"))
+            invalid_id = reason.startswith(("Не найдены выбранные группы", "Ученики не найдены"))
             status = "error" if state["lesson"].get("importError") or invalid_id else "incomplete"
         excluded: set[str] = set()
         blockers: list[dict[str, Any]] = []
         is_lunch = _is_lunch_lesson(state["lesson"])
         if (rule["kind"] == "available_slot" or is_lunch) and not reason:
-            for other_key, other in states.items():
-                if other_key == state_key or other["lesson"].get("day") != state["lesson"].get("day"):
+            for other_key in states_by_day[_lesson_weekday(state["lesson"])]:
+                if other_key == state_key:
                     continue
-                if _lesson_special_mark(other["lesson"]) in {"lunch", "no_lesson"}:
+                other = states[other_key]
+                if _is_lunch_lesson(other["lesson"]) or _lesson_special_mark(other["lesson"]) == "no_lesson":
                     continue
                 other_interval = other["interval"]
                 if not other_interval or not interval or not (interval[0] < other_interval[1] and other_interval[0] < interval[1]):
@@ -664,6 +720,50 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
             len(groups), len(memberships), len(membership_overrides),
         )
     return {"lessons": results, "directory_fingerprint": directory_fingerprint}
+
+
+def experiment_week_audience_preview(
+    database: Database, payload: Mapping[str, Any], reference: date, *,
+    snapshot_for_date: Callable[[str], Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Resolve each authored weekday on its own date using only overlapping rows."""
+    monday = reference - timedelta(days=reference.weekday())
+    lessons_by_day: dict[int | None, list[Mapping[str, Any]]] = {}
+    for index, lesson in enumerate(payload.get("lessons") or []):
+        weekday = _lesson_weekday(lesson)
+        lessons_by_day.setdefault(weekday, []).append(lesson if lesson.get("id") else {**lesson, "id": str(index)})
+    if not lessons_by_day:
+        return {"lessons": {}, "directory_fingerprint": ""}
+    # Imported rows can be reviewed and saved before they have a weekday.
+    # Resolve their directory evidence on the reference date, isolated from
+    # the placed lessons that will be eligible for publication.
+    dates = {day: (monday + timedelta(days=day)).isoformat() if day is not None else reference.isoformat()
+             for day in lessons_by_day}
+    if snapshot_for_date is None:
+        directory_snapshot = _load_experiment_audience_snapshot(database, min(dates.values()), max(dates.values()))
+
+        def snapshot_for_date(day: str) -> dict[str, Any]:
+            return {**directory_snapshot, **{key: [row for row in directory_snapshot[key]
+                                          if (not row["valid_from"] or str(row["valid_from"]) <= day)
+                                          and (not row["valid_until"] or day <= str(row["valid_until"]))]
+                                   for key in ("memberships", "membership_overrides")}}
+    results, fingerprints = {}, {}
+    for day, lessons in sorted(lessons_by_day.items(), key=lambda item: (item[0] is None, item[0] or 0)):
+        day_text = dates[day]
+        daily_payload = {**payload, "reference_date": day_text, "lessons": []}
+        for lesson in lessons:
+            snapshot = lesson.get("audience_snapshot")
+            if isinstance(snapshot, Mapping) and snapshot.get("fingerprint") == _audience_fingerprint(lesson, payload):
+                # A change of evaluation date alone does not change a confirmed
+                # roster. The actual participants are still checked below.
+                snapshot = {**snapshot, "fingerprint": _audience_fingerprint(lesson, daily_payload)}
+                lesson = {**lesson, "audience_snapshot": snapshot}
+            daily_payload["lessons"].append(lesson)
+        resolved = experiment_audience_preview(database, daily_payload, snapshot=snapshot_for_date(day_text))
+        results.update(resolved["lessons"])
+        fingerprints[str(day)] = resolved["directory_fingerprint"]
+    return {"lessons": results, "directory_fingerprint": hashlib.sha256(
+        json.dumps(fingerprints, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
 
 
 def _canonical_payload(database: Database, version_id: str, *, source_blocks: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -866,7 +966,9 @@ def _draft_actor_id(database: Database, actor_user_id: Any) -> Any:
 
 
 def create_experiment(database: Database, *, name: str, source: str, payload: Mapping[str, Any] | None = None,
-                      actor_user_id: Any = None, _base_version_id: str | None = None, _trusted_resolution_history: bool = False) -> dict[str, Any]:
+                      actor_user_id: Any = None, _base_version_id: str | None = None,
+                      _trusted_resolution_history: bool = False, _copy_key: str | None = None,
+                      _source_guard: tuple[str, int] | None = None) -> dict[str, Any]:
     normalized_name = str(name or "").strip()
     if not normalized_name:
         raise ValueError("name is required")
@@ -893,13 +995,16 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
         if payload:
             seed.update(dict(payload))
         payload = seed
-    experiment_id = str(uuid4())
+    experiment_id = str(uuid5(NAMESPACE_URL, f"my-island-school/schedule/{_copy_key}") if _copy_key else uuid4())
     now = datetime.now(timezone.utc).isoformat()
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
     _validate_day_modes(database, clean_payload)
+    from backend.services.schedule_term_comparison import retain_term_comparison
     if not _trusted_resolution_history:
         for lesson in clean_payload['lessons']:lesson.pop('resolution_history',None)
+    if not _trusted_resolution_history or clean_payload.get("week_start"):
+        retain_term_comparison(clean_payload, None)
     provenance = clean_payload.get("school_source")
     provenance = provenance if isinstance(provenance, Mapping) else {}
     if provenance.get("role") == "primary_school_template" and not provenance.get("primary_draft_id"):
@@ -907,11 +1012,25 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     clean_payload["lessons"] = validate_activity_lessons(clean_payload["lessons"], list_activities(database, include_archived=True))
     encoded = json.dumps(_clean_payload(clean_payload), ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
+    actor_id = _draft_actor_id(database, actor_user_id)
+    params = (experiment_id, normalized_name, base_version_id, encoded, actor_id, actor_id, now, now)
+    insert_values = f"VALUES (?,?,?,1,{encoded_sql},?,?,?,?)"
+    if _source_guard:
+        source_lock = " FOR SHARE" if database.database_url else ""
+        insert_values = f"""SELECT ?,?,?,1,{encoded_sql},?,?,?,? WHERE EXISTS (
+            SELECT 1 FROM schedule_experiment_drafts WHERE id=? AND revision=?{source_lock})"""
+        params += _source_guard
     with database.connection() as connection:
         row = database.execute(connection, f"""INSERT INTO schedule_experiment_drafts
             (id,name,base_version_id,revision,payload,created_by,updated_by,created_at,updated_at)
-            VALUES (?,?,?,1,{encoded_sql},?,?,?,?) RETURNING *""",
-            (experiment_id, normalized_name, base_version_id, encoded, _draft_actor_id(database, actor_user_id), _draft_actor_id(database, actor_user_id), now, now)).fetchone()
+            {insert_values} ON CONFLICT (id) DO NOTHING RETURNING *""", params).fetchone()
+        if row is None:
+            if _source_guard:
+                original = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?",
+                                            (_source_guard[0],)).fetchone()
+                if not original or int(original["revision"]) != _source_guard[1]:
+                    raise ExperimentConflict(_item(original) if original else None)
+            row = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
     result = _item(row)
     if transfer_result is not None:
         result["transfer_result"] = transfer_result
@@ -1083,6 +1202,13 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     current = get_experiment(database, experiment_id)
     if int(current["revision"]) != expected_revision:
         raise ExperimentConflict(current)
+    current_week = current["payload"].get("week_start")
+    if clean.get("week_start") and clean["week_start"] != current_week:
+        raise ValueError("Чтобы начать работу над другой неделей, создайте отдельный черновик.")
+    if current_week:
+        clean["week_start"] = current_week
+    from backend.services.schedule_term_comparison import retain_term_comparison
+    retain_term_comparison(clean, current["payload"], record_edits=not _trusted_resolution_history)
 
     def lesson_key(lesson: Mapping[str, Any], index: int) -> str:
         return str(lesson.get("id") or f"index:{index}")
@@ -1098,16 +1224,8 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
             if previous.get('resolution_history'):
                 from copy import deepcopy
                 lesson['resolution_history']=deepcopy(previous['resolution_history'])
-        if lesson.get("activityType") == "club":
-            # Preserve historical snapshots, but they are excluded from club
-            # occupancy and must not be recalculated as student audiences.
-            existing = previous.get("audience_snapshot")
-            if "audience_snapshot" not in lesson and isinstance(existing, Mapping):
-                lesson["audience_snapshot"] = dict(existing)
-            continue
-        if lesson.get("activityType") == "elective":
-            # Keep legacy snapshots untouched for audit/history, but electives
-            # no longer have or recalculate student rosters.
+        if _lesson_activity_type(lesson) in {"club", "elective"}:
+            # Keep historical evidence while using no personal roster.
             existing = previous.get("audience_snapshot")
             if "audience_snapshot" not in lesson and isinstance(existing, Mapping):
                 lesson["audience_snapshot"] = dict(existing)
@@ -1123,12 +1241,14 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         else:
             lesson.pop("audience_snapshot", None)
 
+    reference_date = clean.get("week_start") or clean.get("reference_date")
+    reference = date.fromisoformat(str(reference_date)[:10]) if reference_date else date.today()
     resolved = (_audience_resolution.get("lessons", {}) if isinstance(_audience_resolution, Mapping)
-                else experiment_audience_preview(audience_database or database, clean)["lessons"])
+                else experiment_week_audience_preview(audience_database or database, clean, reference)["lessons"])
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
-        if lesson.get("activityType") in {"club", "elective"}:
+        if _lesson_activity_type(lesson) in {"club", "elective"}:
             continue
         had_snapshot = isinstance(previous.get("audience_snapshot"), Mapping)
         explicit_reset = key in reset_keys
@@ -1158,8 +1278,14 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         lesson["audience_snapshot"] = {"student_ids": _ids(student_ids),
                                        "fingerprint": _audience_fingerprint(lesson, clean),
                                        "resolved_at": datetime.now(timezone.utc).isoformat()}
-    clean = _clean_payload(clean)
-    encoded = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
+    return _write_experiment_revision(database, experiment_id, expected_revision, _clean_payload(clean),
+                                      normalized_name=normalized_name, actor_user_id=actor_user_id)
+
+
+def _write_experiment_revision(database: Database, experiment_id: str, expected_revision: int,
+                               payload: Mapping[str, Any], *, normalized_name: str | None = None,
+                               actor_user_id: Any = None) -> dict[str, Any]:
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     now = datetime.now(timezone.utc).isoformat()
     with database.connection() as connection:

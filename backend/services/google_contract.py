@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 SHEETS_READ_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+SCHOOL_SCHEDULE_SPREADSHEET_ID = "1j5dI2VbT0RoW2A5ZkCpMYVdt7cSY4ZjNxQaMWtu--Fo"
 GOOGLE_IDENTITY_SCOPES = (
     "openid",
     "email",

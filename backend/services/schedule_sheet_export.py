@@ -56,26 +56,52 @@ def _class_key(group: Mapping[str, Any]) -> tuple[int, str]:
     return (int(number[0]) if number else 999, label)
 
 
-def freeze_week(source: Mapping[str, Any], week_start: str) -> dict[str, Any]:
-    """Detached snapshot, including directory names. No references to a live template."""
-    monday = date.fromisoformat(week_start)
-    if monday.weekday() != 0:
-        raise ValueError("week_start must be a Monday")
+def _frozen_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
     def safe(value: Any) -> Any:
         if isinstance(value, dict):
             result = {k: safe(v) for k, v in value.items() if k not in {
                 "student_ids", "studentIds", "confirmedParticipantIds", "confirmed_participant_ids",
-                "audience_snapshot", "raw_text", "raw_text_by_cell"}}
+                "include_student_ids", "exclude_student_ids", "includeStudentIds", "excludeStudentIds",
+                "known_student_ids", "affected_student_ids", "conflict_student_ids",
+                "audience_snapshot", "resolution_history", "term2_preparation", "normalization_copy",
+                "import_review", "raw_text", "raw_text_by_cell"}}
             participants = value.get("confirmedParticipantIds", value.get("confirmed_participant_ids"))
             if participants:
                 result["confirmed_participants_fingerprint"] = _hash(sorted(set(map(str, participants))))
             return result
         return [safe(v) for v in value] if isinstance(value, list) else deepcopy(value)
     snapshot = safe(dict(source))
-    snapshot["payload"]["week_start"] = week_start
     snapshot["format_version"] = FORMAT_VERSION
+    return snapshot
+
+
+def freeze_week(source: Mapping[str, Any], week_start: str) -> dict[str, Any]:
+    """Detached weekly snapshot, including directory names."""
+    monday = date.fromisoformat(week_start)
+    if monday.weekday() != 0:
+        raise ValueError("week_start must be a Monday")
+    snapshot = _frozen_snapshot(source)
+    snapshot["payload"]["week_start"] = week_start
     snapshot["snapshot_id"] = f"mi-week-{week_start}-{_hash(snapshot)[:20]}"
     return snapshot
+
+
+def freeze_template(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Detached undated template snapshot."""
+    snapshot = _frozen_snapshot(source)
+    if snapshot["payload"].get("week_start"):
+        raise ValueError("Недельный черновик следует экспортировать с его датами.")
+    snapshot["snapshot_id"] = f"mi-template-{_hash(snapshot)[:20]}"
+    return snapshot
+
+
+def _schedule_heading(payload: Mapping[str, Any]) -> tuple[date | None, str]:
+    raw_week = payload.get("week_start")
+    if not raw_week:
+        return None, "Шаблон"
+    monday = date.fromisoformat(raw_week)
+    last = monday + timedelta(days=max(4, max(payload["days"], default=4)))
+    return monday, f"{monday:%d.%m}–{last:%d.%m}"
 
 
 def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
@@ -87,6 +113,8 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
     payload = snapshot["payload"]
     groups = {str(g["id"]): g for g in snapshot["groups"]}
     teachers = {str(t["id"]): t for t in snapshot["teachers"]}
+    if any(str(class_id) not in groups for class_id in payload["classes"]):
+        raise ValueError("Перед экспортом сопоставьте классы со школьным справочником.")
     classes = sorted((groups[str(cid)] for cid in payload["classes"]), key=_class_key)
     class_ids = [str(c["id"]) for c in classes]
     if len(class_ids) != len(set(class_ids)) or not class_ids:
@@ -97,9 +125,15 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         raise ValueError("Lesson IDs must be nonempty and unique")
     by_day: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for lesson in lessons:
+        marker = lesson.get("specialMark")
+        if marker in {"lunch", "no_lesson"} and not str(lesson.get("subject") or "").strip():
+            lesson["subject"] = "Обед" if marker == "lunch" else "Нет занятий"
         if not lesson.get("id") or not str(lesson.get("subject") or "").strip():
             raise ValueError("Each lesson requires an ID and subject")
-        day = int(lesson["day"])
+        raw_day = lesson.get("day", lesson.get("weekday"))
+        if str(raw_day) not in {"0", "1", "2", "3", "4", "5", "6"}:
+            raise ValueError(f"Укажите день занятия «{lesson['subject']}» перед экспортом.")
+        day = int(raw_day)
         if day not in payload["days"]:
             raise ValueError(f"Lesson {lesson['id']} is outside exported days")
         period = int(lesson.get("period", -1))
@@ -121,7 +155,7 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         audit = None
         if layout == "final-compact":
             from backend.services.schedule_sheet_occurrences import logical_occurrences
-            by_day, audit = logical_occurrences(by_day, groups, str(snapshot["payload"]["week_start"]))
+            by_day, audit = logical_occurrences(by_day, groups, str(payload.get("week_start") or "template"))
         return build_readable_plan(snapshot, by_day, groups, teachers, classes, title=title,
                                    sheet_id=sheet_id, mapping_sheet_id=mapping_sheet_id,
                                    audience_evidence=audience_evidence or {}, existing_notes=existing_notes or {},
@@ -166,23 +200,24 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
         cells.append(item)
         return item
 
-    monday = date.fromisoformat(payload["week_start"])
+    monday, schedule_label = _schedule_heading(payload)
     cell(0, 0, "Время", bold=True, bg="#E8EAED")
     for group in classes:
         cid = str(group["id"])
         cell(0, offsets[cid], _label(group), w=widths[cid], bold=True, size=18, bg="#E8EAED")
     source = snapshot.get("source") or {}
     clarification_count = sum(bool(l.get("needsClarification")) for l in lessons)
-    cell(1, 0, f"{monday:%d.%m}–{monday + timedelta(days=4):%d.%m}", bold=True)
-    cell(1, 1, f"My Island · {monday:%d.%m}–{monday + timedelta(days=4):%d.%m.%Y} · неделя из шаблона · требуют уточнения: {clarification_count} (примечания)",
-         w=column-1, bold=True, align="LEFT", note=f"Снимок {snapshot_id}\nИсточник: {source.get('name', '')}, редакция {source.get('revision', '')}. "
-         "Недельные замены из Google-образца не импортировались.")
+    cell(1, 0, schedule_label, bold=True)
+    scope_label = "расписание недели" if monday else "шаблон расписания"
+    cell(1, 1, f"My Island · {scope_label} · уточнений в примечаниях — {clarification_count}",
+         w=column-1, bold=True, align="LEFT",
+         note=f"Снимок {snapshot_id}\n{source.get('name', '')}, редакция {source.get('revision', '')}.")
     row_heights.update({0: 38, 1: 30})
     row = 2
     for day in sorted(payload["days"]):
         items = by_day[day]
         day_rows.append(row)
-        cell(row, 0, f"{monday + timedelta(days=day):%d.%m}", bg="#D9D9D9", bold=True)
+        cell(row, 0, f"{monday + timedelta(days=day):%d.%m}" if monday else "", bg="#D9D9D9", bold=True)
         cell(row, 1, DAY_NAMES[day], w=column-1, bg="#D9D9D9", bold=True, size=13, align="LEFT")
         row_heights[row] = 30
         row += 1
@@ -368,7 +403,7 @@ def _compact_sheet_plan(snapshot: Mapping[str, Any], by_day: Mapping[int, list[d
     day_rows = []
     slot_rows = []
     blocks = []
-    monday = date.fromisoformat(payload["week_start"])
+    monday, schedule_label = _schedule_heading(payload)
 
     def cell(row: int, col: int, text: str, *, height: int = 1, width: int = 1,
              bg: str = "#FFFFFF", fg: str = "#202124", bold: bool = False,
@@ -381,15 +416,16 @@ def _compact_sheet_plan(snapshot: Mapping[str, Any], by_day: Mapping[int, list[d
     cell(0, 0, "Время", bg="#E8EAED", bold=True, align="CENTER")
     for grade in grades:
         cell(0, offsets[grade], str(grade), bg="#E8EAED", bold=True, size=14, align="CENTER")
-    cell(1, 0, f"{monday:%d.%m}–{monday + timedelta(days=4):%d.%m}", size=9, align="CENTER")
+    cell(1, 0, schedule_label, size=9, align="CENTER")
     clarification_count = sum(bool(l.get("needsClarification")) for items in by_day.values() for l in items)
-    cell(1, 1, f"My Island · неделя из шаблона · {clarification_count} уточнений в примечаниях",
+    scope_label = "расписание недели" if monday else "шаблон расписания"
+    cell(1, 1, f"My Island · {scope_label} · уточнений в примечаниях — {clarification_count}",
          width=columns-1, size=9, note=f"Снимок {snapshot_id}. Полные названия и исходные данные сохранены в примечаниях и скрытой вкладке.")
     row = 2
     for day in sorted(payload["days"]):
         items = by_day.get(day, [])
         day_rows.append(row)
-        cell(row, 0, f"{monday + timedelta(days=day):%d.%m}", bg="#4B5563", fg="#FFFFFF", bold=True, align="CENTER")
+        cell(row, 0, f"{monday + timedelta(days=day):%d.%m}" if monday else "", bg="#4B5563", fg="#FFFFFF", bold=True, align="CENTER")
         cell(row, 1, DAY_NAMES[day], width=columns-1, bg="#4B5563", fg="#FFFFFF", bold=True, size=11)
         row_heights[row] = 25
         row += 1
@@ -515,9 +551,10 @@ def sheets_requests(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
         return dict(sheetId=sid, startRowIndex=r1, endRowIndex=r2, startColumnIndex=c1, endColumnIndex=c2)
     def color(value: str) -> dict[str, float]:
         return dict(zip(("red", "green", "blue"), (int(value[i:i+2], 16) / 255 for i in (1, 3, 5))))
+    week_start = plan["snapshot"]["payload"].get("week_start")
     internal_rows = [["snapshot_id", plan["snapshot_id"]], ["format_version", FORMAT_VERSION],
                      ["source", json.dumps(plan["snapshot"].get("source"), ensure_ascii=False)],
-                     ["week_start", plan["snapshot"]["payload"]["week_start"]],
+                     ["week_start", week_start] if week_start else ["scope", "template"],
                      ["directory", json.dumps({k: plan["snapshot"][k] for k in ("groups", "teachers")}, ensure_ascii=False)],
                      ["lesson_id", "lesson_snapshot", "placements"]]
     for lesson in plan["snapshot"]["payload"]["lessons"]:

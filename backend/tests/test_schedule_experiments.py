@@ -356,6 +356,26 @@ class ScheduleExperimentTests(unittest.TestCase):
         results = experiment_audience_preview(self.database, payload)["lessons"]
         self.assertEqual(results["same-id"]["status"], "ambiguous")
 
+    def test_shared_legacy_elective_uses_class_time_without_assigning_direction_roster(self):
+        class_id = str(self.class_group["id"])
+        student = self.database.create_identity("student", "Pupil", "9A")
+        self.database.create_membership(class_id, student["id"], "student", "test")
+        payload = {"reference_date": "2026-10-19", "slots": [{"start": "09:00", "end": "09:45"}], "lessons": [
+            {"id": "rest", "day": 0, "period": 0,
+             "audience": {"kind": "available_slot", "class_ids": [class_id]}},
+            {"id": "elective", "weekday": "0", "period": 0, "classId": class_id,
+             "blockId": "shared-digital", "blockName": "Цифровой трек", "subject": "Synthetic direction",
+             "confirmedParticipantIds": [str(student["id"])]},
+        ]}
+        audiences = experiment_audience_preview(self.database, payload)["lessons"]
+        self.assertEqual(audiences["rest"]["status"], "ok")
+        self.assertEqual(audiences["rest"]["student_ids"], [])
+        self.assertEqual(audiences["elective"]["student_ids"], [])
+        draft = create_experiment(self.database, name="Legacy", source="import", payload=payload)
+        saved = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=draft["payload"])
+        self.assertNotIn("activityType", saved["payload"]["lessons"][1])
+        self.assertNotIn("audience_snapshot", saved["payload"]["lessons"][1])
+
     def test_membership_override_applies_to_remainder_on_reference_date(self):
         class_id = str(self.class_group["id"])
         student = self.database.create_identity("student", "Excluded pupil")

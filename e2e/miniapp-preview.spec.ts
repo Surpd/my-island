@@ -236,12 +236,13 @@ test('same admin principal can switch to its confirmed teacher role and back', a
 test('mobile admin published schedule has readable audience labels and no horizontal overflow', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 900 });
   await page.goto('/admin/schedule?role=admin');
+  await page.getByRole('button', { name: 'Просмотр опубликованного расписания' }).click();
   await expect(page.getByRole('heading', { name: 'Опубликованная неделя' })).toBeVisible();
   await page.getByLabel('Выбрать неделю').fill(FIXTURE_MONDAY);
   await expect(page.getByText(/Математика/).first()).toBeVisible();
   await expect(page.getByText('canonical_groups', { exact: false })).toHaveCount(0);
 
-  for (const width of [360, 390, 430]) {
+  for (const width of [320, 360, 390, 430]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('heading', { name: 'Опубликованная неделя' })).toBeVisible();
     await expectPageNoHorizontalOverflow(page);

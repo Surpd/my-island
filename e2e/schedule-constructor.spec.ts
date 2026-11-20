@@ -12,11 +12,10 @@ async function openScheduleInspector(page: import('@playwright/test').Page) {
 
 async function closeScheduleConflicts(page: import('@playwright/test').Page) {
   const panel = page.locator('.constructor-conflict-panel');
-  for (let attempt = 0; attempt < 2 && await panel.count(); attempt += 1) {
-    await panel.getByRole('button', { name: 'Закрыть список проблем' }).focus();
-    await page.keyboard.press('Enter');
+  if (await panel.isVisible()) {
+    await panel.getByRole('button', { name: 'Закрыть список проблем' }).press('Enter');
   }
-  await expect(panel).toHaveCount(0);
+  await expect(panel).toBeHidden();
 }
 
 async function addLessonForGroup(page: import('@playwright/test').Page, subject: string, groupName: RegExp) {
@@ -284,12 +283,16 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-conflict-panel')).toContainText('Центр решений расписания');
   await page.getByRole('combobox', { name: 'Тип проблемы' }).selectOption('student');
-  const studentConflict = page.locator('.constructor-conflict-list article').filter({ hasText: 'назначено одновременно' }).first();
+  const studentConflict = page.locator('.constructor-issue-reason').filter({
+    has: page.locator('summary').filter({ hasText: 'назначено одновременно' }),
+  }).first();
   await expect(studentConflict).toBeVisible();
-  await studentConflict.getByRole('button', { name: 'Показать в расписании' }).click();
+  await studentConflict.locator('summary').click();
+  await studentConflict.getByRole('button', { name: 'Показать в расписании' }).first().click();
   await expect(page.getByRole('button', { name: 'День' })).toHaveClass(/active/);
-  await expect(page.locator('.constructor-card.active')).toHaveCount(1);
-  await closeScheduleConflicts(page);
+  await expect(page.locator('.constructor-card.active[data-issue-target="current"]')).toHaveCount(1);
+  await expect(page.locator('[data-issue-route]')).toBeVisible();
+  await expect(page.locator('.constructor-conflict-panel')).toBeHidden();
 
   const availableSlotMode = page.locator('.constructor-inspector').getByRole('button', { name: /Все остальные/ });
   await availableSlotMode.click();

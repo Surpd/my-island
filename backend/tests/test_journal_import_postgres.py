@@ -1,7 +1,7 @@
 """Opt-in integration tests for journal imports on an isolated PostgreSQL schema.
 
-Run only with MY_ISLAND_PG_JOURNAL_TESTS=1 and a DATABASE_URL for the approved
-My Island project. The test role must be able to create and drop schemas.
+Use MY_ISLAND_RELEASE_TEST_DATABASE_URL for the disposable loopback database.
+The test role must be able to create and drop schemas.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import os
 import unittest
 import uuid
 from contextlib import contextmanager
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 from backend.database import Database
 from backend.services.journal_import import sync_journal_values
@@ -22,9 +22,7 @@ from backend.services.journal_matching import (
 )
 
 
-OPT_IN = os.getenv("MY_ISLAND_PG_JOURNAL_TESTS") == "1"
-DATABASE_URL = os.getenv("DATABASE_URL")
-PROJECT_REF = "kmrcbewmxeqqxfauiwyy"
+DATABASE_URL = os.getenv("MY_ISLAND_RELEASE_TEST_DATABASE_URL", "")
 
 
 class IsolatedPostgresDatabase(Database):
@@ -49,7 +47,7 @@ class IsolatedPostgresDatabase(Database):
             connection.close()
 
 
-@unittest.skipUnless(OPT_IN and DATABASE_URL, "requires explicit PostgreSQL journal-test opt-in and DATABASE_URL")
+@unittest.skipUnless(DATABASE_URL, "requires MY_ISLAND_RELEASE_TEST_DATABASE_URL")
 class JournalImportPostgresTests(unittest.TestCase):
     TABLES = (
         "identities",
@@ -85,13 +83,14 @@ class JournalImportPostgresTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from psycopg.conninfo import conninfo_to_dict
         import psycopg
 
-        conninfo = conninfo_to_dict(DATABASE_URL)
-        # Fail closed when explicitly enabled against a different configured project.
-        if PROJECT_REF not in unquote(conninfo.get("user", "")):
-            raise RuntimeError("DATABASE_URL username does not identify the approved My Island project")
+        parsed = urlparse(DATABASE_URL)
+        if (parsed.scheme not in {"postgres", "postgresql"}
+                or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or parsed.port != 55432 or parsed.path != "/my_island_release_check"
+                or parsed.query):
+            raise RuntimeError("Journal integration tests require the disposable loopback PostgreSQL fixture")
         cls.schema = "journal_it_" + uuid.uuid4().hex
         from psycopg.rows import dict_row
 
@@ -361,7 +360,17 @@ class JournalImportPostgresTests(unittest.TestCase):
         )
         updated_rows = self._rows("SELECT id, title, external_key, value_signature, group_marker, assessed_on FROM journal_assessments WHERE active IS TRUE")
         updated = {row["title"]: row["id"] for row in updated_rows}
-        self.assertEqual(updated["Домашняя работа"], initial_assessments["Входное тестирование"], f"initial={initial_rows!r}; updated={updated_rows!r}")
+        # A different title may be a replacement even with the same date and scores.
+        original_id = initial_assessments["Входное тестирование"]
+        self.assertNotEqual(updated["Домашняя работа"], original_id)
+        self.assertEqual(
+            self._rows("SELECT title, active FROM journal_assessments WHERE id=%s", (original_id,)),
+            [{"title": "Входное тестирование", "active": False}],
+        )
+        self.assertEqual(len(self._rows(
+            "SELECT id FROM journal_results WHERE assessment_id=%s AND is_current IS FALSE",
+            (original_id,),
+        )), 3)
         self.assertEqual(updated["ДЗ"], initial_assessments["ДЗ"])
         self.assertIn("Новая работа", updated)
         history_count = len(self._rows("SELECT id FROM journal_result_history"))

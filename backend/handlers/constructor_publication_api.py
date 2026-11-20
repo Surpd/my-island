@@ -104,6 +104,8 @@ def create_constructor_publication_router(
         except Exception as error:
             if getattr(error, "sqlstate", None) in {"40001", "40P01"}:
                 raise HTTPException(409, "Concurrent school data changed; review a fresh publication preview") from error
+            if getattr(error, "sqlstate", None) == "57014":
+                raise HTTPException(504, "Проверка расписания заняла слишком много времени. Повторите её.") from error
             raise
 
     @router.post("/{draft_id}/publication/preview")
