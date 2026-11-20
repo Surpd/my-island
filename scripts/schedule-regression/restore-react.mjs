@@ -71,6 +71,7 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
   const review = page.getByRole('dialog', { name: 'Проверка расписания' });
+  await review.getByRole('button', { name: 'Публикация', exact: true }).click();
   const confirmation = review.getByRole('checkbox', { name: /Подтверждаю публикацию/ });
   await confirmation.waitFor();
   await shot('publication-preview-390');

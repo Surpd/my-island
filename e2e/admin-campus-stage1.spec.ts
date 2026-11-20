@@ -133,7 +133,7 @@ test('loading stays visible until the real overview response arrives', async ({ 
 test('canceling the existing unsaved guard keeps the mobile menu and route', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/admin?role=admin#/admin/schedule/constructor');
-  await expect(page.getByRole('region', { name: 'Опубликованная неделя' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Просмотр опубликованного расписания' })).toBeVisible();
   await page.evaluate(() => { (window as Window & { __scheduleDraftDirty?: boolean }).__scheduleDraftDirty = true; });
   await page.getByRole('button', { name: 'Все разделы', exact: true }).click();
   const menu = page.getByRole('dialog', { name: 'Разделы школы' });

@@ -119,7 +119,6 @@ const draftURL = frontend + '/admin/schedule/constructor?draft=' + fixture.id;
 const roomSubject = 'Информатика · кабинет';
 const physics = 'Физика ЕГЭ';
 const english = 'Английский ЕГЭ';
-const history = 'История ЕГЭ';
 
 async function expectEventually(message, condition) {
   const until = Date.now() + 14000;
@@ -260,7 +259,7 @@ async function modern(page, width) {
   assert.equal(await pair.issue.getByRole('button', { name: /^Показать в расписании/ }).count(), 2);
   await screenshot(page, `after-paired-issue-${width}.png`);
   await openIssueCard(pair.issue);
-  let active = page.locator('[data-issue-target="current"]').first();
+  const active = page.locator('[data-issue-target="current"]').first();
   await active.waitFor();
   const activeId = await active.getAttribute('data-lesson-id');
   assert.ok([fixture.cases.Q53, fixture.cases.T53].includes(activeId));
