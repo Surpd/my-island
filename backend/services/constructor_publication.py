@@ -966,6 +966,8 @@ def _build_publication_preview(database: Any, draft_id: str, scope_kind: str, ex
     draft = get_experiment(draft_database or database, draft_id)
     if int(draft["revision"]) != int(expected_revision):
         raise PublicationConflict("Draft revision changed; reload before publication")
+    if draft["payload"].get("draft_archive"):
+        raise ValueError("Восстановите черновик из архива перед публикацией.")
     authored_week = draft["payload"].get("week_start")
     if authored_week and (scope_kind != "week" or week_start != authored_week):
         raise ValueError("Черновик недели можно опубликовать только на её исходные даты.")

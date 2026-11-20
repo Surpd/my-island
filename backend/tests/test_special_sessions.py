@@ -5,6 +5,8 @@ from backend.services import canonical_schedule as canonical
 from backend.services.constructor_publication import preview_publication
 from backend.services.schedule_experiments import (
     create_experiment_week,
+    get_experiment,
+    manage_experiment,
     save_experiment,
 )
 from backend.services.schedule_laboratories import laboratory_action
@@ -128,6 +130,24 @@ class SpecialSessionTests(TestCase):
             [row["activity"] for row in rows if row["state"] == "ACTIVITY"], ["Physics"]
         )
 
+    def test_blueprint_edit_and_delete_preserve_week_and_history(self):
+        template = self.draft([self.lesson()])
+        blueprint = {"id": "lab-one", "subject": "Лаборатория", "direction": "Мир вокруг нас"}
+        created = save_experiment(self.database, template["id"], expected_revision=1,
+                                  payload={**template["payload"], "laboratory_blueprints": [blueprint]})
+        week = create_experiment_week(self.database, created["id"], week_start=self.week, expected_revision=2)
+        edited = save_experiment(self.database, template["id"], expected_revision=2, payload={
+            **created["payload"], "laboratory_blueprints": [
+                {**blueprint, "subject": "Новая тема"}, {**blueprint, "id": "lab-copy"}]})
+        deleted = save_experiment(self.database, template["id"], expected_revision=3,
+                                  payload={**edited["payload"], "laboratory_blueprints": []})
+        receipts = deleted["payload"]["laboratory_blueprint_history"]
+        self.assertEqual(receipts[0]["after"], blueprint)
+        self.assertEqual(receipts[-2]["before"]["subject"], "Новая тема")
+        self.assertIsNone(receipts[-2]["after"])
+        self.assertEqual(get_experiment(self.database, week["id"])["payload"], week["payload"])
+        self.assertEqual(week["payload"]["laboratory_blueprints"], [blueprint])
+
     def test_laboratory_preview_partial_week_publish_disable(self):
         original = self.draft(
             [self.lesson(), self.lesson(id="history", subject="History", period=1)]
@@ -178,6 +198,11 @@ class SpecialSessionTests(TestCase):
             preview["changes"][0]["continuing"], [str(self.other_student["id"])]
         )
         active = action(week, token=preview["token"])
+        with self.assertRaisesRegex(ValueError, "отключите лаборатори"):
+            manage_experiment(self.database, active["id"], expected_revision=active["revision"], action="archive")
+        with self.assertRaisesRegex(ValueError, "отключите лабораторию"):
+            save_experiment(self.database, active["id"], expected_revision=active["revision"],
+                            payload={**active["payload"], "laboratory_blueprints": []})
         self.publish(active, "week", week_start=self.week)
 
         def activities(person):
@@ -194,6 +219,12 @@ class SpecialSessionTests(TestCase):
         preview = action(active, deactivate=True)
         disabled = action(active, deactivate=True, token=preview["token"])
         self.assertEqual(disabled["payload"]["lessons"], authored)
+        archived = manage_experiment(self.database, disabled["id"], expected_revision=disabled["revision"], action="archive")
+        with self.assertRaisesRegex(ValueError, "история"):
+            manage_experiment(self.database, archived["id"], expected_revision=archived["revision"], action="delete", confirmed=True)
+        self.assertEqual(activities(student), ["Science"])
+        disabled = manage_experiment(self.database, archived["id"], expected_revision=archived["revision"], action="restore")
+
         self.publish(disabled, "week", week_start=self.week)
         self.assertEqual(activities(student), ["Math", "History"])
 

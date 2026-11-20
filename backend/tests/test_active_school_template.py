@@ -1,6 +1,5 @@
 import hashlib
 import json
-import sqlite3
 import tempfile
 import unittest
 from copy import deepcopy
@@ -433,6 +432,15 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
             app.include_router(create_router(self.database))
         client = TestClient(app)
         admin_headers = {"X-Dev-Auth": f"browser:{token}", "X-School-Admin-Session": token}
+        lifecycle = f"/api/admin/schedule/experiments/school/{updated['id']}/lifecycle"
+        denied = client.post(lifecycle, json={"action": "archive", "expected_revision": updated["revision"]})
+        self.assertIn(denied.status_code, {401, 403})
+        stale = client.post(lifecycle, headers=admin_headers, json={"action": "archive", "expected_revision": 1})
+        self.assertEqual(stale.status_code, 409, stale.text)
+        protected = client.post(lifecycle, headers=admin_headers,
+                                json={"action": "archive", "expected_revision": updated["revision"]})
+        self.assertEqual(protected.status_code, 422, protected.text)
+        self.assertIn("назначьте другой основной", protected.json()["detail"])
         listed = client.get("/api/admin/schedule/experiments/school", headers=admin_headers)
         self.assertEqual(listed.status_code, 200, listed.text)
         active_summary = next(item for item in listed.json()["items"] if item["id"] == updated["id"])
@@ -456,11 +464,11 @@ class ActiveSchoolTemplateTests(unittest.TestCase):
                                       expected_revision=active_again["revision"])
         self.assertEqual(week["payload"]["source_template"]["revision"], updated["revision"])
 
-    def test_foreign_key_prevents_deleting_the_active_draft(self):
+    def test_policy_prevents_deleting_the_active_draft(self):
         active = self.create_draft("Активный шаблон", self.school_payload())
         self.activate(active)
 
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaisesRegex(ValueError, "назначьте другой основной"):
             delete_experiment(self.database, active["id"])
 
         self.assertEqual(open_active_school_template(self.database)["id"], active["id"])

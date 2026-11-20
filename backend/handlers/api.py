@@ -16,6 +16,7 @@ import sqlite3
 import logging
 from html import escape
 from typing import Literal
+from uuid import UUID
 from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
 
@@ -42,7 +43,7 @@ from backend.services.schedule_drafts import (
     audience_preview, get_draft,
 )
 from backend.services.schedule_experiments import (
-    ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment,
+    ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment, manage_experiment,
     duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
 from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_teacher_directory_evidence
@@ -311,6 +312,20 @@ class ScheduleExperimentSavePayload(BaseModel):
     payload: dict
     name: str | None = None
     term_comparison_key: str | None = Field(default=None, min_length=1, max_length=360)
+
+
+class DraftRevisionRequest(BaseModel):
+    expected_revision: int
+
+
+class DraftCopyRequest(DraftRevisionRequest):
+    request_id: UUID | None = None
+
+
+class DraftLifecycleRequest(DraftRevisionRequest):
+    action: Literal["rename", "archive", "restore", "delete"]
+    name: str | None = None
+    confirmed: bool = False
 
 
 class LaboratoryRequest(BaseModel):
@@ -1985,12 +2000,15 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
     @router.post("/admin/schedule/experiments/school/{experiment_id}/duplicate")
-    def admin_school_duplicate(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
+    def admin_school_duplicate(experiment_id: str, payload: DraftCopyRequest, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         require_real_school_admin(x_school_admin_session, actor)
         _, store = school_stores()
         try:
-            return duplicate_experiment(store, experiment_id, actor_user_id=actor["id"])
+            return duplicate_experiment(store, experiment_id, expected_revision=payload.expected_revision,
+                                        copy_request_id=str(payload.request_id) if payload.request_id else None, actor_user_id=actor["id"])
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail="Редакция изменилась. Обновите список шаблонов.") from error
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -2037,16 +2055,25 @@ def create_router(database: Database) -> APIRouter:
         except sqlite3.DatabaseError as error:
             raise HTTPException(status_code=500, detail="Ошибка локальной SQLite при записи черновика") from error
 
-    @router.delete("/admin/schedule/experiments/school/{experiment_id}")
-    def admin_school_delete(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
-        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session, principal)
-        _, store = school_stores()
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/lifecycle")
+    def admin_school_lifecycle(experiment_id: str, payload: DraftLifecycleRequest, init_data: str | None = None,
+                               x_dev_auth: str | None = Header(default=None),
+                               x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+                               x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        source, store = school_stores()
+        if payload.action == "delete" and source is not store:
+            raise HTTPException(status_code=422, detail="Связи черновика с публикациями доступны только в школьном хранилище.")
         try:
-            delete_experiment(store, experiment_id)
-            return {"deleted": experiment_id}
+            return manage_experiment(store, experiment_id, expected_revision=payload.expected_revision,
+                                     action=payload.action, confirmed=payload.confirmed, name=payload.name, actor_user_id=actor["id"])
         except ExperimentNotFound as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+            raise HTTPException(status_code=404, detail="Черновик не найден.") from error
+        except ExperimentConflict as error:
+            raise HTTPException(status_code=409, detail="Редакция изменилась. Обновите список шаблонов.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.post("/admin/schedule/experiments/audience-preview")
     def admin_schedule_experiment_audience_preview(payload: ScheduleExperimentAudiencePreviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -2109,11 +2136,15 @@ def create_router(database: Database) -> APIRouter:
     @router.delete("/admin/schedule/experiments/{experiment_id}")
     def admin_schedule_delete_experiment(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not get_settings().local_test_mode:
+            raise HTTPException(status_code=405, detail="Используйте подтверждённое действие в школьном архиве.")
         try:
             delete_experiment(database, experiment_id)
             return {"deleted": experiment_id}
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.put("/admin/schedule/experiments/{experiment_id}")
     def admin_schedule_save_experiment(experiment_id: str, payload: ScheduleExperimentSavePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

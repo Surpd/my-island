@@ -34,7 +34,33 @@ test('лаборатория в конструкторе на трёх шири�
     });
   }
   await dialog.getByRole('button', { name: 'Сохранить заготовку' }).click();
-  await expect(dialog).toBeHidden();
+  await expect(
+    dialog.getByText('Заготовка добавлена в черновик. Сохраните шаблон.'),
+  ).toBeVisible();
+  const actions = dialog.getByLabel('Действия · Прошлое и настоящее', {
+    exact: true,
+  });
+  await actions.click();
+  await dialog.getByRole('button', { name: 'Копировать', exact: true }).click();
+  await dialog.getByText('Дополнительные настройки', { exact: true }).click();
+  await dialog.getByLabel('Тема', { exact: true }).fill('Копия лаборатории');
+  await dialog.getByRole('button', { name: 'Сохранить заготовку' }).click();
+  await expect(
+    dialog.getByText('Копия лаборатории', { exact: true }),
+  ).toBeVisible();
+  await dialog
+    .getByLabel('Действия · Копия лаборатории', { exact: true })
+    .click();
+  page.once('dialog', (confirm) => confirm.accept());
+  await dialog
+    .locator('article')
+    .filter({ hasText: 'Копия лаборатории' })
+    .getByRole('button', { name: 'Удалить', exact: true })
+    .click();
+  await expect(
+    dialog.getByText('Копия лаборатории', { exact: true }),
+  ).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Закрыть', exact: true }).click();
 });
 
 test('Недельная лаборатория — предпросмотр, активация и восстановление', async ({
@@ -137,7 +163,9 @@ test('Недельная лаборатория — предпросмотр, а
   await dialog
     .getByRole('button', { name: 'Посмотреть замещение уроков' })
     .click();
-  await expect(dialog.locator('section article')).toHaveCount(2);
+  await expect(
+    dialog.locator('section:has(h3:text-matches("^Замещение")) article'),
+  ).toHaveCount(2);
   await dialog
     .getByRole('button', { name: 'Провести на этой неделе' })
     .scrollIntoViewIfNeeded();

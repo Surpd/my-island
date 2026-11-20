@@ -271,6 +271,7 @@ def _payload_semantics(payload: dict[str, Any]) -> dict[str, Any]:
         "classes": _ids(payload.get("classes")),
         "day_modes": modes(payload.get("day_modes")),
         "grade_modes": modes(payload.get("grade_modes")),
+        "laboratory_blueprints": {b["id"]: b for b in payload.get("laboratory_blueprints", [])},
         "lessons": {str(lesson.get("id") or index): _lesson_semantics(lesson, payload)
                     for index, lesson in enumerate(payload.get("lessons") or []) if isinstance(lesson, dict)},
     }
@@ -324,6 +325,25 @@ def _payload_changes(database: Database, before: dict[str, Any], after: dict[str
             new_text = ", ".join(_display_names(database, "groups", right[key])) or "Нет классов"
         changes.append({"field": key, "label": label, "impact": impact,
                         "before": old_text, "after": new_text})
+    old_labs, new_labs = left["laboratory_blueprints"], right["laboratory_blueprints"]
+    for key in sorted(old_labs.keys() | new_labs.keys()):
+        old, new = old_labs.get(key), new_labs.get(key)
+        if old == new:
+            continue
+        def label(blueprint):
+            if not blueprint:
+                return "Нет заготовки"
+            classes, teachers = blueprint.get("classIds"), blueprint.get("teacherIds")
+            names = _display_names(database, "groups", _ids(classes if isinstance(classes, list) else []))
+            staff = _display_names(database, "identities", _ids([blueprint.get("teacherId"), *(teachers if isinstance(teachers, list) else [])]))
+            day = blueprint.get("day")
+            interval = "–".join(str(value) for value in (blueprint.get("start"), blueprint.get("end")) if value)
+            return " · ".join(str(value) for value in (blueprint.get("subject"), blueprint.get("direction"),
+                _WEEKDAYS[day] if isinstance(day, int) and 0 <= day < 7 else "",
+                interval, ", ".join(names), ", ".join(staff), blueprint.get("room"), blueprint.get("description")) if value)
+        changes.append({"field": f"laboratory_blueprints:{key}", "label": "Заготовка лаборатории",
+                        "impact": "Меняются настройки лаборатории для новых черновиков недель.",
+                        "before": label(old), "after": label(new)})
     return changes
 
 
@@ -400,6 +420,8 @@ def _conflicts(lessons: list[dict[str, Any]], payload: dict[str, Any],
 
 def preview_school_template_selection(database: Database, draft_id: str) -> dict[str, Any]:
     candidate = get_experiment(database, draft_id)
+    if candidate["payload"].get("draft_archive"):
+        raise ValueError("Сначала восстановите шаблон из архива.")
     payload = candidate["payload"]
     if payload.get("draft_kind") != "school" or payload.get("week_start") or payload.get("source_template"):
         raise ValueError("Выбрать основным можно только сохранённый шаблон школы")

@@ -181,6 +181,39 @@ class PartialPublicationPostgresTests(unittest.TestCase):
             preview_token=again['preview_token'], reason='No changes', actor_user_id=actor['id'])
         self.assertEqual(unchanged['revision'], updated['revision'])
 
+    def test_school_draft_lifecycle_checks_revisions_and_references(self):
+        from backend.services.schedule_experiments import (
+            ExperimentConflict, create_experiment, create_experiment_week,
+            duplicate_experiment, get_experiment, manage_experiment,
+        )
+
+        source = create_experiment(self.database, name="Школьный шаблон", source="empty")
+        sid = source["id"]
+        a = duplicate_experiment(self.database, sid, expected_revision=1, copy_request_id="repeat")
+        self.assertEqual(duplicate_experiment(self.database, sid, expected_revision=1, copy_request_id="repeat")["id"], a["id"])
+        copied = manage_experiment(self.database, a["id"], expected_revision=1, action="rename", name="Независимая копия")
+        self.assertEqual(copied["payload"], a["payload"])
+        archive = manage_experiment(self.database, copied["id"], expected_revision=2, action="archive")
+        with self.assertRaises(ExperimentConflict):
+            manage_experiment(self.database, copied["id"], expected_revision=2, action="restore")
+        self.assertEqual(manage_experiment(self.database, copied["id"], expected_revision=3, action="archive")["revision"], 3)
+        restored = manage_experiment(self.database, copied["id"], expected_revision=3, action="restore")
+        self.assertEqual(restored["name"], "Независимая копия")
+        self.assertEqual(restored["payload"]["lessons"], copied["payload"]["lessons"])
+        with self.assertRaisesRegex(ValueError, "архивируйте"):
+            manage_experiment(self.database, copied["id"], expected_revision=4, action="delete", confirmed=True)
+        manage_experiment(self.database, copied["id"], expected_revision=4, action="archive")
+        self.assertEqual(manage_experiment(self.database, copied["id"], expected_revision=5, action="delete", confirmed=True), {"deleted": copied["id"]})
+
+        week = create_experiment_week(self.database, sid, week_start="2027-08-02", expected_revision=1)
+        other = duplicate_experiment(self.database, week["id"], expected_revision=1)
+        self.assertNotEqual(week["id"], other["id"])
+        self.assertEqual(week["id"], create_experiment_week(self.database, sid, week_start="2027-08-02", expected_revision=1)["id"])
+        manage_experiment(self.database, sid, expected_revision=1, action="archive")
+        with self.assertRaisesRegex(ValueError, "связанные"):
+            manage_experiment(self.database, sid, expected_revision=2, action="delete", confirmed=True)
+        self.assertEqual(get_experiment(self.database, week["id"])["payload"], week["payload"])
+
     def test_all_386_unresolved_sources_remain_immutable_in_postgres(self):
         from backend.services.constructor_publication import get_published_source
 

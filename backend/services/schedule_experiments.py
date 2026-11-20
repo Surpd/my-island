@@ -964,6 +964,10 @@ def list_experiments(database: Database) -> list[dict[str, Any]]:
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_constructor_publications'").fetchone()
         published_draft_ids = {str(row["draft_id"]) for row in database.execute(connection,
             "SELECT DISTINCT draft_id FROM schedule_constructor_publications").fetchall()} if publication_table else set()
+        archived_ids = [str(row["id"]) for row in rows if _payload(row["payload"]).get("draft_archive")]
+        deletable_ids = {draft_id for draft_id in archived_ids
+                         if not _draft_links(database, connection, draft_id)
+                         and not any(str(row["id"]) != draft_id and draft_id in str(row["payload"]) for row in rows)}
     result = []
     for row in rows:
         item = dict(row)
@@ -987,6 +991,9 @@ def list_experiments(database: Database) -> list[dict[str, Any]]:
                      # tags can remain on superseded copies and must not promote them.
                      "is_primary_template": bool(selected_template_id and str(item["id"]) == selected_template_id),
                      "has_publications": str(item["id"]) in published_draft_ids,
+                     "archived_at": (payload.get("draft_archive") or {}).get("at"),
+                     "has_active_laboratories": bool(payload.get("laboratory_meetings")),
+                     "can_delete": str(item["id"]) in deletable_ids and not payload.get("laboratory_meetings"),
                      "source_template": payload.get("source_template")})
         result.append(item)
     return result
@@ -1046,6 +1053,8 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     now = datetime.now(timezone.utc).isoformat()
     transfer_result = dict((payload or {}).get("transfer_result") or {}) if source in {"canonical", "import"} else None
     clean_payload = _clean_payload(payload)
+    if _trusted_resolution_history and payload.get("laboratory_blueprint_history"):
+        clean_payload["laboratory_blueprint_history"] = payload["laboratory_blueprint_history"]
     _validate_day_modes(database, clean_payload)
     from backend.services.schedule_term_comparison import retain_term_comparison
     if not _trusted_resolution_history:
@@ -1062,7 +1071,7 @@ def create_experiment(database: Database, *, name: str, source: str, payload: Ma
     if provenance.get("role") == "primary_school_template" and not provenance.get("primary_draft_id"):
         clean_payload["school_source"] = {**provenance, "primary_draft_id": experiment_id}
     clean_payload["lessons"] = validate_activity_lessons(clean_payload["lessons"], list_activities(database, include_archived=True))
-    encoded = json.dumps(_clean_payload(clean_payload), ensure_ascii=False, separators=(",", ":"))
+    encoded = json.dumps(clean_payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     actor_id = _draft_actor_id(database, actor_user_id)
     params = (experiment_id, normalized_name, base_version_id, encoded, actor_id, actor_id, now, now)
@@ -1171,23 +1180,44 @@ def create_effective_week_experiment(database: Database, effective_week_id: str,
                              _trusted_resolution_history=bool(has_special_history))
 
 
-def duplicate_experiment(database: Database, experiment_id: str, *, name: str | None = None, actor_user_id: Any = None) -> dict[str, Any]:
+def duplicate_experiment(database: Database, experiment_id: str, *, expected_revision: int | None = None, copy_request_id: str | None = None, name: str | None = None, actor_user_id: Any = None) -> dict[str, Any]:
     source = get_experiment(database, experiment_id)
+    copy_id = str(uuid4())
+    if copy_request_id:
+        copy_id = str(uuid5(NAMESPACE_URL, f"my-island/draft-copy/{source['id']}/{expected_revision}/{actor_user_id}/{copy_request_id}"))
+        try:
+            return get_experiment(database, copy_id)
+        except ExperimentNotFound:
+            pass
+    if expected_revision is not None and int(source["revision"]) != expected_revision:
+        raise ExperimentConflict(source)
     normalized_name = str(name or f"{source['name']} — копия").strip()
     if not normalized_name:
         raise ValueError("name is required")
-    experiment_id = str(uuid4())
     now = datetime.now(timezone.utc).isoformat()
     duplicate_payload = dict(source["payload"])
     if duplicate_payload.get("draft_kind") == "demo":
         duplicate_payload["draft_kind"] = "user"
-    encoded = json.dumps(_clean_payload(duplicate_payload), ensure_ascii=False, separators=(",", ":"))
+    clean_copy = _clean_payload(duplicate_payload)
+    if "laboratory_blueprint_history" in duplicate_payload:
+        clean_copy["laboratory_blueprint_history"] = duplicate_payload["laboratory_blueprint_history"]
+    if clean_copy.get("week_start"):
+        clean_copy["week_variant"] = True
+    encoded = json.dumps(clean_copy, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
+    source_lock = " FOR SHARE" if database.database_url else ""
     with database.connection() as connection:
         row = database.execute(connection, f"""INSERT INTO schedule_experiment_drafts
             (id,name,base_version_id,revision,payload,created_by,updated_by,created_at,updated_at)
-            VALUES (?,?,?,1,{encoded_sql},?,?,?,?) RETURNING *""",
-            (experiment_id, normalized_name, source.get("base_version_id"), encoded, _draft_actor_id(database, actor_user_id), _draft_actor_id(database, actor_user_id), now, now)).fetchone()
+            SELECT ?,?,?,1,{encoded_sql},?,?,?,? WHERE EXISTS (
+                SELECT 1 FROM schedule_experiment_drafts WHERE id=? AND revision=?{source_lock})
+            ON CONFLICT (id) DO NOTHING RETURNING *""",
+            (copy_id, normalized_name, source.get("base_version_id"), encoded, _draft_actor_id(database, actor_user_id),
+             _draft_actor_id(database, actor_user_id), now, now, source["id"], source["revision"])).fetchone()
+        if row is None:
+            row = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (copy_id,)).fetchone()
+        if row is None:
+            raise ExperimentConflict(source)
     return _item(row)
 
 
@@ -1197,6 +1227,7 @@ def create_experiment_week(database: Database, experiment_id: str, *, week_start
         if database.database_url:
             key = f"my-island:week:{week_start}"
             with database.connection() as connection:
+                database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", ("my-island:school-template-selection",))
                 database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
                 return _create_experiment_week_locked(database, experiment_id, week_start=week_start,
                     expected_revision=expected_revision, actor_user_id=actor_user_id)
@@ -1213,19 +1244,25 @@ def _create_experiment_week_locked(database: Database, experiment_id: str, *, we
     source = get_experiment(database, experiment_id)
     if int(source["revision"]) != expected_revision:
         raise ExperimentConflict(source)
+    if source["payload"].get("draft_archive"):
+        raise ValueError("Выберите действующий шаблон для создания недели.")
     # Treat the source template and calendar week as an idempotency key. A
     # repeated request (for example after a lost response) must reopen the
     # independent draft already created for that exact template revision.
+    calendar_drafts = False
     for summary in list_experiments(database):
-        if summary.get("week_start") != start.isoformat():
+        if summary.get("week_start") != start.isoformat() or summary.get("archived_at"):
             continue
+        calendar_drafts = True
         existing = get_experiment(database, summary["id"])
         provenance = existing["payload"].get("source_template") or {}
-        if (str(provenance.get("id") or "") == str(source["id"])
+        if (not existing["payload"].get("week_variant") and str(provenance.get("id") or "") == str(source["id"])
                 and int(provenance.get("revision") or 0) == int(source["revision"])):
             existing["already_exists"] = True
             return existing
-        raise ValueError(f"Неделя с {start.isoformat()} уже сохранена. Откройте существующий черновик или историю, чтобы не создавать дубликат.")
+
+    if calendar_drafts:
+        raise ValueError(f"Неделя с {start.isoformat()} уже сохранена. Выберите черновик из списка.")
     payload = json.loads(json.dumps(source["payload"], ensure_ascii=False))
     if payload.get("laboratory_meetings"):
         from backend.services.schedule_laboratories import restore_lessons
@@ -1261,11 +1298,89 @@ def _create_experiment_week_locked(database: Database, experiment_id: str, *, we
                              _base_version_id=source.get("base_version_id"), _trusted_resolution_history=True)
 
 
+_DRAFT_LINKS = {
+    "school_template_selection": ("draft_id", "source_draft_id"),
+    "school_template_selection_history": ("previous_draft_id", "next_draft_id"),
+    "school_template_baseline_approvals": ("draft_id",),
+    "schedule_constructor_publications": ("draft_id",),
+    "schedule_sheet_exports": ("draft_id",),
+}
+
+
+def _draft_links(database, connection, experiment_id):
+    table_query = ("SELECT table_name AS name FROM information_schema.tables WHERE table_schema=current_schema()"
+                   if database.database_url else "SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row["name"] for row in database.execute(connection, table_query).fetchall()}
+    return {table for table, columns in _DRAFT_LINKS.items() if table in tables
+            and database.execute(connection, f"SELECT 1 FROM {table} WHERE "
+                + " OR ".join(f"{column}=?" for column in columns) + " LIMIT 1",
+                (experiment_id,) * len(columns)).fetchone()}
+
+
+def manage_experiment(database, experiment_id, *, expected_revision, action, confirmed=False, name=None, actor_user_id=None):
+    if action not in {"rename", "archive", "restore", "delete"}:
+        raise ValueError("Неизвестное действие с черновиком.")
+    with _week_creation_lock, database.connection() as connection:
+        if database.database_url:
+            database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                             ("my-island:school-template-selection",))
+        else:
+            database.execute(connection, "BEGIN IMMEDIATE")
+        suffix = " FOR UPDATE" if database.database_url else ""
+        row = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?" + suffix, (experiment_id,)).fetchone()
+        if not row:
+            raise ExperimentNotFound(experiment_id)
+        draft = _item(row)
+        if draft["revision"] != expected_revision:
+            raise ExperimentConflict(draft)
+        payload = draft["payload"]
+        if action == "rename":
+            if payload.get("draft_archive"):
+                raise ValueError("Сначала восстановите черновик из архива.")
+            title = str(name or "").strip()
+            if not title:
+                raise ValueError("Введите название черновика.")
+            if title == draft["name"]:
+                return draft
+            updated = database.execute(connection, """UPDATE schedule_experiment_drafts
+                SET name=?,revision=revision+1,updated_at=?,updated_by=? WHERE id=? RETURNING *""",
+                (title, datetime.now(timezone.utc).isoformat(), _draft_actor_id(database, actor_user_id), experiment_id)).fetchone()
+            return _item(updated)
+        links = _draft_links(database, connection, experiment_id)
+        if action != "restore" and "school_template_selection" in links:
+            raise ValueError("Сначала назначьте другой основной шаблон.")
+        if action != "restore" and payload.get("laboratory_meetings"):
+            raise ValueError("Сначала отключите лаборатории и восстановите заменённые уроки.")
+        if action == "delete":
+            if not confirmed or not payload.get("draft_archive"):
+                raise ValueError("Сначала архивируйте запись, затем подтвердите окончательное удаление.")
+            references = database.execute(connection, "SELECT payload FROM schedule_experiment_drafts WHERE id<>?", (experiment_id,)).fetchall()
+            if links or any(experiment_id in json.dumps(_payload(ref["payload"])) for ref in references):
+                raise ValueError("Есть связанные черновики или история. Запись можно оставить в архиве или восстановить.")
+            database.execute(connection, "DELETE FROM schedule_experiment_drafts WHERE id=?", (experiment_id,))
+            return {"deleted": experiment_id}
+        if bool(payload.get("draft_archive")) == (action == "archive"):
+            return draft
+        now = datetime.now(timezone.utc).isoformat()
+        if action == "archive":
+            payload["draft_archive"] = {"at": now, "by": str(actor_user_id or "")}
+        else:
+            payload.pop("draft_archive", None)
+        payload.setdefault("draft_lifecycle_history", []).append({"action": action, "at": now, "by": str(actor_user_id or "")})
+        encoded = json.dumps(payload, ensure_ascii=False)
+        parameter = "?::jsonb" if database.database_url else "?"
+        updated = database.execute(connection, f"""UPDATE schedule_experiment_drafts
+            SET payload={parameter},revision=revision+1,updated_at=?,updated_by=? WHERE id=? RETURNING *""",
+            (encoded, now, _draft_actor_id(database, actor_user_id), experiment_id)).fetchone()
+        return _item(updated)
+
+
 def delete_experiment(database: Database, experiment_id: str) -> None:
-    with database.connection() as connection:
-        row = database.execute(connection, "DELETE FROM schedule_experiment_drafts WHERE id=? RETURNING id", (experiment_id,)).fetchone()
-    if not row:
-        raise ExperimentNotFound(experiment_id)
+    """Delete disposable local experiments using the same dependency checks."""
+    current = get_experiment(database, experiment_id)
+    if not current["payload"].get("draft_archive"):
+        current = manage_experiment(database, experiment_id, expected_revision=current["revision"], action="archive")
+    manage_experiment(database, experiment_id, expected_revision=current["revision"], action="delete", confirmed=True)
 
 
 def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, term_comparison_key: str | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -1278,6 +1393,19 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     current = get_experiment(database, experiment_id)
     if int(current["revision"]) != expected_revision:
         raise ExperimentConflict(current)
+    if current["payload"].get("draft_archive"):
+        raise ValueError("Восстановите черновик из архива перед редактированием.")
+    previous_blueprints = {b["id"]: b for b in current["payload"].get("laboratory_blueprints", [])}
+    next_blueprints = {b["id"]: b for b in clean.get("laboratory_blueprints", [])}
+    active_blueprints = current["payload"].get("laboratory_meetings", {})
+    if any(previous_blueprints.get(key) != next_blueprints.get(key) for key in active_blueprints):
+        raise ValueError("Сначала отключите лабораторию и восстановите уроки.")
+    blueprint_history = list(current["payload"].get("laboratory_blueprint_history", []))
+    for key in dict.fromkeys([*previous_blueprints, *next_blueprints]):
+        before, after = previous_blueprints.get(key), next_blueprints.get(key)
+        if before != after:
+            blueprint_history.append({"revision": expected_revision + 1, "actor": str(actor_user_id or ""),
+                            "before": before, "after": after})
     for field in ("laboratory_meetings", "laboratory_history"):
         if clean.get(field) != current["payload"].get(field) and field in clean:
             raise ValueError("Измените лабораторию через предпросмотр замещения")
@@ -1298,6 +1426,8 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         if affected_rows(clean) != affected_rows(current["payload"]) or any(
                 clean.get(k) != current["payload"].get(k) for k in ("days", "slots", "grade_modes", "day_modes")):
             raise ValueError("Для изменения замещения или режима дня отключите лабораторию и проверьте новый предпросмотр")
+    if "source_template" in current["payload"]:
+        clean["source_template"] = current["payload"]["source_template"]
     current_week = current["payload"].get("week_start")
     if clean.get("week_start") and clean["week_start"] != current_week:
         raise ValueError("Чтобы начать работу над другой неделей, создайте отдельный черновик.")
@@ -1404,7 +1534,13 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         lesson["audience_snapshot"] = {"student_ids": _ids(student_ids),
                                        "fingerprint": _audience_fingerprint(lesson, clean),
                                        "resolved_at": datetime.now(timezone.utc).isoformat()}
-    return _write_experiment_revision(database, experiment_id, expected_revision, _clean_payload(clean),
+    clean = _clean_payload(clean)
+    if blueprint_history:
+        clean["laboratory_blueprint_history"] = blueprint_history
+    for field in ("week_variant", "draft_lifecycle_history"):
+        if field in current["payload"]:
+            clean[field] = current["payload"][field]
+    return _write_experiment_revision(database, experiment_id, expected_revision, clean,
                                       normalized_name=normalized_name, actor_user_id=actor_user_id)
 
 
@@ -1414,14 +1550,18 @@ def _write_experiment_revision(database: Database, experiment_id: str, expected_
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     now = datetime.now(timezone.utc).isoformat()
+    archived = "payload->'draft_archive' IS NULL" if database.database_url else "json_extract(payload, '$.draft_archive') IS NULL"
     with database.connection() as connection:
         row = database.execute(connection, f"""UPDATE schedule_experiment_drafts
             SET payload={encoded_sql},name=COALESCE(?,name),revision=revision+1,updated_by=?,updated_at=?
-            WHERE id=? AND revision=? RETURNING *""",
+            WHERE id=? AND revision=? AND {archived} RETURNING *""",
             (encoded, normalized_name, _draft_actor_id(database, actor_user_id), now, experiment_id, expected_revision)).fetchone()
         if row:
             return _item(row)
         current = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
     if current:
-        raise ExperimentConflict(_item(current))
+        item = _item(current)
+        if item["revision"] == expected_revision and item["payload"].get("draft_archive"):
+            raise ValueError("Восстановите черновик из архива перед редактированием.")
+        raise ExperimentConflict(item)
     raise ExperimentNotFound(experiment_id)

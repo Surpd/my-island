@@ -645,11 +645,6 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     try { const saved = JSON.parse(window.localStorage.getItem('my-island-hidden-school-drafts:v1') || '[]'); setHiddenSchoolDrafts(Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : []); }
     catch { setHiddenSchoolDrafts([]); }
   }, []);
-  const hideSchoolDraft = (id: string) => setHiddenSchoolDrafts((current) => {
-    const next = [...new Set([...current, id])];
-    try { window.localStorage.setItem('my-island-hidden-school-drafts:v1', JSON.stringify(next)); } catch { /* Hiding is a local convenience only. */ }
-    return next;
-  });
   const restoreSchoolDraft = (id: string) => setHiddenSchoolDrafts((current) => {
     const next = current.filter((item) => item !== id);
     try { window.localStorage.setItem('my-island-hidden-school-drafts:v1', JSON.stringify(next)); } catch { /* Hiding is a local convenience only. */ }
@@ -1024,11 +1019,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     const name = window.prompt('Название черновика', item.name)?.trim();
     if (!name || name === item.name) return;
     try {
+      if (workspace === 'school') {
+        await api(schedulePath(`/${encodeURIComponent(item.id)}/lifecycle`), { method: 'POST',
+          body: JSON.stringify({ action: 'rename', name, expected_revision: item.revision }) });
+        await refreshDrafts();
+        return;
+      }
       const current = draft?.id === item.id ? baseDraftRef.current : await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}`));
       if (!current) return;
       const updated = await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}`), {
         method: 'PUT',
-        body: JSON.stringify({ expected_revision: current.revision, name, payload: current.payload }),
+        body: JSON.stringify({ expected_revision: item.revision, name, payload: current.payload }),
       });
       await refreshDrafts();
       if (draft?.id === item.id) {
@@ -1065,13 +1066,26 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     } catch (error) { setRenameError(String((error as Error).message || error)); }
     finally { savingRef.current = false; setSaving(false); }
   };
+  const copyRequests = useRef(new Map<string, string>());
+  const copiesInProgress = useRef(new Set<string>());
   const duplicate = async (item: DraftSummary) => {
+    const key = `${item.id}:${item.revision}`;
+    if (copiesInProgress.current.has(key)) return;
+    copiesInProgress.current.add(key);
+    const requestId = copyRequests.current.get(key) || crypto.randomUUID();
+    copyRequests.current.set(key, requestId);
     try {
-      const copy = await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}/duplicate`), { method: 'POST' });
+      const copy = await api<Draft>(schedulePath(`/${encodeURIComponent(item.id)}/duplicate`), {
+        method: 'POST', ...(workspace === 'school' ? { body: JSON.stringify({ expected_revision: item.revision, request_id: requestId }) } : {}),
+      });
+      copyRequests.current.delete(key);
       await refreshDrafts();
       setDraftFilter(item.draft_kind === 'demo' ? 'user' : item.draft_kind);
       setStatus(`Создана копия «${copy.name}».`);
-    } catch (error) { setStatus(String((error as Error).message || error)); }
+    } catch (error) {
+      setStatus(String((error as Error).message || error));
+      await refreshDrafts();
+    } finally { copiesInProgress.current.delete(key); }
   };
   const remove = async (item: DraftSummary) => {
     if (!window.confirm(`Удалить экспериментальный черновик «${item.name}»?`)) return;
@@ -2622,7 +2636,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         return meeting ? { ...blueprint, ...meeting, id: blueprint.id, classIds: meeting.classIds || blueprint.classIds, audience: meeting.audience || blueprint.audience } : blueprint;
       })} active={draft.payload.laboratory_meetings || {}} week={draft.payload.week_start} days={draft.payload.days} slots={draft.payload.slots} groups={groups} classes={draft.payload.classes} teachers={teachers} students={students} dirty={dirty || saving}
         initialMeeting={labReturn} onLesson={(id, title, meeting) => { setLabReturn(meeting); setLaboratoriesOpen(false); showIssueLesson(id, 'laboratory', title); }}
-        onClose={() => { setLabReturn(undefined); setLaboratoriesOpen(false); }} onSave={blueprint => mutate(state => ({ ...state, laboratory_blueprints: [...(state.laboratory_blueprints || []).filter(b => b.id !== blueprint.id), blueprint] }))}
+        onClose={() => { setLabReturn(undefined); setLaboratoriesOpen(false); }}
+        onSave={blueprint => mutate(state => ({ ...state, laboratory_blueprints: [...(state.laboratory_blueprints || []).filter(b => b.id !== blueprint.id), blueprint] }))}
+        onDelete={id => mutate(state => ({ ...state, laboratory_blueprints: (state.laboratory_blueprints || []).filter(b => b.id !== id) }))}
         onAction={async (meeting, deactivate, token) => {
           const response = await api<Draft & LaboratoryPreview>(schedulePath('/' + encodeURIComponent(draft.id) + '/laboratory'), { method: 'POST', body: JSON.stringify({ expected_revision: draft.revision, blueprint_id: meeting.id, meeting, deactivate, token }) });
           if (response.payload) { await open(draft.id); await refreshDrafts(); }
@@ -2715,7 +2731,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       ) : null}
       {directoryAccess === 'checking' ? <section className="constructor-school-gate">Проверяем подключение к справочнику…</section> : workspace === 'school' && !draft ? (
         <ConstructorSchoolStart api={api} drafts={schoolDrafts} index={schoolWeekIndex} hiddenIds={hiddenSchoolDrafts} readOnly={readOnlySchoolWorkspace} initialSection={schoolStartSection}
-          onOpen={async id => { await open(id); }} onCopy={(item) => void duplicate(item as DraftSummary)} onHide={hideSchoolDraft} onRestore={restoreSchoolDraft}
+          onOpen={async id => { await open(id); }} onCopy={(item) => void duplicate(item as DraftSummary)} onRename={item => void rename(item as DraftSummary)} onRestore={restoreSchoolDraft}
+          onManage={async (item, action) => {
+            try {
+              await api(schedulePath(`/${encodeURIComponent(item.id)}/lifecycle`), { method: 'POST',
+                body: JSON.stringify({ action, expected_revision: item.revision, confirmed: action === 'delete' }) });
+            } finally { await refreshDrafts(); }
+          }}
           onCompare={async id => {
             const opened = await open(id, undefined, true);
             if (opened) setComparisonOpen(true);

@@ -7,7 +7,7 @@ import { formatLessonTimeRange } from './lesson-time';
 import { normalizeRoomDisplay } from './schedule-rooms';
 import './constructor-school-start.css';
 
-export type SchoolDraftSummary = { id: string; name: string; revision: number; lesson_count: number; updated_at?: string; week_start?: string | null; is_primary_template?: boolean; selection_stale?: boolean; selected_revision?: number; has_publications?: boolean; draft_kind: string; base_version_id?: string | null; source_template?: { id?: string; revision?: number } | null };
+export type SchoolDraftSummary = { id: string; name: string; revision: number; lesson_count: number; updated_at?: string; week_start?: string | null; is_primary_template?: boolean; selection_stale?: boolean; selected_revision?: number; has_publications?: boolean; archived_at?: string; has_active_laboratories?: boolean; can_delete?: boolean; draft_kind: string; base_version_id?: string | null; source_template?: { id?: string; revision?: number } | null };
 export type EffectiveWeekSummary = { effective_week_id: string; version_id: string; week_start: string; status: string; created_at: string; revision_at?: string; is_current_publication?: boolean };
 export type WeekPublication = { id: string; draft_id: string; draft_revision: number; scope_key: string; published_id: string; created_at: string };
 export type SchoolWeekIndex = { effective_weeks?: EffectiveWeekSummary[]; week_publications?: WeekPublication[]; canonical?: { version_id: string; status: string }; load_error?: string };
@@ -81,16 +81,18 @@ function TemplateComparison({ preview, onClose }: { preview: SelectionPreview; o
   </dialog>;
 }
 
-export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly, initialSection = 'template', onOpen, onCopy, onHide, onRestore, onCreateEmpty, onCreated, onReview, onCompare }: {
+export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly, initialSection = 'template', onOpen, onCopy, onRename, onManage, onRestore, onCreateEmpty, onCreated, onReview, onCompare }: {
   api: Api; drafts: SchoolDraftSummary[]; index: SchoolWeekIndex; hiddenIds: string[]; readOnly: boolean;
   initialSection?: 'template' | 'weeks';
   onOpen: (id: string) => Promise<void>; onCopy: (draft: SchoolDraftSummary) => void;
-  onHide: (id: string) => void; onRestore: (id: string) => void; onCreateEmpty: () => void;
+  onRename: (item: SchoolDraftSummary) => void;
+  onManage: (item: SchoolDraftSummary, action: 'archive' | 'restore' | 'delete') => Promise<void>; onRestore: (id: string) => void; onCreateEmpty: () => void;
   onCreated: (id: string) => Promise<void>; onReview: (id: string) => Promise<void>;
   onCompare?: (id: string) => Promise<boolean>;
 }) {
   const [section, setSection] = useState<'template' | 'weeks'>(initialSection);
   const [weekStart, setWeekStart] = useState(nearestMonday);
+  const [managing, setManaging] = useState(false);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
   const [selectionPreview, setSelectionPreview] = useState<SelectionPreview | null>(null);
@@ -122,13 +124,13 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   const publishedDrafts = new Set(publications.map(item => item.draft_id));
   // Test records with no publication or selection stay accessible in the
   // secondary archive. This view does not mutate production archive flags.
-  const archived = drafts.filter(item => item.id !== primary?.id && (hiddenIds.includes(item.id) || isTest(item) && !restoredTests.includes(item.id) && !item.has_publications && !publishedDrafts.has(item.id)));
+  const archived = drafts.filter(item => item.id !== primary?.id && (item.archived_at || hiddenIds.includes(item.id) || isTest(item) && !restoredTests.includes(item.id) && !item.has_publications && !publishedDrafts.has(item.id)));
   const archiveIds = new Set(archived.map(item => item.id));
   const weekDrafts = drafts.filter(item => item.id !== primary?.id && item.week_start && !archiveIds.has(item.id));
   const others = drafts.filter(item => item.id !== primary?.id && !item.week_start && !archiveIds.has(item.id))
     .sort((left, right) => (right.updated_at || '').localeCompare(left.updated_at || '') || right.revision - left.revision);
   const weeks = [...new Set([...effective.map(item => item.week_start), ...publications.map(item => item.scope_key.replace(/^week:/, '')), ...weekDrafts.map(item => item.week_start!)])].sort().reverse();
-  const existingDrafts = drafts.filter(item => item.week_start === weekStart);
+  const existingDrafts = weekDrafts.filter(item => item.week_start === weekStart);
   const weekExists = existingDrafts.length > 0 || effective.some(item => item.week_start === weekStart) || publications.some(item => item.scope_key === `week:${weekStart}`);
   const showWeek = async (item: EffectiveWeekSummary) => {
     setView({ title: weekPeriod(item.week_start), loading: true });
@@ -244,20 +246,37 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
     setRestoredTests(next);
     try { localStorage.setItem('my-island-visible-test-drafts:v1', JSON.stringify(next)); } catch { /* Optional browser preference. */ }
   };
-  const draftCard = (item: SchoolDraftSummary, archive = false) => <article className="schedule-start-row" key={item.id}>
-    <div><h3>{item.name}</h3><p>Ревизия {item.revision} · {item.lesson_count} занятий{item.updated_at ? ` · ${changedAt(item.updated_at)}` : ''}</p></div>
+  const manage = async (item: SchoolDraftSummary, action: 'archive' | 'restore' | 'delete') => {
+    if (managing) return;
+    if (action === 'archive' && !window.confirm(`Переместить «${item.name}» в архив? Запись можно восстановить.`)) return;
+    if (action === 'delete' && !window.confirm(`Удалить «${item.name}» окончательно? Запись нельзя будет восстановить.`)) return;
+    setManaging(true);
+    setMessage('');
+    try { await onManage(item, action); }
+    catch (error) { setMessage((error as Error).message); }
+    finally { setManaging(false); }
+  };
+  const lifecycleActions = (item: SchoolDraftSummary) => !readOnly && <>
+    <StartMenuAction disabled={managing} onClick={() => onRename(item)}>Переименовать</StartMenuAction>
+    <StartMenuAction disabled={managing} onClick={() => onCopy(item)}>Создать копию</StartMenuAction>
+    {!item.is_primary_template && !item.has_active_laboratories &&
+      <StartMenuAction risk disabled={managing} onClick={() => void manage(item, 'archive')}>Архивировать</StartMenuAction>}
+  </>;
+  const draftCard = (item: SchoolDraftSummary) => <article className="schedule-start-row" key={item.id}>
+    <div><h3>{item.name}</h3><p>Ревизия {item.revision} · {item.lesson_count} занятий{item.updated_at ? ` · ${changedAt(item.updated_at)}` : ''}{item.archived_at ? ' · В архиве' : ''}</p></div>
     <div className="schedule-start-actions">
-      <button className="schedule-start-button" onClick={() => void onOpen(item.id)}>Открыть</button>
-      {!archive && !item.week_start && !item.is_primary_template ? <button className="schedule-start-button" disabled={selectionBusy} onClick={event => {
+      {!item.archived_at && <button className="schedule-start-button" onClick={() => void onOpen(item.id)}>{item.week_start ? 'Открыть черновик' : 'Открыть'}</button>}
+      {!item.archived_at && !item.week_start && !item.is_primary_template && <button className="schedule-start-button" disabled={selectionBusy} onClick={event => {
         comparisonTrigger.current = event.currentTarget;
         void previewTemplateSelection(item, true);
-      }}>{comparisonLoadingId === item.id ? 'Сравниваем…' : 'Сравнить'}</button> : null}
-      {archive ? <button className="schedule-start-button" onClick={() => restore(item)}>Вернуть в список</button> : !item.is_primary_template ? <StartMenu>
-        {item.draft_kind === 'school' && !item.week_start && !readOnly ? <StartMenuAction risk disabled={selectionBusy} onClick={() => void previewTemplateSelection(item)}>Сделать основным шаблоном</StartMenuAction> : null}
-        {!readOnly ? <StartMenuAction onClick={() => onCopy(item)}>Создать копию</StartMenuAction> : null}
-        <StartMenuAction onClick={() => onHide(item.id)}>Скрыть</StartMenuAction>
-      </StartMenu> : null}
-      {archive && !readOnly ? <StartMenu><StartMenuAction onClick={() => onCopy(item)}>Создать копию</StartMenuAction></StartMenu> : null}
+      }}>{comparisonLoadingId === item.id ? 'Сравниваем…' : 'Сравнить'}</button>}
+      {item.archived_at ? !readOnly && <>
+        <button className="schedule-start-button" disabled={managing} onClick={() => void manage(item, 'restore')}>Восстановить</button>
+        {item.can_delete && <StartMenu><StartMenuAction risk disabled={managing} onClick={() => void manage(item, 'delete')}>Удалить окончательно</StartMenuAction></StartMenu>}
+      </> : archiveIds.has(item.id) ? <button className="schedule-start-button" onClick={() => restore(item)}>Вернуть в список</button> : !readOnly && <StartMenu>
+        {!item.is_primary_template && !item.week_start && item.draft_kind === 'school' && <StartMenuAction risk disabled={selectionBusy} onClick={() => void previewTemplateSelection(item)}>Сделать основным шаблоном</StartMenuAction>}
+        {lifecycleActions(item)}
+      </StartMenu>}
     </div>
   </article>;
   return <section className="constructor-start constructor-school-start schedule-start">
@@ -285,7 +304,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
             <StartMenu label="Действия" accessibleLabel="Действия с основным шаблоном">
               <StartMenuAction onClick={() => void templateHistory()}>История версий</StartMenuAction>
               <StartMenuAction onClick={() => void loadSelectionHistory()}>История переключений</StartMenuAction>
-              {!readOnly ? <StartMenuAction onClick={() => onCopy(primary)}>Создать отдельную копию</StartMenuAction> : null}
+              {lifecycleActions(primary)}
             </StartMenu>
           </div>
         </> : <p>Выберите основной шаблон из списка, чтобы создавать недели.</p>}
@@ -310,7 +329,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
           {primary ? <p className="schedule-start-muted">Из шаблона «{primary.name}»{primaryRevision == null ? '' : ` · ревизия ${primaryRevision}`}.</p> : <p className="schedule-start-muted">Сначала выберите основной шаблон.</p>}
           <label className="schedule-start-date" htmlFor="constructor-week-start">Неделя начинается<input id="constructor-week-start" type="date" value={weekStart} onChange={event => { setWeekStart(event.target.value); setMessage(''); }} /></label>
           <p className="schedule-start-muted constructor-week-period" aria-live="polite">{weekPeriod(weekStart)}</p>
-          {weekExists ? <div className="schedule-start-notice"><p>Неделя с этими датами уже есть.</p>{existingDrafts.length ? <button className="schedule-start-button" onClick={() => void onOpen(existingDrafts[0].id)}>Открыть существующий черновик</button> : <button className="schedule-start-button" onClick={() => showHistory(weekStart)}>Открыть историю недели</button>}</div> : <>
+          {weekExists ? <div className="schedule-start-notice"><p>Неделя с этими датами уже есть.</p>{existingDrafts.length > 1 ? <button className="schedule-start-button" onClick={() => showHistory(weekStart)}>Выбрать черновик</button> : existingDrafts.length ? <button className="schedule-start-button" onClick={() => void onOpen(existingDrafts[0].id)}>Открыть существующий черновик</button> : <button className="schedule-start-button" onClick={() => showHistory(weekStart)}>Открыть историю недели</button>}</div> : <>
             <button className="schedule-start-button is-primary" disabled={readOnly || !primary || primary.selection_stale || primaryRevision == null || !weekStart || creating} onClick={() => void createWeek()}>{creating ? 'Создаём черновик…' : 'Создать из основного шаблона'}</button>
             {primary?.selection_stale ? <p className="schedule-start-muted">Подтвердите сохранённую ревизию на вкладке «Основной шаблон».</p> : primary ? <p className="schedule-start-muted">Будет создан черновик недели.</p> : null}
           </>}
@@ -330,10 +349,11 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
                 {!current && (versions.length || publicationCount) ? <span>История публикаций</span> : null}
               </div></div>
               <div className="schedule-start-actions">
-                {saved.length ? <button className="schedule-start-button" onClick={() => void onOpen(saved[0].id)}>Открыть черновик</button> : null}
+                {saved.length > 1 ? <button className="schedule-start-button" onClick={() => showHistory(week)}>Выбрать черновик</button> : saved.length ? <button className="schedule-start-button" onClick={() => void onOpen(saved[0].id)}>Открыть черновик</button> : null}
                 {latest ? <button className="schedule-start-button" onClick={() => void showWeek(latest)}>{current ? 'Просмотреть публикацию' : 'Просмотреть'}</button> : null}
-                {(latest || publicationCount || saved.length > 1) ? <StartMenu>
-                  <StartMenuAction onClick={() => showHistory(week)}>История</StartMenuAction>
+                {(latest || publicationCount || saved.length) ? <StartMenu>
+                  <StartMenuAction onClick={() => showHistory(week)}>История публикаций и черновики</StartMenuAction>
+                  {saved.length === 1 && lifecycleActions(saved[0])}
                   {!saved.length && latest && !readOnly ? <StartMenuAction disabled={creating} onClick={() => void editHistoricalWeek(latest)}>Создать черновик версии</StartMenuAction> : null}
                 </StartMenu> : null}
               </div>
@@ -343,16 +363,15 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
       </div>
     </>}
     {archived.length ? <details className="schedule-start-secondary">
-      <summary>Тестовые и скрытые записи · {archived.length}</summary>
-      <p className="schedule-start-muted">Скрытие действует в этом браузере.</p>
-      <div className="schedule-start-list">{archived.map(item => draftCard(item, true))}</div>
+      <summary>Архив и тестовые записи · {archived.length}</summary>
+      <div className="schedule-start-list">{archived.map(draftCard)}</div>
     </details> : null}
     {!readOnly ? <details className="schedule-start-secondary"><summary>Дополнительно</summary><button className="schedule-start-button" onClick={onCreateEmpty}>Создать пустое расписание</button></details> : null}
     {comparisonPreview ? <TemplateComparison preview={comparisonPreview} onClose={() => {
       setComparisonPreview(null);
       window.requestAnimationFrame(() => comparisonTrigger.current?.focus());
     }} /> : null}
-    {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.map(item => draftCard(item)) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
+    {history ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-history-title" onCancel={() => setHistory(null)}><header><h2 id="week-history-title">История · {history.title}</h2><button aria-label="Закрыть историю" onClick={() => setHistory(null)}><X size={20} /></button></header><h3>Сохранённые черновики</h3>{history.drafts?.length ? history.drafts.flatMap(item => drafts.filter(current => current.id === item.id)).map(draftCard) : <p>Отдельного черновика нет.</p>}<h3>Версии недели</h3>{history.weeks?.length ? history.weeks.map((item, position) => <article className="constructor-draft" key={item.effective_week_id}><div className="constructor-draft-open"><strong>{item.is_current_publication ? 'Действующая публикация' : 'Историческая версия'} · {history.weeks!.length - position}</strong><span>{changedAt(item.revision_at || item.created_at)}</span></div><div className="constructor-draft-actions"><button onClick={() => void showWeek(item)}>Просмотреть</button>{!readOnly ? <button disabled={creating} onClick={() => void editHistoricalWeek(item)}>Создать черновик версии</button> : null}</div></article>) : <p>Сохранённых версий недели нет.</p>}<h3>Публикации</h3>{history.publications?.length ? history.publications.map(item => <p key={item.id}>{changedAt(item.created_at)} · ревизия черновика {item.draft_revision}</p>) : <p>Записей публикации нет.</p>}</dialog></div> : null}
     {view ? <div className="constructor-conflict-backdrop"><dialog className="constructor-conflict-dialog constructor-week-history" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="week-view-title" onCancel={() => setView(null)}><header><div><small>Только просмотр сохранённой версии</small><h2 id="week-view-title">{view.title}</h2></div><button aria-label="Закрыть просмотр недели" onClick={() => setView(null)}><X size={20} /></button></header>{view.loading ? <p>Загружаем занятия…</p> : view.error ? <p role="alert">{view.error}</p> : view.blocks?.map((block, position) => <article className="constructor-history-lesson" key={`${block.block_key}:${position}`}><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'][block.weekday]} · {formatLessonTimeRange(block.start_time, block.end_time)}</strong>{block.change_kind === 'cancelled' ? <p>Занятие отменено в этой версии</p> : (block.effective_assignments || []).map((item, i) => <p key={i}>{item.activity} · {item.groups?.join(', ') || `${block.grade_scope || ''} параллель`} · {item.teachers?.join(', ') || 'Преподаватель не указан'}{item.room ? ` · ${normalizeRoomDisplay(item.room)}` : ''}</p>)}</article>)}</dialog></div> : null}
     {selectionPreview ? <TemplateSelectionDialog
       preview={selectionPreview}

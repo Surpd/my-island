@@ -52,6 +52,8 @@ def laboratory_action(
     if draft["revision"] != revision:
         raise ExperimentConflict(draft)
     payload = deepcopy(draft["payload"])
+    if payload.get("draft_archive"):
+        raise ValueError("Восстановите недельный черновик из архива.")
     if not payload.get("week_start"):
         raise ValueError("Выберите недельный черновик")
     receipts = payload.setdefault("laboratory_meetings", {})
@@ -74,7 +76,9 @@ def laboratory_action(
             ),
             None,
         )
-        if not blueprint and blueprint_id in {"school-lab-0", "school-lab-1", "school-lab-2"}:
+        deleted = any((edit.get("before") or {}).get("id") == blueprint_id and not edit.get("after")
+                      for edit in payload.get("laboratory_blueprint_history", []))
+        if not blueprint and not deleted and blueprint_id in {"school-lab-0", "school-lab-1", "school-lab-2"}:
             directions = ["Текст и смысл", "Прошлое и настоящее", "Мир вокруг нас"]
             blueprint = {"subject": directions[int(blueprint_id[-1])]}
         if not blueprint:

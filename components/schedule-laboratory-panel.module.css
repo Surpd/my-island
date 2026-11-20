@@ -90,3 +90,23 @@
 .dialog input[type='checkbox'] {
   width: auto;
 }
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.actions details {
+  position: relative;
+}
+.actions summary {
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+.actions button {
+  margin: 0.15rem;
+}
+.dialog section + section {
+  margin-top: 0.7rem;
+}

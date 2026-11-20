@@ -47,6 +47,7 @@ type Props = {
   initialMeeting?: LaboratoryBlueprint;
   onLesson: (id: string, title: string, meeting: LaboratoryBlueprint) => void;
   onClose: () => void;
+  onDelete(id: string): void;
   onSave(value: LaboratoryBlueprint): void;
   onAction(
     meeting: LaboratoryBlueprint,
@@ -89,22 +90,22 @@ export function LaboratoryPanel(props: Props) {
     format: '',
     audience: { kind: 'classes', class_ids: [] },
   });
-  const legacy = new Map(props.blueprints.map((b) => [b.id, b]));
-  const defaults = directions.map((direction, i) => {
-    const candidates = [...legacy.values()];
-    const blueprint =
-      legacy.get('school-lab-' + i) ||
-      candidates.find((b) => b.direction === direction) ||
-      candidates.find(
-        (b) => b.subject === direction && !directions.includes(b.direction),
-      );
-    if (blueprint) legacy.delete(blueprint.id);
-    return blueprint || initial(direction, i);
+  const categorized = directions.map((direction, i) => {
+    const rows = props.blueprints.filter(
+      (b) =>
+        b.direction === direction ||
+        b.id === 'school-lab-' + i ||
+        (!directions.includes(b.direction) && b.subject === direction),
+    );
+    return { direction, rows, placeholder: initial(direction, i) };
   });
+  const legacy = props.blueprints.filter(
+    (b) => !categorized.some((category) => category.rows.includes(b)),
+  );
   const [missingFrom, setMissingFrom] = useState<LaboratoryBlueprint>();
   const [editing, setEditing] = useState(Boolean(props.initialMeeting));
   const [form, setForm] = useState<LaboratoryBlueprint>(
-    () => props.initialMeeting || defaults[0],
+    () => props.initialMeeting || categorized[0].placeholder,
   );
   const [preview, setPreview] = useState<LaboratoryPreview>();
   const [message, setMessage] = useState('');
@@ -163,6 +164,11 @@ export function LaboratoryPanel(props: Props) {
         : 'class_ids';
   const renderRow = (row: LaboratoryBlueprint, label: string) => {
     const enabled = Boolean(props.active[row.id]);
+    const saved = props.blueprints.some((b) => b.id === row.id);
+    const edit = (value: LaboratoryBlueprint) => {
+      patch(value);
+      setEditing(true);
+    };
     return (
       <article key={row.id}>
         <strong>{label}</strong>
@@ -187,14 +193,51 @@ export function LaboratoryPanel(props: Props) {
             {enabled ? 'Включена' : 'Выключена'}
           </button>
         ) : (
-          <button
-            onClick={() => {
-              patch(row);
-              setEditing(true);
-            }}
-          >
-            Настроить
-          </button>
+          <div className={styles.actions}>
+            <button
+              onClick={() =>
+                edit(saved ? row : { ...row, id: crypto.randomUUID() })
+              }
+            >
+              {saved ? 'Изменить' : 'Настроить'}
+            </button>
+            {saved && (
+              <details>
+                <summary aria-label={'Действия · ' + label}>⋯</summary>
+                <button
+                  onClick={(event) => {
+                    event.currentTarget
+                      .closest('details')
+                      ?.removeAttribute('open');
+                    edit({
+                      ...row,
+                      id: crypto.randomUUID(),
+                      subject: row.subject + ' — копия',
+                    });
+                  }}
+                >
+                  Копировать
+                </button>
+                <button
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `Удалить заготовку «${row.subject}» из шаблона?`,
+                      )
+                    ) {
+                      props.onDelete(row.id);
+                      setEditing(false);
+                      setMessage(
+                        'Заготовка удалена из черновика. Сохраните шаблон.',
+                      );
+                    }
+                  }}
+                >
+                  Удалить
+                </button>
+              </details>
+            )}
+          </div>
         )}
       </article>
     );
@@ -210,13 +253,32 @@ export function LaboratoryPanel(props: Props) {
         <h2>Лаборатории</h2>
         <button onClick={props.onClose}>Закрыть</button>
       </header>
-      {defaults.map((row, i) => renderRow(row, directions[i]))}
-      {legacy.size > 0 && (
+      {categorized.map(({ direction, rows, placeholder }) => (
+        <section key={direction}>
+          {rows.length ? (
+            <>
+              <h3>{direction}</h3>
+              {rows.map((row) => renderRow(row, row.subject))}
+              {!props.week && (
+                <button
+                  onClick={() => {
+                    patch({ ...placeholder, id: crypto.randomUUID() });
+                    setEditing(true);
+                  }}
+                >
+                  Добавить заготовку
+                </button>
+              )}
+            </>
+          ) : (
+            renderRow(placeholder, direction)
+          )}
+        </section>
+      ))}
+      {legacy.length > 0 && (
         <details>
           <summary>Другие сохранённые заготовки</summary>
-          {[...legacy.values()].map((row) =>
-            renderRow(row, row.direction || row.subject),
-          )}
+          {legacy.map((row) => renderRow(row, row.subject))}
         </details>
       )}
       <>
@@ -449,7 +511,10 @@ export function LaboratoryPanel(props: Props) {
                 }
                 onClick={() => {
                   props.onSave(form);
-                  props.onClose();
+                  setEditing(false);
+                  setMessage(
+                    'Заготовка добавлена в черновик. Сохраните шаблон.',
+                  );
                 }}
               >
                 Сохранить заготовку
