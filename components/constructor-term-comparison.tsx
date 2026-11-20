@@ -16,7 +16,16 @@ export type TermComparisonSide = {
   warning: string;
 };
 type Status = 'pending' | 'accepted' | 'rejected' | 'deferred';
-export type TermComparisonAction = 'accept' | 'reject' | 'defer';
+export type TermComparisonChoice = 'original' | 'sheet' | 'current';
+type PreviewLesson = Omit<TermComparisonSide, 'kind' | 'warning'>;
+type ChoicePlan = { token: string; before: PreviewLesson[]; after: PreviewLesson[] };
+export type TermComparisonChoices = Record<TermComparisonChoice, ChoicePlan | { unavailable: string }>;
+
+const choiceLabels: Record<TermComparisonChoice, string> = {
+  original: 'Вернуть исходный вариант',
+  sheet: 'Взять вариант из таблицы',
+  current: 'Оставить рабочую копию',
+};
 type RosterEvidence = {
   sources: { gid: string | number; range: string; label: string }[];
   historical: string;
@@ -50,7 +59,7 @@ type TermComparisonItem = {
   initial_status?: Status;
   assessment?: Assessment;
 };
-type Decision = { key: string; status: Status; reason: string; lesson_id?: string; confirmed_at?: string };
+type Decision = { key: string; status: Status; reason: string; lesson_id?: string; confirmed_at?: string; choice?: TermComparisonChoice | 'manual' };
 export type TermComparisonSource = {
   term2_preparation?: {
     comparison?: {
@@ -64,7 +73,7 @@ type Lesson = TermComparisonSide & { id: string; label: string };
 type Comparison = NonNullable<NonNullable<TermComparisonSource['term2_preparation']>['comparison']>;
 const statusLabels: Record<Status, string> = {
   pending: 'Требуют решения',
-  accepted: 'Приняты',
+  accepted: 'Решённые',
   rejected: 'Отклонены',
   deferred: 'Отложены',
 };
@@ -83,7 +92,7 @@ const priorityLabels: Partial<Record<number, string>> = {
 };
 const itemStatusLabels: Record<Status, string> = {
   pending: 'Требует решения',
-  accepted: 'Принято',
+  accepted: 'Вопрос закрыт',
   rejected: 'Отклонено',
   deferred: 'Отложено',
 };
@@ -151,7 +160,7 @@ function RosterEvidenceDetails({ evidence }: { evidence: RosterEvidence }) {
   </details>;
 }
 
-function SideDetails({ side }: { side: TermComparisonSide }) {
+function SideDetails({ side }: { side: PreviewLesson & { warning?: string } }) {
   return <>
     <strong>{side.subject || 'Запись без названия'}</strong>
     <p>{[days[side.day], side.start && side.end ? `${side.start}–${side.end}` : side.start, ...side.classes].filter(Boolean).join(' · ')}</p>
@@ -164,29 +173,36 @@ function SideDetails({ side }: { side: TermComparisonSide }) {
   </>;
 }
 
-function Side({ title, side, emptyText = 'Записи нет', candidates }: {
+function Side({ title, side, emptyText = 'Записи нет', candidates, action, selected, disabled, onChoose }: {
   title: string;
   side: TermComparisonSide | null;
   emptyText?: string;
   candidates?: TermComparisonSide[];
+  action?: TermComparisonChoice;
+  selected?: boolean;
+  disabled?: boolean;
+  onChoose?: (choice: TermComparisonChoice) => void;
 }) {
-  return <div className="constructor-term-side">
+  return <div className="constructor-term-side" data-selected={selected || undefined}>
     <h4>{title}</h4>
     {side ? <SideDetails side={side} /> : <p>{emptyText}</p>}
     {candidates?.length ? <details className="constructor-term-candidates">
       <summary>Возможные исходные занятия · {candidates.length}</summary>
       <ul>{candidates.map((candidate, index) => <li key={index}><SideDetails side={candidate} /></li>)}</ul>
     </details> : null}
+    {action && onChoose ? <button type="button" aria-pressed={Boolean(selected)}
+      disabled={disabled} onClick={() => onChoose(action)}>{choiceLabels[action]}</button> : null}
   </div>;
 }
 
 export function ConstructorTermComparison({
-  comparison, name, lessons, initialKey, suspended = false, dirty, readOnly, onClose, onSelect, onOpenLesson, onOpenSlot, onDecide,
+  comparison, name, lessons, initialKey, revision, suspended = false, dirty, readOnly, onClose, onSelect, onOpenLesson, onOpenSlot, onPreview, onApply, onDefer,
 }: {
   comparison: Comparison;
   name: string;
   lessons: Lesson[];
   initialKey: string | null;
+  revision: number;
   suspended?: boolean;
   dirty: boolean;
   readOnly: boolean;
@@ -194,13 +210,15 @@ export function ConstructorTermComparison({
   onSelect: (key: string | null) => void;
   onOpenLesson: (id: string, related?: string[], title?: string) => void;
   onOpenSlot: (side: TermComparisonSide, mayCreate?: boolean) => void;
-  onDecide: (key: string, action: TermComparisonAction, reason: string, lessonId?: string) => Promise<void>;
+  onPreview: (key: string) => Promise<TermComparisonChoices>;
+  onApply: (key: string, choice: TermComparisonChoice, token: string) => Promise<void>;
+  onDefer: (key: string) => Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const detailHeading = useRef<HTMLHeadingElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const decisionReason = useRef<HTMLTextAreaElement>(null);
+  const previewHeading = useRef<HTMLHeadingElement>(null);
   const previousKey = useRef<string | null>(initialKey);
   useEffect(() => {
     const node = dialog.current;
@@ -216,8 +234,9 @@ export function ConstructorTermComparison({
   const [shown, setShown] = useState(20);
   const [selectedKey, setSelectedKey] = useState(initialKey);
   const [busy, setBusy] = useState(false);
-  const [reason, setReason] = useState('');
-  const [chosenId, setChosenId] = useState('');
+  const [selectedChoice, setSelectedChoice] = useState<{
+    key: string; revision: number; choice: TermComparisonChoice; plan?: TermComparisonChoices[TermComparisonChoice];
+  } | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const decisions = new Map((comparison.decisions || []).map(decision => [decision.key, decision]));
@@ -255,7 +274,8 @@ export function ConstructorTermComparison({
     if (dayFilter && String(row.day) !== dayFilter ||
         classFilter && !row.classes.includes(classFilter) ||
         typeFilter && row.type !== typeFilter) return false;
-    if (!search) return row.status === status;
+    if (row.status !== status) return false;
+    if (!search) return true;
     return [row.type, row.item.note, row.item.sheet_text, row.item.assessment?.reason, row.item.assessment?.term1_text, ...row.item.cells,
       ...row.classes, weekdays[row.day],
       ...[row.item.before, row.item.after, ...(row.item.assessment?.original_candidates || [])].flatMap(side => side ? [side.subject, side.room, ...side.classes, ...side.teachers, ...side.groups] : [])]
@@ -287,38 +307,58 @@ export function ConstructorTermComparison({
   const chooseItem = (key: string | null) => {
     setSelectedKey(key);
     onSelect(key);
-    setReason('');
-    setChosenId('');
+    setSelectedChoice(null);
     setError('');
     setMessage('');
     scrollTop();
   };
-  const decide = async (action: TermComparisonAction) => {
-    if (!current || dirty || readOnly || busy || !reason.trim()) return;
+  const selectedPlan = selectedChoice?.key === selectedKey && selectedChoice.revision === revision
+    ? selectedChoice.plan : undefined;
+  useEffect(() => {
+    if (selectedPlan && 'token' in selectedPlan) previewHeading.current?.focus();
+  }, [selectedPlan]);
+  const chooseVariant = async (choice: TermComparisonChoice) => {
+    if (!current || dirty || readOnly || busy) return;
+    const key = current.item.key;
+    setError('');
+    setSelectedChoice({ key, revision, choice });
+    setBusy(true);
+    try {
+      const previews = await onPreview(key);
+      setSelectedChoice({ key, revision, choice, plan: previews[choice] });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Не удалось показать вариант.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveDecision = async (defer = false) => {
+    if (!current || dirty || readOnly || busy) return;
+    if (!defer && (!selectedChoice || !selectedPlan || !('token' in selectedPlan))) return;
     setBusy(true);
     setError('');
-    setMessage('');
     try {
-      await onDecide(current.item.key, action, reason.trim(), action === 'accept' ? chosenId || current.item.lesson_id : undefined);
-      setReason('');
-      setChosenId('');
-      setMessage('Решение сохранено в черновике.');
-      scrollTop();
+      if (defer) {
+        await onDefer(current.item.key);
+      } else if (selectedChoice && selectedPlan && 'token' in selectedPlan) {
+        await onApply(current.item.key, selectedChoice.choice, selectedPlan.token);
+      }
+      chooseItem(null);
+      setMessage(defer ? 'Вопрос отложен.' : 'Решение сохранено в рабочей копии.');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Не удалось сохранить решение.');
     } finally {
       setBusy(false);
     }
   };
-  const linkedLessonId = current && (chosenId || decisions.get(current.item.key)?.lesson_id || current.item.lesson_id);
+  const linkedLessonId = current && (decisions.get(current.item.key)?.lesson_id || current.item.lesson_id);
   const currentEdit = lessons.find(lesson => lesson.id === linkedLessonId);
   const destination = current?.item.after;
   const proposedMove = currentEdit && destination && (
     currentEdit.day !== destination.day || currentEdit.start !== destination.start || currentEdit.end !== destination.end
   );
-  const choices = destination ? lessons.filter(lesson =>
-    destination.day === lesson.day && destination.start === lesson.start && destination.end === lesson.end) : [];
-  const preventDecision = dirty || readOnly || busy || !reason.trim();
+  const preventDecision = dirty || readOnly || busy;
+  const choose = canDecide && !readOnly ? (choice: TermComparisonChoice) => void chooseVariant(choice) : undefined;
 
   return <div hidden={suspended} className={suspended ? undefined : "constructor-conflict-backdrop"}>
     <dialog ref={dialog} className="constructor-conflict-dialog constructor-publication-panel constructor-term-dialog" aria-labelledby="constructor-term-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
@@ -331,78 +371,68 @@ export function ConstructorTermComparison({
           <button type="button" disabled={busy} onClick={() => chooseItem(null)}>К списку</button>
           <h3 ref={detailHeading} tabIndex={-1}>{current.item.cells.join(', ') || 'Настройки'} · {current.type}</h3>
           <p className="constructor-term-state">{itemStatusLabels[current.status]}{current.priority === 1 ? ' · высокий приоритет' : ''}</p>
-          <div className="constructor-term-assessment">
-            <h4>{automaticallyResolved
-              ? assessment?.category === 'equivalent' ? 'Совпадение подтверждено' : 'Учтено при подготовке копии'
-              : assessment?.category === 'proposal' ? 'Предложение по расписанию' : 'Основание для проверки'}</h4>
-            <p>{assessment?.reason || current.item.note}</p>
-          </div>
-          {relatedItems.length ? <div className="constructor-term-assessment">
-            <h4>Связанные позиции</h4>
-            <div className="constructor-term-actions">
-              {relatedItems.map(item => {
-                const cells = item.cells.join(', ') || item.key;
-                return <button type="button" key={item.key} disabled={busy}
-                  aria-label={`Открыть связанную позицию ${cells}`} onClick={() => chooseItem(item.key)}>{cells}</button>;
-              })}
-            </div>
-          </div> : null}
+          {canDecide ? <p>Выберите вариант и проверьте, что изменится. Подтверждение сохраняет результат в рабочей копии.</p> : null}
           <div className="constructor-term-sides">
-            <Side title="Сохранённый исходный шаблон" side={current.item.before} emptyText="Связь с исходным занятием не установлена" candidates={assessment?.original_candidates} />
-            <Side title="Таблица второго триместра" side={current.item.after} />
-            <Side title="Текущая рабочая копия" side={currentEdit || null} emptyText={linkedLessonId
+            <Side title="Исходный шаблон" side={current.item.before} emptyText={current.item.kind === 'added'
+              ? 'Записи не было.' : 'Связь с исходным занятием не установлена.'} candidates={assessment?.original_candidates}
+              action="original" selected={selectedChoice?.choice === 'original'} disabled={preventDecision} onChoose={choose} />
+            <Side title="Таблица II триместра" side={current.item.after}
+              action="sheet" selected={selectedChoice?.choice === 'sheet'} disabled={preventDecision} onChoose={choose} />
+            <Side title="Рабочая копия" side={currentEdit || null} emptyText={linkedLessonId
               ? 'Связанного занятия больше нет в рабочей копии.'
-              : 'Для этой строки занятие ещё не сопоставлено.'} />
+              : 'Для этой строки занятие ещё не сопоставлено.'}
+              action="current" selected={selectedChoice?.choice === 'current'} disabled={preventDecision} onChoose={choose} />
           </div>
-          {current.item.sheet_text ? <details className="constructor-review-detail" open>
-            <summary>Текст из таблицы</summary>
-            <p className="constructor-term-literal">{current.item.sheet_text}</p>
-          </details> : null}
-          {assessment?.term1_text ? <details className="constructor-review-detail">
-            <summary>Ячейка в таблице I триместра</summary>
-            <p className="constructor-term-literal">{assessment.term1_text}</p>
-          </details> : null}
-          {assessment?.roster_evidence ? <RosterEvidenceDetails evidence={assessment.roster_evidence} /> : null}
-          {assessment?.options?.length && !automaticallyResolved ? <div className="constructor-term-assessment">
-              <h4>Варианты решения</h4>
-              <ul className="constructor-term-options">{assessment.options.map((option, index) => <li key={index}>
-                <span>{option}</span>
-                {canDecide && !readOnly ? <button type="button" disabled={busy} aria-label={`Подставить в обоснование: ${option}`} onClick={() => {
-                  setReason(option.slice(0, 1000));
-                  decisionReason.current?.focus();
-                }}>Подставить в обоснование</button> : null}
-              </li>)}</ul>
-          </div> : null}
-          {current.decision ? <p><strong>Решение администратора.</strong> {current.decision.reason}</p> : null}
-          {currentHistory.length > 1 ? <details className="constructor-review-detail">
-            <summary>История решений · {currentHistory.length}</summary>
-            <ul>{currentHistory.map((decision, index) => <li key={index}>{statusLabels[decision.status]} · {decision.reason}</li>)}</ul>
-          </details> : null}
+          {dirty ? <p role="alert">Сохраните изменения в конструкторе перед подтверждением варианта.</p> : null}
+          {busy && !selectedPlan && selectedChoice ? <output>Готовим предпросмотр…</output> : null}
+          {selectedPlan && 'unavailable' in selectedPlan ? <output>{selectedPlan.unavailable}</output> : null}
+          {error ? <p role="alert">{error}</p> : null}
+          {canDecide && selectedPlan && 'token' in selectedPlan ? <section className="constructor-term-result" aria-label="Что изменится">
+            <h4 ref={previewHeading} tabIndex={-1}>Что изменится</h4>
+            {!selectedPlan.before.length && !selectedPlan.after.length ? <p>Расписание останется как сейчас. Вопрос закроется.</p> : <>
+              {selectedPlan.before.length ? <div><strong>Сейчас</strong><ul>{selectedPlan.before.map((lesson, i) => <li key={i}><SideDetails side={lesson} /></li>)}</ul></div> : null}
+              <div><strong>После подтверждения</strong>{selectedPlan.after.length
+                ? <ul>{selectedPlan.after.map((lesson, i) => <li key={i}><SideDetails side={lesson} /></li>)}</ul>
+                : <p>Связанное занятие будет удалено из рабочей копии.</p>}</div>
+            </>}
+          </section> : null}
+          {current.decision ? <output>{current.decision.reason}</output> : null}
           {!canDecide
             ? currentEdit ? <button type="button" onClick={() => onOpenLesson(currentEdit.id, relatedItems.flatMap(item => item.lesson_id || []), [current.item.cells.join('/'), assessment?.type || 'Сверка с таблицей'].join(' · '))}>Открыть связанное занятие</button> : null
             : <>
-            <p>Чтобы принять предложение, внесите и сохраните правку в конструкторе. Чтобы оставить текущее расписание, выберите «Отклонить».</p>
             <div className="constructor-term-actions">
-              {currentEdit ? <button type="button" disabled={busy} onClick={() => onOpenLesson(currentEdit.id, relatedItems.flatMap(item => item.lesson_id || []), [current.item.cells.join('/'), assessment?.type || 'Сверка с таблицей'].join(' · '))}>Открыть связанное занятие</button> : null}
+              {currentEdit ? <button type="button" disabled={busy} onClick={() => onOpenLesson(currentEdit.id, relatedItems.flatMap(item => item.lesson_id || []), [current.item.cells.join('/'), assessment?.type || 'Сверка с таблицей'].join(' · '))}>Изменить вручную в конструкторе</button> : null}
               {proposedMove ? <button type="button" disabled={busy} onClick={() => onOpenSlot(destination, false)}>Показать предложенный слот</button> : null}
               {!currentEdit && !destination && current.item.before ? <button type="button" disabled={busy} onClick={() => onOpenSlot(current.item.before!, false)}>Показать прежний слот</button> : null}
               {!currentEdit && destination ? <button type="button" disabled={busy} onClick={() => onOpenSlot(destination)}>Открыть день и слот</button> : null}
-            </div>
-            {dirty ? <p role="alert">Сохраните изменения в конструкторе перед фиксацией решения.</p> : null}
-            {!current.item.lesson_id && destination ? <label>Занятие после правки
-              <select disabled={busy || readOnly} value={chosenId} onChange={event => setChosenId(event.target.value)}>
-                <option value="">Выберите сохранённое занятие</option>
-                {choices.map(lesson => <option key={lesson.id} value={lesson.id}>{lesson.label}</option>)}
-              </select>
-            </label> : null}
-            <label>Основание решения<textarea ref={decisionReason} disabled={busy || readOnly} maxLength={1000} rows={2} value={reason} onChange={event => setReason(event.target.value)} /></label>
-            {error ? <p role="alert">{error}</p> : null}
-            <div className="constructor-term-actions">
-              <button type="button" disabled={preventDecision} onClick={() => void decide('defer')}>Отложить</button>
-              <button type="button" disabled={preventDecision} onClick={() => void decide('reject')}>Отклонить</button>
-              <button type="button" className="admin-button admin-button--primary" disabled={preventDecision || !(current.item.lesson_id || chosenId)} onClick={() => void decide('accept')}>Принять сохранённую правку</button>
+              {!readOnly ? <button type="button" disabled={preventDecision} onClick={() => void saveDecision(true)}>Отложить</button> : null}
             </div>
           </>}
+          <details className="constructor-review-detail">
+            <summary>{automaticallyResolved ? 'Почему вопрос закрыт' : 'Почему возник вопрос'}</summary>
+            <p>{assessment?.reason || current.item.note}</p>
+            {assessment?.options?.length && !automaticallyResolved ? <ul>{assessment.options.map(option => <li key={option}>{option}</li>)}</ul> : null}
+            {relatedItems.length ? <div className="constructor-term-actions" aria-label="Связанные позиции">
+              {relatedItems.map(item => {
+                const cells = item.cells.join(', ') || item.key;
+                return <button type="button" key={item.key} disabled={busy} aria-label={`Открыть связанную позицию ${cells}`}
+                  onClick={() => chooseItem(item.key)}>{cells}</button>;
+              })}
+            </div> : null}
+            {current.item.sheet_text ? <details className="constructor-review-detail">
+              <summary>Текст из таблицы</summary>
+              <p className="constructor-term-literal">{current.item.sheet_text}</p>
+            </details> : null}
+            {assessment?.term1_text ? <details className="constructor-review-detail">
+              <summary>Ячейка в таблице I триместра</summary>
+              <p className="constructor-term-literal">{assessment.term1_text}</p>
+            </details> : null}
+            {assessment?.roster_evidence ? <RosterEvidenceDetails evidence={assessment.roster_evidence} /> : null}
+            {currentHistory.length > 1 ? <details className="constructor-review-detail">
+              <summary>История решений · {currentHistory.length}</summary>
+              <ul>{currentHistory.map((decision, index) => <li key={index}>{statusLabels[decision.status]} · {decision.reason}</li>)}</ul>
+            </details> : null}
+          </details>
         </section> : <>
           <div className="constructor-publication-filters" aria-label="Статусы сверки">
             {Object.entries(statusLabels).map(([key, label]) => <button type="button" key={key} aria-pressed={!search && status === key} onClick={() => { setStatus(key as Status); setQuery(''); setShown(20); }}>
@@ -458,7 +488,11 @@ export function ConstructorTermComparison({
 
         </>}
       </div>
-      <footer><button type="button" disabled={busy} onClick={onClose}>К конструктору</button></footer>
+      <footer className="constructor-term-actions">
+        <button type="button" disabled={busy} onClick={onClose}>К конструктору</button>
+        {canDecide && selectedPlan && 'token' in selectedPlan ? <button type="button" className="admin-button admin-button--primary"
+          disabled={preventDecision} onClick={() => void saveDecision()}>Подтвердить вариант</button> : null}
+      </footer>
     </dialog>
   </div>;
 }

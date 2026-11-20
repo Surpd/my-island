@@ -1192,7 +1192,7 @@ def delete_experiment(database: Database, experiment_id: str) -> None:
         raise ExperimentNotFound(experiment_id)
 
 
-def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, term_comparison_key: str | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
     clean = _clean_payload(payload)
     _validate_day_modes(database, clean)
     clean["lessons"] = validate_activity_lessons(clean["lessons"], list_activities(database, include_archived=True))
@@ -1208,7 +1208,9 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     if current_week:
         clean["week_start"] = current_week
     from backend.services.schedule_term_comparison import retain_term_comparison
-    retain_term_comparison(clean, current["payload"], record_edits=not _trusted_resolution_history)
+    retain_term_comparison(clean, current["payload"], record_edits=not _trusted_resolution_history,
+                           review_key=term_comparison_key, actor_user_id=actor_user_id,
+                           audience_database=audience_database or database)
 
     def lesson_key(lesson: Mapping[str, Any], index: int) -> str:
         return str(lesson.get("id") or f"index:{index}")

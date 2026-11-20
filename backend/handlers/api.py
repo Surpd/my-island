@@ -46,7 +46,9 @@ from backend.services.schedule_experiments import (
     duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
 from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_teacher_directory_evidence
-from backend.services.schedule_term_comparison import record_term_comparison_decision
+from backend.services.schedule_term_comparison import (
+    apply_term_comparison_choice, preview_term_comparison_choices, record_term_comparison_decision,
+)
 from backend.services.school_experiment_workspace import (
     cached_audience_snapshot, import_school_template, school_directory, school_drafts, school_source,
 )
@@ -308,6 +310,7 @@ class ScheduleExperimentSavePayload(BaseModel):
     expected_revision: int
     payload: dict
     name: str | None = None
+    term_comparison_key: str | None = Field(default=None, min_length=1, max_length=360)
 
 
 class ScheduleExperimentAudiencePreviewPayload(BaseModel):
@@ -373,9 +376,17 @@ class SchoolTemplateNormalizePayload(BaseModel):
     expected_plan_hash: str
 
 
-class ScheduleTermComparisonDecisionPayload(BaseModel):
+class ScheduleTermComparisonPosition(BaseModel):
     expected_revision: int = Field(ge=1)
     key: str = Field(min_length=1, max_length=360)
+
+
+class ScheduleTermComparisonApplyPayload(ScheduleTermComparisonPosition):
+    choice: Literal["original", "sheet", "current"]
+    preview_token: str = Field(min_length=64, max_length=64)
+
+
+class ScheduleTermComparisonDecisionPayload(ScheduleTermComparisonPosition):
     action: Literal["accept", "reject", "defer"]
     reason: str = Field(min_length=1, max_length=1000)
     lesson_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -1630,6 +1641,41 @@ def create_router(database: Database) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/term-comparison/choices")
+    def admin_school_term_comparison_choices(experiment_id: str, payload: ScheduleTermComparisonPosition,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        source, store = school_stores()
+        try:
+            return preview_term_comparison_choices(store, experiment_id, audience_database=source, **payload.model_dump())
+        except ExperimentNotFound as error:
+            raise HTTPException(404, "Черновик не найден.") from error
+        except ExperimentConflict as error:
+            raise HTTPException(409, "Черновик изменился. Откройте актуальную редакцию.") from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/term-comparison/apply")
+    def admin_school_term_comparison_apply(experiment_id: str, payload: ScheduleTermComparisonApplyPayload,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        source, store = school_stores()
+        try:
+            return apply_term_comparison_choice(store, experiment_id, actor_user_id=actor["id"],
+                                                audience_database=source, **payload.model_dump())
+        except ExperimentNotFound as error:
+            raise HTTPException(404, "Черновик не найден.") from error
+        except ExperimentConflict as error:
+            raise HTTPException(409, "Черновик изменился. Откройте актуальную редакцию.") from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+
     @router.post("/admin/schedule/experiments/school/{experiment_id}/term-comparison/decision")
     def admin_school_term_comparison_decision(experiment_id: str, payload: ScheduleTermComparisonDecisionPayload,
             init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
@@ -1948,7 +1994,7 @@ def create_router(database: Database) -> APIRouter:
             source, store = school_stores()
             return save_experiment(store, experiment_id, expected_revision=payload.expected_revision,
                                    payload=payload.payload, name=payload.name, actor_user_id=actor["id"],
-                                   audience_database=source)
+                                   audience_database=source, term_comparison_key=payload.term_comparison_key)
         except ExperimentConflict as error:
             raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:

@@ -41,7 +41,7 @@ import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
 import { ConstructorScheduleExport } from './constructor-schedule-export';
-import { ConstructorTermComparison, type TermComparisonAction, type TermComparisonSide, type TermComparisonSource } from './constructor-term-comparison';
+import { ConstructorTermComparison, type TermComparisonChoice, type TermComparisonChoices, type TermComparisonSide, type TermComparisonSource } from './constructor-term-comparison';
 import { normalizeRoomKey, normalizeRoomDisplay, normalizeRoomInput } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
@@ -1110,6 +1110,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const save = async () => {
     const current = draftRef.current;
     if (!current || savingRef.current || !dirty) return !dirty;
+    const termComparisonKey = route?.origin === 'comparison' && comparisonFocus?.draftId === current.id
+      ? comparisonFocus.key : undefined;
     const prepared = prepareOptionalActivityPayload(current.payload, activities);
     if (prepared.problems.length) {
       setSaveFailed(true);
@@ -1141,7 +1143,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       try {
         const saved = await api<Draft>(schedulePath(`/${encodeURIComponent(server.id)}`), {
           method: 'PUT',
-          body: JSON.stringify({ expected_revision: server.revision, name: merged.draft.name, payload: preparedMerge.payload }),
+          body: JSON.stringify({ expected_revision: server.revision, name: merged.draft.name, payload: preparedMerge.payload, term_comparison_key: termComparisonKey }),
         });
         return { saved, server, conflicts: [] };
       } catch (mergeError) {
@@ -1166,6 +1168,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             expected_revision: expectedRevision,
             name: current.name,
             payload: prepared.payload,
+            term_comparison_key: termComparisonKey,
           }),
         },
       );
@@ -1320,6 +1323,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           expected_revision: server.revision,
           name: merge.draft.name,
           payload: merge.draft.payload,
+          term_comparison_key: route?.origin === 'comparison' && comparisonFocus?.draftId === server.id
+            ? comparisonFocus.key : undefined,
         }),
       });
       revision.current = resolved.revision;
@@ -2428,13 +2433,22 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const termComparison = schoolReview && !payload?.week_start ? payload?.school_source?.term2_preparation?.comparison : undefined;
   const termDecided = new Set(termComparison?.decisions?.map(decision => decision.key));
   const pendingTermItems = termComparison?.items.filter(item => item.initial_status !== 'accepted' && !termDecided.has(item.key)).length || 0;
-  const decideTermComparison = async (key: string, action: TermComparisonAction, reason: string, lessonId?: string) => {
-    if (!draft || dirty || saving || !termComparison) return;
+  const termChoicePath = (id: string, step: string) =>
+    schedulePath(`/${encodeURIComponent(id)}/term-comparison/${step}`);
+  const previewTermChoices = async (key: string) => {
+    if (!draft) throw new Error('Откройте рабочую копию.');
+    return api<TermComparisonChoices>(termChoicePath(draft.id, 'choices'), {
+      method: 'POST', body: JSON.stringify({ expected_revision: draft.revision, key }),
+    });
+  };
+  const saveTermDecision = async (key: string, choice?: TermComparisonChoice, token?: string) => {
+    if (!draft || dirty || saving || !termComparison) throw new Error('Сначала сохраните рабочую копию.');
     let updated: Draft;
     try {
-      updated = await api<Draft>(schedulePath(`/${encodeURIComponent(draft.id)}/term-comparison/decision`), {
+      updated = await api<Draft>(termChoicePath(draft.id, choice ? 'apply' : 'decision'), {
         method: 'POST',
-        body: JSON.stringify({ expected_revision: draft.revision, key, action, reason, lesson_id: lessonId }),
+        body: JSON.stringify({ expected_revision: draft.revision, key,
+          ...(choice ? { choice, preview_token: token } : { action: 'defer', reason: 'Решение отложено.' }) }),
       });
     } catch (failure) {
       if ((failure as Error & { status?: number }).status === 409) {
@@ -2449,6 +2463,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     revision.current = updated.revision;
     baseDraftRef.current = updated;
     setDraft(updated);
+    setAudienceSnapshot(null);
     void refreshDrafts().catch(() => {});
   };
   const rosterClassId = classFilter || (selected
@@ -2527,7 +2542,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         <button type="button" className="admin-button" onClick={openTermComparison}>Сверка с таблицей</button>
       </div> : null}
       {draft && termComparison && comparisonOpen ? <ConstructorTermComparison
-        key={draft.id} comparison={termComparison} name={draft.name} suspended={route?.origin === 'comparison'} dirty={dirty || saving} readOnly={readOnlySchoolWorkspace}
+        key={draft.id} comparison={termComparison} name={draft.name} revision={draft.revision} suspended={route?.origin === 'comparison'} dirty={dirty || saving} readOnly={readOnlySchoolWorkspace}
         initialKey={comparisonFocus?.draftId === draft.id ? comparisonFocus.key : null}
         lessons={draft.payload.lessons.map(lesson => {
           const classes = visualClasses(lesson, groups).map(id => groups.find(group => group.id === id)?.name).filter((label): label is string => Boolean(label));
@@ -2559,7 +2574,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           showIssueLesson(id,'comparison',title || 'Сверка с таблицей',[...related,...partners]);
         }}
         onOpenSlot={openComparisonSlot}
-        onDecide={decideTermComparison} /> : null}
+        onPreview={previewTermChoices} onApply={saveTermDecision} onDefer={key => saveTermDecision(key)} /> : null}
       {draft && exportOpen ? <ConstructorScheduleExport
         api={api} id={draft.id} revision={draft.revision} name={draft.name}
         path={schedulePath(`/${encodeURIComponent(draft.id)}/export`)} readOnly={schoolReview && readOnlySchoolWorkspace}

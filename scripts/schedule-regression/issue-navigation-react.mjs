@@ -285,7 +285,7 @@ async function modern(page, width) {
   step = `comparison pair S11/U11 at ${width}`;
   let term = await openTerm(page);
   let detail = await openTermPosition(term, 'S11');
-  await button(detail, 'Открыть связанное занятие').click();
+  await button(detail, 'Изменить вручную в конструкторе').click();
   route = await inspectAt(page, fixture.cases.S11, fixture.cases.U11, width, 'Понедельник');
   const scroll = await page.locator(grid).evaluate(element => ({ left: element.scrollLeft, top: element.scrollTop }));
   assert.ok(scroll.top > 0, 'Late lesson scrolls vertically');
@@ -299,10 +299,11 @@ async function modern(page, width) {
   step = `roster M43 editor and return at ${width}`;
   term = await openTerm(page);
   detail = await openTermPosition(term, 'M43');
+  await detail.getByText('Почему возник вопрос', { exact:true }).click();
   await detail.getByText(/Сведения о составах/).click();
   await detail.getByText(/Два ручных исключения\./).scrollIntoViewIfNeeded();
   await screenshot(page, `after-problem-detail-${width}.png`);
-  await button(detail, 'Открыть связанное занятие').focus();
+  await button(detail, 'Изменить вручную в конструкторе').focus();
   await page.keyboard.press('Enter');
   route = await inspectAt(page, fixture.cases.M43, null, width, 'Четверг');
   if (width < 900) await button(route, 'Редактировать занятие').click();
@@ -328,7 +329,7 @@ async function modern(page, width) {
   step = `unconfirmed group and missing slot at ${width}`;
   term = await openTerm(page);
   detail = await openTermPosition(term, 'I39');
-  await button(detail, 'Открыть связанное занятие').click();
+  await button(detail, 'Изменить вручную в конструкторе').click();
   route = await inspectAt(page, fixture.cases.GROUP, null, width, 'Среда');
   if (width < 900) await button(route, 'Редактировать занятие').click();
   await inspector.getByRole('heading', { name: 'Практикум без группы', exact: true }).waitFor();
@@ -338,7 +339,7 @@ async function modern(page, width) {
   await button(term, 'К конструктору').click();
   term = await openTerm(page);
   detail = await openTermPosition(term, 'M23');
-  await button(detail, 'Открыть связанное занятие').click();
+  await button(detail, 'Изменить вручную в конструкторе').click();
   route = await inspectAt(page, fixture.cases.MOVE, null, width, 'Вторник');
   await backToGrid(page, route);
   await button(route, 'К проверке').click();
@@ -426,6 +427,47 @@ async function correctRoom(initial) {
     await context.close();
   }
 }
+async function confirmLunchVariant() {
+  step = 'apply one verified lunch slot directly from comparison';
+  const { context, page, errors } = await session(390);
+  try {
+    const initial = await readApi(experiment + fixture.id);
+    await openDraft(page);
+    const comparison = await openTerm(page);
+    const detail = await openTermPosition(comparison, 'G8');
+    await button(detail, 'Взять вариант из таблицы').click();
+    const result = detail.getByRole('region', { name: 'Что изменится', exact: true });
+    await result.waitFor();
+    await result.getByText('Обед', { exact: true }).waitFor();
+    await result.getByText('Пн · 12:45–13:30 · 7-А · 8-Т', { exact: true }).waitFor();
+    assert.deepEqual(await readApi(experiment + fixture.id), initial);
+    await button(comparison, 'Подтвердить вариант').click();
+    await comparison.getByText('Решение сохранено в рабочей копии.', { exact: true }).waitFor();
+    const saved = await readApi(experiment + fixture.id);
+    assert.equal(saved.revision, initial.revision + 1);
+    assert.equal(saved.payload.lessons.length, initial.payload.lessons.length + 1);
+    const english = saved.payload.lessons.find(row => row.id === fixture.cases.G8);
+    const lunch = saved.payload.lessons.find(row => row.specialMark === 'lunch');
+    assert.deepEqual(english.classIds, [fixture.classes['7-А'], fixture.classes['8-Т']]);
+    assert.deepEqual(lunch.classIds, [fixture.classes['7-Б']]);
+    await comparison.getByRole('searchbox', { name: 'Поиск по сверке' }).fill('G8');
+    assert.equal(await comparison.locator('[data-term-row="cells:G8"]').count(), 0);
+    const adjacent = await openTermPosition(comparison, 'J8');
+    await button(adjacent, 'Оставить рабочую копию').click();
+    await adjacent.getByText('Расписание останется как сейчас. Вопрос закроется.', { exact:true }).waitFor();
+    await button(comparison, 'Подтвердить вариант').click();
+    await comparison.getByText('Решение сохранено в рабочей копии.', { exact: true }).waitFor();
+    const kept = await readApi(experiment + fixture.id);
+    assert.deepEqual(kept.payload.lessons, saved.payload.lessons);
+    assert.deepEqual(kept.payload.school_source.term2_preparation.comparison.decisions.slice(-2)
+      .map(row => [row.key, row.choice]), [['cells:G8','sheet'], ['cells:J8','current']]);
+    assert.deepEqual(errors, []);
+    console.log('PASS choose Sheets lunch and keep the next row directly in mobile comparison');
+  } finally {
+    await context.close();
+  }
+}
+
 try {
   const initial = await readApi(experiment + fixture.id);
   const primary = await readApi(experiment + fixture.primary_id);
@@ -457,6 +499,7 @@ try {
   }
   assert.deepEqual(await readApi(experiment + fixture.id), initial, 'Review and slot navigation leave the draft unchanged');
   if (!before && widths.includes(1366)) await correctRoom(initial);
+  if (!before && widths.includes(390)) await confirmLunchVariant();
   assert.deepEqual(violations, []);
   assert.deepEqual(await readApi(experiment + fixture.primary_id), primary);
   await writeFile(dataDir + `/issue-navigation-${before ? 'before' : 'after'}.json`, JSON.stringify({ results, shots, trace }, null, 2));

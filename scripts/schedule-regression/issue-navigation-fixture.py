@@ -80,7 +80,10 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
             "audience_snapshot": {"student_ids": confirmed},
         }
 
+    english_lunch = group("Английский · смешанная группа", "Английский",
+                          [*people["7-А"], *people["7-Б"], *people["8-Т"]], teacher_ids[0])
     cases = {
+        "G8": lesson("G8", 0, 4, "Английский", teacher_ids[0], "8", ["7-А", "7-Б", "8-Т"], group_id=english_lunch),
         "Q53": lesson("Q53", 4, 1, "Английский ЕГЭ", teacher_ids[0], "18", ["10-Т", "11-Т"], group_id=eng),
         "T53": lesson("T53", 4, 1, "Физика ЕГЭ", teacher_ids[1], "16", ["11-Т"], group_id=phys_11),
         "S11": lesson("S11", 0, 7, "Физика ЕГЭ", teacher_ids[2], "17", ["10-Т", "11-Т"], group_id=phys_shared),
@@ -110,7 +113,7 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
             "classes": [labels_by_class[g] for g in value["classIds"]], "subject": value["subject"],
             "room": value["room"], "teachers": [teacher_names[t] for t in value["teacherIds"]],
             "groups": [label for label, gid in groups.items() if gid in value["groupIds"]],
-            "kind": "lesson", "warning": value.get("clarificationReason", ""),
+            "kind": value.get("specialMark", "lesson"), "warning": value.get("clarificationReason", ""),
         }
 
     def item(cell, before, after, reason, kind, linked=None, related=(), roster_evidence=None, mode=None):
@@ -134,7 +137,14 @@ def seed_issue_navigation(database: Database, fixture: dict) -> dict:
         "overrides": "Два ручных исключения.", "reliability": "Подтверждены два исключения и текущий состав.",
         "outcome": "clarified", "reason": "Колонка 9-Д сама по себе не подтверждает участие.",
     }
+    lunch_proposal = {**cases["G8"], "subject": "Обед", "specialMark": "lunch", "teacherIds": [], "groupIds": [],
+                      "room": "", "classIds": [class_ids["7-Б"]],
+                      "clarificationReason": "Уточните, относится ли обед ко всему классу."}
     items = [
+        item("G8", cases["G8"], lunch_proposal, "Обед для 7-Б вместо части общего занятия.",
+             "Связь исходных ячеек", cases["G8"]),
+        item("J8", cases["G8"], {**lunch_proposal, "classIds": [class_ids["8-Т"]]},
+             "Соседнее предложение из другой ячейки.", "Связь исходных ячеек", cases["G8"]),
         item("Q53", cases["Q53"], cases["Q53"], "Двое учеников попадают на английский и физику одновременно.",
              "Пересечение составов", cases["Q53"], ("T53",)),
         item("T53", cases["T53"], cases["T53"], "Физика пересекается с тем же практикумом английского.",

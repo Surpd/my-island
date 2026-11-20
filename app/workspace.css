@@ -1315,3 +1315,10 @@
 .constructor-directory-tools summary { cursor:pointer; padding:6px 10px; }
 .constructor-directory-tools[open] a { display:inline-block; margin:4px 8px; }
 .constructor .constructor-cell[data-issue-slot=true] { outline:3px solid #344883; outline-offset:-3px; background-color:#e5ecfa; }
+.constructor-term-side[data-selected] { border-color:#405489; background:#f4f6fb; }
+.constructor-term-side button { display:block; margin-block-start:10px; }
+.constructor-term-result { display:grid; gap:8px; padding:12px; border:1px solid var(--cp-line); border-radius:8px; }
+.constructor-term-result h4,.constructor-term-result ul { margin:0; }
+.constructor-term-result li + li { margin-block-start:6px; }
+.constructor-term-result dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:4px 8px; }
+.constructor-term-result dd { margin:0; }
