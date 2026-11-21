@@ -4,6 +4,7 @@ import {
   LEGACY_TEACHER_COLORS_KEY,
   TEACHER_COLOR_PALETTE,
   TeacherColorRegistry,
+  readableTeacherText,
 } from './teacher-color-registry.ts';
 
 class MockStorage {
@@ -214,4 +215,11 @@ test('scope isolates assignments and storage reload observes another tab update'
   external.setColor('shared-id', '#123456');
   first.reload([teacher('shared-id')]);
   assert.equal(first.color('shared-id'), '#123456');
+});
+
+test('school fills use the higher-contrast text, including manual colors near the crossover', () => {
+  for (const background of ['#1155CC', '#674EA7', '#274E13', '#000000', '#757575'])
+    assert.equal(readableTeacherText(background), '#ffffff');
+  for (const background of ['#FF0000', '#00FF00', '#F7F75B', '#CCCCCC', '#767676'])
+    assert.equal(readableTeacherText(background), '#000000');
 });

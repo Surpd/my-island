@@ -53,6 +53,12 @@ function hexToHsl(hex: string) {
   return { hue: (hue + 360) % 360, saturation: saturation * 100, lightness: lightness * 100 };
 }
 
+export function readableTeacherText(hex: string) {
+  const rgb = [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)/255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4);
+  const luminance = .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+  return (luminance + .05) ** 2 >= .0525 ? '#000000' : '#ffffff';
+}
+
 export function teacherAccentForOverride(hex: string) {
   const { hue, saturation, lightness } = hexToHsl(hex);
   return hslToHex(hue, Math.max(55, saturation), Math.max(6, Math.min(38, lightness * 0.68)));

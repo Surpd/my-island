@@ -626,7 +626,7 @@
 .campus-shell .constructor-ux .constructor-card small { line-height:1.25; }
 .campus-shell .constructor-ux .constructor-cell-lessons { gap:4px; }
 .campus-shell .constructor-ux .constructor-cell-lessons.many { row-gap:4px; }
-.campus-shell .constructor-ux .constructor-day-band { top:32px; }
+.campus-shell .constructor-ux .constructor-day-band { top:32px; background:#344d64; color:white; border-top:3px solid #243a51; }
 .campus-shell .constructor-ux .constructor-editor-actions { position:sticky; bottom:-14px; z-index:5; display:none; align-items:center; gap:7px; padding:10px 0; border-top:1px solid var(--cp-line); background:white; font-size:11px; }
 .campus-shell .constructor-ux .constructor-editor-actions span { flex:1; color:var(--cp-muted); }
 .campus-shell .constructor-ux .constructor-editor-actions button { display:flex; align-items:center; gap:5px; padding:6px 8px; border:1px solid var(--cp-line); background:white; border-radius:6px; font-size:12px; }
@@ -1281,7 +1281,9 @@
 .constructor-export-full-details { min-width:0; }
 .constructor-export-full-wrap { box-sizing:border-box; width:100%; max-height:min(54dvh,470px); overscroll-behavior:contain; }
 .constructor-export-full-wrap:focus-visible { outline:2px solid var(--cp-blue); outline-offset:2px; }
-.constructor-export-full-wrap > .constructor-export-sample { position:relative; width:max-content; min-width:100%; }
+.constructor-export-full-wrap > .constructor-export-sample { position:relative; width:max-content; min-width:100%; gap:0; }
+.constructor-export-full-wrap .constructor-export-sample > div { box-shadow:inset -1px -1px var(--cp-line); }
+.constructor-export-full-wrap [data-sheet-time] { position:sticky; inset-inline-start:0; z-index:1; }
 .constructor-export-day-nav { display:flex; flex-wrap:wrap; gap:6px; }
 .constructor-export-day-nav button {
   min-height:38px; padding:6px 10px; border:1px solid var(--cp-line);
@@ -1289,7 +1291,7 @@
 }
 .constructor-export-full-details > p { margin-block:8px; color:var(--cp-muted); }
 @media (min-width:901px) {
-  .campus-shell .constructor-export-dialog:has(.constructor-export-full-details[open]) { width:min(1180px,calc(100vw - 40px)); max-width:none; }
+  .campus-shell .constructor-export-dialog:has(.constructor-export-full-details[open]) { width:min(1326px,calc(100vw - 32px)); max-width:none; }
 }
 
 @media (min-width:901px) {
@@ -1322,3 +1324,33 @@
 .constructor-term-result li + li { margin-block-start:6px; }
 .constructor-term-result dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:4px 8px; }
 .constructor-term-result dd { margin:0; }
+
+.constructor-sheet-link { display: inline-grid; align-items: start; gap: 2px; }
+.constructor-sheet-link a { padding: 5px 8px; color: var(--cp-ink, #20334a); text-decoration: underline; }
+.constructor-sheet-link small { max-width: 24ch; font-size: 11px; line-height: 1.2; }
+.campus-shell .constructor-ux .constructor-cell { border-inline-start:2px solid #64768b; border-block-start:2px solid #a3afbd; }
+.campus-shell .constructor-ux .constructor-cell-lessons { column-gap:2px; }
+.campus-shell .constructor-ux .constructor-cell-lessons > .constructor-card { border-inline-end:1px solid #9aa9b9; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-grid { min-width: max-content; }
+.campus-shell .constructor-ux .constructor-day-overview :is(.constructor-cell,.constructor-time) { min-height:37px; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell:not(:has(.constructor-cell-entry-wrap)) {
+  position:relative; grid-template-rows:1fr; padding:2px;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell:not(:has(.constructor-cell-entry-wrap)) .constructor-cell-add {
+  position:absolute; bottom:1px; right:2px; opacity:0; pointer-events:none;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell-add:focus-visible { opacity:1; pointer-events:auto; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-cell-lessons { gap:1px; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card {
+  min-height:31px; min-width:0; padding:2px; text-align:center; align-items:center;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card strong {
+  font-size:10px; line-height:1.1; white-space:normal; overflow-wrap:anywhere;
+}
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card small { font-size:9px; line-height:1.1; }
+.campus-shell .constructor-ux .constructor-day-overview .constructor-card[data-optional] { border-bottom:2px solid #8557ad; }
+.constructor-export-sample .constructor-export-cell-link {
+  background:transparent; color:inherit; font:inherit; text-align:inherit; padding:0; width:100%; min-height:0;
+  line-height:inherit; white-space:inherit; border:0; border-radius:0; cursor:pointer;
+}
+.constructor-export-sample .constructor-export-cell-link:hover { text-decoration:underline; }

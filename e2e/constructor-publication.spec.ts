@@ -28,6 +28,7 @@ type PreviewPayload = {
     message: string;
     lesson_id?: string;
     related_lesson_ids?: string[];
+    affected_student_ids?: string[];
     context?: { day: number; start: string; end: string; subject: string; teachers: string[]; groups: string[] };
   }[];
   summary: { ready_lessons: number; deferred_lessons: number; deferred_blocks: number; unchanged_lessons: number; replaced_lessons: number; info_count: number; conflict_count: number; critical_count: number };
@@ -68,7 +69,7 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   };
 }
 
-async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean } = {}) {
+async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean } = {}) {
   let previewCount = 0;
   let publishPayload: Record<string, unknown> | null = null;
   let historyItems: Record<string, unknown>[] = [];
@@ -82,8 +83,9 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       return route.fulfill({ json: { items: [{ id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, updated_at: '2026-10-27T08:00:00Z', is_primary_template: true, draft_kind: 'school', lesson_count: 1, event_count: 0, group_count: 1, day_count: 1 }] } });
     }
     if (path.endsWith('/schedule/experiments/school/directory')) {
-      return route.fulfill({ json: { groups: [{ id: 'group-fixture', name: '7А', display_name: '7А', group_type: 'class', base_class_name: '7' }], teachers: [{ id: 'teacher-fixture', display_name: 'Анна Учитель' }], students: [], rooms: [] } });
+      return route.fulfill({ json: { groups: [{ id: 'group-fixture', name: '7А', display_name: '7А', group_type: 'class', base_class_name: '7' }], teachers: [{ id: 'teacher-fixture', display_name: 'Анна Учитель' }], students: [{id: 'student-fixture', display_name: 'Мария Тестова'}], rooms: [] } });
     }
+    if (path.endsWith('/export/link')) return route.fulfill({ json: { url: 'https://docs.google.com/spreadsheets/d/synthetic/edit#gid=1088', current: true, revision: 1, previous_revision: null } });
     if (path === '/api/admin/schedule/experiments/school/audience-preview') return route.fulfill({json:{lessons:{}}});
     if (path === '/api/admin/school/teacher-ui-colors') return route.fulfill({json:{items:[]}});
     if (path === '/api/admin/schedule/observability') return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [], canonical: { version_id: 'base-version-hidden-in-ui', status: 'authoritative' } } });
@@ -104,7 +106,10 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/preview` && route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as { scope_kind: 'template' | 'week'; week_start?: string };
       previewCount += 1;
-      return route.fulfill({ json: preview(`ui-preview-token-${previewCount}`, { ...options, scope: body.scope_kind, week: body.week_start }) });
+      const data = preview(`ui-preview-token-${previewCount}`, { ...options, scope: body.scope_kind, week: body.week_start });
+      if (options.studentOverlap) data.diagnostics.push({severity: 'conflict', code: 'student_overlap', message: '',
+        lesson_id: 'lesson-conflict', related_lesson_ids: ['lesson-related'], affected_student_ids: ['student-fixture']});
+      return route.fulfill({ json: data });
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish` && route.request().method() === 'POST') {
       publishPayload = route.request().postDataJSON() as Record<string, unknown>;
@@ -224,4 +229,45 @@ test('changing publication scope clears confirmation and publish uses the latest
   await page.getByRole('button', { name: 'История публикаций', exact: true }).click();
   const history = page.getByRole('dialog', { name: 'История публикаций' });
   await expect(history.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
+});
+
+test('показывает имя из справочника в единой карточке и прямую ссылку на выгрузку', async ({page}) => {
+  const {dialog} = await openPublicationPanel(page, {studentOverlap: true});
+  await dialog.getByLabel('Серьёзность', {exact: true}).selectOption('conflict');
+  await dialog.getByPlaceholder('Предмет, кабинет, преподаватель или фамилия ученика').fill('Тестова');
+  const issue = dialog.locator('[data-review-issue]');
+  await expect(issue).toHaveCount(1);
+  await expect(issue).toContainText('Мария Тестова');
+  await expect(issue).not.toContainText('student-fixture');
+  await dialog.getByRole('button', {name: 'Закрыть проверку', exact: true}).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('link', {name: 'Открыть таблицу', exact: true})).toHaveAttribute('href', /#gid=1088$/);
+  let writes = 0;
+  await page.route(`${API}/api/admin/schedule/experiments/school/${DRAFT_ID}/export`, route => {
+    writes += 1;
+    return route.fulfill({json: {status: 'exported', url: 'https://docs.google.com/spreadsheets/d/synthetic/edit#gid=1088'}});
+  });
+  await page.route(`${API}/api/admin/schedule/experiments/school/${DRAFT_ID}/export/preview`, route => {
+    const { expected_revision } = route.request().postDataJSON();
+    expect(expected_revision).toBe(1);
+    return route.fulfill({json: {draft_id: DRAFT_ID, revision: 1, kind: 'template', title: 'Шаблон · демо',
+      status: 'prepared', preview_token: 'fixture', summary: {lessons: 1, placements: 1, clarifications: 0, rows: 8, columns: 9},
+      grid: {rows: 8, columns: 9, column_widths: [98, ...Array(8).fill(146)], row_heights: Array(8).fill(50),
+        days: [{row: 4, label: 'Среда'}], cells: [{row: 4, col: 0, width: 1, height: 1, text: '09:00–09:45', align: 'LEFT'},
+          {row: 4, col: 8, width: 1, height: 1, text: 'Физика', align: 'LEFT'}]}}});
+  });
+  await page.getByRole('button', {name: 'Экспортировать', exact: true}).click();
+  const sheet = page.getByRole('dialog', {name: 'Экспорт в Google Sheets'});
+  await sheet.getByText('Показать весь лист').click();
+  const viewport = sheet.getByRole('region', {name: 'Лист экспорта целиком'});
+  await expect(viewport.getByText('Физика')).toBeVisible();
+  await page.setViewportSize({width: 390, height: 844});
+  await viewport.evaluate(element => {element.scrollLeft = element.scrollWidth;});
+  await expect.poll(() => viewport.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  await expect(sheet.getByRole('button', {name: 'Создать лист экспорта'})).toBeDisabled();
+  expect(writes).toBe(0);
+  await sheet.getByRole('checkbox', {name: 'Подтверждаю создание отдельного листа экспорта'}).check();
+  await sheet.getByRole('button', {name: 'Создать лист экспорта'}).click();
+  await expect(sheet.getByRole('link', {name: 'Открыть экспортированный лист'})).toHaveAttribute('href', /#gid=1088$/);
+  expect(writes).toBe(1);
 });

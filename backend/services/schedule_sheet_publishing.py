@@ -22,7 +22,8 @@ from backend.services.schedule_experiments import ExperimentConflict, get_experi
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, freeze_week, sheets_requests
 
 TEST_EXPORT_TARGET = "11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ"
-EXPORT_POLICY = "compact-activities-v3"
+EXPORT_POLICY = "school-grid-class-v8"
+PREVIOUS_POLICY = "compact-activities-v3"
 LEGACY_WEEK_POLICY = "compact-activities-v2"
 
 
@@ -129,22 +130,26 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
         return hashlib.sha256(digest_input.encode()).hexdigest()
 
     digest = export_key(EXPORT_POLICY)
-    legacy_prepared = None
+    legacy_prepared = []
     with database.connection() as connection:
         existing = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?", (digest,)).fetchone()
-        if existing is None and week:
-            legacy = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?",
-                                      (export_key(LEGACY_WEEK_POLICY),)).fetchone()
-            if legacy and legacy["status"] == "exported":
-                existing = legacy
-            elif legacy and legacy["status"] == "prepared":
-                legacy_prepared = _decode(legacy)
+        if existing is None:
+            for policy in ("school-grid-class-v7", "school-grid-class-v6", "school-grid-class-v5", "school-grid-class-v4", "school-grid-day-v3", "school-grid-horizontal-v2", "school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
+                if policy == EXPORT_POLICY:
+                    continue
+                legacy = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?",
+                                          (export_key(policy),)).fetchone()
+                if legacy and legacy["status"] == "exported" and policy == LEGACY_WEEK_POLICY:
+                    existing = legacy
+                    break
+                if legacy and legacy["status"] == "prepared":
+                    legacy_prepared.append(_decode(legacy))
     if existing:
         receipt = _decode(existing)
         _check_selected_target(receipt)
         return receipt
     with directory_database.connection() as connection:
-        groups = [dict(r) for r in directory_database.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject FROM groups ORDER BY id").fetchall()]
+        groups = [dict(r) for r in directory_database.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject,subject_subgroup,semantic_dimension FROM groups ORDER BY id").fetchall()]
         teachers = [dict(r) for r in directory_database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' ORDER BY id").fetchall()]
     for group in groups:
         group["id"] = str(group["id"])
@@ -154,19 +159,42 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
                           "school_source": payload.get("school_source")},
               "payload": payload, "groups": groups, "teachers": teachers}
     snapshot = freeze_week(source, week) if week else freeze_template(source)
+    snapshot["source"]["updated_at"] = str(draft.get("updated_at") or "")
     if presentation_colors is not None:
         for teacher in snapshot["teachers"]:
             color = presentation_colors.get(str(teacher["id"]))
             if color:
                 teacher["ui_color"] = color
     sheet_id = int(digest[:8], 16) % 2_000_000_000 + 1
-    title = f"MI · {week or 'Шаблон'} · r{expected_revision} · {digest[:6]}"
+    from backend.services.schedule_sheet_school_grid import week_caption
+    name = re.sub(r"[\[\]*?/\\:]", " ", draft["name"])
+    name = " ".join(name.split()) or "Расписание"
+    title = (f"Неделя {week_caption(week, payload['days'])}" if week else f"Шаблон · {name[:66]}")
+    title += f" · ред. {expected_revision}"
     notes = {str(l["id"]): [str(l["note"])] for l in payload["lessons"] if l.get("note")}
     plan = build_sheet_plan(snapshot, title=title, sheet_id=sheet_id, mapping_sheet_id=sheet_id+1,
-                            layout="final-compact", existing_notes=notes)
+                            layout="school-grid", existing_notes=notes)
     return {"export_key": digest, "draft_id": experiment_id, "revision": expected_revision, "target_id": target,
             "sheet_id": sheet_id, "mapping_sheet_id": sheet_id + 1, "title": title, "status": "prepared",
             "snapshot": snapshot, "plan": plan, "legacy_prepared": legacy_prepared}
+
+
+def saved_export_link(database: Database, experiment_id: str, *, expected_revision: int) -> dict[str, Any]:
+    """Find an exact-revision receipt without rendering a plan or contacting Google."""
+    draft = get_experiment(database, experiment_id)
+    if int(draft["revision"]) != expected_revision:
+        raise ExperimentConflict(draft)
+    target = _target(draft["payload"].get("school_source"))
+    with database.connection() as connection:
+        receipt = database.execute(connection, """SELECT sheet_id, revision FROM schedule_sheet_exports
+            WHERE draft_id=? AND target_id=? AND status='exported' AND revision<=?
+            ORDER BY revision DESC, updated_at DESC, export_key DESC LIMIT 1""",
+            (experiment_id, target, expected_revision)).fetchone()
+    url = _spreadsheet_url(target)
+    current = receipt is not None and receipt["revision"] == expected_revision
+    return {"url": f"{url}#gid={receipt['sheet_id']}" if current else url,
+            "current": current, "revision": expected_revision,
+            "previous_revision": receipt["revision"] if receipt and not current else None}
 
 
 def _preview_token(export: dict[str, Any]) -> str:
@@ -189,15 +217,21 @@ def preview_saved_export(database: Database, experiment_id: str, *, expected_rev
     plan = export["plan"]
     summary = {key: plan["summary"][key] for key in ("lessons", "placements", "clarifications")}
     summary.update(rows=plan["rows"], columns=plan["columns"])
-    visible_fields = ("row", "col", "height", "width", "text", "bg", "fg", "bold")
+    visible_fields = ("row", "col", "height", "width", "text", "bg", "fg", "bold", "align")
     visible_cells = [{key: cell[key] for key in visible_fields} for cell in plan["cells"]]
+    if "overview_rows" in plan:
+        for visible, original in zip(visible_cells, plan["cells"]):
+            visible["size"] = original["size"]
+            if "link_row" in original:
+                visible["link_row"] = original["link_row"]
     rows, columns = min(plan["rows"], 8), min(plan["columns"], 5)
     sample = [{**cell,
                "height": min(cell["height"], rows - cell["row"]),
                "width": min(cell["width"], columns - cell["col"])}
               for cell in visible_cells if cell["row"] < rows and cell["col"] < columns]
     row_heights = {int(row): height for row, height in plan["row_heights"].items()}
-    day_labels = {cell["row"]: cell["text"] for cell in visible_cells if cell["col"] == 1}
+    day_labels = {int(row): label for row, label in plan.get("day_labels", {}).items()} or {
+        cell["row"]: cell["text"] for cell in visible_cells if cell["col"] == 1}
     grid = {"rows": plan["rows"], "columns": plan["columns"], "cells": visible_cells,
             "column_widths": plan.get("column_widths") or [122] + [166] * (plan["columns"] - 1),
             "row_heights": [row_heights.get(row, 21) for row in range(plan["rows"])],
@@ -238,15 +272,17 @@ def complete_export(database: Database, export: dict[str, Any]) -> dict[str, Any
     return {"status": "exported", "url": url, "export_key": export["export_key"], "revision": export["revision"]}
 
 
-def _verify_remote(export: dict[str, Any], client: Any) -> bool:
-    metadata = client.spreadsheet(_check_selected_target(export))
+def _verify_remote(export: dict[str, Any], client: Any, metadata: Mapping[str, Any] | None = None) -> bool:
+    if metadata is None:
+        metadata = client.spreadsheet(_check_selected_target(export))
     by_id = {s["properties"]["sheetId"]: s["properties"] for s in metadata.get("sheets", [])}
     main, hidden = by_id.get(export["sheet_id"]), by_id.get(export["mapping_sheet_id"])
     if not main and not hidden:
         return False
-    if not main or not hidden or main["title"] != export["title"] or hidden["title"] != f"_MI {export['sheet_id']}":
+    if not main or not hidden or not hidden.get("hidden"):
         raise ValueError("Export sheet ID collision; existing tabs were not modified")
-    check = client.sheet_values(_check_selected_target(export), f"'{hidden['title']}'!A1:B1")
+    hidden_title = hidden["title"].replace("'", "''")
+    check = client.sheet_values(_check_selected_target(export), f"'{hidden_title}'!A1:B1")
     if check != [["snapshot_id", export["snapshot"]["snapshot_id"]]]:
         raise ValueError("Export snapshot does not match; existing tabs were not modified")
     return True
@@ -255,8 +291,20 @@ def _verify_remote(export: dict[str, Any], client: Any) -> bool:
 def publish_export(database: Database, export: dict[str, Any], client: Any) -> dict[str, Any]:
     # Deterministic IDs plus readback make retries safe, including a lost HTTP
     # response after Google's atomic batch was already committed.
-    if not _verify_remote(export, client):
-        requests = sheets_requests(export["plan"])
+    target = _check_selected_target(export)
+    metadata = client.spreadsheet(target)
+    if not _verify_remote(export, client, metadata):
+        # Choose a human-readable title without overwriting an older snapshot.
+        # The permanent gid and hidden snapshot, not the mutable title, establish identity.
+        titles = {item["properties"]["title"] for item in metadata.get("sheets", [])}
+        preferred = export["title"]
+        title = preferred
+        suffix = 2
+        while title in titles:
+            title = f"{preferred[:90]} ({suffix})"
+            suffix += 1
+        requests = sheets_requests({**export["plan"], "title": title}, spreadsheet_url=_spreadsheet_url(target),
+                                   frontend_url=os.getenv("FRONTEND_PUBLIC_URL", ""))
         try:
             client.batch_update_spreadsheet(_check_selected_target(export), requests)
         except GoogleLiveError:
@@ -283,11 +331,10 @@ def export_saved_schedule(database: Database, experiment_id: str, *, expected_re
                     not settings.local_test_mode and os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1"
                     and getattr(settings, "google_oauth_client_id", None) and getattr(settings, "google_oauth_client_secret", None)
                     and getattr(settings, "google_oauth_redirect_uri", None) and getattr(settings, "google_oauth_token_encryption_key", None))}
-    legacy = export.get("legacy_prepared")
-    if legacy and _verify_remote(legacy, client):
-        # A previous release might have committed the Sheets batch but lost
-        # the database receipt. Reconcile it without resending its old plan.
-        return {**_export_summary(legacy), **complete_export(database, legacy), "status": "existing"}
+    for legacy in export.get("legacy_prepared") or []:
+        if _verify_remote(legacy, client):
+            # Reconcile an upload committed before a lost response.
+            return {**_export_summary(legacy), **complete_export(database, legacy), "status": "existing"}
     recorded = _record_export(database, export)
     _check_selected_target(recorded)
     if not compare_digest(_preview_token(recorded), preview_token):

@@ -10,6 +10,7 @@ type ColorRecord = {
   teacher_id: string;
   color: string;
   base_color: string;
+  school_color?: string | null;
   manual_color: string | null;
   revision: number;
   source?: string;
@@ -145,7 +146,7 @@ export function useSchoolTeacherColors(
     setState((stateNow) => ({ ...stateNow, scope: currentScope, colors: {
       ...stateNow.colors,
       [id]: { teacher_id: id, color: hex, base_color: current?.base_color || sharedFallback(id).background,
-        manual_color: hex, revision: expectedRevision, source: current?.source },
+        school_color: current?.school_color, manual_color: hex, revision: expectedRevision, source: current?.source },
     }, error: '', notice: '' }));
     const existingTimer = saveTimers.current.get(id);
     if (existingTimer !== undefined) window.clearTimeout(existingTimer);
@@ -173,7 +174,7 @@ export function useSchoolTeacherColors(
     try {
       const result = await api<{ inserted: number; updated?: number; preserved: number }>(`${SHARED_PATH}/seed-approved`, { method: 'POST' });
       await refresh();
-      setState((current) => ({ ...current, notice: `Применены исходные цвета: ${result.inserted + (result.updated || 0)}; сохранены текущие ручные настройки: ${result.preserved}.` }));
+      setState((current) => ({ ...current, notice: `Обновлено базовых цветов — ${result.inserted + (result.updated || 0)}. Ручные цвета сохранены.` }));
     } catch (error) {
       setState((current) => ({ ...current, error: message(error) }));
     } finally {
@@ -237,6 +238,7 @@ export function useSchoolTeacherColors(
     pending: shared.pending,
     initializing: shared.initializing,
     seeding: shared.seeding,
+    schoolColors: Object.fromEntries(Object.values(shared.colors).filter(r => r.school_color).map(r => [r.teacher_id, r.school_color!])),
     unassignedCount,
     refresh,
     initialize: initializeMissing,

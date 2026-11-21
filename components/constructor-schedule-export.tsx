@@ -7,7 +7,7 @@ type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type ExportGrid = {
   rows: number;
   columns: number;
-  cells: { row: number; col: number; height: number; width: number; text: string; bg: string; fg: string; bold: boolean }[];
+  cells: { row: number; col: number; height: number; width: number; text: string; bg: string; fg: string; bold: boolean; size?: number; link_row?: number; align?: 'LEFT' | 'CENTER' | 'RIGHT' }[];
   column_widths?: number[];
   row_heights?: number[];
   days?: { row: number; label: string }[];
@@ -35,7 +35,37 @@ type ExportResult = {
   message?: string;
 };
 
-function ScheduleGrid({ grid, gridRef }: { grid: ExportGrid; gridRef?: Ref<HTMLDivElement> }) {
+type ExportLink = {url: string; current: boolean; revision: number; previous_revision: number | null};
+
+export function ScheduleExportLink({api, path, revision, dirty, refresh}: {
+  api: Api; path: string; revision: number; dirty: boolean; refresh: boolean;
+}) {
+  const key = `${path}:${revision}`;
+  const [result, setResult] = useState<{key: string; link?: ExportLink; error?: string}>();
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<ExportLink>(`${path}/link?expected_revision=${revision}`, {signal: controller.signal})
+      .then(link => { if (!controller.signal.aborted) setResult({key, link}); })
+      .catch(error => { if (!controller.signal.aborted) setResult({key, error: (error as Error).message}); });
+    return () => controller.abort();
+  }, [api, path, key, revision, refresh, retry]);
+  const current = result?.key === key ? result : undefined;
+  if (current?.error) return <button type="button" title={current.error}
+    aria-label="Открыть таблицу · повторить поиск ссылки" onClick={() => {setResult(undefined); setRetry(value => value + 1);}}>Открыть таблицу</button>;
+  if (!current?.link) return <button type="button" disabled>Открыть таблицу</button>;
+  const {link} = current;
+  return <span className="constructor-sheet-link">
+    <a href={link.url} target="_blank" rel="noopener noreferrer"
+      aria-describedby={link.current && !dirty ? undefined : 'constructor-sheet-revision'}>Открыть таблицу</a>
+    {dirty || !link.current ? <small id="constructor-sheet-revision">{link.current
+      ? `Таблица показывает сохранённую редакцию ${link.revision}`
+      : link.previous_revision === null ? 'Эта редакция ещё не выгружена'
+        : `Эта редакция ещё не выгружена · предыдущая: ${link.previous_revision}`}</small> : null}
+  </span>;
+}
+
+function ScheduleGrid({ grid, gridRef, onJump }: { grid: ExportGrid; gridRef?: Ref<HTMLDivElement>; onJump?: (row: number) => void }) {
   const columns = grid.column_widths?.length === grid.columns
     ? grid.column_widths.map(width => `${width}px`).join(' ')
     : `repeat(${grid.columns}, minmax(118px, 1fr))`;
@@ -43,10 +73,15 @@ function ScheduleGrid({ grid, gridRef }: { grid: ExportGrid; gridRef?: Ref<HTMLD
     ? grid.row_heights.map(height => `minmax(${height}px, auto)`).join(' ')
     : undefined;
   return <div ref={gridRef} className="constructor-export-sample" style={{ gridTemplateColumns: columns, gridTemplateRows: rows }}>
-    {grid.cells.map(cell => <div key={`${cell.row}:${cell.col}`} data-sheet-row={cell.row} style={{
+    {grid.cells.map(cell => <div key={`${cell.row}:${cell.col}`} data-sheet-row={cell.row} data-sheet-time={cell.col === 0 || undefined} style={{
       gridColumn: `${cell.col + 1} / span ${cell.width}`, gridRow: `${cell.row + 1} / span ${cell.height}`,
       backgroundColor: cell.bg, color: cell.fg, fontWeight: cell.bold ? 650 : 400,
-    }}>{cell.text}</div>)}
+      fontSize: cell.size ? `${cell.size * 4 / 3}px` : undefined,
+      textAlign: cell.align === 'LEFT' ? 'left' : cell.align === 'RIGHT' ? 'right' : 'center',
+      justifyItems: cell.align === 'LEFT' ? 'start' : cell.align === 'RIGHT' ? 'end' : 'center',
+    }}>{cell.link_row !== undefined && onJump
+      ? <button type="button" className="constructor-export-cell-link" onClick={() => onJump(cell.link_row!)}>{cell.text}</button>
+      : cell.text}</div>)}
   </div>;
 }
 
@@ -68,7 +103,7 @@ function FullSchedulePreview({ grid }: { grid: ExportGrid }) {
       {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- Enable keyboard scrolling of both axes. */}
       <section ref={viewport} className="constructor-export-sample-wrap constructor-export-full-wrap" tabIndex={0}
         aria-label="Лист экспорта целиком" aria-describedby="constructor-export-grid-help">
-        <ScheduleGrid grid={grid} gridRef={sheet} />
+        <ScheduleGrid grid={grid} gridRef={sheet} onJump={goToDay} />
       </section>
     </> : null}
   </details>;
@@ -158,7 +193,8 @@ export function ConstructorScheduleExport({ api, path, id, revision, name, readO
         {validPreview ? <>
           <p>{validPreview.kind === 'template' ? 'Школьный шаблон' : `Неделя с ${validPreview.week_start}`} · версия {revision}</p>
           <h3>{validPreview.title}</h3>
-          <p>Экспорт создаёт отдельный лист в таблице для выгрузок. {validPreview.target_url ? <a href={validPreview.target_url} target="_blank" rel="noreferrer">Открыть таблицу для выгрузок</a> : null}</p>
+          <p>Каждая выгрузка сохраняет редакцию черновика. Для проверки актуальности вернитесь в My Island. {validPreview.target_url ? <a href={validPreview.target_url} target="_blank" rel="noreferrer">Открыть таблицу для выгрузок</a> : null}</p>
+          <p>Ручные правки остаются в Google Sheets. Для печати выберите альбомную ориентацию и «По ширине» в настройках печати Sheets.</p>
           <div className="constructor-publication-summary" aria-label="Состав экспорта">
             <span><b>{validPreview.summary.lessons}</b> исходных занятий</span>
             <span><b>{validPreview.summary.placements}</b> размещений в сетке</span>

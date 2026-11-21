@@ -37,10 +37,12 @@ import {
 import Link from 'next/link';
 import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
+import { readableTeacherText } from './teacher-color-registry';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
+import { fixedGroup, schoolSourceLane, subgroupRank, timetableLanes } from './schedule-lanes';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
-import { ConstructorScheduleExport } from './constructor-schedule-export';
+import { ConstructorScheduleExport, ScheduleExportLink } from './constructor-schedule-export';
 import { ConstructorTermComparison, type TermComparisonChoice, type TermComparisonChoices, type TermComparisonSide, type TermComparisonSource } from './constructor-term-comparison';
 import { normalizeRoomKey, normalizeRoomDisplay, normalizeRoomInput, isVirtualRoom } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
@@ -59,6 +61,7 @@ const scheduleDataSourceLabel = String((import.meta as ImportMeta & { env?: Reco
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Raw = Record<string, any>;
 type Group = {
+  canonicalName?: string;
   id: string;
   name: string;
   group_type: string;
@@ -286,6 +289,7 @@ type Issue = {
   message: string;
   related?: string;
   category: 'conflict' | 'review' | 'incomplete' | 'import' | 'critical';
+  affectedStudentIds?: string[];
 };
 
 const DAYS = [
@@ -489,6 +493,10 @@ function ElectiveClassFields({ groups, classIds, eligibleGrades, onClassIdsChang
 function isNoLesson(lesson: Lesson) {
   return lesson.specialMark === 'no_lesson' || lesson.canonicalRole === 'explicit_no_lesson' || ['нет урока', 'нет занятия'].some((value) => sameText(lesson.subject, value));
 }
+function technicalGroup(label: string) {
+  return /индивидуальн.*состав|инд\. состав|без индивидуального назначения/i.test(label);
+}
+
 function isLunch(lesson: Lesson) {
   const assignment = lesson.canonical?.assignment || {};
   const mark = lesson.specialMark || assignment.metadata?.special_mark;
@@ -528,11 +536,13 @@ function issuesFor(
     message: string,
     related?: string,
     category?: Issue['category'],
+    affectedStudentIds?: string[],
   ) => result.push({
     lessonId,
     severity,
     message,
     related,
+    affectedStudentIds,
     category: category || (/уже ведёт|кабинет .+ занят|назначено одновременно/i.test(message) ? 'conflict' : 'incomplete'),
     type: /преподавател/i.test(message) ? 'teacher' : /кабинет/i.test(message) ? 'room' : /ученик|группа «|группа одновременно|межклассов/i.test(message) ? 'audience' : 'data',
   });
@@ -566,7 +576,7 @@ function issuesFor(
       if (!sa.start || !sb.start || sa.start >= sb.end || sb.start >= sa.end) continue;
       const describe = (lesson: Lesson) =>
         `${lessonClasses(lesson).map((id) => groups.find((item) => item.id === id)?.name || 'класс не уточнён').join(', ') || 'класс'} в ${lessonTimes(lesson,payload.slots).start || 'неуказанное время'}`;
-      const pair = (message: string) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id);
+      const pair = (message: string, studentIds?: string[]) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id, 'conflict', studentIds);
       const teacherIdsA = new Set([...(a.teacherIds || []), a.teacherId].filter(Boolean));
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
       const independentA = isSdepIndependentLesson(payload, a, groups);
@@ -584,7 +594,7 @@ function issuesFor(
       if (!independentA && !independentB && !optionalAudience && overlappingStudents.length) {
         const sample = overlappingStudents.slice(0, 3).map((studentId) => students.find((item) => item.id === studentId)?.name || 'ученик');
         const remainder = overlappingStudents.length > sample.length ? ` и ещё ${overlappingStudents.length - sample.length}` : '';
-        pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`);
+        pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`, overlappingStudents);
       }
     }
   return result.concat(payload.lessons.filter((lesson) => lesson.needsClarification || lesson.importError).filter((lesson) => !(lesson.specialMark === 'lunch' && !lesson.importError && (previews[lesson.id]?.status === 'ok' || confirmedClassLunchMarker(lesson, groups)))).map((lesson) => {
@@ -602,12 +612,6 @@ function issuesFor(
         : readableIssueReason(lesson.clarificationReason, 'Уточните, какие ученики посещают это занятие.'),
     };
   }));
-}
-
-function readableTeacherText(hex: string) {
-  const rgb = [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)/255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4);
-  const luminance = .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
-  return luminance > .25 ? '#202339' : luminance > .179 ? '#000000' : '#ffffff';
 }
 
 export function ScheduleConstructor({ api }: { api: Api }) {
@@ -695,6 +699,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [colorPanelOpen, setColorPanelOpen] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [fullScreen, setFullScreen] = useState(false);
+  const [dayOverview, setDayOverview] = useState(false);
   const [fitWidth, setFitWidth] = useState(true);
   const [conflictsOpen, setConflictsOpen] = useState(false);
   const [adminTableOpen, setAdminTableOpen] = useState(false);
@@ -862,7 +867,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       const demoGroups =
       (groupData.items || []).map((item) => ({
         id: String(item.id),
-        name: audienceLabel(item),
+        name: audienceLabel(item), canonicalName: String(item.name || ''),
         group_type: String(item.group_type),
         role: String(item.role || ''),
         semantic_dimension: String(item.semantic_dimension || ''),
@@ -892,7 +897,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         groups: [...new Set([...(item.groups || []).map((g: Raw) => String(typeof g === 'object' ? g.id : g)), ...studentMemberships(item).map((g: Raw) => String(g.group_id || g.id))])],
         classes: (item.base_classes || []).map((g: Raw) => String(g.id)),
       }));
-    const mapGroups = (items: Raw[] = []) => items.map((item) => ({ id: String(item.id), name: audienceLabel(item), group_type: String(item.group_type), role: String(item.role || ''), semantic_dimension: String(item.semantic_dimension || ''), subject: subjectLabel(item.subject), archived_at: item.archived_at || null, subject_subgroup: String(item.subject_subgroup || ''), base_class_name: String(item.base_class_name || ''), course: String(item.course || item.course_name || ''), exam_track: groupCourseContext(item) }));
+    const mapGroups = (items: Raw[] = []) => items.map((item) => ({ id: String(item.id), name: audienceLabel(item), canonicalName: String(item.name || ''), group_type: String(item.group_type), role: String(item.role || ''), semantic_dimension: String(item.semantic_dimension || ''), subject: subjectLabel(item.subject), archived_at: item.archived_at || null, subject_subgroup: String(item.subject_subgroup || ''), base_class_name: String(item.base_class_name || ''), course: String(item.course || item.course_name || ''), exam_track: groupCourseContext(item) }));
     const schoolGroups = mapGroups(schoolDirectory.groups || []);
     const schoolTeachers = (schoolDirectory.teachers || []).map((item) => ({ id: String(item.id), name: String(item.display_name || item.name), assignments: (item.assignments || item.teacher_assignments || []).filter((a: Raw) => assignmentIsActive(a)).map((a: Raw) => ({ group_id: a.group_id ? String(a.group_id) : '', subject: subjectLabel(a.subject), course: String(a.course || a.course_name || ''), grade_level: a.grade_level == null ? '' : String(a.grade_level), exam_track: String(a.exam_track || '') })) }));
     const schoolStudents = (schoolDirectory.students || []).map((item) => ({ id: String(item.id), name: String(item.display_name || item.name), groups: [...new Set([...(item.groups || []).map((g: Raw) => String(typeof g === 'object' ? g.id : g)), ...studentMemberships(item).map((g: Raw) => String(g.group_id || g.id))])], classes: (item.base_classes || item.classes || []).map((g: Raw) => String(typeof g === 'object' ? g.id : g)) }));
@@ -1522,6 +1527,18 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     return { label: item?.name || 'Класс', classIds: item ? [item.id] : [] };
   })();
   const gridColumns: GridColumn[] = classColumns;
+  const columnLanes = gridColumns.map(column => timetableLanes((payload?.days || []).flatMap(d =>
+    payload!.slots.map((_, period) => payload!.lessons.filter(lesson =>
+      overlapsSlot(lesson, d, period, payload!.slots) && (lesson.activityType === 'club' ? visualClasses(lesson, groups) : displayedClasses(lesson)).some(id => column.classIds.includes(id))
+    ).map(lesson => {
+      const instructional = linkedInstructionalGroups(lesson, groups);
+      const ids = instructional.length ? instructional.map(group => group.id) : lessonClasses(lesson);
+      const group = instructional.length === 1 ? instructional[0] : undefined;
+      const grade = canonicalGradeOfGroup(groups.find(g => g.id === column.classIds[0])) || '';
+      const remainder = lesson.audience?.kind === 'available_slot' || lesson.audienceMode === 'remainder';
+      return {id: lesson.id, fixed: remainder ? undefined : fixedGroup(group?.canonicalName || '', grade), sourceLane: schoolSourceLane(lesson.source, grade),
+        remainder, key: [...ids].sort().join('|'), rank: group && subgroupRank(group.canonicalName || group.name, group.subject_subgroup)};
+    })))));
   const gradeScopeAtColumn = (column: number) => {
     const grades = new Set((gridColumns[column]?.classIds || [])
       .map((id) => canonicalGradeOfGroup(groups.find((item) => item.id === id)))
@@ -1533,9 +1550,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       (payload?.lessons || []).filter((lesson) => overlapsSlot(lesson, candidateDay, period, payload!.slots) && displayedClasses(lesson).some((id) => column.classIds.includes(id))).length)));
     return Math.min(2.2, 1 + Math.max(0, peak - 1) * 0.22);
   };
-  const gridColumnTemplate = `68px ${gridColumns.map((column) => {
+  const horizontalDay = viewMode === "day" && gridColumns.length > 1 && columnLanes.some(group => group.width > 1);
+  const compactDay = dayOverview && viewMode === "day";
+  const gridColumnTemplate = `${compactDay ? 86 : 68}px ${gridColumns.map((column, index) => {
     const width = resizePreview?.[column.key] ?? (payload?.column_width_mode === 'manual' ? payload.column_widths?.[column.key] : undefined);
-    return width ? `${width}px` : `minmax(${fitWidth ? '0px' : `${density === 'compact' ? 115 : 145}px`}, ${columnWeight(column)}fr)`;
+    if (compactDay) {
+      const grade = gradeScopeAtColumn(index);
+      return `minmax(${grade === '9' ? 186 : grade === '7' ? 142 : 108}px, 1fr)`;
+    }
+    const minimum = horizontalDay ? columnLanes[index].width * 184 : fitWidth ? 0 : density === 'compact' ? 115 : 145;
+    return width ? `${width}px` : `minmax(${minimum}px, ${columnWeight(column)}fr)`;
+
   }).join(' ')}`;
   const beginColumnResize = (event: ReactPointerEvent<HTMLSpanElement>, key: string) => {
     if (event.button !== 0 || !payload) return;
@@ -2577,6 +2602,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               <button aria-label="Сохранить черновик" onClick={() => void save()} disabled={!dirty || saving}>
                 <Save size={16} />Сохранить
               </button>
+              <ScheduleExportLink api={api} path={schedulePath(`/${encodeURIComponent(draft.id)}/export`)}
+                revision={draft.revision} dirty={dirty} refresh={exportOpen} />
+              <button type="button" disabled={dirty || saving} onClick={() => setExportOpen(true)}>Экспортировать</button>
               {schoolReview
                 ? <button className="constructor-review-trigger" disabled={saving} onClick={() => openReviewCenter('all')}><BookOpenCheck size={16} />Проверить расписание</button>
                 : <button onClick={() => setRecalculationOpen(true)} disabled={saving}>Пересчитать аудитории</button>}
@@ -2651,6 +2679,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         day={day} classId={rosterClassId} classLabel={rosterClassLabel}
         teacherNames={Object.fromEntries(teachers.map(item => [item.id, item.name]))}
         groupNames={Object.fromEntries(groups.map(item => [item.id, item.name]))}
+        studentNames={Object.fromEntries(students.map(item => [item.id, item.name]))}
         lessonLabels={Object.fromEntries(draft.payload.lessons.map(lesson => [lesson.id, `${lesson.subject || 'Занятие'} · ${DAYS[lesson.day]}, ${lesson.start || draft.payload.slots[lesson.period]?.start || 'время не указано'}`]))}
         onClose={() => setReviewMode(null)}
         onSave={save}
@@ -2867,6 +2896,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               </details>
             </div>
             <div className="constructor-edit-tools" role="group" aria-label="Редактирование расписания">
+            {viewMode === 'day' ? <button type="button" aria-pressed={compactDay} onClick={() => {
+              setDayOverview(!dayOverview);
+              if (!dayOverview) { setPanelOpen(false); setFocus(null); setAnchor(null); }
+            }}>Обзор дня</button> : null}
             <button
               onClick={undo}
               disabled={!history.length}
@@ -3135,14 +3168,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <button onClick={backToIssues}>К проверке</button>
           </section> : null}
           <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
-            <div ref={gridWrap} className={`constructor-grid-wrap ${density}`} onScroll={(event) => {
+            <div ref={gridWrap} className={`constructor-grid-wrap ${density} ${compactDay ? "constructor-day-overview" : ""}`} onScroll={(event) => {
               if (!restoringGridScroll.current) gridScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop };
             }}>
               <div
                 className="constructor-grid"
                 style={{
                   gridTemplateColumns: gridColumnTemplate,
-                  zoom: fitWidth ? 1 : zoom / 100,
+                  zoom: compactDay || fitWidth ? 1 : zoom / 100,
                 }}
               >
                 <div className="constructor-corner">Время</div>
@@ -3215,7 +3248,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           (!teacherFilter || item.teacherId === teacherFilter || item.teacherIds?.includes(teacherFilter)) &&
                           (!subjectFilter || subjectLabel(item.subject) === subjectFilter) &&
                           (!query || `${item.subject} ${item.room} ${groups.find((g) => g.id === item.groupId)?.name || ''} ${teachers.find((t) => t.id === item.teacherId)?.name || ''}`.toLocaleLowerCase('ru').includes(query.toLocaleLowerCase('ru'))),
-                      ).sort((a, b) => a.classId.localeCompare(b.classId));
+                      );
+                      const lanes = columnLanes[col];
+                      const layout = lanes.layouts[payload.days.indexOf(cellDay) * payload.slots.length + period];
                       return (
                         <div
                           key={column.key}
@@ -3277,13 +3312,39 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             setContext({ x: event.clientX, y: event.clientY });
                           }}
                         >
-                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${lessons.length > 3 ? 2 : Math.max(1, lessons.length)}, minmax(0, 1fr))` }}>
+                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${layout?.columns || 1}, minmax(0, 1fr))` }}>
                             {lessons.map((item) => {
+                              const placement = layout?.positions.get(item.id);
+                              const primaryTeacher = item.teacherId || item.teacherIds?.find(Boolean);
+                              const teacherFill = item.specialMark === 'lunch' ? '#FABF8F' : item.specialMark === 'no_lesson' ? '#F3F4F6' :
+                                item.kind === 'event' || item.activityType === 'event' ? '#D9EAD3' : primaryTeacher ? teacherRegistry.color(primaryTeacher) : '#F1F3F8';
                               const roomCaption = lessonOnline(payload, item, groups) ? 'Онлайн' : normalizeRoomDisplay(item.room);
                               const localGroups = linkedInstructionalGroupsForColumn(item, groups, students, column.classIds);
                               const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups, localGroups);
                               const isAvailableSlot = audienceOf(item, groups).kind === 'available_slot';
                               const classCaption = visualClasses(item, groups).filter((id) => column.classIds.includes(id)).map((id) => groups.find((g) => g.id === id)?.name || id).join(', ');
+                              const group = localGroups.length === 1 ? localGroups[0] : undefined;
+                              const rank = group && subgroupRank(group.canonicalName || group.name, group.subject_subgroup);
+                              const legacyCode = group?.subject_subgroup || (rank === undefined ? '' :
+                                (group?.canonicalName || group?.name || '').startsWith('grade9-math-') ? 'ABC'[rank] : String(rank + 1));
+                              const lunch = isLunch(item);
+                              const fixed = fixedGroup(group?.canonicalName || '', gradeScopeAtColumn(col));
+                              const groupCode = fixed ? (fixed.width === 3 ? '9' + 'ABC'[fixed.lane] : '7-' + (fixed.lane+1))
+                                : legacyCode || group?.exam_track || group?.name.match(/(?:^|[ ·])([ОЕ]ГЭ)(?:$|[ ·])/u)?.[1] || '';
+                              const lunchScope = isAvailableSlot || item.audienceMode === 'remainder' ? 'Остальные'
+                                : item.audience?.kind === 'classes' || item.audience?.kind === 'students' ? ''
+                                : fixed ? groupCode
+                                : localGroups.filter(g=>g.group_type !== 'class').map(g=>audienceShortLabel(g)).filter(label=>!technicalGroup(label)).join(', ');
+                              const subject = lunch ? ['Обед', lunchScope].filter(Boolean).join(' · ') : subjectLabel(item.subject) || 'Занятие';
+                              const schoolLabel = shortSubject(subject);
+                              const words = subject.match(/[\p{L}\d]+/gu) || [];
+                              const abbreviation = words.length > 1 ? words.slice(0, 4).map(word => word[0].toUpperCase()).join('') : `${words[0]?.slice(0, 3) || 'Зан'}.`;
+                              const compactLabel = item.activityType === 'laboratory' ? 'Лаб' :
+                                item.activityType === 'consultation' ? 'Конс' : item.activityType === 'practice' ? 'Пр' :
+                                schoolLabel.length <= (lessons.length > 2 ? 5 : 12) && !schoolLabel.includes('…') ? schoolLabel : abbreviation;
+                              const sessionMark = item.period !== period ? '↳' : lessonClasses(item).length > 1 ? '↔' : '';
+                              const roomCode = roomCaption === 'Онлайн' ? 'Онл' : roomCaption.match(/^(?:каб\.\s*)?(\d+\p{L}?)$/u)?.[1];
+                              const optional = ['club', 'elective', 'consultation'].includes(item.activityType || '');
                               return (
                                 <button
                                   id={`lesson-${item.id}-${row}-${col}`}
@@ -3291,8 +3352,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   data-issue-target={route?.active === item.id ? 'current' : route?.ids.includes(item.id) ? 'related' : undefined}
                                   key={item.id}
                                   data-lesson-id={item.id}
-                                  title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${roomCaption || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
-                                  style={{ backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
+                                  data-optional={optional || undefined}
+                                  aria-label={compactDay ? `${subject} · ${classCaption}${groupCode ? ` · группа ${groupCode}` : ''}` : undefined}
+                                  title={`${placement?.unresolved ? 'Позиция среди подгрупп не подтверждена\n' : ''}${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${roomCaption || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
+                                  style={{ gridRow: (placement?.row ?? 0) + 1, gridColumn: placement ? `${placement.col + 1} / span ${placement.span}` : undefined, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? teacherFill : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' ? readableTeacherText(teacherFill) : '#202339' } as React.CSSProperties}
                                   className={`constructor-card ${item.kind === 'event' ? 'event' : ''} ${item.kind === 'event' || item.end && item.end !== payload.slots[item.period]?.end ? `multislot ${item.period !== period ? 'event-continuation' : ''} ${overlapsSlot(item, cellDay, period + 1, payload.slots) ? 'event-continues' : ''}` : ''} ${selectedId === item.id ? 'active' : ''} ${conflictsOpen && issues.some((issue) => (issue.lessonId === item.id || issue.related === item.id) && issue.severity === 'error') ? 'error' : conflictsOpen && issues.some((issue) => issue.lessonId === item.id || issue.related === item.id) ? 'warning' : ''}`}
                                   draggable
                                   onDragStart={(event) => {
@@ -3320,6 +3383,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     selectCell(row, col);
                                     setSelectedId(item.id);
                                     setPanelMode('lesson');
+                                    if (compactDay) setPanelOpen(true);
                                   }}
                                   onDoubleClick={(event) => {
                                     event.stopPropagation();
@@ -3328,14 +3392,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                     setPanelOpen(true);
                                   }}
                                 >
-                                  <span>
+                                  {compactDay ? <span>
+                                    <strong>{lunch ? 'Обед' : compactLabel}</strong>
+                                    <small>{[lunch ? '' : sessionMark, lunch ? lunchScope : groupCode, lunch ? '' : roomCode, optional ? '＋' : ''].filter(Boolean).join(' ')}</small>
+                                  </span> : <span>
                                     <strong>
-                                      {item.kind === 'event' ? <>◆ {item.subject}{item.period !== period ? ' ↳' : ''}</> : <><span className="constructor-subject-short">{item.period !== period ? '↳ ' : ''}{englishCaption?.short || shortSubject(subjectLabel(item.subject) || 'Новый урок')}</span><span className="constructor-subject-full">{item.period !== period ? '↳ ' : ''}{englishCaption?.full || subjectLabel(item.subject) || 'Новый урок'}</span></>}
+                                      {lunch ? subject : item.kind === 'event' ? <>◆ {item.subject}{item.period !== period ? ' ↳' : ''}</> : <><span className="constructor-subject-short">{item.period !== period ? '↳ ' : ''}{englishCaption?.short || shortSubject(subjectLabel(item.subject) || 'Новый урок')}</span><span className="constructor-subject-full">{item.period !== period ? '↳ ' : ''}{englishCaption?.full || subjectLabel(item.subject) || 'Новый урок'}</span></>}
                                     </strong>
                                     {item.activityType === 'practice' || item.activityType === 'consultation' || item.activityType === 'laboratory' ? <small>{item.activityType === 'practice' ? 'Практикум' : item.activityType === 'consultation' ? 'Консультация' : 'Лаборатория'}</small> : null}
-                                    {item.activityType !== 'club' ? <small>{lessonClasses(item).length > 1 ? <span title="Совместное занятие">↔ </span> : null}{isAvailableSlot ? 'Все остальные' : localGroups.length ? localGroups.map((group) => audienceShortLabel(group)).join(', ') : classCaption || 'Участники требуют уточнения'}</small> : null}
-                                    {item.activityType !== 'club' || item.teacherId || item.room || item.place || item.teacherIds?.length ? <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || (item.activityType === 'club' ? '' : '—'))}{roomCaption ? ` · ${roomCaption}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small> : null}
-                                  </span>
+                                    {!lunch && item.activityType !== 'club' ? <small>{lessonClasses(item).length > 1 ? <span title="Совместное занятие">↔ </span> : null}{isAvailableSlot ? 'Все остальные' : localGroups.length ? localGroups.map((group) => audienceShortLabel(group)).filter(label=>!technicalGroup(label)).join(', ') : classCaption || 'Участники требуют уточнения'}</small> : null}
+                                    {!lunch && (item.activityType !== 'club' || item.teacherId || item.room || item.place || item.teacherIds?.length) ? <small className="constructor-teacher-line">{shortTeacher(teachers.find((t) => t.id === item.teacherId)?.name || (item.activityType === 'club' ? '' : '—'))}{roomCaption ? ` · ${roomCaption}` : item.place ? ` · ${item.place}` : ''}{[...new Set(item.teacherIds || [])].filter(id => id !== item.teacherId).map(id => <i key={id} className="constructor-co-teacher" style={{background:teacherRegistry.accent(id)}} title={teachers.find(t=>t.id===id)?.name || 'Преподаватель не найден'}>{shortTeacher(teachers.find(t=>t.id===id)?.name || '—')}</i>)}</small> : null}
+                                  </span>}
                                   {conflictsOpen && issues.some(
                                     (issue) => issue.lessonId === item.id || issue.related === item.id,
                                   ) ? (
@@ -3827,11 +3894,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             >{panelOpen ? <ChevronRight size={18} aria-hidden="true" /> : <ChevronLeft size={18} aria-hidden="true" />}</button>
           </div>
           <footer className="constructor-footer">
-            <span>
+            {compactDay ? <span>Нажмите на занятие для деталей · ＋ кружок или занятие по выбору · ↔ совместное · ↳ продолжение</span> : <span>
               Клик — ячейка · Enter — урок · Esc — весь слот · Shift+стрелки —
               диапазон · Ctrl/Cmd+C/X/V — копировать, вырезать, вставить ·
               Alt+перетаскивание — копия
-            </span>
+            </span>}
 
           </footer>
           {context ? (
