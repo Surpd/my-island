@@ -524,7 +524,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(export['snapshot']['snapshot_id'], baseline['snapshot_id'])
         self.assertEqual(export['snapshot']['payload'], baseline['payload'])
         self.assertFalse(any('ui_color' in row for row in export['snapshot']['payload']['lessons']))
-        card_color = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in (18, 171, 239))
+        card_color = "#12ABEF"
         self.assertTrue(any(cell["bg"] == card_color for cell in export["plan"]["cells"]))
 
 

@@ -103,7 +103,13 @@ class TeacherUiColorsTests(unittest.TestCase):
         self.assertEqual(chosen["manual_color"], "#123456")
 
     def test_approved_source_color_keeps_original_hex_and_allows_duplicates(self):
-        self.assertEqual(len(APPROVED_SOURCE_COLORS), 14)
+        self.assertEqual(APPROVED_SOURCE_COLORS["6fd01ff4-e729-49ea-9c32-df540263de86"]["color"], "#1155CC")
+        ivan = "6fd01ff4-e729-49ea-9c32-df540263de86"
+        default = get_color(self.db, "school-a", ivan)
+        self.assertEqual((default["color"], default["revision"]), ("#1155CC", 0))
+        saved = set_manual_color(self.db, "school-a", ivan, "#123456", 0)
+        self.assertEqual(saved["school_color"], "#1155CC")
+        self.assertEqual(reset_manual_color(self.db, "school-a", ivan, saved["revision"])["color"], "#1155CC")
         seed_approved(self.db, "school-a")
         teacher_id = list(APPROVED_SOURCE_COLORS)[1]
         self.assertEqual(get_color(self.db, "school-a", teacher_id)["base_color"], "#4285F4")

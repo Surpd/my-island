@@ -37,6 +37,7 @@ import {
 import Link from 'next/link';
 import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
+import { readableTeacherText } from './teacher-color-registry';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
 import { subgroupRank, timetableLanes } from './schedule-lanes';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
@@ -607,12 +608,6 @@ function issuesFor(
         : readableIssueReason(lesson.clarificationReason, 'Уточните, какие ученики посещают это занятие.'),
     };
   }));
-}
-
-function readableTeacherText(hex: string) {
-  const rgb = [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)/255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4);
-  const luminance = .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
-  return luminance > .25 ? '#202339' : luminance > .179 ? '#000000' : '#ffffff';
 }
 
 export function ScheduleConstructor({ api }: { api: Api }) {
@@ -3309,6 +3304,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         >
                           <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${Math.max(1, lessons.length)}, minmax(0, 1fr))` }}>
                             {lessons.map((item) => {
+                              const primaryTeacher = item.teacherId || item.teacherIds?.find(Boolean);
+                              const teacherFill = item.specialMark === 'lunch' ? '#FABF8F' : item.specialMark === 'no_lesson' ? '#F3F4F6' :
+                                item.kind === 'event' || item.activityType === 'event' ? '#D9EAD3' : primaryTeacher ? teacherRegistry.color(primaryTeacher) : '#F1F3F8';
                               const roomCaption = lessonOnline(payload, item, groups) ? 'Онлайн' : normalizeRoomDisplay(item.room);
                               const localGroups = linkedInstructionalGroupsForColumn(item, groups, students, column.classIds);
                               const englishCaption = item.kind === 'event' ? null : englishLessonCaption(item, groups, localGroups);
@@ -3338,7 +3336,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   data-optional={optional || undefined}
                                   aria-label={compactDay ? `${subject} · ${classCaption}${groupCode ? ` · группа ${groupCode}` : ''}` : undefined}
                                   title={`${englishCaption?.full || item.subject}\n${isAvailableSlot ? 'Все остальные' : linkedInstructionalGroups(item, groups).map((group) => audienceLabel(group)).join(', ') || classCaption || 'Группа не определена'}\n${isAvailableSlot ? 'Все остальные' : classCaption || 'Класс не определён'}\n${teachers.find((t) => t.id === item.teacherId)?.name || 'Без учителя'} · ${roomCaption || 'Без кабинета'}${item.kind === 'event' ? `\n${item.start || ''}–${item.end || ''} · ${item.place || ''}\n${item.description || ''}` : ''}`}
-                                  style={{ gridRow: 1, order: placements?.get(item.id) ?? 0, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? (item.teacherId ? teacherRegistry.color(item.teacherId) : '#f1f3f8') : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' && item.teacherId ? readableTeacherText(teacherRegistry.color(item.teacherId)) : '#202339' } as React.CSSProperties}
+                                  style={{ gridRow: 1, order: placements?.get(item.id) ?? 0, backgroundColor: colorMode === 'none' ? undefined : colorMode === 'teacher' ? teacherFill : stableColor(subjectLabel(item.subject) || 'none'), '--teacher-accent': colorMode === 'teacher' && item.teacherId ? teacherRegistry.accent(item.teacherId) : '#8290aa', '--teacher-text': colorMode === 'teacher' ? readableTeacherText(teacherFill) : '#202339' } as React.CSSProperties}
                                   className={`constructor-card ${item.kind === 'event' ? 'event' : ''} ${item.kind === 'event' || item.end && item.end !== payload.slots[item.period]?.end ? `multislot ${item.period !== period ? 'event-continuation' : ''} ${overlapsSlot(item, cellDay, period + 1, payload.slots) ? 'event-continues' : ''}` : ''} ${selectedId === item.id ? 'active' : ''} ${conflictsOpen && issues.some((issue) => (issue.lessonId === item.id || issue.related === item.id) && issue.severity === 'error') ? 'error' : conflictsOpen && issues.some((issue) => issue.lessonId === item.id || issue.related === item.id) ? 'warning' : ''}`}
                                   draggable
                                   onDragStart={(event) => {

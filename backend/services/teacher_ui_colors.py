@@ -30,6 +30,14 @@ APPROVED_SOURCE_COLORS: dict[str, dict[str, str]] = {
     "468c238b-4071-488b-88f6-91fc769e137c": {"color": "#F4CCCC", "evidence": "observed_legend_activity_filtered"},
     "358f479c-5cf7-483f-a094-47b83320c373": {"color": "#34A853", "evidence": "observed_legend_activity_filtered"},
     "8876cefa-5451-40e6-8541-f76711dc923a": {"color": "#674EA7", "evidence": "observed_legend_activity_filtered"},
+    "35a9b104-d966-444b-93db-468dbb3a937e": {"color": "#660000", "evidence": "term2_I30_r98_grade8_training"},
+    "32237364-b204-410e-ac1c-e783aa85a331": {"color": "#00FFFF", "evidence": "term2_T18_T19_T28_T29_r98_advanced_math"},
+    "6fd01ff4-e729-49ea-9c32-df540263de86": {"color": "#1155CC", "evidence": "term2_F5_F6_F30"},
+    "e1ac596f-345b-4c92-a063-e5a19aeef395": {"color": "#F7F75B", "evidence": "term2_B5_G6_D8"},
+    "4eefa015-e866-4df6-9aff-d3d25bc304ea": {"color": "#FFFF00", "evidence": "term2_B20_D21_F22"},
+    "29c9c9a7-fcb9-4d6f-bfed-88eb74958c3c": {"color": "#000000", "evidence": "term2_D5_B29"},
+    "0713e82b-76b8-4ab6-8fcb-0caff6bcf4b0": {"color": "#EA9999", "evidence": "term2_D10_P8"},
+    "c9468cb8-4692-467b-92ea-1c5eba3ed290": {"color": "#46BDC6", "evidence": "term2_D20_D21_D30"},
 }
 
 
@@ -107,14 +115,17 @@ def _require_teacher(database: Database, teacher_id: Any) -> str:
 
 
 def _public(row: Any, *, missing_id: str | None = None) -> dict[str, Any]:
+    identity = str(missing_id or row["teacher_identity_id"])
+    approved = APPROVED_SOURCE_COLORS.get(identity, {}).get("color")
     if row is None or not _row_dict(row).get("base_color"):
-        identity = str(missing_id or (row["teacher_identity_id"] if row is not None else ""))
-        return {"teacher_id": identity, "color": _fallback(identity), "base_color": _fallback(identity),
-                "manual_color": None, "revision": 0, "source": "fallback"}
+        base = approved or _fallback(identity)
+        return {"teacher_id": identity, "color": base, "base_color": base, "school_color": approved,
+                "manual_color": None, "revision": 0, "source": "approved_default" if approved else "fallback"}
     value = _row_dict(row)
-    return {"teacher_id": str(value["teacher_identity_id"]),
-            "color": value["manual_color"] or value["base_color"],
-            "base_color": value["base_color"], "manual_color": value["manual_color"],
+    base = approved if approved and value["base_source"] == "fallback" else value["base_color"]
+    return {"teacher_id": identity, "school_color": approved,
+            "color": value["manual_color"] or base,
+            "base_color": base, "manual_color": value["manual_color"],
             "revision": int(value["revision"]), "source": value["base_source"],
             "source_evidence": value["source_evidence"]}
 

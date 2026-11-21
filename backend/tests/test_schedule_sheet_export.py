@@ -26,6 +26,36 @@ class ScheduleSheetExportTests(unittest.TestCase):
         return build_sheet_plan(freeze_week(source or self.source(), "2026-10-19"),
                                 title="Новая неделя", sheet_id=101, mapping_sheet_id=102)
 
+    def test_missing_optional_fields_are_omitted_and_ids_are_preserved(self):
+        for kind, room, ids in (("practice", "каб.17", []), ("club", "Зал", []),
+                                ("event", "", []), ("consultation", "", ["unresolved"])):
+            with self.subTest(kind=kind):
+                source = self.source()
+                source["payload"]["lessons"] = [self.lesson("a", ["c5"], activityType=kind,
+                    teacherIds=ids, room=room, groupIds=[], subject="Текст и смысл")]
+                plan = build_sheet_plan(freeze_week(source, "2026-10-19"), layout="school-grid",
+                                        sheet_id=1, mapping_sheet_id=2, title="Расписание")
+                item, = plan["mapping"]
+                card = next(c for c in plan["cells"] if (c["row"], c["col"]) == (item["row"], item["col"]))
+                self.assertNotIn("?", card["text"])
+                self.assertIn("Текст и смысл", card["text"])
+                self.assertEqual(item["teacher_ids"], ids)
+                if room:
+                    self.assertIn(room, card["text"])
+                if ids:
+                    self.assertIn("Преподаватель отсутствует", item["review"])
+
+    def test_school_palette_text_contrast_meets_wcag_aa(self):
+        from backend.services.schedule_sheet_school_grid import contrast_text
+        from backend.services.teacher_ui_colors import APPROVED_SOURCE_COLORS
+        for item in APPROVED_SOURCE_COLORS.values():
+            color = item["color"]
+            channels = [int(color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+            values = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in channels]
+            y = sum(v * w for v, w in zip(values, (.2126, .7152, .0722)))
+            ratio = (y + .05) / .05 if contrast_text(color) == "#000000" else 1.05 / (y + .05)
+            self.assertGreaterEqual(ratio, 4.5, color)
+
     def test_detached_week_and_stable_identity(self):
         source = self.source()
         source["payload"]["lessons"][0]["audience_snapshot"] = {"student_ids": ["private"]}

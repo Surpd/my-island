@@ -7,6 +7,7 @@ import type {TeacherColorInput} from './teacher-color-registry';
 type Registry = {
   color: (id:string) => string; accent: (id:string) => string; code: (id:string) => string;
   overrides: Record<string,string>; setColor: (id:string, color:string) => void; resetColor: (id:string) => void;
+  schoolColors?: Record<string,string>;
   storageError: string; ready: boolean; mode?: 'local'|'school'; error?: string; notice?: string;
   pending?: Set<string>; initializing?: boolean; seeding?: boolean; unassignedCount?: number;
   initialize?: () => Promise<void>; seedApproved?: () => Promise<void>;
@@ -16,6 +17,7 @@ type Registry = {
 
 export function TeacherColorPanel({teachers, registry, onFilter, onClose}: {teachers: TeacherColorInput[]; registry: Registry; onFilter: (id:string) => void; onClose: () => void}) {
   const [query,setQuery] = useState('');
+  const [showPalette,setShowPalette] = useState(false);
   const [migration,setMigration] = useState<TeacherColorMigrationPreview | null>(null);
   const [panelError,setPanelError] = useState('');
   const [migrationBusy,setMigrationBusy] = useState(false);
@@ -28,7 +30,11 @@ export function TeacherColorPanel({teachers, registry, onFilter, onClose}: {teac
     <p>{registry.mode === 'school' ? 'Изменения видны всем администраторам школы после сохранения. Цвет можно сбросить к исходному назначению.' : 'Цвета сохраняются только в этом браузере. Чтобы перенести их в настройки школы, сначала просмотрите список и подтвердите импорт.'} Один цвет во всех днях и видах.</p>
     {registry.mode === 'school' ? <details className="constructor-color-service"><summary>Служебные операции</summary><p>Цвета хранятся по постоянному ID преподавателя. Первичное назначение закрепляет текущие цвета; перенос локальных цветов сначала показывает список соответствий.</p><div className="constructor-color-actions">
       <button disabled={!registry.ready || registry.initializing || registry.unassignedCount === 0} onClick={()=>void registry.initialize?.()}>{registry.initializing ? 'Закрепляем…' : `Закрепить цвета для новых преподавателей (${registry.unassignedCount})`}</button>
-      <button disabled={!registry.ready || registry.seeding} onClick={()=>{if(window.confirm(`Обновить базовые цвета для ${teachers.length} преподавателей по их постоянным ID? Ручные цвета сохранятся.`))void registry.seedApproved?.();}}>{registry.seeding ? 'Применяем…' : 'Обновить цвета из школьного справочника…'}</button>
+      <button disabled={!registry.ready || registry.seeding} onClick={()=>setShowPalette(!showPalette)}>Обновить цвета из школьного справочника…</button>
+      {showPalette ? <section aria-label="Школьная палитра"><p>Подтверждённые цвета шаблона II триместра</p>
+        <ul>{teachers.filter(t=>registry.schoolColors?.[t.id]).map(t=><li key={t.id}><span style={{background:registry.schoolColors?.[t.id],display:'inline-block',width:16,height:16}}/> {t.name} · {registry.schoolColors?.[t.id]}{registry.overrides[t.id] ? ` · сохранится ручной цвет ${registry.overrides[t.id]}` : ''}</li>)}</ul>
+        <button disabled={registry.seeding} onClick={async()=>{await registry.seedApproved?.();setShowPalette(false);}}>Подтвердить школьную палитру</button>
+      </section> : null}
       <button disabled={!registry.ready || migrationBusy} onClick={async()=>{setPanelError('');setMigrationBusy(true);try{if(registry.previewLocalMigration)setMigration(await registry.previewLocalMigration());}catch(error){setPanelError((error as Error).message || 'Не удалось прочитать локальные настройки.');}finally{setMigrationBusy(false);}}}>{migrationBusy ? 'Проверяем…' : 'Перенести локальные цвета…'}</button>
     </div></details> : null}
     {!registry.ready ? <output aria-live="polite">Загружаем цвета…</output> : null}

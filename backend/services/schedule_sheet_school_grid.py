@@ -7,7 +7,8 @@ import re
 from backend.services.canonical_schedule import canonical_group_grade
 from backend.services.schedule_experiments import resolve_payload_day_mode
 from backend.services.schedule_sheet_export import (DAY_NAMES, FORMAT_VERSION, _COMPACT_SUBJECTS,
-                                                    _COMPACT_TEACHERS, _class_key, _hash, _label, _teacher_fill)
+                                                    _COMPACT_TEACHERS, _class_key, _hash, _label)
+from backend.services.teacher_ui_colors import APPROVED_SOURCE_COLORS
 from backend.services.schedule_sheet_layout_v3 import activity_semantics
 
 GRID_LAYOUT = "school-grid"
@@ -128,8 +129,8 @@ def saved_notes(lesson, existing_notes):
 def describe_lesson(lesson, groups, teachers, existing_notes):
     group_ids = instructional_ids(lesson, groups)
     teacher_ids = list(dict.fromkeys(filter(None, [lesson.get("teacherId"), *(lesson.get("teacherIds") or [])])))
-    staff = [str(teachers[i].get("display_name") or teachers[i].get("name") or "Преподаватель")
-             if i in teachers else "Преп. ?" for i in teacher_ids]
+    staff = [name for i in teacher_ids if i in teachers
+             if (name := teachers[i].get("display_name") or teachers[i].get("name"))]
     activity = activity_semantics(lesson)
     name = activity["display_name"] or lesson["subject"]
     kind = lesson.get("activityType")
@@ -163,13 +164,15 @@ def describe_lesson(lesson, groups, teachers, existing_notes):
             reasons.append("Ошибка сопоставления при импорте")
         else:
             reasons.append("В черновике сохранена пометка о проверке. Причина не указана.")
-    bg = _teacher_fill(teacher_ids, teachers, staff)
-    rgb = [int(bg[i:i+2], 16) for i in (1, 3, 5)]
-    bg = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in rgb)
+    primary = teacher_ids[0] if teacher_ids else ""
+    color = teachers.get(primary, {}).get("ui_color") or APPROVED_SOURCE_COLORS.get(primary, {}).get("color")
+    bg = color if color and re.fullmatch(r"#[0-9a-fA-F]{6}", color) else "#F1F3F8"
     if lesson.get("specialMark") == "lunch":
-        bg = "#F6E5CD"
-    if (activity["participation"] == "opt_in" or kind == "consultation") and bg == "#F7F8FA":
-        bg = "#EDE8FA"
+        bg = "#FABF8F"
+    elif lesson.get("specialMark") == "no_lesson":
+        bg = "#F3F4F6"
+    elif lesson.get("kind") == "event" or kind == "event":
+        bg = "#D9EAD3"
     return dict(overview_name=overview_name, subject=name, activity_prefix=short_type if not club else None,
                 staff=", ".join(_COMPACT_TEACHERS.get(name, name) for name in staff), room=room, bg=bg,
                 club=club, elective=activity["activity_type"] == "elective",
@@ -178,9 +181,16 @@ def describe_lesson(lesson, groups, teachers, existing_notes):
                 notes=saved_notes(lesson, existing_notes))
 
 
+def contrast_text(background):
+    channels = [int(background[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in channels]
+    luminance = sum(v * weight for v, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+    return "#000000" if (luminance + .05) ** 2 >= .0525 else "#FFFFFF"
+
+
 def wrapped_lines(text, width, size):
     """Estimate native Arial wrapping to budget row height without clipping the values."""
-    limit = max(1, width - 5)
+    limit = max(1, width - 8)  # Include padding and the heavier class separator.
     lines, used = 1, 0
     for word in text.split():
         pixels = sum(.9 if char in "МШЩЖЮФЫWMW@%" else .63 if char.isupper()
@@ -202,8 +212,6 @@ def card_caption(info, group, width, *, club, online_day=False):
     if room_number := re.fullmatch(r"каб\.?\s*(\d+\w?)", room, re.IGNORECASE):
         room = f"каб.{room_number[1]}"
     staff = info["staff"]
-    if info["marker"] not in {"lunch", "no_lesson"}:
-        staff, room = staff or "Преп. ?", room or "каб.?"
     metadata = " · ".join(filter(None, (staff, room)))
     title = info["overview_name"]
     time = f"{info['start']} " if club else ""
@@ -360,7 +368,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                     text, size, text_height = card_caption(details, group, sum(widths[col:col+width]), club=club,
                                                          online_day=modes.get(grade) == "Онлайн")
                     heights[card_row] = max(heights[card_row], text_height)
-                    cell(card_row, col, text, width=width, bg="#FFF0D5" if _UNKNOWN_GROUP in group else details["bg"],
+                    cell(card_row, col, text, width=width, bg=details["bg"], fg=contrast_text(details["bg"]),
                          size=size, note="\n".join(details["notes"]) if anchor else "")
                     if anchor:
                         mapping[lesson_id] = dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
