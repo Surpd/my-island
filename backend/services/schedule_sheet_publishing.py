@@ -22,7 +22,7 @@ from backend.services.schedule_experiments import ExperimentConflict, get_experi
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, freeze_week, sheets_requests
 
 TEST_EXPORT_TARGET = "11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ"
-EXPORT_POLICY = "school-grid-class-v5"
+EXPORT_POLICY = "school-grid-class-v6"
 PREVIOUS_POLICY = "compact-activities-v3"
 LEGACY_WEEK_POLICY = "compact-activities-v2"
 
@@ -134,7 +134,7 @@ def prepare_export(database: Database, experiment_id: str, *, expected_revision:
     with database.connection() as connection:
         existing = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?", (digest,)).fetchone()
         if existing is None:
-            for policy in ("school-grid-class-v4", "school-grid-day-v3", "school-grid-horizontal-v2", "school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
+            for policy in ("school-grid-class-v5", "school-grid-class-v4", "school-grid-day-v3", "school-grid-horizontal-v2", "school-grid-v1", PREVIOUS_POLICY, *([LEGACY_WEEK_POLICY] if week else [])):
                 if policy == EXPORT_POLICY:
                     continue
                 legacy = database.execute(connection, "SELECT * FROM schedule_sheet_exports WHERE export_key=?",

@@ -275,7 +275,7 @@ class SchedulePublishingTests(unittest.TestCase):
         cells = "\n".join(c["text"] for c in plan["cells"])
         self.assertIn("Математика", cells)
         self.assertIn("Онлайн", cells)
-        self.assertIn("Уточнить · В черновике сохранена пометка о проверке.", cells)
+        self.assertTrue(any("В черновике сохранена пометка" in item["review"] for item in plan["mapping"]))
         requests = sheets_requests(plan)
         self.assertTrue(requests[1]["addSheet"]["properties"]["hidden"])
         visible = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == plan["sheet_id"])
@@ -315,10 +315,10 @@ class SchedulePublishingTests(unittest.TestCase):
         lab = next(m for m in plan["mapping"] if m["lesson_id"] == "lab")
         cards = [cells[r["row"], r["col"]] for r in [lab, *lab["references"]]]
         self.assertEqual(len(cards), 4)
-        self.assertTrue(all(c["bg"] == cards[0]["bg"] and c["link_row"] == lab["details_row"] and "Лаб" in c["text"]
+        self.assertTrue(all(c["bg"] == cards[0]["bg"] and "Тест" in c["text"] and "Лаб" in c["text"]
                             for c in cards))
         self.assertEqual(sum(bool(ref.get("continuation")) for ref in lab["references"]), 2)
-        self.assertIn("09:00–10:40", cells[lab["details_row"], 1]["text"])
+        self.assertEqual((lab["segment_start"], lab["segment_end"]), ("09:00", "10:40"))
         club_header = next(c["row"] for c in cells.values() if c["text"] == "Кружки")
         by_id = {m["lesson_id"]: m for m in plan["mapping"]}
         self.assertGreater(by_id["club"]["row"], club_header)
@@ -340,14 +340,57 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertGreater(width(9), width(8))
         self.assertEqual(plan["frozen_rows"], 1)
         self.assertFalse(any(c["note"] for c in cells.values()))
-        sheet = "https://docs.google.com/spreadsheets/d/test/edit"
-        requests = sheets_requests(plan, spreadsheet_url=sheet, frontend_url="https://schedule.example")
+        requests = sheets_requests(plan, spreadsheet_url="https://docs.google.com/spreadsheets/d/test/edit")
         overview = next(r["updateCells"] for r in requests if r.get("updateCells", {}).get("start", {}).get("sheetId") == 70)
         native_cell = overview["rows"][lab["row"]]["values"][lab["col"]]
-        self.assertEqual(native_cell["userEnteredFormat"]["textFormat"]["link"]["uri"],
-                         f"{sheet}#gid=70&range=A{lab['details_row']+1}")
-        details = overview["rows"][lab["details_row"]]["values"][1]
-        self.assertTrue(details["userEnteredFormat"]["textFormat"]["link"]["uri"].endswith("?draft=draft&lesson=lab"))
+        self.assertNotIn("link", native_cell["userEnteredFormat"]["textFormat"])
+        self.assertEqual(plan["rows"], plan["overview_rows"])
+        self.assertFalse(any(c["text"] == "Карточки" for c in cells.values()))
+
+    def test_school_cell_displays_group_teacher_and_room_without_navigation(self):
+        from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template
+        groups = [{"id": key, "name": label, "group_type": "class"} for key, label in
+                  [("five", "5"), ("seven-a", "7-А"), ("seven-b", "7-Б"), ("nine-an", "9-Ан"), ("nine-d", "9-Д")]]
+        classes = [g["id"] for g in groups]
+        groups.extend({"id": key, "name": name, "group_type": "subject_group"} for key, name in
+                      [("split2", "grade7:split:2"), ("split1", "grade7:split:1"), ("math-a", "grade9-math-A"),
+                       ("math-b", "grade9-math-B"), ("math-c", "grade9-math-C"), ("english", "english:6")])
+        cases = [
+            ("whole", ["five"], None, "Математика", ""),
+            ("solo", ["seven-a", "seven-b"], "split2", "Русский язык", "7-2"),
+            ("first", ["seven-a"], "split1", "Литература", "7-1"),
+            ("admin-an", ["nine-an"], None, "География", "9-Ан"),
+            ("admin-d", ["nine-d"], None, "История", "9-Д"),
+            ("math-a", ["nine-an"], "math-a", "Алгебра", "9A"),
+            ("math-b", ["nine-d"], "math-b", "Геометрия", "9B"),
+            ("math-c", ["nine-d"], "math-c", "Алгебра", "9C"),
+            ("english", ["seven-a", "nine-d"], "english", "Английский язык", "Англ. 6"),
+            ("unknown", ["five"], "missing-record", "История", "Группа требует уточнения"),
+        ]
+        lessons = []
+        for period, (key, class_ids, group_id, subject, _) in enumerate(cases):
+            lesson = {"id": key, "day": 0, "period": period, "classIds": class_ids, "subject": subject,
+                      "teacherId": "teacher", "room": "каб. 17"}
+            if group_id:
+                lesson["canonical"] = {"assignment": {"metadata": {"audience_rule": {"group_ids": [group_id]}}}}
+            lessons.append(lesson)
+        slots = [{"start": f"{8+i:02}:00", "end": f"{8+i:02}:45"} for i in range(len(lessons))]
+        snapshot = freeze_template({"groups": groups, "teachers": [{"id": "teacher", "display_name": "Дмитрий Филиппов"}],
+                                    "source": {}, "payload": {"classes": classes, "days": [0], "slots": slots, "lessons": lessons}})
+        plan = build_sheet_plan(snapshot, layout="school-grid", title="Демо", sheet_id=1, mapping_sheet_id=2)
+        cells = {(c["row"], c["col"]): c["text"] for c in plan["cells"]}
+        for item, (key, _, _, _, label) in zip(plan["mapping"], cases):
+            self.assertEqual(item["lesson_id"], key)
+            self.assertEqual(item["group_label"], label)
+            for placed in (item, *item["references"]):
+                text = cells[placed["row"], placed["col"]]
+                self.assertIn("ДФ · каб.17", text)
+                self.assertNotIn("5 класс", text)
+                self.assertNotIn("missing-record", text)
+                if label:
+                    self.assertIn(label, text)
+                else:
+                    self.assertEqual(text, "Математика\nДФ · каб.17")
 
     def test_legacy_week_with_missing_receipt_is_recovered_without_upload(self):
         client = FakeSheets()
