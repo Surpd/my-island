@@ -75,11 +75,13 @@ export function useSchoolTeacherColors(
       return true;
     } catch (error) {
       if (generation.current !== requestId) return false;
-      const status = (error as { status?: number } | null)?.status;
-      const loadError = status === 401 || status === 403
-        ? 'Не удалось загрузить школьные цвета. Проверьте вход администратора и повторите.'
-        : 'Не удалось загрузить школьные цвета. Повторите попытку.';
-      setState((current) => ({ ...current, scope: currentScope, colors: {}, ready: false, loadError, notice: '' }));
+      setState((current) => {
+        const status = (error as { status?: number } | null)?.status;
+        const loadError = status === 401 || status === 403
+          ? 'Не удалось загрузить школьные цвета. Проверьте вход администратора и повторите.'
+          : 'Не удалось загрузить школьные цвета. Повторите попытку.';
+        return { ...current, scope: currentScope, colors: {}, ready: false, loadError, notice: '' };
+      });
       return false;
     }
   }, [api, currentScope, sharedEnabled]);
