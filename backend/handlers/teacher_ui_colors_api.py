@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Cookie, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.database import Database
@@ -65,8 +65,15 @@ def create_school_teacher_ui_colors_router(
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("")
-    def colors(x_school_admin_session: str | None = Header(default=None)):
-        database, _, tenant = admin(x_school_admin_session)
+    def colors(x_school_admin_session: str | None = Header(default=None),
+               x_dev_auth: str | None = Header(default=None),
+               my_island_admin_session: str | None = Cookie(default=None)):
+        # A newly opened tab can authenticate with the HttpOnly browser cookie
+        # before it has a primary token in sessionStorage. An explicit primary
+        # token still wins. Validate exactly one session using the same guard.
+        explicit_primary = x_school_admin_session and x_dev_auth == f"browser:{x_school_admin_session}"
+        token = x_school_admin_session if explicit_primary else my_island_admin_session or x_school_admin_session
+        database, _, tenant = admin(token)
         return {"colors": list_colors(database, tenant)}
 
     @router.get("/{teacher_id}")
