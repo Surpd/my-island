@@ -284,7 +284,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(notes, ["Возьмите тетрадь."])
         self.assertLessEqual(max(plan["row_heights"].values()), 88)
 
-    def test_bell_times_and_colored_links_survive_a_friday_laboratory_and_optional_activity(self):
+    def test_bell_times_and_course_choices_stay_in_the_grid_with_clubs_below(self):
         from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, sheets_requests
         groups = [{"id": str(grade), "name": str(grade), "group_type": "class"} for grade in range(5, 12)]
         lessons = [
@@ -296,6 +296,12 @@ class SchedulePublishingTests(unittest.TestCase):
              "activityType": "club"},
             {"id": "elective", "day": 4, "period": 1, "classIds": ["5"], "subject": "История искусства",
              "activityType": "elective", "teacherId": "teacher", "room": "каб. 12"},
+            {"id": "elective-2", "day": 4, "period": 1, "classIds": ["5"], "subject": "Шахматы",
+             "activityType": "elective"},
+            {"id": "consultation", "day": 4, "period": 1, "classIds": ["6"], "subject": "Английский язык",
+             "activityType": "consultation"},
+            {"id": "practice", "day": 4, "period": 1, "classIds": ["9"], "subject": "Физика",
+             "activityType": "practice"},
         ]
         snapshot = freeze_template({"groups": groups, "teachers": [{"id": "teacher", "display_name": "Тест"}],
             "source": {"draft_id": "draft"}, "payload": {"classes": [g["id"] for g in groups], "days": [4],
@@ -313,12 +319,16 @@ class SchedulePublishingTests(unittest.TestCase):
                             for c in cards))
         self.assertEqual(sum(bool(ref.get("continuation")) for ref in lab["references"]), 2)
         self.assertIn("09:00–10:40", cells[lab["details_row"], 1]["text"])
-        self.assertIn("Курсы по выбору, кружки и консультации", cells[friday+3, 1]["text"])
-        club = next(m for m in plan["mapping"] if m["lesson_id"] == "club")
-        self.assertGreater(club["row"], friday+3)
-        elective = next(m for m in plan["mapping"] if m["lesson_id"] == "elective")
-        self.assertEqual(elective["col"], club["col"])
-        self.assertNotEqual(elective["row"], club["row"])
+        club_header = next(c["row"] for c in cells.values() if c["text"] == "Кружки")
+        by_id = {m["lesson_id"]: m for m in plan["mapping"]}
+        self.assertGreater(by_id["club"]["row"], club_header)
+        for lesson in ("art", "elective", "elective-2", "consultation", "practice"):
+            self.assertLessEqual(friday + 2, by_id[lesson]["row"])
+            self.assertLess(by_id[lesson]["row"], club_header)
+        self.assertEqual(by_id["elective"]["col"], by_id["elective-2"]["col"])
+        self.assertEqual(by_id["elective"]["row"] + 1, by_id["elective-2"]["row"])
+        self.assertEqual(cells[friday + 2, 0]["height"], club_header - friday - 2)
+        elective = by_id["elective"]
         self.assertIn("Тест", cells[elective["row"], elective["col"]]["text"])
         class_cols = {cells[0, c["start"]]["text"]: c for c in plan["class_columns"]}
         self.assertEqual(cells[friday, class_cols["5 класс"]["start"]]["text"], "Онлайн")

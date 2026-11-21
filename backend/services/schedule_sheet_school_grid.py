@@ -86,7 +86,7 @@ def describe_lesson(lesson, groups, teachers, existing_notes):
     activity = activity_semantics(lesson)
     name = activity["display_name"] or lesson["subject"]
     kind = lesson.get("activityType")
-    extra = activity["participation"] == "opt_in" or kind == "consultation"
+    club = activity["section"] == "clubs"
     formal_type = _ACTIVITY_TYPES.get(kind or activity["activity_type"])
     if kind in {"practice", "consultation", "laboratory"}:
         prefix, _, title = name.partition(" · ")
@@ -125,11 +125,11 @@ def describe_lesson(lesson, groups, teachers, existing_notes):
     bg = "#" + "".join(f"{round(value*.21+255*.79):02X}" for value in rgb)
     if lesson.get("specialMark") == "lunch":
         bg = "#F6E5CD"
-    if extra and bg == "#F7F8FA":
+    if (activity["participation"] == "opt_in" or kind == "consultation") and bg == "#F7F8FA":
         bg = "#EDE8FA"
     interval = f"{lesson['start']}–{lesson['end']}"
     return dict(name=full_name, overview_name=overview_name, classes=", ".join(labels) or "Общее занятие",
-                groups=", ".join(group_labels), staff=", ".join(staff), room=room, bg=bg, extra=extra,
+                groups=", ".join(group_labels), staff=", ".join(staff), room=room, bg=bg, club=club, elective=activity["activity_type"] == "elective",
                 group_ids=group_ids, teacher_ids=teacher_ids, interval=interval, notice=" · ".join(reasons),
                 notes=saved_notes(lesson, existing_notes))
 
@@ -152,8 +152,8 @@ def wrapped_lines(text, width, size):
     return lines
 
 
-def card_caption(info, width, *, optional, online_day=False):
-    size = 8 if optional or width < 160 else 9
+def card_caption(info, width, *, club, stacked, online_day=False):
+    size = 8 if stacked or width < 160 else 9
     room = info["room"]
     if online_day and room == "Онлайн":
         room = ""  # The grade's day band already labels the format.
@@ -167,14 +167,14 @@ def card_caption(info, width, *, optional, online_day=False):
         staff = f"Пед. {last}" if last.isdigit() else primary[0]
     metadata = " · ".join(filter(None, (staff, room)))
     title = info["overview_name"]
-    time = f"{info['interval'].split('–')[0]} " if optional else ""
+    time = f"{info['interval'].split('–')[0]} " if club else ""
     if wrapped_lines(time + title, width, size) > 1:
         title = _SHORT_TITLES.get(title, title)
     if width < 50:
         title = {"Окружающий мир": "Окр. мир", "Разговорная": "Разг. практика"}.get(title, title)
-    if optional:
+    if club:
         title = time + title
-    if optional and wrapped_lines(f"{title} · {metadata}", width, size) == 1:
+    if stacked and wrapped_lines(f"{title} · {metadata}", width, size) == 1:
         lines = [" · ".join(filter(None, (title, metadata)))]
     else:
         lines = [line for line in (title, metadata) if line]
@@ -199,14 +199,14 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     # Lanes divide the budget of their grade. Only links and source IDs connect
     # repeated display cards for cross-class and multi-period activities.
     rows_by_slot = defaultdict(lambda: defaultdict(list))
-    optional_by_day = defaultdict(lambda: defaultdict(list))
+    clubs_by_day = defaultdict(lambda: defaultdict(list))
     for day, lessons in by_day.items():
         for lesson in lessons:
-            extra = info[str(lesson["id"])]["extra"]
+            club = info[str(lesson["id"])]["club"]
             targets = {grade_by_class[c] for c in lesson["classIds"]} or {None}
-            if extra:
+            if club:
                 for grade in targets:
-                    optional_by_day[day][grade].append((lesson, False))
+                    clubs_by_day[day][grade].append((lesson, False))
                 continue
             starts = [lesson["start"], *(bell for bell in bell_times if lesson["start"] < bell < lesson["end"])]
             for index, start in enumerate(starts):
@@ -214,7 +214,8 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                     rows_by_slot[day, start][grade].append((lesson, index > 0))
     seats = {}
     for grade in grades:
-        counts = {len(section[grade]) for section in rows_by_slot.values() if grade in section} or {1}
+        counts = {sum(not info[str(lesson["id"])]["elective"] for lesson, _ in section[grade])
+                  for section in rows_by_slot.values() if grade in section} - {0} or {1}
         # Equal-width results for 2 and 3 visible groups in the same grade.
         common = lcm(*counts)
         seats[grade] = common if common <= 12 else max(counts)
@@ -269,15 +270,15 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
             cell(row, 1, caption, width=columns-1, bg="#DCE7F1", bold=True)
             heights[row] = 22
         row += 1
-        for extra in (False, True):
-            if extra:
-                if not optional_by_day[day]:
+        for club in (False, True):
+            if club:
+                if not clubs_by_day[day]:
                     continue
-                cell(row, 0, "По желанию", bg="#E7DFF4", bold=True, size=8)
-                cell(row, 1, "Курсы по выбору, кружки и консультации", width=columns-1, bg="#E7DFF4", bold=True)
+                cell(row, 0, "", bg="#E7DFF4", bold=True, size=8)
+                cell(row, 1, "Кружки", width=columns-1, bg="#E7DFF4", bold=True)
                 heights[row] = 20
                 row += 1
-                windows = [("", optional_by_day[day])]
+                windows = [("", clubs_by_day[day])]
             else:
                 starts = set(bell_times) | {start for weekday, start in rows_by_slot if weekday == day}
                 windows = [(start, rows_by_slot.get((day, start), {})) for start in sorted(starts)]
@@ -285,39 +286,50 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 ends = {lesson["end"] for entries in sections.values() for lesson, _ in entries}
                 stop = bell_times.get(start) or (next(iter(ends)) if len(ends) == 1 else "")
                 time = f"{start}–{stop}" if stop else f"с {start}"
-                height = max((len(entries) for entries in sections.values()), default=1) if extra else 1
-                cell(row, 0, "" if extra else time, bg="#F3EFF8" if extra else "#EEF3F8", bold=bool(sections), size=8, height=height)
-                for offset in range(height):
-                    heights[row + offset] = 21 if extra or not sections else 31
-                slot_ranges.append({"start": row, "end": row + height})
+                # A grade uses one horizontal row for parallel lessons, then one
+                # full-width row per choice within the same time band.
+                placements = []
+                height = 1
                 for grade, entries in sorted(sections.items(), key=lambda section: columns_by_grade[section[0]]):
                     ordered = sorted(entries, key=lambda entry: (entry[0]["start"], group_order(entry[0], groups)))
+                    parallel, stacked = [], []
+                    for entry in ordered:
+                        details = info[str(entry[0]["id"])]
+                        (stacked if club or details["elective"] else parallel).append(entry)
                     count = seats[grade]
                     first_col = columns_by_grade[grade]
-                    for index, (lesson, continuation) in enumerate(ordered):
-                        lesson_id = str(lesson["id"])
-                        details = info[lesson_id]
-                        card_row = row + index if extra else row
-                        if extra:
-                            col, width = first_col, count
-                        else:
-                            col = first_col + index * count // len(ordered)
-                            width = first_col + (index + 1) * count // len(ordered) - col
-                        anchor = lesson_id not in mapping
-                        text, size, text_height = card_caption(details, sum(widths[col:col+width]), optional=extra,
-                                                             online_day=modes.get(grade) == "Онлайн")
-                        heights[card_row] = max(heights[card_row], text_height)
-                        linked_cards[lesson_id].append(cell(card_row, col, text, width=width, bg=details["bg"],
-                            size=size, note="\n".join(details["notes"]) if anchor else ""))
-                        if anchor:
-                            mapping[lesson_id] = dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
-                                source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
-                                row=card_row, col=col, segment_start=lesson["start"], segment_end=lesson["end"],
-                                day=day, class_ids=lesson["classIds"],
-                                grade_numbers=sorted({grade_by_class[c] for c in lesson["classIds"]}),
-                                group_ids=details["group_ids"], teacher_ids=details["teacher_ids"], references=[], rows=1)
-                        else:
-                            mapping[lesson_id]["references"].append({"row": card_row, "col": col, **({"continuation": True} if continuation else {})})
+                    for index, entry in enumerate(parallel):
+                        left = index * count // len(parallel)
+                        right = (index + 1) * count // len(parallel)
+                        placements.append((grade, entry, 0, first_col + left, right - left, False))
+                    offset = int(bool(parallel))
+                    for index, entry in enumerate(stacked):
+                        placements.append((grade, entry, offset + index, first_col, count, True))
+                    height = max(height, offset + len(stacked))
+                cell(row, 0, "" if club else time, bg="#F3EFF8" if club else "#EEF3F8",
+                     bold=bool(sections), size=8, height=height)
+                for offset in range(height):
+                    heights[row + offset] = 21
+                slot_ranges.append({"start": row, "end": row + height})
+                for grade, (lesson, continuation), offset, col, width, stacked in placements:
+                    lesson_id = str(lesson["id"])
+                    details = info[lesson_id]
+                    card_row = row + offset
+                    anchor = lesson_id not in mapping
+                    text, size, text_height = card_caption(details, sum(widths[col:col+width]), club=club, stacked=stacked,
+                                                         online_day=modes.get(grade) == "Онлайн")
+                    heights[card_row] = max(heights[card_row], text_height)
+                    linked_cards[lesson_id].append(cell(card_row, col, text, width=width, bg=details["bg"],
+                        size=size, note="\n".join(details["notes"]) if anchor else ""))
+                    if anchor:
+                        mapping[lesson_id] = dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
+                            source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
+                            row=card_row, col=col, segment_start=lesson["start"], segment_end=lesson["end"],
+                            day=day, class_ids=lesson["classIds"],
+                            grade_numbers=sorted({grade_by_class[c] for c in lesson["classIds"]}),
+                            group_ids=details["group_ids"], teacher_ids=details["teacher_ids"], references=[], rows=1)
+                    else:
+                        mapping[lesson_id]["references"].append({"row": card_row, "col": col, **({"continuation": True} if continuation else {})})
                 row += height
 
     overview_rows = row
