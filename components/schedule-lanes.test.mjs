@@ -183,3 +183,28 @@ test('semantic order survives new ids and contradictory source claims', () => {
     order(slots.reverse().map((e, i) => ({ ...e, id: 'new' + i }))),
   );
 });
+
+test('online and on-site entries with an identical subject have stable positions after copying', async () => {
+  const { lessonLaneEntry } = await import('./schedule-lanes.ts');
+  const positions = (entries) => {
+    const slot = entries.map((e) =>
+      lessonLaneEntry({ subject: 'Консультация', ...e }, '10', new Map()),
+    );
+    const layout = timetableLanes([slot]).layouts[0];
+    return entries.find((e) => layout.positions.get(e.id).col === 0).format;
+  };
+  assert.equal(
+    positions([
+      { id: 'b', format: 'offline' },
+      { id: 'a', format: 'online' },
+    ]),
+    'offline',
+  );
+  assert.equal(
+    positions([
+      { id: 'z', format: 'online' },
+      { id: 'a', format: 'offline' },
+    ]),
+    'offline',
+  );
+});

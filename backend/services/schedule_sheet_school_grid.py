@@ -112,7 +112,8 @@ def lane_entry(lesson, grade, groups):
               if audience.get("student_ids") else "1")
     key = [names, lesson["subject"], lesson.get("activityType") or "", lesson.get("room") or "",
            sorted(map(str,cells)) if isinstance(cells, list) else [], lesson.get("start") or "", lesson.get("end") or "",
-           lesson.get("blockName") or "", staff,
+           lesson.get("blockName") or "", lesson.get("format") or "", lesson.get("place") or "",
+           lesson.get("specialMark") or "", lesson.get("kind") or "", audience.get("kind") or "", staff,
            sorted(lesson.get("classIds") or [lesson.get("classId") or ""]), roster]
     group = column_group(ids, groups, grade)
     rank = subgroup_rank(group)

@@ -184,6 +184,10 @@ type PlacementLesson = {
   start?: string;
   end?: string;
   blockName?: string;
+  format?: string;
+  place?: string;
+  specialMark?: string;
+  kind?: string;
   teacherId?: string;
   teacherIds?: string[];
   room?: string;
@@ -284,6 +288,11 @@ export function lessonLaneEntry(
       lesson.start || '',
       lesson.end || '',
       lesson.blockName || '',
+      lesson.format || '',
+      lesson.place || '',
+      lesson.specialMark || '',
+      lesson.kind || '',
+      kind || '',
       [
         ...new Set(
           [...(lesson.teacherIds || []), lesson.teacherId || ''].filter(

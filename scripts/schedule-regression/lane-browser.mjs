@@ -251,7 +251,9 @@ try {
   assert.equal(await room.isDisabled(), true);
   await inspector
     .locator('details')
-    .filter({ has: page.getByRole('checkbox',{name:'Этот урок проводится онлайн'}) })
+    .filter({
+      has: page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }),
+    })
     .screenshot({ path: out + '/online-format.png' });
   await online.uncheck();
   assert.equal(await room.inputValue(), before);
@@ -344,6 +346,26 @@ try {
       .getByRole('button', { name: 'Закрыть панель', exact: true })
       .click();
   }
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.getByRole('button', { name: 'Понедельник', exact: true }).click();
+  const empty = page
+    .locator('[data-cell]')
+    .filter({ hasNot: page.locator('.constructor-card') })
+    .first();
+  await empty.click();
+  await empty.getByRole('button', { name: 'Урок' }).click();
+  const create = inspector.getByRole('group', {
+    name: 'Вид занятия',
+    exact: true,
+  });
+  await create.getByRole('button', { name: 'Практикум' }).click();
+  assert.equal(
+    await create
+      .getByRole('button', { name: 'Практикум' })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  await create.screenshot({ path: out + '/create-practice.png' });
   console.log(
     JSON.stringify({ browserGradeSlots: slots, distinctCards: seen.size }),
   );
