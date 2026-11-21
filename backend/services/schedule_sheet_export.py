@@ -80,6 +80,17 @@ def _frozen_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
             return result
         return [safe(v) for v in value] if isinstance(value, list) else deepcopy(value)
     snapshot = safe(dict(source))
+    # Exports redact participant IDs. Keep only relative ordering for otherwise
+    # identical individual cards so redaction cannot reverse the editor's lanes.
+    lessons = source.get("payload", {}).get("lessons", [])
+    roster_keys = [json.dumps(sorted((lesson.get("audience") or {}).get("student_ids") or []),
+                              ensure_ascii=False, separators=(",", ":")) for lesson in lessons]
+    ordinal = {key: i for i, key in enumerate(sorted(set(roster_keys) - {"[]"}))}
+    for raw, masked, key in zip(lessons, snapshot.get("payload", {}).get("lessons", []), roster_keys):
+        if key in ordinal:
+            masked["_lane_roster_order"] = ordinal[key]
+        if (raw.get("audience") or {}).get("exclude_student_ids"):
+            masked["_lane_partial_class"] = True
     snapshot["format_version"] = FORMAT_VERSION
     return snapshot
 

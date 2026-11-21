@@ -258,7 +258,23 @@ class SchedulePublishingTests(unittest.TestCase):
             for day in range(3):
                 self.assertEqual(len({item["row"] for item in plan["mapping"] if item["day"] == day}), 1)
 
-    def test_school_lanes_lunch_and_daily_club_band(self):
+    def test_school_grid_preserves_individual_order_after_snapshot_redaction(self):
+        from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template
+        groups = [{"id": "nine", "name": "9", "group_type": "class"}]
+        lessons = [{"id": key, "day": 0, "period": 0, "classId": "nine", "subject": "Консультация",
+                    "audience": {"kind": "students", "student_ids": [student]}}
+                   for key, student in [("first-id", "pupil-z"), ("last-id", "pupil-a")]]
+        payload = {"days": [0], "classes": ["nine"], "slots": [{"start": "09:00", "end": "09:45"}],
+                   "lessons": lessons}
+        for order in [lessons, lessons[::-1]]:
+            masked = freeze_template({"source": {}, "teachers": [], "groups": groups,
+                                      "payload": dict(payload, lessons=order)})
+            self.assertNotIn("pupil-", str(masked))
+            plan = build_sheet_plan(masked, title="Local", sheet_id=1, mapping_sheet_id=2, layout="school-grid")
+            self.assertEqual([entry["lesson_id"] for entry in sorted(plan["mapping"], key=lambda x: x["col"])],
+                             ["last-id", "first-id"])
+
+    def test_school_lanes_lunch_and_simultaneous_clubs(self):
         from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, sheets_requests
         groups = [{"id": "class", "name": "9", "group_type": "class"}]
         groups.extend({"id": g, "name": f"grade9-math-{g}" if g in "ABC" else g, "group_type": "subject"}
@@ -287,7 +303,8 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(card("subgroup")["text"],"Обед · 9B")
         self.assertEqual(card("meal1")["text"],"Обед · Остальные")
         self.assertEqual(card("whole")["text"],"Обед")
-        self.assertEqual(card("whole")["width"],plan["class_columns"][0]["width"])
+        self.assertEqual(card("whole")["row"], card("club1")["row"])
+        self.assertEqual(len({card(k)["col"] for k in ("whole", "club1", "club2")}), 3)
         self.assertEqual(card("club1")["row"],card("club2")["row"])
         self.assertNotEqual(card("club1")["col"],card("club2")["col"])
         self.assertEqual(card("club1")["text"].replace(" · ", " ").split(),"14:50 Рисунок зал".split())
@@ -321,7 +338,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(notes, ["Возьмите тетрадь."])
         self.assertLessEqual(max(plan["row_heights"].values()), 88)
 
-    def test_bell_times_and_course_choices_stay_in_the_grid_with_clubs_below(self):
+    def test_bell_times_and_course_choices_stay_in_the_grid_alongside_timed_clubs(self):
         from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, sheets_requests
         groups = [{"id": str(grade), "name": str(grade), "group_type": "class"} for grade in range(5, 12)]
         lessons = [
@@ -344,7 +361,8 @@ class SchedulePublishingTests(unittest.TestCase):
             "source": {"draft_id": "draft"}, "payload": {"classes": [g["id"] for g in groups], "days": [4],
             "grade_modes": {"5": {"4": "online"}, "10": {"4": "sdep"}}, "lessons": lessons, "slots": [{"start": "09:00", "end": "09:45"}, {"start": "09:55", "end": "10:40"}]}})
         plan = build_sheet_plan(snapshot, layout="school-grid", title="Пятница", sheet_id=70, mapping_sheet_id=71)
-        self.assertLessEqual(sum(plan["column_widths"]), 1258)
+        # Five simultaneous choices must remain readable in their time band.
+        self.assertGreater(sum(plan["column_widths"]), 1258)
         cells = {(c["row"], c["col"]): c for c in plan["cells"]}
         friday = plan["day_rows"][0]
         self.assertEqual([cells[friday+offset, 0]["text"] for offset in (1, 2)], ["09:00–09:45", "09:55–10:40"])
@@ -356,15 +374,11 @@ class SchedulePublishingTests(unittest.TestCase):
                             for c in cards))
         self.assertEqual(sum(bool(ref.get("continuation")) for ref in lab["references"]), 2)
         self.assertEqual((lab["segment_start"], lab["segment_end"]), ("09:00", "10:40"))
-        club_header = next(c["row"] for c in cells.values() if c["text"] == "Кружки")
         by_id = {m["lesson_id"]: m for m in plan["mapping"]}
-        self.assertEqual(by_id["club"]["row"], club_header)
-        for lesson in ("art", "elective", "elective-2", "consultation", "practice"):
-            self.assertLessEqual(friday + 2, by_id[lesson]["row"])
-            self.assertLess(by_id[lesson]["row"], club_header)
-        self.assertEqual(by_id["elective"]["col"], by_id["elective-2"]["col"])
-        self.assertEqual(by_id["elective"]["row"] + 1, by_id["elective-2"]["row"])
-        self.assertEqual(cells[friday + 2, 0]["height"], club_header - friday - 2)
+        for lesson in ("club", "art", "elective", "elective-2", "consultation", "practice"):
+            self.assertEqual(friday + 2, by_id[lesson]["row"])
+        self.assertEqual(len({by_id[key]["col"] for key in ("club", "art", "elective", "elective-2")}), 4)
+        self.assertEqual(cells[friday + 2, 0]["height"], 1)
         elective = by_id["elective"]
         self.assertIn("Тест", cells[elective["row"], elective["col"]]["text"])
         class_cols = {cells[0, c["start"]]["text"]: c for c in plan["class_columns"]}
@@ -373,7 +387,9 @@ class SchedulePublishingTests(unittest.TestCase):
         def width(grade):
             col = class_cols[f"{grade} класс"]
             return sum(plan["column_widths"][col["start"]:col["start"] + col["width"]])
-        self.assertGreater(width(7), width(5))
+        for key in ("club", "art", "elective", "elective-2"):
+            card = cells[by_id[key]["row"], by_id[key]["col"]]
+            self.assertGreaterEqual(sum(plan["column_widths"][card["col"]:card["col"]+card["width"]]), 75)
         self.assertGreater(width(9), width(8))
         self.assertEqual(plan["frozen_rows"], 1)
         self.assertFalse(any(c["note"] for c in cells.values()))

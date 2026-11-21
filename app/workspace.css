@@ -1357,3 +1357,11 @@
 
 .constructor-color-load-error { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 10px; color:#77341d; background:#fff4e8; font-size:13px; }
 .constructor-color-load-error button { text-decoration:underline; }
+
+@media (min-width:1024px) {
+  .campus-shell .constructor-ux .constructor-layout.panel-open .constructor-grid-wrap,
+  .admin-workspace .constructor-ux .constructor-layout.panel-open .constructor-grid-wrap {
+    width:calc(100% - 420px);
+  }
+}
+.constructor-card[data-lane-review] { border-bottom-style:dashed; }

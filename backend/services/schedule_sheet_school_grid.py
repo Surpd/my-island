@@ -2,6 +2,7 @@
 from collections import defaultdict
 from math import ceil, lcm
 from datetime import date, timedelta
+import json
 import re
 
 from backend.services.canonical_schedule import canonical_group_grade
@@ -44,19 +45,15 @@ def instructional_ids(lesson, groups):
     audience = lesson.get("audience") or {}
     assignment = (lesson.get("canonical") or {}).get("assignment") or {}
     metadata = assignment.get("metadata") or {}
-    linked = [*(audience.get("group_ids") or []), *(lesson.get("groupIds") or []),
-              *([lesson["groupId"]] if lesson.get("groupId") else []),
-              *(assignment.get("canonical_group_ids") or []),
-              *((metadata.get("audience") or {}).get("canonical_group_ids") or []),
-              *((metadata.get("audience_rule") or {}).get("group_ids") or [])]
+    current = [key for key in [*(lesson.get("groupIds") or []), lesson.get("groupId")]
+               if key and groups.get(key, {}).get("group_type") != "class"]
+    if audience.get("kind"):
+        linked = audience.get("group_ids", []) if audience["kind"] == "groups" else []
+    else:
+        linked = current or [*(assignment.get("canonical_group_ids") or []),
+                            *((metadata.get("audience") or {}).get("canonical_group_ids") or []),
+                            *((metadata.get("audience_rule") or {}).get("group_ids") or [])]
     return list(dict.fromkeys(key for key in linked if groups.get(key, {}).get("group_type") != "class"))
-
-
-def group_order(lesson, groups):
-    ids = sorted(instructional_ids(lesson, groups))
-    rank = subgroup_rank(groups.get(ids[0], {})) if len(ids) == 1 else None
-    classes = sorted(_label(groups[key]) for key in lesson["classIds"])
-    return (rank if rank is not None else 100, bool(ids), tuple(ids or classes))
 
 
 _FIXED_LANES = {
@@ -65,12 +62,14 @@ _FIXED_LANES = {
 }
 
 
-def fixed_lane(lesson, groups, grade):
-    if (lesson.get("audience") or {}).get("kind") == "available_slot" or lesson.get("audienceMode") == "remainder":
-        return None
-    ids = instructional_ids(lesson, groups)
-    name = groups.get(ids[0], {}).get("name") if len(ids) == 1 else ""
-    return _FIXED_LANES.get(grade, {}).get(name)
+def column_group(ids, groups, grade):
+    local = []
+    for key in ids:
+        name = groups.get(key, {}).get("name") or ""
+        owner = re.match(r"grade(7|9)(?=:split:|-math-)", name)
+        if not owner or owner[1] == grade:
+            local.append(key)
+    return groups.get(local[0], {}) if len(local) == 1 else {}
 
 
 def source_lane(lesson, grade):
@@ -78,73 +77,101 @@ def source_lane(lesson, grade):
     if str(source.get("sheet_id")) not in {"638874869", "714307019"}:
         return None
     columns = {"7": "FG", "9": "LMN"}.get(grade, "")
-    matches = [re.fullmatch(r"([A-Z]+)[1-9]\d*", ref) for ref in source.get("cells", []) if isinstance(ref, str)]
-    if matches and all(m and len(m[1]) == 1 and m[1] in columns for m in matches):
+    cells = source.get("cells")
+    if not isinstance(cells, list) or not cells or not all(isinstance(c, str) for c in cells):
+        return None
+    matches = [re.fullmatch(r"([A-Z])([1-9]\d*)", ref) for ref in cells]
+    if all(m and m[1] in columns for m in matches):
         indices = {columns.index(m[1]) for m in matches}
         if len(indices) == 1:
             return indices.pop()
 
 
-def parallel_positions(entries, grade, groups):
-    """Return row, lane and division count. Unproven peers get a separate row."""
-    fixed = [fixed_lane(lesson, groups, grade) for lesson, _ in entries]
-    if not any(lane is not None for lane in fixed):
-        return [(0, n, len(entries), "") for n in range(len(entries))]
-    count = 3 if grade == "9" else 2
-    lanes = [lane if lane is not None else source_lane(entry[0], grade) for lane, entry in zip(fixed, entries)]
-    free = set(range(count)) - set(lanes)
-    if len(free) == lanes.count(None) == 1:
-        n = lanes.index(None)
-        lesson = entries[n][0]
-        if (lesson.get("audience") or {}).get("kind") == "available_slot" or lesson.get("audienceMode") == "remainder":
-            lanes[n] = free.pop()
-    used = defaultdict(int)
-    extra = []
-    result = [None] * len(entries)
-    for n in sorted(range(len(entries)), key=lambda i: fixed[i] is None):
-        lane = lanes[n]
-        if lane is None:
-            extra.append(n)
-        else:
-            result[n] = (used[lane], lane, count, "")
-            used[lane] += 1
-    for i, n in enumerate(extra):
-        result[n] = (max(used.values()) + i, 0, 1, "Позиция среди подгрупп не подтверждена")
-    return result
+
+def placement_kind(lesson):
+    explicit = (lesson.get("audience") or {}).get("kind")
+    if explicit:
+        return explicit
+    metadata = ((lesson.get("canonical") or {}).get("assignment") or {}).get("metadata") or {}
+    rule = (metadata.get("audience_rule") or {}).get("kind")
+    if rule == "whole_grade":
+        return "classes"
+    if rule in {"available_slot", "remaining"} or lesson.get("audienceMode") == "remainder":
+        return "available_slot"
+    return rule
 
 
-def club_positions(placements, widths):
-    """Keep grade anchors, borrowing empty neighbors before widening an overcrowded band."""
-    minimum = 75
-    occupied = {i for _, _, _, col, span in placements for i in range(col, col + span)}
-    result = []
-    by_grade = defaultdict(list)
-    for item in placements:
-        by_grade[item[0]].append(item)
-    for items in by_grade.values():
-        left = items[0][3]
-        right = items[-1][3] + items[-1][4]
-        count = len(items)
-        while sum(widths[left:right]) < minimum * count:
-            if right < len(widths) and right not in occupied:
-                occupied.add(right)
-                right += 1
-            elif left > 1 and left - 1 not in occupied:
-                left -= 1
-                occupied.add(left)
+def lane_entry(lesson, grade, groups):
+    ids = instructional_ids(lesson, groups)
+    audience = lesson.get("audience") or {}
+    names = sorted(groups.get(key, {}).get("name") or key for key in ids)
+    staff = sorted(set(filter(None, [lesson.get("teacherId"), *(lesson.get("teacherIds") or [])])))
+    cells = (lesson.get("source") or {}).get("cells")
+    roster = ("0" + str(lesson["_lane_roster_order"]).zfill(12) if "_lane_roster_order" in lesson else
+              "0" + json.dumps(sorted(audience["student_ids"]), ensure_ascii=False, separators=(",", ":"))
+              if audience.get("student_ids") else "1")
+    key = [names, lesson["subject"], lesson.get("activityType") or "", lesson.get("room") or "",
+           sorted(map(str,cells)) if isinstance(cells, list) else [], lesson.get("start") or "", lesson.get("end") or "",
+           lesson.get("blockName") or "", staff,
+           sorted(lesson.get("classIds") or [lesson.get("classId") or ""]), roster]
+    group = column_group(ids, groups, grade)
+    rank = subgroup_rank(group)
+    kind = placement_kind(lesson)
+    remainder = kind == "available_slot"
+    return dict(id=lesson["id"], order=(100 if rank is None else rank,
+                json.dumps(key, ensure_ascii=False, separators=(",", ":")), lesson["id"]),
+                fixed=None if remainder else _FIXED_LANES.get(grade, {}).get(group.get("name")), source=source_lane(lesson, grade),
+                whole=kind == "classes" and not audience.get("exclude_student_ids") and not lesson.get("_lane_partial_class"),
+                remainder=remainder)
+
+
+def grade_layout(slots, grade):
+    """Mirror timetableLanes. Only display coordinates are allocated here."""
+    width = len(_FIXED_LANES.get(grade, {}))
+    def base(entries):
+        if len(entries) == 1 and entries[0]["whole"]:
+            return 0
+        return width if any(e["fixed"] is not None or e["source"] is not None or e["remainder"] for e in entries) else 0
+
+    anchored = max([width, *[len({e["fixed"] for e in entries if e["fixed"] is not None}) +
+                   sum(e["fixed"] is None for e in entries) for entries in slots.values() if base(entries)]])
+    result = {}
+    for slot, entries in slots.items():
+        nominal = base(entries)
+        seats = anchored if nominal else max(1, len(entries))
+        buckets = [[] for _ in range(seats)]
+        uncertain = set()
+        pending = []
+        for e in sorted(entries, key=lambda e: e["order"]):
+            if e["fixed"] is not None:
+                buckets[e["fixed"]].append(e)
             else:
-                break
-        for i, (grade, entry, row, _, _) in enumerate(items):
-            stop = left + 1
-            target = sum(widths[left:right]) / (count-i)
-            while stop < right-(count-i-1) and sum(widths[left:stop]) < target:
-                stop += 1
-            if i == count-1:
-                stop = right
-            # Exception for a genuinely overcrowded day: widen instead of truncating.
-            widths[left] += max(0, minimum - sum(widths[left:stop]))
-            result.append((grade, entry, row, left, stop-left))
-            left = stop
+                pending.append(e)
+        for remainder in (False, True):
+            peers = [e for e in pending if e["remainder"] == remainder]
+            waiting = []
+            for e in peers:
+                col = e["source"]
+                if (not e["whole"] and col is not None and col < nominal and not buckets[col]
+                        and sum(not p["whole"] and p["source"] == col for p in peers) == 1):
+                    buckets[col].append(e)
+                else:
+                    waiting.append(e)
+            for e in waiting:
+                col = next(i for i, b in enumerate(buckets) if not b)
+                buckets[col].append(e)
+                if nominal and (not remainder or len(peers) > 1 or not all(buckets[:nominal]) or col >= nominal):
+                    uncertain.add(e["id"])
+        subdivisions = max(1, *(len(bucket) for bucket in buckets))
+        positions = {}
+        for seat, bucket in enumerate(buckets):
+            for i, e in enumerate(bucket):
+                left = seat * subdivisions + i * subdivisions // len(bucket)
+                right = seat * subdivisions + (i + 1) * subdivisions // len(bucket)
+                notice = ("Несколько занятий одной группы одновременно" if len(bucket) > 1 else
+                          "Позиция среди подгрупп не подтверждена" if e["id"] in uncertain else "")
+                positions[e["id"]] = (left, right, notice)
+        result[slot] = seats * subdivisions, positions
     return result
 
 
@@ -176,8 +203,8 @@ def group_caption(group):
 
 def cell_group(lesson, details, groups, grade, classes_by_grade):
     audience = lesson.get("audience") or {}
-    kind = audience.get("kind")
-    if kind == "available_slot" or lesson.get("audienceMode") == "remainder":
+    kind = placement_kind(lesson)
+    if kind == "available_slot":
         return "Свободные" if lesson.get("specialMark") != "lunch" else "Остальные"
     if lesson.get("specialMark") == "lunch" and kind in {"classes", "students"}:
         return ""
@@ -335,38 +362,34 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     classes_by_grade = defaultdict(set)
     for class_id, grade in grade_by_class.items():
         classes_by_grade[grade].add(class_id)
-    extras_column = any(not lesson["classIds"] for lessons in by_day.values() for lesson in lessons)
-    if extras_column:
-        grades.append(None)
     bell_times = {str(slot["start"])[:5]: str(slot["end"])[:5] for slot in payload["slots"]}
     info = {str(lesson["id"]): describe_lesson(lesson, groups, teachers, existing_notes)
             for lessons in by_day.values() for lesson in lessons}
     # Lanes divide the budget of their grade. Only links and source IDs connect
     # repeated display cards for cross-class and multi-period activities.
     rows_by_slot = defaultdict(lambda: defaultdict(list))
-    clubs_by_day = defaultdict(lambda: defaultdict(list))
+    originals = {lesson["id"]: lesson for lesson in payload["lessons"]}
     for day, lessons in by_day.items():
         for lesson in lessons:
-            club = info[str(lesson["id"])]["club"]
-            targets = {grade_by_class[c] for c in lesson["classIds"]} or {None}
-            if club:
-                for grade in targets:
-                    clubs_by_day[day][grade].append((lesson, False))
-                continue
-            starts = [lesson["start"], *(bell for bell in bell_times if lesson["start"] < bell < lesson["end"])]
-            for index, start in enumerate(starts):
-                for grade in targets:
+            raw = originals[lesson["id"]]
+            targets = {grade_by_class[c] for c in lesson["classIds"]}
+            if raw.get("activityType") == "club":
+                targets = {grade_by_class[c] for c in raw.get("displayClassIds") or [] if c in grade_by_class} or {
+                    str(g) for g in raw.get("eligibleGrades") or [] if str(g) in grades} or targets
+            if not targets and None not in grades:
+                grades.append(None)
+            starts = sorted(bell for bell, end in bell_times.items() if lesson["start"] < end and bell < lesson["end"])
+            for index, start in enumerate(starts or [lesson["start"]]):
+                for grade in targets or {None}:
                     rows_by_slot[day, start][grade].append((lesson, index > 0))
-    seats = {}
+    seats, layouts = {}, {}
     for grade in grades:
-        counts = {sum(not info[str(lesson["id"])]["elective"] for lesson, _ in section[grade])
-                  for section in rows_by_slot.values() if grade in section} - {0} or {1}
-        # Equal-width results for 2 and 3 visible groups in the same grade.
-        if any(fixed_lane(l, groups, grade) is not None for section in rows_by_slot.values() for l, _ in section.get(grade, [])):
-            counts.add(3 if grade == "9" else 2)
-        counts.update(len(section[grade]) for section in clubs_by_day.values() if section.get(grade))
+        layouts[grade] = grade_layout({
+            slot: [lane_entry(originals[l["id"]], grade, groups) for l, _ in section[grade]]
+            for slot, section in rows_by_slot.items() if grade in section}, grade)
+        counts = {width for width, _ in layouts[grade].values()} or {1}
         common = lcm(*counts)
-        seats[grade] = common if common <= 12 else ceil(max(counts) / 6) * 6
+        seats[grade] = common if common <= 24 else ceil(max(counts) / 6) * 6
     columns_by_grade = {}
     widths = [TIME_WIDTH]
     requested_width = sum(GRADE_WIDTHS.get(grade, 120) for grade in grades)
@@ -374,8 +397,14 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
         budget = GRADE_WIDTHS.get(grade, 120)
         if requested_width > GRID_WIDTH - TIME_WIDTH:
             budget = budget * (GRID_WIDTH - TIME_WIDTH) // requested_width
-        columns_by_grade[grade] = len(widths)
+        # A crowded school band can scroll horizontally. Keep each actual
+        # merged card at least as legible as the former club band (75 px).
         count = seats[grade]
+        smallest = min((right * count // divisions - left * count // divisions
+                        for divisions, positions in layouts[grade].values()
+                        for left, right, _ in positions.values()), default=count)
+        budget = max(budget, ceil(75 * count / smallest))
+        columns_by_grade[grade] = len(widths)
         widths.extend([(part + 1) * budget // count - part * budget // count for part in range(count)])
     columns = len(widths)
     cells, mapping, day_rows, day_labels, slot_ranges, heights = [], {}, [], {}, [], {}
@@ -389,7 +418,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     days = sorted(payload["days"])
     cell(0, 0, "Время", bg="#243A51", fg="#FFFFFF", bold=True)
     for grade, col in columns_by_grade.items():
-        label = "Общие" if grade is None else f"{grade} класс" if grade.isdecimal() else grade
+        label = "Без параллели" if grade is None else f"{grade} класс" if grade.isdecimal() else grade
         cell(0, col, label, width=seats[grade], bg="#243A51", fg="#FFFFFF", bold=True, align="CENTER")
     heights[0] = 25
     row = 1
@@ -416,71 +445,49 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
             cell(row, 1, caption, width=columns-1, bg="#344D64", fg="#FFFFFF", bold=True)
             heights[row] = 22
         row += 1
-        for club in (False, True):
-            if club:
-                if not clubs_by_day[day]:
-                    continue
-                windows = [("", clubs_by_day[day])]
-            else:
-                starts = set(bell_times) | {start for weekday, start in rows_by_slot if weekday == day}
-                windows = [(start, rows_by_slot.get((day, start), {})) for start in sorted(starts)]
-            for start, sections in windows:
-                ends = {lesson["end"] for entries in sections.values() for lesson, _ in entries}
-                stop = bell_times.get(start) or (next(iter(ends)) if len(ends) == 1 else "")
-                time = f"{start}–{stop}" if stop else f"с {start}"
-                # A grade uses one horizontal row for parallel lessons, then one
-                # full-width row per choice within the same time band.
-                placements = []
-                placement_notes = {}
-                height = 1
-                for grade, entries in sorted(sections.items(), key=lambda section: columns_by_grade[section[0]]):
-                    ordered = sorted(entries, key=lambda entry: (entry[0]["start"], group_order(entry[0], groups)))
-                    parallel, stacked = [], []
-                    for entry in ordered:
-                        details = info[str(entry[0]["id"])]
-                        (stacked if not club and details["elective"] else parallel).append(entry)
-                    count = seats[grade]
-                    first_col = columns_by_grade[grade]
-                    positions = ([(0, i, len(parallel), "") for i in range(len(parallel))] if club else
-                                 parallel_positions(parallel, grade, groups))
-                    for entry, (level, lane, divisions, notice) in zip(parallel, positions):
-                        left, right = lane * count // divisions, (lane + 1) * count // divisions
-                        placements.append((grade, entry, level, first_col + left, right - left))
-                        if notice:
-                            placement_notes[entry[0]["id"]] = notice
-                    offset = max((pos[0] + 1 for pos in positions), default=0)
-                    for index, entry in enumerate(stacked):
-                        placements.append((grade, entry, offset + index, first_col, count))
-                    height = max(height, offset + len(stacked))
-                if club:
-                    placements = club_positions(placements, widths)
-                cell(row, 0, "Кружки" if club else time, bg="#F3EFF8" if club else "#EEF3F8",
-                     bold=bool(sections), size=8, height=height)
-                for offset in range(height):
-                    heights[row + offset] = 21
-                slot_ranges.append({"start": row, "end": row + height})
-                for grade, (lesson, continuation), offset, col, width in placements:
-                    lesson_id = str(lesson["id"])
-                    details = info[lesson_id]
-                    card_row = row + offset
-                    anchor = lesson_id not in mapping
-                    group = "" if club else cell_group(lesson, details, groups, grade, classes_by_grade)
-                    text, size, text_height = card_caption(details, group, sum(widths[col:col+width]), club=club,
-                                                         online_day=modes.get(grade) == "Онлайн")
-                    heights[card_row] = max(heights[card_row], text_height)
-                    cell(card_row, col, text, width=width, bg=details["bg"], fg=contrast_text(details["bg"]),
-                         size=size, note="\n".join(details["notes"]) if anchor else "")
-                    if anchor:
-                        mapping[lesson_id] = dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
-                            source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
-                            row=card_row, col=col, segment_start=lesson["start"], segment_end=lesson["end"],
-                            day=day, class_ids=lesson["classIds"],
-                            grade_numbers=sorted({grade_by_class[c] for c in lesson["classIds"]}),
-                            group_ids=details["group_ids"], teacher_ids=details["teacher_ids"], references=[], rows=1,
-                            group_label=group, review=placement_notes.get(lesson_id) or details["notice"] or (_UNKNOWN_GROUP if _UNKNOWN_GROUP in group else ""))
-                    else:
-                        mapping[lesson_id]["references"].append({"row": card_row, "col": col, "group_label": group, **({"continuation": True} if continuation else {})})
-                row += height
+        starts = set(bell_times) | {start for weekday, start in rows_by_slot if weekday == day}
+        for start in sorted(starts):
+            sections = rows_by_slot.get((day, start), {})
+            ends = {lesson["end"] for entries in sections.values() for lesson, _ in entries}
+            stop = bell_times.get(start) or (next(iter(ends)) if len(ends) == 1 else "")
+            time = f"{start}–{stop}" if stop else f"с {start}"
+            placements = []
+            placement_notes = {}
+            for grade, entries in sorted(sections.items(), key=lambda item: columns_by_grade[item[0]]):
+                divisions, positions = layouts[grade][day, start]
+                count = seats[grade]
+                for entry in entries:
+                    left, right, notice = positions[entry[0]["id"]]
+                    col = columns_by_grade[grade] + left * count // divisions
+                    span = right * count // divisions - left * count // divisions
+                    placements.append((grade, entry, 0, col, span))
+                    if notice:
+                        placement_notes[entry[0]["id"]] = notice
+            cell(row, 0, time, bg="#EEF3F8", bold=bool(sections), size=8)
+            heights[row] = 21
+            slot_ranges.append({"start": row, "end": row + 1})
+            for grade, (lesson, continuation), offset, col, width in placements:
+                lesson_id = str(lesson["id"])
+                details = info[lesson_id]
+                card_row = row + offset
+                anchor = lesson_id not in mapping
+                group = cell_group(lesson, details, groups, grade, classes_by_grade)
+                text, size, text_height = card_caption(details, group, sum(widths[col:col+width]), club=details["club"],
+                                                     online_day=modes.get(grade) == "Онлайн")
+                heights[card_row] = max(heights[card_row], text_height)
+                cell(card_row, col, text, width=width, bg=details["bg"], fg=contrast_text(details["bg"]),
+                     size=size, note="\n".join(details["notes"]) if anchor else "")
+                if anchor:
+                    mapping[lesson_id] = dict(lesson_id=lesson_id, source_lesson_ids=lesson["_source_ids"],
+                        source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
+                        row=card_row, col=col, segment_start=lesson["start"], segment_end=lesson["end"],
+                        day=day, class_ids=lesson["classIds"],
+                        grade_numbers=sorted({grade_by_class[c] for c in lesson["classIds"]}),
+                        group_ids=details["group_ids"], teacher_ids=details["teacher_ids"], references=[], rows=1,
+                        group_label=group, review=placement_notes.get(lesson_id) or details["notice"] or (_UNKNOWN_GROUP if _UNKNOWN_GROUP in group else ""))
+                else:
+                    mapping[lesson_id]["references"].append({"row": card_row, "col": col, "group_label": group, **({"continuation": True} if continuation else {})})
+            row += 1
 
     mapping = list(mapping.values())
     source_ids = [sid for item in mapping for sid in item["source_lesson_ids"]]
