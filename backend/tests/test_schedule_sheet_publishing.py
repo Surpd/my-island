@@ -240,7 +240,7 @@ class SchedulePublishingTests(unittest.TestCase):
         from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template
         families = json.loads((Path(__file__).parent / "fixtures/schedule_lane_order.json").read_text())
         for names in families:
-            groups = [{"id": "class", "name": "7", "group_type": "class"}]
+            groups = [{"id": "class", "name": "9" if names[0].startswith("grade9") else "7", "group_type": "class"}]
             groups.extend({"id": name, "name": name, "group_type": "subject"} for name in names)
             lessons = []
             for day, keys in enumerate([names, names[::-1], names[-1:]]):
@@ -252,11 +252,48 @@ class SchedulePublishingTests(unittest.TestCase):
                             "slots": [{"start": "09:00", "end": "09:45"}]}})
             plan = build_sheet_plan(snapshot, layout="school-grid", title="Демо", sheet_id=1, mapping_sheet_id=2)
             for item in plan["mapping"]:
-                self.assertEqual(item["col"], 1 if item["day"] == 2 else 1 + names.index(item["group_ids"][0]))
+                self.assertEqual(item["col"], 1 if item["day"] == 2 and names[0].startswith("english") else 1 + names.index(item["group_ids"][0]))
             solo = next(item for item in plan["mapping"] if item["day"] == 2)
-            self.assertEqual(next(c["width"] for c in plan["cells"] if c["row"] == solo["row"] and c["col"] == solo["col"]), len(names))
+            self.assertEqual(next(c["width"] for c in plan["cells"] if c["row"] == solo["row"] and c["col"] == solo["col"]), len(names) if names[0].startswith("english") else 1)
             for day in range(3):
                 self.assertEqual(len({item["row"] for item in plan["mapping"] if item["day"] == day}), 1)
+
+    def test_school_lanes_lunch_and_daily_club_band(self):
+        from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, sheets_requests
+        groups = [{"id": "class", "name": "9", "group_type": "class"}]
+        groups.extend({"id": g, "name": f"grade9-math-{g}" if g in "ABC" else g, "group_type": "subject"}
+                      for g in ["A", "B", "C", "ОГЭ"])
+        def lesson(key, period, title, group=None, **options):
+            return dict(id=key, day=0, period=period, subject=title, classId="class",
+                        groupIds=[group] if group else [], **options)
+        remainder = {"specialMark": "lunch", "audience": {"kind": "available_slot", "grade": "9"}}
+        lessons = [lesson("meal1",0,"Обед",**remainder), lesson("b",0,"Математика","B"),
+                   lesson("exam",0,"Химия","ОГЭ",source={"sheet_id":"714307019","cells":["N7"]}),
+                   lesson("a",1,"Математика","A"), lesson("c",1,"Математика","C"), lesson("meal2",1,"Обед",**remainder),
+                   lesson("subgroup",2,"Обед","B",specialMark="lunch"), lesson("whole",3,"Обед",specialMark="lunch"),
+                   lesson("club1",3,"Рисунок",activityType="club",room="зал",audience={"kind":"students"}),
+                   lesson("club2",3,"Ателье",activityType="club",room="каб.6")]
+        snap = freeze_template({"groups":groups,"teachers":[],"source":{},
+            "payload":{"days":[0,1],"classes":["class"],"lessons":lessons,
+                       "slots":[{"start":f"{11+i}:50","end":f"{12+i}:35"} for i in range(4)]}})
+        plan = build_sheet_plan(snap,title="День",sheet_id=7,mapping_sheet_id=8,layout="school-grid")
+        mapped = {m["lesson_id"]:m for m in plan["mapping"]}
+        def card(key):
+            m = mapped[key]
+            return next(c for c in plan["cells"] if c["row"] == m["row"] and c["col"] == m["col"])
+        for key, other in zip(["meal1","b","exam"],["a","meal2","c"]):
+            self.assertEqual(card(key)["col"],card(other)["col"])
+        self.assertEqual(card("b")["col"],card("subgroup")["col"])
+        self.assertEqual(card("subgroup")["text"],"Обед · 9B")
+        self.assertEqual(card("meal1")["text"],"Обед · Остальные")
+        self.assertEqual(card("whole")["text"],"Обед")
+        self.assertEqual(card("whole")["width"],plan["class_columns"][0]["width"])
+        self.assertEqual(card("club1")["row"],card("club2")["row"])
+        self.assertNotEqual(card("club1")["col"],card("club2")["col"])
+        self.assertEqual(card("club1")["text"].replace(" · ", " ").split(),"14:50 Рисунок зал".split())
+        borders = [r["updateBorders"] for r in sheets_requests(plan) if "updateBorders" in r]
+        self.assertTrue(all(any(b["range"]["startRowIndex"] == row and b.get("top",{}).get("style")=="SOLID_THICK"
+                                 for b in borders) for row in plan["day_rows"]))
 
     def test_school_grid_keeps_parallel_cards_and_hidden_source_map(self):
         from backend.services.schedule_sheet_export import sheets_requests
@@ -321,7 +358,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual((lab["segment_start"], lab["segment_end"]), ("09:00", "10:40"))
         club_header = next(c["row"] for c in cells.values() if c["text"] == "Кружки")
         by_id = {m["lesson_id"]: m for m in plan["mapping"]}
-        self.assertGreater(by_id["club"]["row"], club_header)
+        self.assertEqual(by_id["club"]["row"], club_header)
         for lesson in ("art", "elective", "elective-2", "consultation", "practice"):
             self.assertLessEqual(friday + 2, by_id[lesson]["row"])
             self.assertLess(by_id[lesson]["row"], club_header)

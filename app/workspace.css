@@ -626,7 +626,7 @@
 .campus-shell .constructor-ux .constructor-card small { line-height:1.25; }
 .campus-shell .constructor-ux .constructor-cell-lessons { gap:4px; }
 .campus-shell .constructor-ux .constructor-cell-lessons.many { row-gap:4px; }
-.campus-shell .constructor-ux .constructor-day-band { top:32px; }
+.campus-shell .constructor-ux .constructor-day-band { top:32px; background:#344d64; color:white; border-top:3px solid #243a51; }
 .campus-shell .constructor-ux .constructor-editor-actions { position:sticky; bottom:-14px; z-index:5; display:none; align-items:center; gap:7px; padding:10px 0; border-top:1px solid var(--cp-line); background:white; font-size:11px; }
 .campus-shell .constructor-ux .constructor-editor-actions span { flex:1; color:var(--cp-muted); }
 .campus-shell .constructor-ux .constructor-editor-actions button { display:flex; align-items:center; gap:5px; padding:6px 8px; border:1px solid var(--cp-line); background:white; border-radius:6px; font-size:12px; }

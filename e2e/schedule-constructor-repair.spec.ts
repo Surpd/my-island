@@ -507,7 +507,7 @@ test('constructor repair: grade nine all-others audience displays a live class s
   await page.getByRole('button', { name: 'Добавить обед' }).scrollIntoViewIfNeeded();
   await screenshot(page, 'all-others-grade9');
   await page.getByRole('button', { name: 'Добавить обед' }).click();
-  await expect(page.locator('.constructor-card')).toContainText('Все остальные');
+  await expect(page.locator('.constructor-card')).toHaveText('Обед · Остальные');
 });
 
 test('вид занятия и онлайн сохраняются через обычную форму', async ({page}) => {

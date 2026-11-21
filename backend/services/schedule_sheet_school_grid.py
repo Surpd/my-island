@@ -56,7 +56,96 @@ def group_order(lesson, groups):
     ids = sorted(instructional_ids(lesson, groups))
     rank = subgroup_rank(groups.get(ids[0], {})) if len(ids) == 1 else None
     classes = sorted(_label(groups[key]) for key in lesson["classIds"])
-    return (rank if rank is not None else 100, tuple(ids or classes))
+    return (rank if rank is not None else 100, bool(ids), tuple(ids or classes))
+
+
+_FIXED_LANES = {
+    "7": {"grade7:split:1": 0, "grade7:split:2": 1},
+    "9": {"grade9-math-A": 0, "grade9-math-B": 1, "grade9-math-C": 2},
+}
+
+
+def fixed_lane(lesson, groups, grade):
+    if (lesson.get("audience") or {}).get("kind") == "available_slot" or lesson.get("audienceMode") == "remainder":
+        return None
+    ids = instructional_ids(lesson, groups)
+    name = groups.get(ids[0], {}).get("name") if len(ids) == 1 else ""
+    return _FIXED_LANES.get(grade, {}).get(name)
+
+
+def source_lane(lesson, grade):
+    source = lesson.get("source") or {}
+    if str(source.get("sheet_id")) not in {"638874869", "714307019"}:
+        return None
+    columns = {"7": "FG", "9": "LMN"}.get(grade, "")
+    matches = [re.fullmatch(r"([A-Z]+)[1-9]\d*", ref) for ref in source.get("cells", []) if isinstance(ref, str)]
+    if matches and all(m and len(m[1]) == 1 and m[1] in columns for m in matches):
+        indices = {columns.index(m[1]) for m in matches}
+        if len(indices) == 1:
+            return indices.pop()
+
+
+def parallel_positions(entries, grade, groups):
+    """Return row, lane and division count. Unproven peers get a separate row."""
+    fixed = [fixed_lane(lesson, groups, grade) for lesson, _ in entries]
+    if not any(lane is not None for lane in fixed):
+        return [(0, n, len(entries), "") for n in range(len(entries))]
+    count = 3 if grade == "9" else 2
+    lanes = [lane if lane is not None else source_lane(entry[0], grade) for lane, entry in zip(fixed, entries)]
+    free = set(range(count)) - set(lanes)
+    if len(free) == lanes.count(None) == 1:
+        n = lanes.index(None)
+        lesson = entries[n][0]
+        if (lesson.get("audience") or {}).get("kind") == "available_slot" or lesson.get("audienceMode") == "remainder":
+            lanes[n] = free.pop()
+    used = defaultdict(int)
+    extra = []
+    result = [None] * len(entries)
+    for n in sorted(range(len(entries)), key=lambda i: fixed[i] is None):
+        lane = lanes[n]
+        if lane is None:
+            extra.append(n)
+        else:
+            result[n] = (used[lane], lane, count, "")
+            used[lane] += 1
+    for i, n in enumerate(extra):
+        result[n] = (max(used.values()) + i, 0, 1, "Позиция среди подгрупп не подтверждена")
+    return result
+
+
+def club_positions(placements, widths):
+    """Keep grade anchors, borrowing empty neighbors before widening an overcrowded band."""
+    minimum = 75
+    occupied = {i for _, _, _, col, span in placements for i in range(col, col + span)}
+    result = []
+    by_grade = defaultdict(list)
+    for item in placements:
+        by_grade[item[0]].append(item)
+    for items in by_grade.values():
+        left = items[0][3]
+        right = items[-1][3] + items[-1][4]
+        count = len(items)
+        while sum(widths[left:right]) < minimum * count:
+            if right < len(widths) and right not in occupied:
+                occupied.add(right)
+                right += 1
+            elif left > 1 and left - 1 not in occupied:
+                left -= 1
+                occupied.add(left)
+            else:
+                break
+        for i, (grade, entry, row, _, _) in enumerate(items):
+            stop = left + 1
+            target = sum(widths[left:right]) / (count-i)
+            while stop < right-(count-i-1) and sum(widths[left:stop]) < target:
+                stop += 1
+            if i == count-1:
+                stop = right
+            # Exception for a genuinely overcrowded day: widen instead of truncating.
+            widths[left] += max(0, minimum - sum(widths[left:stop]))
+            result.append((grade, entry, row, left, stop-left))
+            left = stop
+    return result
 
 
 _UNKNOWN_GROUP = "Группа требует уточнения"
@@ -77,7 +166,9 @@ def group_caption(group):
             return subgroup
     label = str(group.get("display_name") or name).strip()
     if name.startswith("instructional:") and "·" in label:
-        return label.rsplit("·", 1)[-1].strip()
+        label = label.rsplit("·", 1)[-1].strip()
+    if re.search(r"индивидуальн.*состав|без индивидуального назначения|инд\. состав", label, re.I):
+        return ""
     if not label or label == str(group.get("id")) or ":" in label:
         return _UNKNOWN_GROUP
     return label
@@ -87,13 +178,15 @@ def cell_group(lesson, details, groups, grade, classes_by_grade):
     audience = lesson.get("audience") or {}
     kind = audience.get("kind")
     if kind == "available_slot" or lesson.get("audienceMode") == "remainder":
-        return "Свободные" if lesson.get("specialMark") != "lunch" else ""
-    if kind == "students":
-        return "Инд. состав"
+        return "Свободные" if lesson.get("specialMark") != "lunch" else "Остальные"
+    if lesson.get("specialMark") == "lunch" and kind in {"classes", "students"}:
+        return ""
     if details["group_ids"]:
-        return ", ".join(dict.fromkeys(group_caption(groups.get(key, {})) for key in details["group_ids"]))
+        return ", ".join(dict.fromkeys(filter(None, (group_caption(groups.get(key, {})) for key in details["group_ids"]))))
     if kind == "groups":
         return _UNKNOWN_GROUP
+    if kind == "students":
+        return ""
     confirmed = set(audience.get("class_ids") or lesson["classIds"])
     candidates = classes_by_grade[grade]
     if selected := candidates & confirmed:
@@ -212,6 +305,8 @@ def card_caption(info, group, width, *, club, online_day=False):
     if room_number := re.fullmatch(r"каб\.?\s*(\d+\w?)", room, re.IGNORECASE):
         room = f"каб.{room_number[1]}"
     staff = info["staff"]
+    if info["marker"] == "lunch":
+        staff, room = "", ""
     metadata = " · ".join(filter(None, (staff, room)))
     title = info["overview_name"]
     time = f"{info['start']} " if club else ""
@@ -267,8 +362,11 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
         counts = {sum(not info[str(lesson["id"])]["elective"] for lesson, _ in section[grade])
                   for section in rows_by_slot.values() if grade in section} - {0} or {1}
         # Equal-width results for 2 and 3 visible groups in the same grade.
+        if any(fixed_lane(l, groups, grade) is not None for section in rows_by_slot.values() for l, _ in section.get(grade, [])):
+            counts.add(3 if grade == "9" else 2)
+        counts.update(len(section[grade]) for section in clubs_by_day.values() if section.get(grade))
         common = lcm(*counts)
-        seats[grade] = common if common <= 12 else max(counts)
+        seats[grade] = common if common <= 12 else ceil(max(counts) / 6) * 6
     columns_by_grade = {}
     widths = [TIME_WIDTH]
     requested_width = sum(GRADE_WIDTHS.get(grade, 120) for grade in grades)
@@ -302,10 +400,10 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
         modes = {grade: _MODE_LABELS.get(resolve_payload_day_mode(payload, grade, day, grade_by_class)[0], "")
                  for grade in grades if grade is not None}
         if any(modes.values()):
-            cell(row, 0, caption, bg="#DCE7F1", bold=True, size=8)
+            cell(row, 0, caption, bg="#344D64", fg="#FFFFFF", bold=True, size=8)
             for grade, col in columns_by_grade.items():
                 label = modes.get(grade, "")
-                cell(row, col, label, width=seats[grade], bg="#D7EAE9" if label else "#DCE7F1",
+                cell(row, col, label, width=seats[grade], bg="#345D5C" if label else "#344D64", fg="#FFFFFF",
                      bold=True, align="CENTER")
             heights[row] = max(22, 4 + 12 * wrapped_lines(caption, TIME_WIDTH, 8))
             for grade, label in modes.items():
@@ -314,18 +412,14 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                     width = sum(widths[col:col+seats[grade]])
                     heights[row] = max(heights[row], 4 + 14 * wrapped_lines(label, width, 9))
         else:
-            cell(row, 0, DAY_NAMES[day][:2], bg="#DCE7F1", bold=True)
-            cell(row, 1, caption, width=columns-1, bg="#DCE7F1", bold=True)
+            cell(row, 0, DAY_NAMES[day][:2], bg="#344D64", fg="#FFFFFF", bold=True)
+            cell(row, 1, caption, width=columns-1, bg="#344D64", fg="#FFFFFF", bold=True)
             heights[row] = 22
         row += 1
         for club in (False, True):
             if club:
                 if not clubs_by_day[day]:
                     continue
-                cell(row, 0, "", bg="#E7DFF4", bold=True, size=8)
-                cell(row, 1, "Кружки", width=columns-1, bg="#E7DFF4", bold=True)
-                heights[row] = 20
-                row += 1
                 windows = [("", clubs_by_day[day])]
             else:
                 starts = set(bell_times) | {start for weekday, start in rows_by_slot if weekday == day}
@@ -337,24 +431,30 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                 # A grade uses one horizontal row for parallel lessons, then one
                 # full-width row per choice within the same time band.
                 placements = []
+                placement_notes = {}
                 height = 1
                 for grade, entries in sorted(sections.items(), key=lambda section: columns_by_grade[section[0]]):
                     ordered = sorted(entries, key=lambda entry: (entry[0]["start"], group_order(entry[0], groups)))
                     parallel, stacked = [], []
                     for entry in ordered:
                         details = info[str(entry[0]["id"])]
-                        (stacked if club or details["elective"] else parallel).append(entry)
+                        (stacked if not club and details["elective"] else parallel).append(entry)
                     count = seats[grade]
                     first_col = columns_by_grade[grade]
-                    for index, entry in enumerate(parallel):
-                        left = index * count // len(parallel)
-                        right = (index + 1) * count // len(parallel)
-                        placements.append((grade, entry, 0, first_col + left, right - left))
-                    offset = int(bool(parallel))
+                    positions = ([(0, i, len(parallel), "") for i in range(len(parallel))] if club else
+                                 parallel_positions(parallel, grade, groups))
+                    for entry, (level, lane, divisions, notice) in zip(parallel, positions):
+                        left, right = lane * count // divisions, (lane + 1) * count // divisions
+                        placements.append((grade, entry, level, first_col + left, right - left))
+                        if notice:
+                            placement_notes[entry[0]["id"]] = notice
+                    offset = max((pos[0] + 1 for pos in positions), default=0)
                     for index, entry in enumerate(stacked):
                         placements.append((grade, entry, offset + index, first_col, count))
                     height = max(height, offset + len(stacked))
-                cell(row, 0, "" if club else time, bg="#F3EFF8" if club else "#EEF3F8",
+                if club:
+                    placements = club_positions(placements, widths)
+                cell(row, 0, "Кружки" if club else time, bg="#F3EFF8" if club else "#EEF3F8",
                      bold=bool(sections), size=8, height=height)
                 for offset in range(height):
                     heights[row + offset] = 21
@@ -364,7 +464,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                     details = info[lesson_id]
                     card_row = row + offset
                     anchor = lesson_id not in mapping
-                    group = cell_group(lesson, details, groups, grade, classes_by_grade)
+                    group = "" if club else cell_group(lesson, details, groups, grade, classes_by_grade)
                     text, size, text_height = card_caption(details, group, sum(widths[col:col+width]), club=club,
                                                          online_day=modes.get(grade) == "Онлайн")
                     heights[card_row] = max(heights[card_row], text_height)
@@ -377,7 +477,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                             day=day, class_ids=lesson["classIds"],
                             grade_numbers=sorted({grade_by_class[c] for c in lesson["classIds"]}),
                             group_ids=details["group_ids"], teacher_ids=details["teacher_ids"], references=[], rows=1,
-                            group_label=group, review=details["notice"] or (_UNKNOWN_GROUP if _UNKNOWN_GROUP in group else ""))
+                            group_label=group, review=placement_notes.get(lesson_id) or details["notice"] or (_UNKNOWN_GROUP if _UNKNOWN_GROUP in group else ""))
                     else:
                         mapping[lesson_id]["references"].append({"row": card_row, "col": col, "group_label": group, **({"continuation": True} if continuation else {})})
                 row += height

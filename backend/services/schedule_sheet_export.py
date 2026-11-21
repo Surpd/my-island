@@ -692,4 +692,7 @@ def sheets_requests(plan: Mapping[str, Any], *, spreadsheet_url: str = "", front
         for slot in plan["slot_ranges"]:
             requests.append({"updateBorders": {"range": grid(slot["start"], 0, slot["end"], plan["columns"]),
                              "top": {"style": "SOLID_MEDIUM", "color": color("#708396")}}})
+        for row in plan["day_rows"]:
+            requests.append({"updateBorders": {"range": grid(row, 0, row+1, plan["columns"]),
+                             "top": {"style": "SOLID_THICK", "color": color("#243A51")}}})
     return requests
