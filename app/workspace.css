@@ -1281,7 +1281,8 @@
 .constructor-export-full-details { min-width:0; }
 .constructor-export-full-wrap { box-sizing:border-box; width:100%; max-height:min(54dvh,470px); overscroll-behavior:contain; }
 .constructor-export-full-wrap:focus-visible { outline:2px solid var(--cp-blue); outline-offset:2px; }
-.constructor-export-full-wrap > .constructor-export-sample { position:relative; width:max-content; min-width:100%; }
+.constructor-export-full-wrap > .constructor-export-sample { position:relative; width:max-content; min-width:100%; gap:0; }
+.constructor-export-full-wrap .constructor-export-sample > div { box-shadow:inset -1px -1px var(--cp-line); }
 .constructor-export-full-wrap [data-sheet-time] { position:sticky; inset-inline-start:0; z-index:1; }
 .constructor-export-day-nav { display:flex; flex-wrap:wrap; gap:6px; }
 .constructor-export-day-nav button {
