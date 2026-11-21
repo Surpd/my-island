@@ -1,6 +1,7 @@
 /* oxlint-disable */
 'use client';
 
+import { selectSchoolAdminSession } from '../../components/admin-session';
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import dynamic from 'next/dynamic';
 import {
@@ -103,12 +104,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (typeof window !== 'undefined') {
     const schoolSession = window.sessionStorage.getItem('my_island_school_admin_session');
     const browserSession = window.sessionStorage.getItem('my_island_admin_session');
-    // Constructor publication is authenticated against the primary admin
-    // session. A stale school-directory token must not shadow a still-valid
-    // browser session for these consolidated schedule endpoints.
-    const schoolAdminSession = path.startsWith('/api/admin/schedule/constructor')
-      ? browserSession || schoolSession
-      : schoolSession || browserSession;
+    const schoolAdminSession = selectSchoolAdminSession(path, browserSession, schoolSession);
     if (schoolAdminSession) headers.set('X-School-Admin-Session', schoolAdminSession);
     // The API's auth resolver accepts browser sessions through the existing
     // X-Dev-Auth transport using the explicit browser: prefix. Keeping the
@@ -163,7 +159,8 @@ async function schoolApi<T>(path: string, init?: RequestInit): Promise<T> {
   const schoolPath = path.replace(/^\/api\/admin\/(groups|people|identities|memberships|teacher-assignments)(?=\/|\?|$)/, '/api/admin/school/$1');
   const headers = new Headers(init?.headers);
   const token = typeof window !== 'undefined'
-    ? window.sessionStorage.getItem('my_island_school_admin_session') || window.sessionStorage.getItem('my_island_admin_session')
+    ? selectSchoolAdminSession(schoolPath, window.sessionStorage.getItem('my_island_admin_session'),
+      window.sessionStorage.getItem('my_island_school_admin_session'))
     : null;
   if (token) headers.set('X-School-Admin-Session', token);
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');

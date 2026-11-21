@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { teacherAccentForOverride, teacherCode, TEACHER_COLOR_PALETTE, type TeacherColorInput, type TeacherPair } from './teacher-color-registry';
+import { teacherAccentForOverride, teacherCode, type TeacherColorInput, type TeacherPair } from './teacher-color-registry';
+import { TEACHER_COLORS_PATH as SHARED_PATH } from './admin-session';
 import { useTeacherColors } from './use-teacher-colors';
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -26,6 +27,7 @@ type SharedState = {
   scope: string;
   colors: Record<string, ColorRecord>;
   ready: boolean;
+  loadError: string;
   error: string;
   notice: string;
   pending: Set<string>;
@@ -34,20 +36,15 @@ type SharedState = {
 };
 
 const EMPTY: SharedState = {
-  scope: '', colors: {}, ready: false, error: '', notice: '', pending: new Set(), initializing: false, seeding: false,
+  scope: '', colors: {}, ready: false, loadError: '', error: '', notice: '', pending: new Set(), initializing: false, seeding: false,
 };
-const SHARED_PATH = '/api/admin/school/teacher-ui-colors';
 const LOCAL_PREFIX = 'my-island-teacher-colors:v1:';
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : 'Не удалось сохранить цвета преподавателей.';
 }
 
-function sharedFallback(id: string) {
-  let hash = 0;
-  for (const character of id) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return TEACHER_COLOR_PALETTE[hash % TEACHER_COLOR_PALETTE.length];
-}
+const UNAVAILABLE_COLOR = '#f1f3f8';
 
 export function useSchoolTeacherColors(
   api: Api,
@@ -67,17 +64,25 @@ export function useSchoolTeacherColors(
   const currentScope = sharedEnabled ? `school:${scope}` : `${workspace}:${scope}:local`;
 
   const refresh = useCallback(async () => {
-    if (!sharedEnabled) return;
+    if (!sharedEnabled) return false;
     const requestId = ++generation.current;
-    setState((current) => ({ ...current, scope: currentScope, ready: false, error: '' }));
+    setState((current) => ({ ...current, scope: currentScope, ready: false, loadError: '', error: '' }));
     try {
       const response = await api<{ colors?: ColorRecord[] }>(SHARED_PATH);
-      if (generation.current !== requestId) return;
+      if (generation.current !== requestId) return false;
       const colors = Object.fromEntries((response.colors || []).map((record) => [String(record.teacher_id), record]));
-      setState((current) => ({ ...current, scope: currentScope, colors, ready: true, error: '' }));
+      setState((current) => ({ ...current, scope: currentScope, colors, ready: true, loadError: '', error: '' }));
+      return true;
     } catch (error) {
-      if (generation.current !== requestId) return;
-      setState((current) => ({ ...current, scope: currentScope, ready: true, error: message(error) }));
+      if (generation.current !== requestId) return false;
+      setState((current) => {
+        const status = (error as { status?: number } | null)?.status;
+        const loadError = status === 401 || status === 403
+          ? 'Не удалось загрузить школьные цвета. Проверьте вход администратора и повторите.'
+          : 'Не удалось загрузить школьные цвета. Повторите попытку.';
+        return { ...current, scope: currentScope, colors: {}, ready: false, loadError, notice: '' };
+      });
+      return false;
     }
   }, [api, currentScope, sharedEnabled]);
 
@@ -98,10 +103,10 @@ export function useSchoolTeacherColors(
   const shared = state.scope === currentScope ? state : EMPTY;
   const recordFor = useCallback((id: string) => shared.colors[id], [shared.colors]);
   const color = useCallback((id: string) => sharedEnabled
-    ? recordFor(id)?.color || sharedFallback(id).background
+    ? recordFor(id)?.color || UNAVAILABLE_COLOR
     : local.color(id), [local, recordFor, sharedEnabled]);
   const accent = useCallback((id: string) => sharedEnabled
-    ? teacherAccentForOverride(recordFor(id)?.color || sharedFallback(id).background)
+    ? teacherAccentForOverride(recordFor(id)?.color || UNAVAILABLE_COLOR)
     : local.accent(id), [local, recordFor, sharedEnabled]);
   const code = useCallback((id: string) => teacherCode(id), []);
   const overrides = useMemo(() => {
@@ -145,7 +150,7 @@ export function useSchoolTeacherColors(
     const expectedRevision = current?.revision ?? 0;
     setState((stateNow) => ({ ...stateNow, scope: currentScope, colors: {
       ...stateNow.colors,
-      [id]: { teacher_id: id, color: hex, base_color: current?.base_color || sharedFallback(id).background,
+      [id]: { teacher_id: id, color: hex, base_color: current?.base_color || UNAVAILABLE_COLOR,
         school_color: current?.school_color, manual_color: hex, revision: expectedRevision, source: current?.source },
     }, error: '', notice: '' }));
     const existingTimer = saveTimers.current.get(id);
@@ -173,7 +178,7 @@ export function useSchoolTeacherColors(
     setState((current) => ({ ...current, seeding: true, error: '', notice: '' }));
     try {
       const result = await api<{ inserted: number; updated?: number; preserved: number }>(`${SHARED_PATH}/seed-approved`, { method: 'POST' });
-      await refresh();
+      if (!await refresh()) return;
       setState((current) => ({ ...current, notice: `Обновлено базовых цветов — ${result.inserted + (result.updated || 0)}. Ручные цвета сохранены.` }));
     } catch (error) {
       setState((current) => ({ ...current, error: message(error) }));
@@ -207,7 +212,7 @@ export function useSchoolTeacherColors(
     const result = await api<{ imported: number }>(`${SHARED_PATH}/settings/confirm`, {
       method: 'POST', body: JSON.stringify({ settings, expected_revisions }),
     });
-    await refresh();
+    if (!await refresh()) return;
     setState((current) => ({ ...current, notice: `Перенесено цветов: ${result.imported}.` }));
   }, [api, refresh]);
 
@@ -215,7 +220,7 @@ export function useSchoolTeacherColors(
     setState((current) => ({ ...current, initializing: true, error: '', notice: '' }));
     try {
       const result = await api<{ created: number }>(`${SHARED_PATH}/initialize`, { method: 'POST' });
-      await refresh();
+      if (!await refresh()) return;
       setState((current) => ({ ...current, notice: `Закреплены цвета для ${result.created} новых преподавателей.` }));
     } catch (error) {
       setState((current) => ({ ...current, error: message(error) }));
@@ -233,6 +238,7 @@ export function useSchoolTeacherColors(
     storageError: sharedEnabled ? '' : local.storageError,
     ready: sharedEnabled ? shared.ready : local.ready,
     mode: sharedEnabled ? 'school' as const : 'local' as const,
+    loadError: shared.loadError,
     error: shared.error,
     notice: shared.notice,
     pending: shared.pending,

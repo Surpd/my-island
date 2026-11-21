@@ -2719,6 +2719,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           </button>
         </output>
       ) : null}
+      {teacherRegistry.loadError && colorMode === 'teacher' ? (
+        <div className="constructor-color-load-error">
+          <span role="alert">{teacherRegistry.loadError}</span>
+          <button type="button" onClick={() => void teacherRegistry.refresh()}>Повторить загрузку цветов</button>
+        </div>
+      ) : null}
       {colorPanelOpen ? <TeacherColorPanel teachers={teachers} registry={teacherRegistry} onFilter={(id) => { setTeacherFilter(id); setFiltersOpen(Boolean(id)); }} onClose={() => setColorPanelOpen(false)} /> : null}
       {activityEditor ? <div className="constructor-conflict-backdrop"><dialog ref={(node) => { if (node && !node.open) node.showModal(); }} onCancel={(event) => { event.preventDefault(); if (!catalogSaving) setActivityEditor(null); }} className="constructor-conflict-dialog constructor-catalog-dialog" aria-modal="true" aria-labelledby="constructor-catalog-title">
         <header><h2 id="constructor-catalog-title">Каталог кружков и курсов</h2><button aria-label="Закрыть каталог" disabled={catalogSaving} onClick={() => setActivityEditor(null)}><X size={18} /></button></header>
