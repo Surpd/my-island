@@ -52,6 +52,19 @@ class TeacherColorSessionTests(unittest.TestCase):
                     self.assertEqual(client.put(f"{path}/{teacher_id}", headers=headers,
                                                 json={"color": "#000000", "expected_revision": 1}).status_code, 401)
 
+                # A primary cookie authorizes only the read and takes precedence
+                # over the stale school-directory header.
+                client.cookies.set("my_island_admin_session", browser)
+                stale_header = {"X-School-Admin-Session": expired}
+                for headers in ({}, stale_header):
+                    self.assertEqual(client.get(path, headers=headers).status_code, 200)
+                self.assertEqual(client.put(f"{path}/{teacher_id}", json={"color": "#000000", "expected_revision": 1}).status_code, 401)
+                client.cookies.set("my_island_admin_session", expired)
+                self.assertEqual(client.get(path).status_code, 401)
+                explicit = {"X-School-Admin-Session": browser, "X-Dev-Auth": f"browser:{browser}"}
+                self.assertEqual(client.get(path, headers=explicit).status_code, 200)
+                client.cookies.clear()
+
                 with db.connection() as conn:
                     db.execute(conn, "UPDATE admin_browser_sessions SET expires_at = ? WHERE token_hash = ?",
                                ("2000-01-01T00:00:00+00:00", db._token_hash(browser)))
