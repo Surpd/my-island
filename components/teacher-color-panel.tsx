@@ -9,6 +9,7 @@ type Registry = {
   overrides: Record<string,string>; setColor: (id:string, color:string) => void; resetColor: (id:string) => void;
   schoolColors?: Record<string,string>;
   storageError: string; ready: boolean; mode?: 'local'|'school'; error?: string; notice?: string;
+  loadError?: string; refresh?: () => Promise<boolean>;
   pending?: Set<string>; initializing?: boolean; seeding?: boolean; unassignedCount?: number;
   initialize?: () => Promise<void>; seedApproved?: () => Promise<void>;
   previewLocalMigration?: () => Promise<TeacherColorMigrationPreview>;
@@ -33,11 +34,15 @@ export function TeacherColorPanel({teachers, registry, onFilter, onClose}: {teac
       <button disabled={!registry.ready || registry.seeding} onClick={()=>setShowPalette(!showPalette)}>Обновить цвета из школьного справочника…</button>
       {showPalette ? <section aria-label="Школьная палитра"><p>Подтверждённые цвета шаблона II триместра</p>
         <ul>{teachers.filter(t=>registry.schoolColors?.[t.id]).map(t=><li key={t.id}><span style={{background:registry.schoolColors?.[t.id],display:'inline-block',width:16,height:16}}/> {t.name} · {registry.schoolColors?.[t.id]}{registry.overrides[t.id] ? ` · сохранится ручной цвет ${registry.overrides[t.id]}` : ''}</li>)}</ul>
-        <button disabled={registry.seeding} onClick={async()=>{await registry.seedApproved?.();setShowPalette(false);}}>Подтвердить школьную палитру</button>
+        <button disabled={!registry.ready || registry.seeding} onClick={async()=>{await registry.seedApproved?.();setShowPalette(false);}}>Подтвердить школьную палитру</button>
       </section> : null}
       <button disabled={!registry.ready || migrationBusy} onClick={async()=>{setPanelError('');setMigrationBusy(true);try{if(registry.previewLocalMigration)setMigration(await registry.previewLocalMigration());}catch(error){setPanelError((error as Error).message || 'Не удалось прочитать локальные настройки.');}finally{setMigrationBusy(false);}}}>{migrationBusy ? 'Проверяем…' : 'Перенести локальные цвета…'}</button>
     </div></details> : null}
-    {!registry.ready ? <output aria-live="polite">Загружаем цвета…</output> : null}
+    {registry.loadError ? <div className="constructor-color-load-error">
+      <span role="alert">{registry.loadError}</span>
+      <button type="button" onClick={() => void registry.refresh?.()}>Повторить загрузку цветов</button>
+    </div> : null}
+    {!registry.ready && !registry.loadError ? <output aria-live="polite">Загружаем цвета…</output> : null}
     {registry.error ? <p role="alert">{registry.error}</p> : null}
     {registry.notice ? <output aria-live="polite">{registry.notice}</output> : null}
     {panelError ? <p role="alert">{panelError}</p> : null}
@@ -53,15 +58,15 @@ export function TeacherColorPanel({teachers, registry, onFilter, onClose}: {teac
           </tr>;})}
         </tbody></table>
       </> : <p>Нет ручных настроек для переноса.</p>}
-      <button disabled={!migration.ready || migration.plan.length===0 || migrationBusy || !registry.confirmLocalMigration} onClick={async()=>{setPanelError('');setMigrationBusy(true);try{await registry.confirmLocalMigration?.(migration);setMigration(null);}catch(error){setPanelError((error as Error).message || 'Не удалось перенести настройки. Обновите предпросмотр.');}finally{setMigrationBusy(false);}}}>{migrationBusy ? 'Переносим…' : 'Подтвердить перенос'}</button>
+      <button disabled={!registry.ready || !migration.ready || migration.plan.length===0 || migrationBusy || !registry.confirmLocalMigration} onClick={async()=>{setPanelError('');setMigrationBusy(true);try{await registry.confirmLocalMigration?.(migration);setMigration(null);}catch(error){setPanelError((error as Error).message || 'Не удалось перенести настройки. Обновите предпросмотр.');}finally{setMigrationBusy(false);}}}>{migrationBusy ? 'Переносим…' : 'Подтвердить перенос'}</button>
       <button disabled={migrationBusy} onClick={()=>setMigration(null)}>Отмена</button>
     </section> : null}
     {registry.storageError ? <p role="alert">Настройки доступны в этой вкладке, но браузер не подтвердил сохранение: {registry.storageError}</p> : null}
-    {duplicate ? <p className="constructor-color-note">Некоторые оттенки совпадают. Ориентируйтесь также на имя и постоянный код.</p> : null}
+    {registry.ready && duplicate ? <p className="constructor-color-note">Некоторые оттенки совпадают. Ориентируйтесь также на имя и постоянный код.</p> : null}
     <div className="constructor-color-list">{filtered.map(t=><div key={t.id} className="constructor-color-row">
       <label title={`Изменить цвет: ${t.name}`}><input type="color" aria-label={`Цвет: ${t.name}`} value={registry.color(t.id)} disabled={!registry.ready || registry.pending?.has(t.id)} onChange={e=>registry.setColor(t.id,e.target.value)}/></label>
-      <button className="constructor-color-person" onClick={()=>{onFilter(t.id);onClose();}}><strong>{t.name}</strong><small><i style={{background:registry.accent(t.id)}}/>{registry.overrides[t.id] ? 'Цвет настроен вручную' : 'Цвет по умолчанию'}</small></button>
-      <button aria-label={`Сбросить цвет: ${t.name}`} disabled={!registry.overrides[t.id] || registry.pending?.has(t.id)} onClick={()=>registry.resetColor(t.id)}>Сбросить</button>
+      <button className="constructor-color-person" onClick={()=>{onFilter(t.id);onClose();}}><strong>{t.name}</strong><small><i style={{background:registry.accent(t.id)}}/>{registry.overrides[t.id] ? 'Цвет настроен вручную' : registry.ready ? 'Цвет по умолчанию' : 'Цвет недоступен'}</small></button>
+      <button aria-label={`Сбросить цвет: ${t.name}`} disabled={!registry.ready || !registry.overrides[t.id] || registry.pending?.has(t.id)} onClick={()=>registry.resetColor(t.id)}>Сбросить</button>
     </div>)}{!filtered.length ? <p>Преподаватели не найдены</p> : null}</div>
     <footer><span>{filtered.length} из {teachers.length} преподавателей</span><button onClick={()=>{onFilter('');onClose();}}>Показать всех</button><button onClick={onClose}>Готово</button></footer>
   </dialog></div>;

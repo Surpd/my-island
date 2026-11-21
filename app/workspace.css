@@ -1354,3 +1354,6 @@
   line-height:inherit; white-space:inherit; border:0; border-radius:0; cursor:pointer;
 }
 .constructor-export-sample .constructor-export-cell-link:hover { text-decoration:underline; }
+
+.constructor-color-load-error { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 10px; color:#77341d; background:#fff4e8; font-size:13px; }
+.constructor-color-load-error button { text-decoration:underline; }
