@@ -298,7 +298,7 @@ def describe_lesson(lesson, groups, teachers, existing_notes):
                 staff=", ".join(_COMPACT_TEACHERS.get(name, name) for name in staff), room=room, bg=bg,
                 club=club, elective=activity["activity_type"] == "elective",
                 group_ids=group_ids, teacher_ids=teacher_ids, notice=" · ".join(reasons),
-                marker=lesson.get("specialMark"), start=lesson["start"],
+                marker=lesson.get("specialMark"), start=lesson["start"], end=lesson["end"],
                 notes=saved_notes(lesson, existing_notes))
 
 
@@ -337,7 +337,7 @@ def card_caption(info, group, width, *, club, online_day=False):
         staff, room = "", ""
     metadata = " · ".join(filter(None, (staff, room)))
     title = info["overview_name"]
-    time = f"{info['start']} " if club else ""
+    time = f"{info['start']}–{info['end']} " if club else ""
     if wrapped_lines(" · ".join(filter(None, (time + title, group))), width, size) > 1:
         subject = _SHORT_TITLES.get(info["subject"], _COMPACT_SUBJECTS.get(info["subject"], info["subject"]))
         prefix = info["activity_prefix"]
@@ -370,13 +370,13 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     # repeated display cards for cross-class and multi-period activities.
     rows_by_slot = defaultdict(lambda: defaultdict(list))
     originals = {lesson["id"]: lesson for lesson in payload["lessons"]}
+    clubs_by_day = defaultdict(list)
     for day, lessons in by_day.items():
         for lesson in lessons:
-            raw = originals[lesson["id"]]
+            if info[str(lesson["id"])]["club"]:
+                clubs_by_day[day].append(lesson)
+                continue
             targets = {grade_by_class[c] for c in lesson["classIds"]}
-            if raw.get("activityType") == "club":
-                targets = {grade_by_class[c] for c in raw.get("displayClassIds") or [] if c in grade_by_class} or {
-                    str(g) for g in raw.get("eligibleGrades") or [] if str(g) in grades} or targets
             if not targets and None not in grades:
                 grades.append(None)
             starts = sorted(bell for bell, end in bell_times.items() if lesson["start"] < end and bell < lesson["end"])
@@ -409,6 +409,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
         widths.extend([(part + 1) * budget // count - part * budget // count for part in range(count)])
     columns = len(widths)
     cells, mapping, day_rows, day_labels, slot_ranges, heights = [], {}, [], {}, [], {}
+    class_band_ranges = []
 
     def cell(row, col, text, *, width=1, bg="#FFFFFF", fg="#202B3B", bold=False, note="", size=9, align="LEFT", height=1, **links):
         entry = dict(row=row, col=col, width=width, height=height, text=text, bg=bg,
@@ -424,6 +425,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
     heights[0] = 25
     row = 1
     for day in days:
+        class_start = row
         day_rows.append(row)
         caption = DAY_NAMES[day] + (f" · {monday + timedelta(days=day):%d.%m}" if monday else "")
         day_labels[row] = caption
@@ -490,6 +492,45 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
                     mapping[lesson_id]["references"].append({"row": card_row, "col": col, "group_label": group, **({"continuation": True} if continuation else {})})
             row += 1
 
+        class_band_ranges.append({"start": class_start, "end": row})
+        clubs = sorted(clubs_by_day[day], key=lambda l: (l["start"], l["end"], str(l["id"])))
+        if clubs:
+            cell(row, 0, "Кружки", width=columns, bg="#EDF1F5", bold=True)
+            heights[row] = 23
+            row += 1
+            # Use only real sheet columns; merge entire cards across grade boundaries.
+            per_row = min(3, columns - 1, max(1, sum(widths[1:]) // 145))
+            for first in range(0, len(clubs), per_row):
+                batch = clubs[first:first + per_row]
+                heights[row] = 21
+                for index, lesson in enumerate(batch):
+                    lid = str(lesson["id"])
+                    details = info[lid]
+                    col = 1 + index * (columns - 1) // len(batch)
+                    right = 1 + (index + 1) * (columns - 1) // len(batch)
+                    known_classes = list(dict.fromkeys(c for c in [
+                        *(lesson.get("displayClassIds") or []),
+                        *((lesson.get("audience") or {}).get("class_ids") or []),
+                        *lesson["classIds"],
+                    ] if c in grade_by_class))
+                    labels = [_label(groups[c]) for c in known_classes]
+                    labels.extend(group_caption(groups.get(key, {})) for key in details["group_ids"])
+                    audience = ", ".join(dict.fromkeys(filter(None, labels)))
+                    text, size, text_height = card_caption(
+                        details, audience, sum(widths[col:right]), club=True,
+                    )
+                    heights[row] = max(heights[row], text_height)
+                    cell(row, col, text, width=right-col, bg=details["bg"], fg=contrast_text(details["bg"]),
+                         size=size, note="\n".join(details["notes"]))
+                    mapping[lid] = dict(lesson_id=lid, source_lesson_ids=lesson["_source_ids"],
+                        source_hashes=lesson["_source_hashes"], logical_id=lesson["_logical_id"],
+                        row=row, col=col, segment_start=lesson["start"], segment_end=lesson["end"],
+                        day=day, class_ids=lesson["classIds"],
+                        grade_numbers=sorted({grade_by_class[c] for c in lesson["classIds"]}),
+                        group_ids=details["group_ids"], teacher_ids=details["teacher_ids"], references=[], rows=1,
+                        group_label=audience, review=details["notice"], section="clubs")
+                row += 1
+
     mapping = list(mapping.values())
     source_ids = [sid for item in mapping for sid in item["source_lesson_ids"]]
     if len(source_ids) != len(set(source_ids)) or set(source_ids) != {str(l["id"]) for l in payload["lessons"]}:
@@ -499,6 +540,7 @@ def build_school_grid(snapshot, by_day, groups, teachers, classes, *, title, she
             "mapping_sheet_id": mapping_sheet_id, "snapshot_id": snapshot["snapshot_id"], "snapshot": snapshot,
             "rows": row, "overview_rows": row, "columns": columns, "column_widths": widths, "row_heights": heights,
             "day_rows": day_rows, "day_labels": day_labels, "frozen_rows": 1, "slot_ranges": slot_ranges, "cells": cells, "mapping": mapping,
+            "class_band_ranges": class_band_ranges if any(clubs_by_day.values()) else None,
             "class_columns": [{"start": col, "width": seats[grade]} for grade, col in columns_by_grade.items()],
             "presentation_context": context, "presentation_fingerprint": _hash(context),
             "summary": {"lessons": len(source_ids), "placements": len(mapping),

@@ -303,11 +303,12 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(card("subgroup")["text"],"Обед · 9B")
         self.assertEqual(card("meal1")["text"],"Обед · Остальные")
         self.assertEqual(card("whole")["text"],"Обед")
-        self.assertEqual(card("whole")["row"], card("club1")["row"])
-        self.assertEqual(len({card(k)["col"] for k in ("whole", "club1", "club2")}), 3)
-        self.assertEqual(card("club1")["row"],card("club2")["row"])
-        self.assertNotEqual(card("club1")["col"],card("club2")["col"])
-        self.assertEqual(card("club1")["text"].replace(" · ", " ").split(),"14:50 Рисунок зал".split())
+        self.assertLess(card("whole")["row"], card("club1")["row"])
+        self.assertTrue(all(mapped[key]["section"] == "clubs" for key in ("club1", "club2")))
+        self.assertNotEqual((card("club1")["row"], card("club1")["col"]),
+                            (card("club2")["row"], card("club2")["col"]))
+        self.assertIn("14:50–15:35 Рисунок", card("club1")["text"])
+        self.assertIn("зал", card("club1")["text"])
         borders = [r["updateBorders"] for r in sheets_requests(plan) if "updateBorders" in r]
         self.assertTrue(all(any(b["range"]["startRowIndex"] == row and b.get("top",{}).get("style")=="SOLID_THICK"
                                  for b in borders) for row in plan["day_rows"]))
@@ -338,7 +339,7 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(notes, ["Возьмите тетрадь."])
         self.assertLessEqual(max(plan["row_heights"].values()), 88)
 
-    def test_bell_times_and_course_choices_stay_in_the_grid_alongside_timed_clubs(self):
+    def test_bell_times_and_course_choices_stay_in_the_grid_with_clubs_below(self):
         from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, sheets_requests
         groups = [{"id": str(grade), "name": str(grade), "group_type": "class"} for grade in range(5, 12)]
         lessons = [
@@ -361,8 +362,7 @@ class SchedulePublishingTests(unittest.TestCase):
             "source": {"draft_id": "draft"}, "payload": {"classes": [g["id"] for g in groups], "days": [4],
             "grade_modes": {"5": {"4": "online"}, "10": {"4": "sdep"}}, "lessons": lessons, "slots": [{"start": "09:00", "end": "09:45"}, {"start": "09:55", "end": "10:40"}]}})
         plan = build_sheet_plan(snapshot, layout="school-grid", title="Пятница", sheet_id=70, mapping_sheet_id=71)
-        # Five simultaneous choices must remain readable in their time band.
-        self.assertGreater(sum(plan["column_widths"]), 1258)
+        # The ordinary time band is independent of the club.
         cells = {(c["row"], c["col"]): c for c in plan["cells"]}
         friday = plan["day_rows"][0]
         self.assertEqual([cells[friday+offset, 0]["text"] for offset in (1, 2)], ["09:00–09:45", "09:55–10:40"])
@@ -375,9 +375,11 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(sum(bool(ref.get("continuation")) for ref in lab["references"]), 2)
         self.assertEqual((lab["segment_start"], lab["segment_end"]), ("09:00", "10:40"))
         by_id = {m["lesson_id"]: m for m in plan["mapping"]}
-        for lesson in ("club", "art", "elective", "elective-2", "consultation", "practice"):
+        for lesson in ("art", "elective", "elective-2", "consultation", "practice"):
             self.assertEqual(friday + 2, by_id[lesson]["row"])
-        self.assertEqual(len({by_id[key]["col"] for key in ("club", "art", "elective", "elective-2")}), 4)
+        self.assertEqual(len({by_id[key]["col"] for key in ("art", "elective", "elective-2")}), 3)
+        self.assertGreater(by_id["club"]["row"], friday + 2)
+        self.assertEqual(by_id["club"]["section"], "clubs")
         self.assertEqual(cells[friday + 2, 0]["height"], 1)
         elective = by_id["elective"]
         self.assertIn("Тест", cells[elective["row"], elective["col"]]["text"])
@@ -456,6 +458,21 @@ class SchedulePublishingTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "existing")
         self.assertEqual(recovered["url"], old["url"])
         self.assertEqual(len(client.writes), 1)
+
+    def test_v8_receipt_is_not_reused_for_the_new_club_layout(self):
+        client = FakeSheets()
+        with patch("backend.services.schedule_sheet_publishing.EXPORT_POLICY", "school-grid-class-v8"):
+            old = self.confirm(self.draft["id"], client=client)
+        with self.db.connection() as connection:
+            connection.execute("UPDATE schedule_sheet_exports SET status='prepared',url=NULL WHERE export_key=?",
+                               (old["export_key"],))
+        new = self.confirm(self.draft["id"], client=client)
+        self.assertEqual(new["status"], "exported")
+        self.assertNotEqual(new["url"], old["url"])
+        self.assertNotEqual(new["export_key"], old["export_key"])
+        self.assertEqual(len(client.writes), 2)
+        self.assertEqual(self.confirm(self.draft["id"], client=client)["url"], new["url"])
+        self.assertEqual(len(client.writes), 2)
 
     def test_confirmed_participants_are_not_sent_to_google(self):
         self.payload['lessons'][0].update(activityType='club', activityNameSnapshot='Шахматы', confirmedParticipantIds=['private-student'], eligibleGrades=[7])

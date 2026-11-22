@@ -168,9 +168,15 @@ def build_sheet_plan(snapshot: Mapping[str, Any], *, title: str,
             raise ValueError(f"Invalid lesson interval: {lesson['id']}")
         targets = list(dict.fromkeys(cid for cid in (lesson.get("classIds") or [lesson.get("classId")]) if cid))
         independent_activity = lesson.get("activityType") in {"club", "elective", "event"}
-        if (not targets and not independent_activity) or any(cid not in class_ids for cid in targets):
+        club_band = False
+        if layout == "school-grid":
+            from backend.services.schedule_sheet_layout_v3 import activity_semantics
+            club_band = activity_semantics(lesson)["section"] == "clubs"
+        if (not targets and not (independent_activity or club_band)) or any(cid not in class_ids for cid in targets):
             raise ValueError(f"Unresolved class placement: {lesson['id']}")
-        if lesson_is_online(lesson, _lesson_day_modes(payload, lesson, class_grades)):
+        # A class mode may not describe a separately scheduled club.
+        day_modes = set() if club_band else _lesson_day_modes(payload, lesson, class_grades)
+        if lesson_is_online(lesson, day_modes):
             lesson["room"] = "Онлайн"
         if lesson.get("activityType") == "laboratory":
             lesson["teacherIds"] = list(dict.fromkeys([lesson["teacherId"], *(lesson.get("teacherIds") or [])]))
@@ -645,8 +651,11 @@ def sheets_requests(plan: Mapping[str, Any], *, spreadsheet_url: str = "", front
             height_runs.append([row, row+1, height])
     for start, end, height in height_runs:
         requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": start, "endIndex": end}, "properties": {"pixelSize": height}, "fields": "pixelSize"}})
-    for c in plan["class_columns"]:
-        requests.append({"updateBorders": {"range": grid(0, c["start"], plan["rows"], c["start"]+c["width"]), "left": {"style": "SOLID", "color": color("#9AA0A6")}, "right": {"style": "SOLID", "color": color("#9AA0A6")}}})
+    outer_class_bands = ([{"start": 0, "end": plan["frozen_rows"]}, *plan["class_band_ranges"]]
+                         if plan.get("class_band_ranges") else [{"start": 0, "end": plan["rows"]}])
+    for band in outer_class_bands:
+        for c in plan["class_columns"]:
+            requests.append({"updateBorders": {"range": grid(band["start"], c["start"], band["end"], c["start"]+c["width"]), "left": {"style": "SOLID", "color": color("#9AA0A6")}, "right": {"style": "SOLID", "color": color("#9AA0A6")}}})
     if plan.get("layout") == "compact-v2":
         requests[2]["updateDimensionProperties"]["properties"]["pixelSize"] = plan["column_widths"][0]
         requests[3]["updateDimensionProperties"]["properties"]["pixelSize"] = plan["column_widths"][1]
@@ -693,10 +702,14 @@ def sheets_requests(plan: Mapping[str, Any], *, spreadsheet_url: str = "", front
                 "top": {"style": "SOLID_MEDIUM", "color": color("#344054")},
                 "bottom": {"style": "SOLID_MEDIUM", "color": color("#344054")}}})
     if plan.get("layout") == "school-grid":
-        for c in plan["class_columns"]:
-            requests.append({"updateBorders": {"range": grid(plan.get("frozen_rows", 2), c["start"], plan.get("overview_rows", plan["rows"]), c["start"]+c["width"]),
-                "left": {"style": "SOLID_THICK", "color": color("#53687C")},
-                "innerVertical": {"style": "SOLID", "color": color("#AAB8C5")}}})
+        class_bands = plan.get("class_band_ranges") or [
+            {"start": plan.get("frozen_rows", 2), "end": plan.get("overview_rows", plan["rows"])}
+        ]
+        for band in class_bands:
+            for c in plan["class_columns"]:
+                requests.append({"updateBorders": {"range": grid(band["start"], c["start"], band["end"], c["start"]+c["width"]),
+                    "left": {"style": "SOLID_THICK", "color": color("#53687C")},
+                    "innerVertical": {"style": "SOLID", "color": color("#AAB8C5")}}})
         for index, width in enumerate(plan["column_widths"]):
             requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
                 "startIndex": index, "endIndex": index + 1}, "properties": {"pixelSize": width}, "fields": "pixelSize"}})
