@@ -45,6 +45,71 @@ class ScheduleSheetExportTests(unittest.TestCase):
                 if ids:
                     self.assertIn("Преподаватель отсутствует", item["review"])
 
+    def test_clubs_have_one_anchor_each_below_normal_slots_and_preserve_metadata(self):
+        source = self.source()
+        source["groups"].extend({"id": str(g), "name": str(g), "group_type": "class"} for g in (10, 11))
+        payload = source["payload"]
+        payload["classes"].extend(("10", "11"))
+        payload["grade_modes"] = {"5": {"0": "online"}, "6": {"0": "online"}}
+        normal = [
+            self.lesson("math-10", ["10"], activityType="lesson", subject="Айкидо"),
+            self.lesson("elective-11", ["11"], activityType="elective", subject="Айкидо"),
+            self.lesson("math-11", ["11"], activityType="practice", subject="Геометрия"),
+        ]
+        clubs = [
+            self.lesson("legacy", [], subject="⚪АЙКИДО", start="09:00", end="10:40", room="Зал"),
+            self.lesson("targeted", ["c5", "c6"], activityType="club", subject="Рисунок", room="Студия"),
+            self.lesson("empty", [], activityType="club", subject="Вокал", eligibleGrades=[10]),
+            self.lesson("additional", [], activityType="club", subject="Ателье", start="15:11", end="15:56"),
+            self.lesson("day2", [], day=1, activityType="club", subject="Айкидо", start="16:21", end="17:06"),
+        ]
+        for item in normal + clubs:
+            item["groupIds"] = []
+        def build(lessons):
+            payload["lessons"] = lessons
+            return build_sheet_plan(freeze_week(source, "2026-10-19"), layout="school-grid",
+                                    sheet_id=1, mapping_sheet_id=2, title="Расписание")
+        before, after = build(normal), build(normal + clubs)
+        self.assertEqual(before["class_columns"], after["class_columns"])
+        self.assertEqual(before["column_widths"], after["column_widths"])
+        self.assertNotIn("Без параллели", [c["text"] for c in after["cells"]])
+        mapping = {m["lesson_id"]: m for m in after["mapping"]}
+        cells = {(c["row"], c["col"]): c for c in after["cells"]}
+        headings = [c["row"] for c in after["cells"] if c["text"] == "Кружки"]
+        self.assertEqual(len(headings), 2)
+        for previous in before["mapping"]:
+            self.assertEqual(previous, mapping[previous["lesson_id"]])
+        for item in clubs:
+            m = mapping[item["id"]]
+            self.assertEqual(m["section"], "clubs")
+            self.assertEqual(m["references"], [])
+            self.assertEqual(m["source_lesson_ids"], [item["id"]])
+            content = cells[m["row"], m["col"]]["text"]
+            self.assertIn(f"{item['start']}–{item['end']}", content)
+            self.assertLess(headings[item["day"]], m["row"])
+            self.assertLess(m["row"], after["day_rows"][item["day"] + 1])
+        self.assertEqual(mapping["empty"]["group_label"], "")
+        self.assertEqual(mapping["legacy"]["group_label"], "")
+        self.assertEqual(mapping["legacy"]["grade_numbers"], [])
+        self.assertEqual(mapping["targeted"]["group_label"], "5, 6")
+        self.assertIn("Студия", cells[mapping["targeted"]["row"], mapping["targeted"]["col"]]["text"])
+        self.assertIn("Айкидо", cells[mapping["legacy"]["row"], mapping["legacy"]["col"]]["text"])
+        self.assertIn("Зал", cells[mapping["legacy"]["row"], mapping["legacy"]["col"]]["text"])
+        self.assertGreaterEqual(len({mapping[m["id"]]["row"] for m in clubs[:-1]}), 2)
+        requests = sheets_requests(after)
+        self.assertTrue(requests[1]["addSheet"]["properties"]["hidden"])
+        visible = next(r["updateCells"]["rows"] for r in requests
+                       if r.get("updateCells", {}).get("start", {}).get("sheetId") == after["sheet_id"])
+        for club in clubs:
+            m = mapping[club["id"]]
+            self.assertEqual(visible[m["row"]]["values"][m["col"]]["userEnteredValue"]["stringValue"],
+                             cells[m["row"], m["col"]]["text"])
+        self.assertTrue(all(
+            not any(r["startRowIndex"] <= h < r["endRowIndex"] for h in headings)
+            for request in requests if "left" in request.get("updateBorders", {})
+            for r in [request["updateBorders"]["range"]]
+        ))
+
     def test_school_palette_text_contrast_meets_wcag_aa(self):
         from backend.services.schedule_sheet_school_grid import contrast_text
         from backend.services.teacher_ui_colors import APPROVED_SOURCE_COLORS

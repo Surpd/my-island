@@ -145,3 +145,14 @@ test('pasting remaps class audiences but preserves explicit groups, students, an
   const club = { id: 'old', activityType: 'club', classId: '', classIds: [], displayClassIds: ['class-7b'], audience: { kind: 'students', student_ids: [] } };
   assert.deepEqual(remapPastedLessonAudience(club, ['class-9a'], 'new'), { ...club, id: 'new', displayClassIds: ['class-9a'] });
 });
+
+test('partial lesson intervals survive copy and period changes without losing a laboratory continuation', async () => {
+  const { lessonTimes, relocatedTimes } = await import('./schedule-constructor-logic.ts');
+  const slots = [{start:'09:00',end:'09:45'},{start:'09:55',end:'10:40'},{start:'10:50',end:'11:25'}];
+  const lab = {period:0,end:'10:40'};
+  assert.deepEqual(lessonTimes(lab,slots),{start:'09:00',end:'10:40'});
+  const moved = {...lab,period:1,...relocatedTimes(lab,slots,1)};
+  assert.deepEqual(lessonTimes(moved,slots),{start:'09:55',end:'11:35'});
+  assert.deepEqual(relocatedTimes({period:0,start:'09:10',end:'09:45'},slots,2),{start:'11:00',end:'11:25'});
+  assert.deepEqual(relocatedTimes({period:0},slots,2),{});
+});

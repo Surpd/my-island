@@ -22,7 +22,7 @@ from backend.services.schedule_experiments import ExperimentConflict, get_experi
 from backend.services.schedule_sheet_export import build_sheet_plan, freeze_template, freeze_week, sheets_requests
 
 TEST_EXPORT_TARGET = "11VZK05M0QNV3sGny2PLWL3_yiuyuQSVnj-6QtIa5cDQ"
-EXPORT_POLICY = "school-grid-class-v8"
+EXPORT_POLICY = "school-grid-class-v9"
 PREVIOUS_POLICY = "compact-activities-v3"
 LEGACY_WEEK_POLICY = "compact-activities-v2"
 

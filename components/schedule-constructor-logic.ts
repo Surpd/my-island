@@ -1,3 +1,4 @@
+import { instructionalGroupIds } from './schedule-lanes.ts';
 import { audienceGrade, subjectLabel, subjectAliases } from './school-audience.ts';
 import { assignmentIsActive } from './teacher-directory-logic.ts';
 
@@ -34,6 +35,32 @@ export function confirmedClassLunchMarker(lesson: { specialMark?: string; classI
   return classIds.length > 0 && classIds.every((id) => groups.some((group) => group.id === id && group.group_type === 'class'));
 }
 
+export function addMinutes(time: string, amount: number) {
+  const [h, m] = time.split(':').map(Number);
+  const value = h * 60 + m + amount;
+  return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+export function minutes(time: string) { const [hour, minute] = time.split(':').map(Number); return hour * 60 + minute; }
+type LessonPeriod = { period: number; start?:string; end?:string };
+type Bell = {start:string; end:string};
+
+export function lessonTimes(lesson:LessonPeriod, slots:Bell[]) {
+  const slot = slots[lesson.period];
+  return {start:lesson.start || slot?.start || '', end:lesson.end || slot?.end || ''};
+}
+
+// Keep implicit endpoints on the destination bell. Shift explicit offsets
+// from the old bell, including an end-only multi-period laboratory.
+export function relocatedTimes(lesson:LessonPeriod, slots:Bell[], period:number) {
+  const from = slots[lesson.period], to = slots[period];
+  if (!from || !to || period === lesson.period) return {};
+  const shift = minutes(to.start) - minutes(from.start);
+  return {
+    ...(lesson.start ? { start:lesson.start === from.start ? to.start : addMinutes(lesson.start,shift) } : {}),
+    ...(lesson.end ? { end:lesson.end === from.end ? to.end : addMinutes(lesson.end,shift) } : {}),
+  };
+}
+
 type LinkedLesson = {
   groupId?: string;
   groupIds?: string[];
@@ -59,15 +86,7 @@ export function linkedInstructionalGroupsForColumn<T extends LinkedGroup>(
   students: MembershipStudent[],
   columnClassIds: string[],
 ): T[] {
-  const assignment = lesson.canonical?.assignment;
-  const metadata = assignment?.metadata;
-  const ids = [...new Set([
-    ...(lesson.groupIds || []), lesson.groupId || '',
-    ...(lesson.audience?.kind === 'groups' ? lesson.audience.group_ids || [] : []),
-    ...(assignment?.canonical_group_ids || []),
-    ...(metadata?.audience?.canonical_group_ids || []),
-    ...(metadata?.audience_rule?.group_ids || []),
-  ].map(String).filter(Boolean))];
+  const ids = instructionalGroupIds(lesson, id => groups.find(g => g.id === id)?.group_type === 'class');
   const linked = ids.map((id) => groups.find((group) => group.id === id))
     .filter((group): group is T => Boolean(group && group.group_type !== 'class'));
   if (linked.length < 2 || !columnClassIds.length) return linked;
