@@ -25,6 +25,7 @@ export type AudiencePreview = {
   excluded_count?: number | null;
   blockers?: { lesson_id: string; subject?: string; reason: string }[];
   needs_recalculation?: boolean;
+  verified_saved_group?: boolean;
   proposed_student_ids?: string[] | null;
   audience_snapshot?: { student_ids: string[]; resolved_at: string };
 };

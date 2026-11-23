@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { confirmedClassLunchMarker, displayedClarificationReason, groupCourseContext, parseQuick, rankTeachersForAudience, shortGroup, shortSubject } from '../components/schedule-constructor-logic.ts';
+import { confirmedClassLunchMarker, displayedClarificationReason, displayedDayModeWarning, isSdepIndependentLesson, lessonNeedsPhysicalRoom, groupCourseContext, parseQuick, rankTeachersForAudience, shortGroup, shortSubject } from '../components/schedule-constructor-logic.ts';
 
 const groups = [
   { id: '5', name: '5 класс', group_type: 'class' },
@@ -159,4 +159,31 @@ test('displayed lunch advisory strips only the exact obsolete clause with truste
   assert.equal(displayedClarificationReason({ ...lesson, importError: true }, classes), old);
   assert.equal(displayedClarificationReason({ ...lesson, audience: {kind: 'groups', group_ids: ['7-lunch']} }, classes), old);
   assert.equal(displayedClarificationReason(lesson, [{ ...classes[0], archived_at: '2026-11-20' }]), old);
+});
+
+test('SPED waiver needs an explicit compatible day and class; online never waives a teacher warning', () => {
+  const directory = [...groups,
+    { id: '10a', name: '10-A', group_type: 'class' },
+    { id: '11a', name: '11-A', group_type: 'class' }];
+  const payload = { grade_modes: { 10: { 4: 'sdep' }, 11: { 4: 'sdep' }, 9: { 0: 'online' } } };
+  const row = { day: 4, classIds: ['10a', '11a'], room: '104' };
+  const warning = 'Не подтверждён преподаватель; Кабинет не указан; Уточните аудиторию';
+  assert.equal(isSdepIndependentLesson(payload, row, directory), true);
+  assert.equal(lessonNeedsPhysicalRoom(payload, row, directory), false);
+  assert.equal(displayedDayModeWarning(warning, payload, row, directory), 'Уточните аудиторию');
+  for (const ordinary of [
+    { ...row, day: 0 }, { ...row, classIds: ['9an'] }, { ...row, classIds: ['10a', 'unknown'] },
+    { ...row, audience: { kind: 'classes', class_ids: ['9an'] } }, { ...row, activityType: 'consultation' },
+  ]) {
+    assert.equal(isSdepIndependentLesson(payload, ordinary, directory), false);
+    assert.equal(lessonNeedsPhysicalRoom(payload, ordinary, directory), true);
+    assert.equal(displayedDayModeWarning(warning, payload, ordinary, directory), warning);
+  }
+  for (const remote of [
+    { day: 0, classIds: ['9an'], room: '104' },
+    { day: 4, classIds: ['9an'], format: 'online', room: '104' },
+  ]) {
+    assert.equal(lessonNeedsPhysicalRoom(payload, remote, directory), false);
+    assert.equal(displayedDayModeWarning(warning, payload, remote, directory), 'Не подтверждён преподаватель; Уточните аудиторию');
+  }
 });

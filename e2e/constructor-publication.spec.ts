@@ -189,20 +189,21 @@ test('publication preview groups pairs, separates severity and keeps the affecte
   await expect(severity).toHaveValue('critical');
 });
 
-test('diagnostics copy a report with lesson links and without internal messages', async ({ page }) => {
+test('diagnostics copy a report without names, codes or lesson links', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { document.documentElement.dataset.copiedReport = text; } } });
   });
   const { dialog } = await openPublicationPanel(page);
   await dialog.getByText('Отчёт проверки', { exact: true }).click();
-  await expect(dialog.getByRole('button', { name: 'Скопировать отчёт проверки' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Скопировать обезличенный отчёт' })).toBeVisible();
   await expect(dialog.locator('[data-review-issue~="teacher_overlap"]')).toHaveCount(1);
-  await dialog.getByRole('button', { name: 'Скопировать отчёт проверки' }).click();
-  await expect(dialog.getByText(/Отчёт проверки скопирован/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Скопировать обезличенный отчёт' }).click();
+  await expect(dialog.getByText(/Обезличенный отчёт проверки скопирован/)).toBeVisible();
   const copiedReport = await page.locator('html').getAttribute('data-copied-report');
-  expect(copiedReport).toContain('teacher_overlap\t1');
-  expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-related`);
-  expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-conflict`);
+  expect(copiedReport).toContain('У преподавателя пересекаются занятия');
+  expect(copiedReport).not.toContain(DRAFT_ID);
+  expect(copiedReport).not.toContain('lesson-conflict');
+  expect(copiedReport).not.toContain('teacher_overlap');
   expect(copiedReport).not.toContain('Нужно проверить пересечение занятий');
   await page.screenshot({ path: 'test-results/schedule-publication-preview.png', fullPage: true });
 });

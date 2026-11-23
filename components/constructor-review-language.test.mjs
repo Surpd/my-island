@@ -16,3 +16,10 @@ test('does not invent a reason or expose technical fallback as the display text'
   }
   assert.equal(legacyReviewReason('Не указан вид занятия').title, 'Не указан вид занятия');
 });
+
+test('unverified historical group links do not require a matching lesson subject', () => {
+  const explanation = legacyReviewReason('Для этого предмета не подтверждена учебная группа; прежняя математическая группа удалена');
+  assert.equal(explanation.title, 'Проверьте связь с учебной группой');
+  assert.match(explanation.action, /можно оставить/i);
+  assert.doesNotMatch(explanation.title + explanation.action, /замен/i);
+});

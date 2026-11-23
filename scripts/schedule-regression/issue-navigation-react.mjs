@@ -96,7 +96,7 @@ async function openDraft(page) {
 async function baseline(page, width) {
   step = `before issues at ${width}`;
   await openDraft(page);
-  const gridIssues = button(page, /Конфликты в сетке|В сетке/);
+  const gridIssues = button(page, /Занятия с конфликтами в сетке|С конфликтами/);
   await gridIssues.click();
   const panel = page.locator('.constructor-conflict-panel');
   await panel.getByText('Центр решений расписания', { exact: true }).waitFor();
