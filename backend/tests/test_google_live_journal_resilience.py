@@ -30,17 +30,18 @@ class _FakePostgresConnection:
 
     def execute(self, query, params=()):
         self.queries.append((query, params))
-        return _FakePostgresResult(self.lock_acquired)
+        return _FakePostgresResult(self.lock_acquired, 42 if "INSERT INTO journal_sync_runs" in query else None)
 
 
 class _FakePostgresResult:
     rowcount = 1
 
-    def __init__(self, lock_acquired):
+    def __init__(self, lock_acquired, run_id=None):
         self.lock_acquired = lock_acquired
+        self.run_id = run_id
 
     def fetchone(self):
-        return {"acquired": self.lock_acquired}
+        return {"id": self.run_id} if self.run_id is not None else {"acquired": self.lock_acquired}
 
 
 class _FakePostgresDatabase(Database):
@@ -180,6 +181,15 @@ class JournalSyncResilienceTests(unittest.TestCase):
         self.assertTrue(any("pg_try_advisory_lock" in query for query in queries))
         self.assertTrue(any("pg_advisory_unlock" in query for query in queries))
         self.assertEqual(active_database.fake_connection.commits, 1)
+
+    def test_validated_import_run_reservation_uses_existing_postgres_session_lock(self):
+        database = _FakePostgresDatabase(True)
+        with database.journal_workbook_lock("book-locked") as acquired:
+            self.assertTrue(acquired)
+            self.assertEqual(database.start_journal_sync("book-locked", 9, book_lock_held=True), 42)
+        queries = [query for query, _ in database.fake_connection.queries]
+        self.assertFalse(any("pg_try_advisory_xact_lock" in query for query in queries))
+        self.assertTrue(any("pg_advisory_unlock" in query for query in queries))
 
     def test_refresh_reports_progress_after_each_exact_named_tab(self):
         run_id = self.database.start_journal_sync("book-progress", 9)

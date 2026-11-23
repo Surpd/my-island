@@ -184,17 +184,20 @@ class JournalRoleViewTests(unittest.TestCase):
                                 grade=7, subject="Математика/Физика", sheet_title="I · Математика/Физика", sheet_id=1)
             google.sheet_values.reset_mock()
             for attempt in range(2):
+                checked = self.client.post("/api/admin/journals/connect", headers={"X-Dev-Auth": "admin-auth"},
+                    json={**payload, "dry_run": True}).json()
+                self.assertEqual([tab["sheet_id"] for tab in checked["tabs"]], ["2"])
                 response = self.client.post("/api/admin/journals/connect", headers={"X-Dev-Auth": "admin-auth"},
-                    json=payload)
+                    json={**payload, "selected_sheet_ids": ["2"], "preflight_token": checked["preflight_token"]})
                 self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual([tab["status"] for tab in response.json()["tabs"]], ["success", "skipped"])
+                self.assertEqual([tab["status"] for tab in response.json()["tabs"]], ["success"])
                 sources = [item for item in self.database.journal_status() if item["spreadsheet_id"] == book and item["status"] == "ready"]
                 self.assertEqual(sorted(item["term_number"] for item in sources), [1, 2])
                 if attempt == 0:
                     for source in sources:
                         student = next(row for row in self.database.journal_detail(source["id"])["students"] if row["display_name"] == "Student One")
                         self.assertTrue(self.database.match_journal_student(source["id"], student["id"], self.student_identity))
-            self.assertEqual([call.args[1] for call in google.sheet_values.call_args_list], [f"'{title}'!A:ZZ"] * 2)
+            self.assertEqual([call.args[1] for call in google.sheet_values.call_args_list], [f"'{title}'!A:ZZ"] * 4)
         items = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"}).json()["items"]
         visible = {item["source"]["term_number"]: item for item in items if item["source"]["subject"] == "Математика/Физика"}
         self.assertEqual([row["numeric_score"] for row in visible[1]["results"]], [3])

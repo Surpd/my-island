@@ -228,16 +228,27 @@ test('other routes retain their sidebar mode', async ({ page }) => {
 });
 
 test('II import is gated on fresh preflight of the exact class and book', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   let previewCalls = 0;
+  let commits = 0;
+  const token = 'a'.repeat(64);
   await page.route('**/api/admin/journals/connect', async (route) => {
     const input = route.request().postDataJSON();
-    expect(input).toMatchObject({ grade: 5, term_number: 2, dry_run: true, auto_sync_enabled: false,
-      spreadsheet_url: previewCalls === 0 ? 'synthetic-journal-workbook-a' : 'synthetic-journal-workbook-b' });
+    expect(input).toMatchObject({ grade: 5, term_number: 2, auto_sync_enabled: false,
+      spreadsheet_url: previewCalls === 1 && input.dry_run ? 'synthetic-journal-workbook-b' : 'synthetic-journal-workbook-a' });
+    if (!input.dry_run) {
+      expect(input).toMatchObject({ preflight_token: token, selected_sheet_ids: ['2'] });
+      commits++;
+      return route.fulfill({ json: { status: 'success', spreadsheet_id: 'synthetic-journal-workbook-a', tabs: [] } });
+    }
     previewCalls++;
-    await route.fulfill({ json: previewCalls === 1 ? {
-      status: 'success', tabs: [{ sheet_id: '2', label: 'II · История', status: 'success' }],
+    await route.fulfill({ json: previewCalls !== 2 ? {
+      status: 'success', preflight_token: token, tabs: [
+        { sheet_id: '2', label: 'II · История', status: 'success' },
+        { sheet_id: '3', label: 'II · История: практика', status: 'success', connected: true },
+      ],
     } : {
-      status: 'blocked', tabs: [{ sheet_id: '2', label: 'II · История', status: 'error',
+      status: 'blocked', preflight_token: null, tabs: [{ sheet_id: '2', label: 'II · История', status: 'error',
         reason: 'ID или название вкладки уже привязано к другому периоду.' }],
     } });
   });
@@ -251,7 +262,9 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   await source.fill('synthetic-journal-workbook-a');
   await expect(commit).toBeDisabled();
   await preview.click();
-  await expect(editor.getByText('II · История')).toBeVisible();
+  await expect(editor.getByRole('checkbox', { name: 'II · История', exact: true })).toBeChecked();
+  await expect(editor.getByRole('checkbox', { name: /История: практика/ })).toBeChecked();
+  await expect(editor.getByText('Выбрано: 2 из 2 проверенных вкладок.')).toBeVisible();
   await expect(commit).toBeEnabled();
   await editor.getByLabel('Класс', { exact: true }).selectOption('7');
   await expect(commit).toBeDisabled();
@@ -262,5 +275,16 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   await preview.click();
   await expect(editor.getByText(/привязано к другому периоду/)).toBeVisible();
   await expect(commit).toBeDisabled();
-  expect(previewCalls).toBe(2);
+  await source.fill('synthetic-journal-workbook-a');
+  await preview.click();
+  await editor.getByRole('checkbox', { name: /История: практика/ }).uncheck();
+  const history = editor.getByRole('checkbox', { name: 'II · История', exact: true });
+  await history.uncheck();
+  await expect(commit).toBeDisabled();
+  await history.check();
+  await expect(editor.getByText('Выбрано: 1 из 2 проверенных вкладок.')).toBeVisible();
+  await commit.click();
+  await expect(editor).toHaveCount(0);
+  expect(previewCalls).toBe(3);
+  expect(commits).toBe(1);
 });

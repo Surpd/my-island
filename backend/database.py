@@ -4947,16 +4947,19 @@ class Database:
                 "students": [{**dict(row), "canonical_classes": sorted(canonical_classes.get(str(row["identity_id"]), set())), "members": members.get(row['id'], []), "summaries": summaries.get(row["id"], []), "results": {str(item["id"]): values.get((row["id"], item["id"])) for item in assignments if not group_marker or item["group_marker"] in {"all", group_marker}}} for row in students],
             }
 
-    def start_journal_sync(self, spreadsheet_id: str, grade: int, subject: str | None = None, trigger_kind: str = "manual") -> Any | None:
+    def start_journal_sync(self, spreadsheet_id: str, grade: int, subject: str | None = None, trigger_kind: str = "manual", *, book_lock_held: bool = False) -> Any | None:
         try:
             with self.connection() as connection:
                 # A killed worker leaves its row behind. Reclaim only runs that
                 # have exceeded a generous wall-clock lease; the partial unique
                 # index below remains the cross-process concurrency guard.
                 if self.database_url:
-                    lock = self.execute(connection, "SELECT pg_try_advisory_xact_lock(hashtext(?)) AS acquired", (f"journal-book:{spreadsheet_id}",)).fetchone()
-                    if not lock or not lock["acquired"]:
-                        return None
+                    # A verified selection starts its run inside the existing
+                    # workbook session lock; a second connection cannot reacquire it.
+                    if not book_lock_held:
+                        lock = self.execute(connection, "SELECT pg_try_advisory_xact_lock(hashtext(?)) AS acquired", (f"journal-book:{spreadsheet_id}",)).fetchone()
+                        if not lock or not lock["acquired"]:
+                            return None
                     self.execute(connection, """UPDATE journal_sync_runs
                         SET status = 'error', finished_at = CURRENT_TIMESTAMP,
                             error = 'Recovered stale journal sync after worker interruption (30-minute lease expired)'
