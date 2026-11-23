@@ -31,12 +31,14 @@ export type NormalizationPreview = {
   automatic_count: number;
   activity_type_change_count: number;
   teacher_warning_clear_count: number;
-  changes: { lesson_id: string; field?: string; before: string; after: string; reason: string }[];
+  changes: { lesson_id: string; field?: string; before: string; after: string; reason: string; current_note_eligible?: boolean }[];
   manual: { lesson_id: string; reason: string }[];
   scope_proposals?: { lesson_id: string; kind: 'lunch_verified' | 'elective_availability'; problem?: string }[];
   retained_warning_count: number;
   retained_warnings: { reason: string; count: number; examples: { lesson_id: string; subject: string }[] }[];
 };
+export type SelectedNote = {lesson_id: string; field: string};
+
 export type NormalizationCopy = {
   id: string;
   name: string;
@@ -139,7 +141,7 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
   </section>;
 }
 
-export function ConstructorLegacyReview({ preview, error, busy, readOnly, lessonLabels, lessonImpact, onCopy, onOpenLesson }: {
+export function ConstructorLegacyReview({ preview, error, busy, readOnly, lessonLabels, lessonImpact, onCopy, onApplyNotes, onOpenLesson }: {
   preview: NormalizationPreview | null;
   error: string;
   busy: boolean;
@@ -147,10 +149,19 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
   lessonLabels: Record<string, string>;
   lessonImpact: (id: string) => string;
   onCopy: () => void;
+  onApplyNotes: (items: SelectedNote[]) => Promise<boolean>;
   onOpenLesson: (id: string) => void;
 }) {
   const [confirmedPlan, setConfirmedPlan] = useState<string | null>(null);
   const confirmed = confirmedPlan !== null && confirmedPlan === preview?.plan_hash;
+  const [noteSelection, setNoteSelection] = useState<{plan: string; items: SelectedNote[]} | null>(null);
+  const selected = noteSelection?.plan === preview?.plan_hash ? noteSelection?.items || [] : [];
+  const selectable = preview?.changes.some(item => item.current_note_eligible === true) ?? false;
+  const setChecked = (item: SelectedNote, checked: boolean) => {
+    if (!preview) return;
+    const rest = selected.filter(value => value.lesson_id !== item.lesson_id || value.field !== item.field);
+    setNoteSelection({plan: preview.plan_hash, items: checked ? [...rest, item] : rest});
+  };
   const lessonButton = (id: string, label: string) => <LessonButton id={id} label={label}
     onOpen={onOpenLesson} disabled={busy} available={Boolean(lessonLabels[id])} />;
   return <section aria-labelledby="constructor-review-legacy-title">
@@ -168,6 +179,11 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
         <ul className="constructor-review-list">{preview.changes.map(item => <li key={`${item.lesson_id}:${item.field}`}>
           <div>
             <strong>{lessonLabels[item.lesson_id] || 'Занятие'}</strong>
+            {!readOnly && item.field && item.current_note_eligible ? <label className="constructor-publication-confirm">
+              <input type="checkbox" disabled={busy} checked={selected.some(value => value.lesson_id === item.lesson_id && value.field === item.field)}
+                onChange={event => setChecked({lesson_id: item.lesson_id, field: item.field!}, event.target.checked)} />
+              Снять эту пометку в открытом черновике
+            </label> : null}
             {item.field === 'activity_type' ? <p>Указать тип «Курс по выбору». Направления уже входят в один блок.</p> :
               item.field === 'elective_scope_warning' ? <p>Снять устаревшую пометку о составе курса: подтверждены общий блок, время и классы. Зачисление учеников не меняется.</p> :
                 <p>Снять предупреждение о преподавателе. Назначение подтверждено по справочнику.</p>}
@@ -209,6 +225,12 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
           {legacyReviewReason(warning.reason).title !== warning.reason ? <ReasonDetails reason={warning.reason} /> : null}
         </div>)}
       </ReviewDisclosure> : null}
+      {selectable && !readOnly ? <section aria-label="Применение только выбранных пометок">
+        <p>Снимутся только отмеченные старые пометки. Занятия, назначения и составы не изменятся. Публикации и новой копии не будет.</p>
+        <button type="button" disabled={busy || !selected.length} onClick={async () => {
+          if (await onApplyNotes(selected)) setNoteSelection(null);
+        }}>Снять выбранные пометки в этом черновике ({selected.length})</button>
+      </section> : null}
       {preview.automatic_count > 0 && !readOnly ? <>
         <label className="constructor-publication-confirm">
           <input type="checkbox" checked={confirmed} disabled={busy} onChange={event => setConfirmedPlan(event.target.checked ? preview.plan_hash : null)} />

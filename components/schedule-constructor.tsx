@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { ConstructorInspectorShell } from './constructor-inspector-shell';
+import { exactLinkedLesson } from './constructor-linked-lesson';
 import { useConstructorLayout } from './use-constructor-layout';
 import { readableTeacherText } from './teacher-color-registry';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
@@ -798,7 +799,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const [issueSeverity, setIssueSeverity] = useState('all');
   const [issueRoute, setIssueRoute] = useState<IssueRoute | null>(null);
   const route = issueRoute?.draftId === draft?.id ? issueRoute : null;
-  const routedLesson = draft?.payload.lessons.find(lesson => lesson.id === route?.active);
+  const routedLesson = route ? exactLinkedLesson(route, draft?.id, draft?.payload.lessons || []) : undefined;
   const [issueDay, setIssueDay] = useState('');
   const [issueClass, setIssueClass] = useState('');
   const [issueType, setIssueType] = useState('all');
@@ -2205,7 +2206,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     return true;
   };
   const showIssueLesson = (id: string, origin: IssueRoute['origin'], title: string, related: string[] = []) => {
-    if (!draft || !openReviewLesson(id, true)) return;
+    if (!draft || !exactLinkedLesson({draftId: draft.id, active: id}, draft.id, draft.payload.lessons) || !openReviewLesson(id, true)) return;
     setIssueRoute({draftId:draft.id, origin, title, ids:[...new Set([id,...related])], active:id});
     setConflictsOpen(false);
     setReviewMode(null);
@@ -3503,10 +3504,17 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               const lesson = payload.lessons.find(item => item.id === id);
               const duplicateSubject = lesson && payload.lessons.some(other => other.id !== id && route.ids.includes(other.id) && other.subject === lesson.subject);
               const label = lesson && [lesson.subject || 'Занятие', ...(duplicateSubject ? [displayedClasses(lesson).flatMap(classId => groups.find(g => g.id === classId)?.name || []).join(', '), normalizeRoomDisplay(lesson.room)] : [])].filter(Boolean).join(' · ');
-              return lesson ? <button key={id} aria-pressed={route.active===id} onClick={()=>{openReviewLesson(id,true);setIssueRoute({...route,active:id});}}>{label}</button> : null;
+              return lesson ? <button key={id} aria-pressed={route.active===id} onClick={()=>{if (openReviewLesson(id,true)) setIssueRoute({...route,active:id});}}>{label}</button> : null;
             })}</div> : null}
-            {!panelOpen && (selected || canCreateAtSlot) ? <button onClick={()=>{if (route.slot && !selected) setCreationInput('form');
-              setPanelOpen(true);}}>{selected?'Редактировать занятие':'Создать занятие в слоте'}</button> : null}
+            {!panelOpen && route.active && routedLesson ? <button type="button" onClick={() => {
+              // A routed review owns its destination even if grid selection
+              // changed while opening or the inspector was closed on mobile.
+              if (!exactLinkedLesson(route, draft.id, payload.lessons) || !openReviewLesson(route.active)) return;
+              setPanelOpen(true);
+            }}>Редактировать занятие</button> : null}
+            {!panelOpen && !route.active && route.slot && canCreateAtSlot ? <button type="button" onClick={() => {
+              setSelectedId(''); setCreationInput('form'); setPanelOpen(true);
+            }}>Создать занятие в слоте</button> : null}
             {route.mayCreate && customSlotTime ? <small>Показан пересекающийся урок. Для создания занятия уточните время по звонкам.</small> : null}
             {route.slot && !selectedCell ? <small>Для этого времени или класса в сетке нет подходящей ячейки. Уточните размещение в сверке.</small> : null}
             <button onClick={backToIssues}>{route.origin === 'review' ? 'Назад к проверке' : 'К проверке'}</button>

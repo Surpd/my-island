@@ -71,9 +71,11 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   };
 }
 
-async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean } = {}) {
+async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean; applyNotes?: boolean } = {}) {
   let previewCount = 0;
   let normalizationCount = 0;
+  let appliedNoteBody: unknown = null;
+  let noteApplied = false;
   let publishPayload: Record<string, unknown> | null = null;
   let historyItems: Record<string, unknown>[] = [];
   await page.route(`${API}/api/admin/**`, async (route) => {
@@ -99,6 +101,12 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       }));
       return route.fulfill({ json: { id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, base_version_id: 'base-version-hidden-in-ui', payload: { days: [0], slots: [{ start: '09:00', end: '09:45' }], classes: ['group-fixture', ...(options.legacyReview ? ['group-secondary'] : [])], lessons } } });
     }
+    if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}/normalization-apply`) {
+      appliedNoteBody = route.request().postDataJSON();
+      noteApplied = true;
+      return route.fulfill({json:{cleared_count:1,draft:{id:DRAFT_ID, name:'Шаблон для публикации',revision:2,
+        payload:{days:[0], slots:[{start:'09:00',end:'09:45'}], classes:['group-fixture'], lessons:[]}}}});
+    }
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}/normalization-preview`) {
       normalizationCount += 1;
       const examples = [{ lesson_id: 'lesson-info', subject: 'Математика' }];
@@ -107,7 +115,12 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
         { reason: 'Не подтверждён преподаватель', count: 1, examples },
         { reason: 'unsupported_audience_v3: check legacy roster', count: 1, examples },
       ] : [];
-      return route.fulfill({ json: { source_id: DRAFT_ID, source_revision: 1, automatic_count: 0, changes: [], manual: [], retained_warning_count: warnings.length, retained_warnings: warnings } });
+      const changes = options.applyNotes && !noteApplied ? [
+        {lesson_id:'lesson-info',field:'teacher_identity_warning',current_note_eligible:true},
+        {lesson_id:'lesson-related',field:'activity_type',current_note_eligible:false},
+      ] : [];
+      return route.fulfill({ json: { source_id: DRAFT_ID, source_revision: noteApplied ? 2 : 1, source_hash:'fixture-source',
+        plan_hash:'fixture-plan', automatic_count: changes.length, changes, manual: [], retained_warning_count: warnings.length, retained_warnings: warnings } });
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
       return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
@@ -141,7 +154,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
   await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Проверка расписания' });
   await expect(dialog).toBeVisible();
-  return { dialog, getPublishPayload: () => publishPayload, getReviewRequests: () => ({ previewCount, normalizationCount }) };
+  return { dialog, getPublishPayload: () => publishPayload, getReviewRequests: () => ({ previewCount, normalizationCount }), getAppliedNoteBody: () => appliedNoteBody };
 }
 
 test('publication preview groups pairs, separates severity and keeps the affected lesson details', async ({ page }) => {
@@ -286,6 +299,7 @@ test('показывает имя из справочника в единой к
 
 test('legacy warning rows name both classes and return to the same review without rechecking', async ({ page }) => {
   const { dialog, getReviewRequests } = await openPublicationPanel(page, { legacyReview: true });
+  await page.setViewportSize({width: 1200, height: 900});
   const fixesTab = dialog.getByRole('button', { name: 'Составы и старые записи', exact: true });
   await fixesTab.click();
   const held = dialog.locator('details[data-review-fix="delivery-deferred"]');
@@ -311,6 +325,12 @@ test('legacy warning rows name both classes and return to the same review withou
   expect(checks).toEqual({ previewCount: 1, normalizationCount: 1 });
   await target.press('Enter');
   await expect(dialog).toBeHidden();
+  // Reproduce a lingering grid selection after the linked warning is opened.
+  await page.getByRole('button', {name:'Закрыть панель', exact:true}).click();
+  await page.locator('[data-lesson-id="lesson-related"]').first().click();
+  const editLinked = page.getByRole('region', {name:'Выбранная проблема'}).getByRole('button', {name:'Редактировать занятие', exact:true});
+  await editLinked.click();
+  await expect(page.locator('.constructor-inspector.is-open').getByRole('heading', {name:'Математика', exact:true})).toBeVisible();
   await page.getByRole('button', { name: 'Назад к проверке', exact: true }).first().click();
   await expect(fixesTab).toHaveAttribute('aria-pressed', 'true');
   await expect(category).toHaveAttribute('aria-expanded', 'true');
@@ -355,4 +375,20 @@ test('checking the whole draft shows roster changes without saving them', async 
   await expect(rosters).toContainText('В черновике — 25, в текущем составе — 16.');
   await expect(rosters).toContainText('Занятие не войдёт в эту публикацию.');
   expect(writes).toEqual([]);
+});
+
+
+test('applies only the explicitly checked verified note to the same draft revision', async ({ page }) => {
+  const {dialog, getAppliedNoteBody, getPublishPayload} = await openPublicationPanel(page, {applyNotes:true});
+  await dialog.getByRole('button', {name:'Составы и старые записи',exact:true}).click();
+  await dialog.getByText('Можно исправить в копии', {exact:true}).click();
+  const checkbox = dialog.getByRole('checkbox', {name:'Снять эту пометку в открытом черновике'});
+  await expect(checkbox).toHaveCount(1);
+  await expect(dialog.getByRole('button', {name:'Снять выбранные пометки в этом черновике (0)'})).toBeDisabled();
+  await checkbox.check();
+  await dialog.getByRole('button', {name:'Снять выбранные пометки в этом черновике (1)'}).click();
+  await expect(dialog.getByText(/Снято старых пометок: 1/)).toBeVisible();
+  expect(getAppliedNoteBody()).toEqual({expected_revision:1,expected_source_hash:'fixture-source',
+    expected_plan_hash:'fixture-plan',selected:[{lesson_id:'lesson-info',field:'teacher_identity_warning'}]});
+  expect(getPublishPayload()).toBeNull();
 });
