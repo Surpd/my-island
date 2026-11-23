@@ -6,6 +6,17 @@ from backend.services.journal_import import classify_journal_values, parse_journ
 
 
 class JournalImportParserTests(unittest.TestCase):
+    def test_multiline_term_two_headers_keep_parts_and_empty_final(self):
+        values = [["Дата", "Итог", "01.12", "02.12", "03.12"], ["", "", "", "", ""],
+                  ["", "", "", "", ""], ["Блок\nЗадание / работа", "", "A", "B", "C"],
+                  ["Вес", "", 1, 3, 1], ["Категория (У/О/П)", "", "У", "О", "П"],
+                  ["Synthetic Student", "", 5, 2, "н"]]
+        result = parse_journal_values(values, grade=7, subject="Предмет", sheet_title="II · Предмет")
+        self.assertEqual([item["category"] for item in result["assessments"]], ["У", "О", "П"])
+        self.assertEqual([item["weight"] for item in result["assessments"]], [1, 3, 1])
+        self.assertEqual(result["results"][-1]["status"], "н")
+        self.assertEqual(result["summaries"], [])
+
     def test_empty_duplicate_placeholders_collapse_and_hidden_roster_is_valid(self):
         values = [
             ["Дата", "01.09", "01.09"],

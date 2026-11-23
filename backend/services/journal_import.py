@@ -14,14 +14,15 @@ SUMMARY_TYPES = {
     "итого": "total_points", "сумма баллов за триместр": "total_points", "сумма баллов за триместр всего": "total_points",
     "допуск": "admission", "допуск к аттестации": "admission", "допуск к аттестации за триместр": "admission",
     "средняя отметка": "average_grade", "средняя оценка": "average_grade", "средний балл": "average_grade", "средний балл за триместр": "average_grade",
-    "итоговая": "term_grade", "итоговая оценка": "term_grade", "оценка за триместр": "term_grade",
+    "итог": "term_grade", "итоговая": "term_grade", "итоговая оценка": "term_grade", "оценка за триместр": "term_grade",
     "пропущенные весы": "missing_weights", "пропущенные работы": "missing_weights", "не выставлены оценки": "missing_weights",
 }
 SUMMARY_HEADERS = set(SUMMARY_TYPES) | {"допуск к аттестации", "итоговая оценка"}
 HEADER_ALIASES = {
     "date": {"дата", "дата работы", "дата выполнения"},
-    "title": {"задание", "работа", "название работы", "тема задания"},
+    "title": {"задание", "работа", "название работы", "тема задания", "задание / работа"},
     "weight": {"вес", "вес работы"},
+    "category": {"категория", "категория работы", "категория (у/о/п)"},
     "max_score": {"оценка", "максимальный балл", "макс. балл", "максимум"},
 }
 MATH_GROUP_RE = re.compile(r"^(?:9\s*[-–]?\s*[ABC]|9\s*[-–]?\s*[123]|[ABC])$", re.IGNORECASE)
@@ -101,6 +102,9 @@ _TERM_RE = re.compile(r"\s*(?:[-–—:]\s*)?(?:\(\s*)?(?:триместр\s*)?(
 
 def subject_period_from_title(title: str) -> tuple[str, int | None]:
     """Return a canonical subject and an explicit trimester, if present."""
+    prefix = re.fullmatch(r"(I{1,3})\s*·\s*(.+)", title.strip(), re.IGNORECASE)
+    if prefix:
+        return prefix[2].strip(), len(prefix[1])
     match = _TERM_RE.search(title.strip())
     if not match:
         return title.strip(), None
@@ -154,6 +158,8 @@ def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list
         found: dict[str, int] = {"date": index}
         for next_index in range(index + 1, min(index + 8, len(values))):
             kind = _header_kind(_cell(values[next_index], 0))
+            if kind == "date":
+                break
             if kind and kind not in found:
                 found[kind] = next_index
             if _normalized(_cell(values[next_index], 0)) == "участники" and any(re.search(r"оценка.*из\s*\d+", _normalized(v)) for v in values[next_index][1:]):
@@ -163,7 +169,9 @@ def _header_blocks(values: Sequence[Sequence[object]], sheet_title: str) -> list
         # but use labels such as "Ученик" and statistics, not assignment columns.
         if "title" not in found:
             continue
-        missing = set(HEADER_ALIASES) - found.keys()
+        missing = {"date", "title", "weight", "max_score"} - found.keys()
+        if "category" in found:
+            missing.discard("max_score")
         # Project checklists deliberately have no numerical weights/maxima.
         if _normalized(sheet_title).startswith("проекты") and found.get("title") == index + 1:
             missing -= {"weight", "max_score"}
@@ -220,7 +228,12 @@ def parse_journal_values(
         block_start = min(block.values())
         previous_end = max(blocks[block_index - 1].values()) + 1 if block_index else 0
         marker = "all"
-        if grade == 9 and _normalized(subject) in {"математика", "math"}:
+        header_group = re.fullmatch(r"(?:I{1,3}\s*триместр\s*·\s*)?(группа\s+\d+)", str(_cell(values[block_start], 1) or "").strip(), re.IGNORECASE)
+        if "category" in block and header_group:
+            marker = header_group[1]
+        elif "category" in block and len(blocks) > 1:
+            marker = f"block {block_index + 1}"
+        elif grade == 9 and _normalized(subject) in {"математика", "math"}:
             for prior in values[previous_end:block_start]:
                 text = str(_cell(prior, 0) or "").strip()
                 if MATH_GROUP_RE.fullmatch(text):
@@ -242,6 +255,8 @@ def parse_journal_values(
 
         title_row = values[block["title"]]
         summary_columns = [(column, str(_cell(title_row, column) or "").strip(), _summary_type(_cell(title_row, column))) for column in range(1, width) if _summary_type(_cell(title_row, column))]
+        if "category" in block:
+            summary_columns = [(1, "Итог", "term_grade"), *(entry for entry in summary_columns if entry[0] != 1)]
         metadata_rows = {key: values[row_index] for key, row_index in block.items()}
         end = blocks[block_index + 1]["date"] if block_index + 1 < len(blocks) else len(values)
         later_auxiliary = [start for start in auxiliary_starts if start > max(block.values())]
@@ -254,7 +269,7 @@ def parse_journal_values(
             raw_name = str(_cell(row, 0) if _cell(row, 0) is not None else "").strip()
             name = _display_name(raw_name)
             normalized_name = _normalized(name)
-            if not name or normalized_name in SUMMARY_HEADERS or _header_kind(name):
+            if not name or normalized_name in {"ученик", "ученики", "фио"} or normalized_name in SUMMARY_HEADERS or _header_kind(name):
                 continue
             if grade == 9 and _normalized(subject) in {"математика", "math"} and MATH_GROUP_RE.fullmatch(name):
                 current_marker = _canonical_group_marker(name, grade=grade, subject=subject)
@@ -293,7 +308,7 @@ def parse_journal_values(
                 })
 
         block_assessments: list[tuple[int, dict[str, Any]]] = []
-        for column in range(1, width):
+        for column in range(2 if "category" in block else 1, width):
             title = str(_cell(title_row, column) if _cell(title_row, column) is not None else "").strip()
             if not title or _summary_type(title):
                 continue
@@ -304,6 +319,8 @@ def parse_journal_values(
                 "max_score": _maximum(_cell(metadata_rows.get("max_score", []), column)),
                 "group_marker": marker,
             }
+            if "category" in block:
+                meta["category"] = _normalized(_cell(metadata_rows["category"], column)).upper()
             block_assessments.append((column, meta))
         for column, metadata in block_assessments:
             score_vector = []
@@ -331,7 +348,7 @@ def parse_journal_values(
             assessment = {
                 "external_key": external_key, **metadata, "source_column": column_name(column),
                 "value_signature": _signature(sorted(score_vector)),
-                "raw_source": {"date": _cell(metadata_rows["date"], column), "title": metadata["title"],
+                "raw_source": {**({"category": metadata["category"]} if "category" in metadata else {}), "date": _cell(metadata_rows["date"], column), "title": metadata["title"],
                                "weight": _cell(metadata_rows.get("weight", []), column), "max_score": _cell(metadata_rows.get("max_score", []), column),
                                "header_rows": {key: index + 1 for key, index in block.items()}, "group_marker": marker,
                                "column_identity": column_identity, "score_vector": score_vector},
@@ -347,6 +364,8 @@ def parse_journal_values(
     metadata_groups: dict[str, list[dict[str, Any]]] = {}
     for assessment in assessments:
         identity = {key: assessment[key] for key in ("group_marker", "assessed_on", "title", "weight", "max_score")}
+        if "category" in assessment:
+            identity["category"] = assessment["category"]
         metadata_groups.setdefault(_signature(identity), []).append(assessment)
     for metadata_identity, duplicates in metadata_groups.items():
         if len(duplicates) < 2:
@@ -389,6 +408,8 @@ def parse_journal_values(
 
 def classify_journal_values(values: Sequence[Sequence[object]], *, sheet_title: str) -> dict[str, str] | None:
     """Classify a recognizable derived results table without relying on its tab name."""
+    if _normalized(subject_period_from_title(sheet_title)[0]) == "как работать":
+        return {"kind": "instructions", "reason": "Инструкция по заполнению журнала."}
     if not values:
         return None
     first_row = [_normalized(_cell(values[0], column)) for column in range(len(values[0]))]
@@ -409,7 +430,7 @@ def classify_journal_values(values: Sequence[Sequence[object]], *, sheet_title: 
 def sync_journal_values(
     database: Database, values: Sequence[Sequence[object]], *, spreadsheet_id: str,
     spreadsheet_title: str, grade: int, subject: str, sheet_title: str,
-    sheet_id: int | str | None = None,
+    sheet_id: int | str | None = None, expected_term: int | None = None,
 ) -> dict[str, int]:
     canonical_subject, explicit_term = subject_period_from_title(sheet_title)
     parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title, sheet_id=sheet_id)
@@ -417,6 +438,6 @@ def sync_journal_values(
     school_year = f"{school_year_start}/{str(school_year_start + 1)[-2:]}"
     source = {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "grade": grade,
               "subject": canonical_subject, "sheet_title": sheet_title, "sheet_id": sheet_id,
-              "academic_year": school_year, "term_number": explicit_term,
+              "academic_year": school_year, "term_number": explicit_term, "expected_term": expected_term,
               "source_hash": parsed["source_hash"]}
     return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"], parsed["students"], parsed["summaries"])

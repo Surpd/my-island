@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentResultText, studentSummaryPreview, studentSubjectIndicator, studentPeriodKey, studentResultDisplay } from './student-journal-view.ts';
+import { studentPeriodLabel, journalCategoryLabel, journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentResultText, studentSummaryPreview, studentSubjectIndicator, studentPeriodKey, studentResultDisplay } from './student-journal-view.ts';
 
 function journal(overrides = {}) {
   return { source: { source_id: 'math-I', subject: 'Математика', term_number: 1, period_status: 'current' },
@@ -83,4 +83,11 @@ test('compact statuses keep recognized attendance and outcomes, never arbitrary 
     { assessment_id: 'source-text', numeric_score: null, status: 'Иванов Иван Иванович' },
   ] });
   assert.deepEqual(recentStudentStatuses(item).map(row => row.status), ['Не был']);
+});
+
+test('school category labels and historical period follow the confirmed trimester', () => {
+  assert.deepEqual(['У', 'О', 'П', null].map(journalCategoryLabel), ['Учебная', 'Обязательная', 'Пересдача', '']);
+  const source = { academic_year: '2026/27', term_number: 1, period_status: 'current' };
+  assert.equal(studentPeriodLabel(journal({ source })), 'I триместр · 2026/27 · архив');
+  assert.equal(studentPeriodLabel(journal({ source: { ...source, term_number: 2, period_status: 'archived' } })), 'II триместр · 2026/27');
 });

@@ -1477,3 +1477,11 @@
   border: 1px solid var(--cp-line);
   border-radius: 8px;
 }
+
+.journal-work-list > details { border-bottom: 1px solid var(--line); }
+.journal-work-list summary { cursor: pointer; padding: 10px 0; overflow-wrap: anywhere; }
+.journal-work-list summary small { display: block; margin-top: 4px; color: var(--muted); }
+.journal-work-list ul { list-style: none; padding: 0; }
+.journal-work-list li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.journal-work-list button { margin-top: 10px; }
+.journal-roster-details > summary { cursor: pointer; padding: 12px 0; }

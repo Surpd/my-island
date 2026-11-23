@@ -8,11 +8,15 @@ export type StudentJournalItem = {
   student: { journal_student_id: string | number; display_name: string; group_marker: string };
   assessments: Array<{
     id: string | number; title: string; assessed_on?: string | null;
-    weight?: number | null; max_score?: number | null; group_marker: string;
+    category?: string | null; weight?: number | null; max_score?: number | null; group_marker: string;
   }>;
   results: Array<{ assessment_id: string | number; numeric_score: number | null; status?: string | null }>;
   summaries: Array<{ label: string; summary_type: string; numeric_value: number | null; text_value: string | null }>;
 };
+
+export function journalCategoryLabel(category?: string | null): string {
+  return ({ 'У': 'Учебная', 'О': 'Обязательная', 'П': 'Пересдача' } as Record<string, string>)[category || ''] || category || '';
+}
 
 export function journalKey(item: StudentJournalItem): string {
   return `${item.source.source_id}:${item.student.journal_student_id}`;
@@ -30,7 +34,7 @@ export function journalValue(value: unknown): string {
 export function studentJournalRows(item: StudentJournalItem, newestFirst = false) {
   const results = new Map(item.results.map(result => [String(result.assessment_id), result]));
   return item.assessments
-    .filter(assessment => !assessment.group_marker || assessment.group_marker === 'all' || assessment.group_marker === item.student.group_marker)
+    .filter(assessment => item.student.group_marker.trim() && (assessment.group_marker === 'all' || assessment.group_marker === item.student.group_marker))
     .map(assessment => ({ assessment, result: results.get(String(assessment.id)) }))
     .sort((a, b) => {
       const left = a.assessment.assessed_on;
@@ -95,14 +99,24 @@ export function recentResultsAcrossSubjects(items: StudentJournalItem[], limit =
   return results;
 }
 
+export function isDefaultJournalPeriod(item: StudentJournalItem): boolean {
+  return item.source.academic_year === '2026/27' && item.source.term_number === 2 && item.source.period_status !== 'unassigned';
+}
+
+export function studentPeriodStatus(item: StudentJournalItem): string {
+  if (isDefaultJournalPeriod(item)) return 'current';
+  if (item.source.academic_year === '2026/27' && item.source.term_number === 1 && item.source.period_status !== 'unassigned') return 'archived';
+  return item.source.period_status;
+}
+
 export function studentPeriodKey(item: StudentJournalItem): string {
-  return `period:${JSON.stringify([item.source.academic_year, item.source.term_number ?? null, item.source.period_status])}`;
+  return `period:${JSON.stringify([item.source.academic_year, item.source.term_number ?? null, studentPeriodStatus(item)])}`;
 }
 
 export function studentPeriodLabel(item: StudentJournalItem): string {
-  const { term_number: term, academic_year: year, period_status: status } = item.source;
+  const { term_number: term, academic_year: year } = item.source;
   const name = term ? `${['I', 'II', 'III'][term - 1] || term} триместр` : 'Период не указан';
-  return [name, year, status === 'archived' ? 'архив' : ''].filter(Boolean).join(' · ');
+  return [name, year, studentPeriodStatus(item) === 'archived' ? 'архив' : ''].filter(Boolean).join(' · ');
 }
 
 export function studentResultDisplay(result: StudentJournalItem['results'][number] | undefined, maxScore?: number | null) {
