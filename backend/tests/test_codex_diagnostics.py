@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+import logging
 import os
 from pathlib import Path
 from secrets import token_urlsafe
@@ -15,7 +16,7 @@ from fastapi.testclient import TestClient
 from backend.database import Database
 from backend.handlers.api import create_router
 from backend.handlers.codex_diagnostic_api import create_codex_diagnostic_router
-from backend.services.codex_diagnostics import authorize, revoke
+from backend.services.codex_diagnostics import authorize, log_startup_readiness, revoke
 from backend.services.schedule_experiments import create_experiment
 
 
@@ -52,6 +53,33 @@ class CodexDiagnosticAuthTests(TestCase):
             with patch.dict(os.environ, changes):
                 self.assertEqual(self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": self.secret}).status_code, 404)
                 self.assertEqual(self.http.get("/api/diagnostics/view/overview").status_code, 404)
+
+    def test_startup_uses_only_one_fixed_reason_and_never_logs_inputs(self):
+        verifier = sha256(self.secret.encode()).hexdigest()
+        logger = logging.getLogger("codex-diagnostic-startup-fixture")
+        for flag, raw, configured_hash, status in (
+            ("0", self.secret, verifier, "flag_off"),
+            ("1", None, "", "no_key_configured"),
+            ("1", "synthetic-malformed-raw", "", "raw_rejected"),
+            ("1", self.secret, "synthetic-malformed-digest", "digest_malformed"),
+            ("1", self.secret, "0" * 64, "verifiers_mismatch"),
+            ("1", self.secret, verifier, "enabled"),
+            ("1", None, verifier, "enabled"),
+        ):
+            with self.subTest(status=status), patch.dict(os.environ, {
+                "MY_ISLAND_CODEX_DIAGNOSTICS": flag,
+                "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": configured_hash,
+            }):
+                if raw is None:
+                    os.environ.pop("MY_ISLAND_CODEX_DIAGNOSTIC_KEY", None)
+                else:
+                    os.environ["MY_ISLAND_CODEX_DIAGNOSTIC_KEY"] = raw
+                with self.assertLogs(logger, level="INFO") as captured:
+                    log_startup_readiness(logger)
+                self.assertEqual([record.getMessage() for record in captured.records],
+                                 ["Codex diagnostic startup: " + status])
+                self.assertNotIn(self.secret, captured.output[0])
+                self.assertNotIn(verifier, captured.output[0])
 
     def test_raw_config_uses_same_credential_epoch_and_no_secret_is_returned(self):
         headers, token = self.login()
