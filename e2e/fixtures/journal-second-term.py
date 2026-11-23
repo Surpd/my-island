@@ -36,8 +36,12 @@ google.spreadsheet.return_value = {"sheets": [{"properties": {"sheetId": n, "tit
 google.sheet_values.side_effect = lambda _, address, **kwargs: tabs[address.split("'")[1]]
 payload = {"spreadsheet_url": "synthetic-browser-journal", "grade": 7, "term_number": 2, "auto_sync_enabled": False}
 with patch("backend.services.google_sync_service._client", return_value=(google, None)):
-    for dry in (True, False, False):
-        response = api.post("/api/admin/journals/connect", headers=header, json={**payload, "dry_run": dry})
+    for _ in range(2):
+        check = api.post("/api/admin/journals/connect", headers=header, json={**payload, "dry_run": True})
+        assert check.status_code == 200 and check.json()["status"] == "success"
+        plan = check.json()
+        response = api.post("/api/admin/journals/connect", headers=header, json={**payload,
+            "preflight_token": plan["preflight_token"], "selected_sheet_ids": [tab["sheet_id"] for tab in plan["tabs"]]})
         assert response.status_code == 200 and response.json()["status"] == "success"
 with database.connection() as connection:
     identity = connection.execute("SELECT id FROM identities WHERE origin='local_e2e' AND source_ref='local-e2e:student'").fetchone()

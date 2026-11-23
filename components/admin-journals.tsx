@@ -17,7 +17,7 @@ type JournalSource = {
   unmapped_count?: number; markers?: string[]; refreshing?: boolean;
   active_run_id?: string | number | null;
 };
-type JournalPreflightTab = { sheet_id?: string; label?: string; status: string; reason?: string };
+type JournalPreflightTab = { sheet_id?: string; label?: string; status: string; reason?: string; connected?: boolean };
 type JournalImportTab = { sheet_id?: string; subject?: string; status: string; error?: string };
 type KnownJournalSource = { grade: number; spreadsheet_id: string; connected: boolean };
 type GradeResult = { numeric_score: number | null; status: string | boolean | null } | null;
@@ -109,7 +109,8 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   const [busy, setBusy] = useState('');
   const [actionError, setActionError] = useState('');
   const [connectionUrl, setConnectionUrl] = useState('');
-  const [preflight, setPreflight] = useState<{ key: string; status: string; tabs: JournalPreflightTab[] } | null>(null);
+  const [preflight, setPreflight] = useState<{ key: string; token: string | null; tabs: JournalPreflightTab[] } | null>(null);
+  const [selectedSheetIds, setSelectedSheetIds] = useState<string[]>([]);
   const [connectionGrade, setConnectionGrade] = useState(5);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [progress, setProgress] = useState<Record<string, { completed: number; total: number }>>({});
@@ -288,35 +289,39 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   const preflightKey = JSON.stringify([connectionGrade, connectionUrl.trim(), 2]);
   const checked = preflight?.key === preflightKey ? preflight : null;
   const verifiedSubjects = checked?.tabs.filter(tab => tab.status === 'success').length || 0;
-  const hasPreflight = checked?.status === 'success' && verifiedSubjects > 0
-    && !checked.tabs.some(tab => tab.status === 'error' || tab.status === 'excluded');
+  const eligibleSheetIds = new Set(checked?.tabs.filter(tab => tab.status === 'success').map(tab => tab.sheet_id) || []);
+  const selectedVerifiedIds = selectedSheetIds.filter(id => eligibleSheetIds.has(id));
+  const hasPreflight = Boolean(checked?.token && selectedVerifiedIds.length > 0);
 
   async function previewConnection() {
     const key = preflightKey;
-    setBusy('preview'); setActionError(''); setPreflight(null);
+    setBusy('preview'); setActionError(''); setPreflight(null); setSelectedSheetIds([]);
     try {
-      const result = await api<{ status: string; tabs: JournalPreflightTab[] }>('/api/admin/journals/connect', {
+      const result = await api<{ preflight_token?: string; tabs: JournalPreflightTab[] }>('/api/admin/journals/connect', {
         method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, term_number: 2, dry_run: true, auto_sync_enabled: false }),
       });
-      setPreflight({ key, status: result.status, tabs: result.tabs });
+      setPreflight({ key, token: result.preflight_token || null, tabs: result.tabs });
+      setSelectedSheetIds(result.tabs.flatMap(tab => tab.status === 'success' && tab.sheet_id ? [tab.sheet_id] : []));
     } catch (error) { setActionError(errorText(error)); }
     finally { setBusy(''); }
   }
 
   async function connect(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!hasPreflight || busy) return;
+    if (!hasPreflight || !checked?.token || busy) return;
     setBusy('connect'); setActionError('');
     try {
-      const result = await api<{ status: string; spreadsheet_id: string; tabs?: JournalImportTab[] }>('/api/admin/journals/connect', {
-        method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, auto_sync_enabled: false, term_number: 2 }),
+      const result = await api<{ status: string; spreadsheet_id: string; message?: string; tabs?: JournalImportTab[] }>('/api/admin/journals/connect', {
+        method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, auto_sync_enabled: false, term_number: 2,
+          selected_sheet_ids: selectedVerifiedIds, preflight_token: checked.token }),
       });
       setPreflight(null);
+      setSelectedSheetIds([]);
       if (result.status === 'blocked') {
-        setPreflight({ key: preflightKey, status: 'blocked', tabs: (result.tabs || []).map(tab => ({
+        setPreflight({ key: preflightKey, token: null, tabs: (result.tabs || []).map(tab => ({
           sheet_id: tab.sheet_id, label: tab.subject, status: tab.status, reason: tab.error,
         })) });
-        setActionError('Таблица не прошла повторную проверку. Ничего не импортировано.');
+        setActionError(`${result.message || 'Таблица не прошла повторную проверку.'} Ничего не импортировано.`);
         return;
       }
       setConnectionOpen(false); setConnectionUrl('');
@@ -571,14 +576,25 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
 
     {!detail ? <>
       <div className="journal-grade-tabs" role="tablist" aria-label="Класс">{gradeList.map((grade) => { const connected = knownSources.find((item) => item.grade === grade)?.connected ?? books.some((book) => book.grade === grade); const count = books.filter((book) => book.grade === grade).length; return <button key={grade} role="tab" aria-selected={selectedGrade === grade} className={selectedGrade === grade ? 'is-active' : ''} onClick={() => { setSelectedGrade(grade); setActionError(''); }}>{grade} класс<span>{count ? `${count} журналов` : connected ? 'нет активных вкладок' : 'не подключён'}</span></button>; })}</div>
-      <div className="admin-page-actions journal-intro"><p>{readOnly ? 'Доступны предметы и статус обновления. Оценки и составы скрыты.' : 'Выберите предмет, чтобы открыть оценки.'}{!schedulerConfigured ? <><br /><span className="admin-help-text">Журналы обновляются вручную.</span></> : null}</p>{!readOnly && <div className="admin-button-row"><button className={`admin-button ${matchingOpen ? 'admin-button--primary' : 'admin-button--quiet'}`} aria-pressed={matchingOpen} onClick={() => { const next = !matchingOpen; setMatchingOpen(next); if (next) { setActionError(''); void loadAllMatching(); } }}><Search size={15} /> Сопоставление учеников</button><button className="admin-button admin-button--primary" onClick={() => { setActionError(''); setConnectionOpen((value) => !value); }}><BookOpen size={15} /> Подключить Google Таблицу</button></div>}</div>
-      {connectionOpen ? <section className="admin-panel journal-connect-panel"><div><h2>Подключить Google Таблицу</h2><p className="admin-help-text">Выберите класс и проверьте предметные вкладки II триместра перед импортом.</p></div><form onSubmit={(event) => void connect(event)}><label htmlFor="journal-grade-select">Класс</label><select id="journal-grade-select" value={connectionGrade} onChange={(event) => { setConnectionGrade(Number(event.target.value)); setPreflight(null); }}>{gradeList.map((grade) => <option value={grade} key={grade}>{grade} класс</option>)}</select><label htmlFor="journal-source-url">Ссылка на таблицу</label><input id="journal-source-url" value={connectionUrl} onChange={(event) => { setConnectionUrl(event.target.value); setPreflight(null); }} placeholder="https://docs.google.com/spreadsheets/d/…" required />{checked && <div>
-      <output>{hasPreflight ? `Проверено без сохранения: ${verifiedSubjects} предметных вкладок. Можно импортировать.`
-        : verifiedSubjects ? `Проверено без сохранения: ${verifiedSubjects} вкладок прошли проверку. Импорт остановлен.`
-        : 'Предметные вкладки не прошли проверку. Импорт недоступен.'}</output>
-      <ul>{checked.tabs.map((tab, index) => <li key={`${tab.sheet_id || "tab"}:${index}`}><strong>{tab.label || 'Вкладка'}</strong>
-        {' · '}{tab.status === 'success' ? 'Проверена' : tab.reason || (tab.status === 'skipped' ? 'Не предметная' : 'Не импортируется')}</li>)}</ul>
-      </div>}<div className="admin-button-row"><button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || !connectionUrl.trim()} onClick={() => void previewConnection()}>Проверить без сохранения</button><button className="admin-button admin-button--primary" disabled={Boolean(busy) || !hasPreflight}>{busy === 'connect' ? <LoaderCircle size={15} className="admin-spin" /> : null} Подключить и импортировать</button><button type="button" className="admin-button admin-button--quiet" onClick={() => { setConnectionOpen(false); setPreflight(null); }}>Отмена</button></div></form></section> : null}
+      <div className="admin-page-actions journal-intro"><p>{readOnly ? 'Доступны предметы и статус обновления. Оценки и составы скрыты.' : 'Выберите предмет, чтобы открыть оценки.'}{!schedulerConfigured ? <><br /><span className="admin-help-text">Журналы обновляются вручную.</span></> : null}</p>{!readOnly && <div className="admin-button-row"><button className={`admin-button ${matchingOpen ? 'admin-button--primary' : 'admin-button--quiet'}`} aria-pressed={matchingOpen} onClick={() => { const next = !matchingOpen; setMatchingOpen(next); if (next) { setActionError(''); void loadAllMatching(); } }}><Search size={15} /> Сопоставление учеников</button><button className="admin-button admin-button--primary" onClick={() => { setActionError(''); setPreflight(null); setSelectedSheetIds([]); setConnectionOpen((value) => !value); }}><BookOpen size={15} /> Подключить Google Таблицу</button></div>}</div>
+      {connectionOpen ? <section className="admin-panel journal-connect-panel"><div><h2>Подключить Google Таблицу</h2><p className="admin-help-text">Выберите класс и проверьте предметные вкладки II триместра перед импортом.</p></div><form onSubmit={(event) => void connect(event)}><label htmlFor="journal-grade-select">Класс</label><select id="journal-grade-select" value={connectionGrade} onChange={(event) => { setConnectionGrade(Number(event.target.value)); setPreflight(null); }}>{gradeList.map((grade) => <option value={grade} key={grade}>{grade} класс</option>)}</select><label htmlFor="journal-source-url">Ссылка на таблицу</label><input id="journal-source-url" value={connectionUrl} onChange={(event) => { setConnectionUrl(event.target.value); setPreflight(null); }} placeholder="https://docs.google.com/spreadsheets/d/…" required />{checked && <fieldset className="journal-import-pick">
+      <legend>Предметные вкладки II триместра</legend>
+      <output aria-live="polite">{verifiedSubjects
+        ? `Выбрано: ${selectedVerifiedIds.length} из ${verifiedSubjects} проверенных вкладок.`
+        : 'Нет проверенных предметных вкладок для импорта.'}</output>
+      <p className="admin-help-text">Новые вкладки без галочки не подключатся. Уже подключённые вкладки без галочки не обновятся сейчас, но останутся подключёнными.</p>
+      <ul>{checked.tabs.map((tab, index) => {
+        const gid = tab.sheet_id;
+        const label = tab.label || 'Вкладка';
+        const ready = Boolean(gid && tab.status === 'success' && checked.token);
+        return <li key={`${gid || 'tab'}:${index}`}>
+          {ready && gid ? <label aria-label={label}><input type="checkbox" aria-label={label} checked={selectedVerifiedIds.includes(gid)} disabled={Boolean(busy)}
+            onChange={event => setSelectedSheetIds(previous => event.target.checked ? [...previous, gid] : previous.filter(id => id !== gid))} />
+            <span><strong>{label}</strong><small>{tab.connected ? 'Уже подключена · ' : ''}Проверена</small></span></label>
+            : <span><strong>{label}</strong><small>{tab.reason || 'Не импортируется'}</small></span>}
+        </li>;
+      })}</ul>
+      </fieldset>}<div className="admin-button-row"><button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || !connectionUrl.trim()} onClick={() => void previewConnection()}>Проверить без сохранения</button><button className="admin-button admin-button--primary" disabled={Boolean(busy) || !hasPreflight}>{busy === 'connect' ? <LoaderCircle size={15} className="admin-spin" /> : null} Подключить и импортировать</button><button type="button" className="admin-button admin-button--quiet" onClick={() => { setConnectionOpen(false); setPreflight(null); }}>Отмена</button></div></form></section> : null}
       {matchingOpen ? <section className="admin-panel journal-central-matching"><div className="journal-central-matching-heading"><div><p className="admin-eyebrow">ЖУРНАЛЫ</p><h2>Сопоставление учеников и команд</h2><p className="admin-help-text">Записи сгруппированы по имени внутри каждой таблицы и охватывают все её предметы. Данные таблиц загружаются при открытии этого раздела.</p>{Object.keys(matchingByBook).length ? <p className="admin-help-text">Загружено таблиц: {Object.keys(matchingByBook).length} · ожидают: {Object.values(matchingByBook).reduce((sum, data) => sum + data.individuals.length, 0)} имён · {Object.values(matchingByBook).reduce((sum, data) => sum + data.teams.length, 0)} команд</p> : null}</div><button className="admin-button admin-button--quiet" onClick={() => { setMatchingOpen(false); setMatching(null); setMatchingBook(''); }}>Закрыть</button></div>{busy === 'matching-all' ? <div className="admin-loading"><LoaderCircle size={16} className="admin-spin" /> Загружаем сопоставления по таблицам…</div> : null}<div className="journal-matching-books">{books.map((book) => { const data = matchingByBook[book.spreadsheetId]; return <button key={book.spreadsheetId} disabled={busy === 'matching-all'} className={`journal-matching-book ${matchingBook === book.spreadsheetId ? 'is-active' : ''}`} onClick={() => { setSelectedGrade(book.grade); void openMatching(book.spreadsheetId); }}><strong>{book.grade} класс · {book.title}</strong><span>{data ? `${data.individuals.length} имён ожидают · ${data.teams.length} команд` : matchingErrors[book.spreadsheetId] ? 'Ошибка загрузки' : 'Загрузка…'}</span></button>; })}</div>
         {matchingBook && !matching && busy === 'matching' ? <div className="admin-loading"><LoaderCircle size={16} className="admin-spin" /> Загружаем сопоставления…</div> : null}
         {matchingBook && matchingErrors[matchingBook] && !matching ? <div className="journal-source-error" role="alert"><AlertTriangle size={14} /><span>{matchingErrors[matchingBook]}</span><button className="admin-link" onClick={() => void openMatching(matchingBook)}>Повторить</button></div> : null}

@@ -37,7 +37,7 @@ from backend.services.school_template_selection import (
     select_school_template, rollback_school_template,
 )
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
-from backend.services.google_sync_service import CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
+from backend.services.google_sync_service import JournalImportBusy, CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability, student_campus_projection
 from backend.services.schedule_drafts import (
     audience_preview, get_draft,
@@ -213,6 +213,8 @@ class JournalMappingPayload(BaseModel):
 class JournalConnectPayload(BaseModel):
     term_number: int | None = Field(default=None, ge=1, le=3)
     dry_run: bool = False
+    selected_sheet_ids: list[str] | None = Field(default=None, max_length=365)
+    preflight_token: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     spreadsheet_url: str
     grade: int = Field(default=9, ge=5, le=11)
     auto_sync_enabled: bool = True
@@ -1161,45 +1163,38 @@ def create_router(database: Database) -> APIRouter:
         spreadsheet_id = match.group(1) if match else raw
         if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", spreadsheet_id):
             raise HTTPException(status_code=400, detail="Укажите ссылку на Google Таблицу или её идентификатор")
+        if payload.term_number is None:
+            raise HTTPException(status_code=422, detail="Укажите триместр и проверьте предметные вкладки перед импортом.")
+        if not payload.dry_run and (not payload.preflight_token or not payload.selected_sheet_ids
+                or len(set(payload.selected_sheet_ids)) != len(payload.selected_sheet_ids)
+                or any(not re.fullmatch(r"[0-9]{1,12}", sheet_id) for sheet_id in payload.selected_sheet_ids)):
+            raise HTTPException(status_code=422, detail="Выберите непустой список проверенных предметных вкладок.")
         if payload.dry_run:
             try:
                 preview = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id,
                                                term_number=payload.term_number, dry_run=True)
             except (GoogleLiveError, ValueError, RuntimeError) as error:
                 raise HTTPException(status_code=502, detail="Не удалось проверить вкладки. Проверьте доступ и выбранный период.") from error
-            return {"dry_run": True, "status": preview["status"], "tabs": [
+            return {"dry_run": True, "status": preview["status"], "preflight_token": preview.get("preflight_token"), "tabs": [
                 {"sheet_id": tab.get("sheet_id"), "label": " ".join(str(tab.get("subject") or "").split())[:160],
-                 "status": tab["status"], "counts": tab.get("counts", {}), "error_code": tab.get("error_code"),
+                 "status": tab["status"], "connected": tab.get("connected", False),
+                 "counts": tab.get("counts", {}), "error_code": tab.get("error_code"),
                  "reason": tab.get("error") or tab.get("reason")}
                 for tab in preview["tabs"]]}
-        already_connected = any(item["spreadsheet_id"] == spreadsheet_id for item in database.journal_status())
-        run_id = database.start_journal_sync(spreadsheet_id, payload.grade, None, "manual")
-        if run_id is None:
-            raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
         try:
-            result = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id, term_number=payload.term_number)
-            success = result.get("status") == "success"
-            scheduler_configured = database.journal_scheduler_configured()
-            # A term-specific manual import does not opt any source into the cron.
-            automation_enabled = payload.term_number is None and success and payload.auto_sync_enabled and scheduler_configured
-            if automation_enabled and not already_connected:
-                database.set_journal_auto_sync(spreadsheet_id, True)
-            tabs = result.get("tabs", [])
-            database.finish_journal_sync(run_id, status="success" if success else "error" if result.get("status") in ("blocked", "failed") else "partial",
-                counts={"tabs": len(tabs), "succeeded": sum(tab["status"] == "success" for tab in tabs),
-                        "failed": sum(tab["status"] == "error" for tab in tabs), "not_imported": sum(tab["status"] == "not_imported" for tab in tabs)})
+            result = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id,
+                                           term_number=payload.term_number, selected_sheet_ids=payload.selected_sheet_ids,
+                                           preflight_token=payload.preflight_token)
             if result.get("status") not in ("blocked", "failed"):
-                database.record_audit_event("journal_source.connected", "journal_source", {"spreadsheet_id": spreadsheet_id, "grade": payload.grade, "auto_sync_enabled": automation_enabled}, actor["id"])
-            return {**result, "auto_sync_enabled": automation_enabled, "scheduler_configured": scheduler_configured}
+                database.record_audit_event("journal_source.connected", "journal_source",
+                    {"spreadsheet_id": spreadsheet_id, "grade": payload.grade, "auto_sync_enabled": False}, actor["id"])
+            return {**result, "auto_sync_enabled": False, "scheduler_configured": database.journal_scheduler_configured()}
+        except JournalImportBusy as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except (GoogleLiveError, ValueError, RuntimeError) as error:
-            database.finish_journal_sync(run_id, status="error", error=str(error))
             raise HTTPException(status_code=502, detail=str(error)) from error
         except Exception as error:
             logger.error("Unexpected failure while connecting journal grade=%s error_type=%s", payload.grade, type(error).__name__)
-            try:
-                database.finish_journal_sync(run_id, status="error", error=f"Unexpected journal connection failure: {type(error).__name__}")
-            except Exception:
-                logger.exception("Failed to finalize journal sync run_id=%s after refresh failure", run_id)
             raise HTTPException(status_code=500, detail="Не удалось обновить журнал. Попробуйте ещё раз позже.") from error
 
     @router.post("/admin/journals/refresh-grade", status_code=202)

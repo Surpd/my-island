@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from backend.database import Database
-from backend.services.journal_group_labels import explicit_header_label
+from backend.services.journal_group_labels import JournalGroupLabelConflict, explicit_header_label
 
 
 SUMMARY_TYPES = {
@@ -241,7 +241,7 @@ def parse_journal_values(
         if match:
             canonical = _normalized(match[1])
             if canonical in numeric_markers:
-                raise ValueError("У нескольких разделов журнала одно название группы. Уточните заголовки. Прежние оценки и связи сохранены.")
+                raise JournalGroupLabelConflict("У нескольких разделов журнала одно название группы. Уточните заголовки. Прежние оценки и связи сохранены.")
             numeric_markers.add(canonical)
     for block_index, block in enumerate(blocks):
         group_label = explicit_labels[block_index]

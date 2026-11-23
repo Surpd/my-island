@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+import logging
 import os
 import re
 
@@ -12,6 +14,7 @@ from backend.config import get_settings
 from backend.handlers.api import GENERIC_PREVIEW_SCHOOL_MODE_DETAIL, create_router
 from backend.handlers.codex_diagnostic_api import PREFIX as DIAGNOSTIC_PREFIX, create_codex_diagnostic_router
 from backend.services.codex_diagnostics import bearer_token as diagnostic_bearer
+from backend.services.codex_diagnostics import log_startup_readiness
 from backend.handlers.school_directory_api import create_school_directory_router
 from backend.services.auth import is_loopback_dev_auth_request
 from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
@@ -32,7 +35,15 @@ if isolated_consolidation_enabled():
     from backend.services.teacher_ui_colors import initialize_sqlite_schema
     initialize_publication_schema(database)
     initialize_sqlite_schema(database)
-app = FastAPI(title="My Island API", version="0.1.0")
+
+
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    log_startup_readiness(logging.getLogger("uvicorn.error"))
+    yield
+
+
+app = FastAPI(title="My Island API", version="0.1.0", lifespan=app_lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"], allow_headers=["*"])
 
 

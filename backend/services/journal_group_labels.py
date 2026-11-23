@@ -15,6 +15,10 @@ STORED_LABEL = re.compile(r"9[ABC]|(?:Группа (?:[1-9][0-9]?|[A-ZА-ЯЁ]))
 CYRILLIC_LOOKALIKES = str.maketrans("АВС", "ABC")
 
 
+class JournalGroupLabelConflict(ValueError):
+    """The source argument cannot identify the same saved journal groups."""
+
+
 def explicit_header_label(value: object, *, grade: int, subject: str) -> str | None:
     """Read only explicit short labels from the gradebook's header cell."""
     text = str(value or "").strip()
@@ -67,7 +71,7 @@ def verify_group_labels(
     error = ("Не удалось подтвердить, что названия групп соответствуют сохранённым группам журнала. "
              "Сверьте заголовки и составы групп. Прежние оценки и связи сохранены.")
     if any(incoming_labels.get(marker) != label for marker, label in previous_labels.items()):
-        raise ValueError(error)
+        raise JournalGroupLabelConflict(error)
     old_rosters = by_marker(previous_roster)
     new_rosters = by_marker(incoming_roster)
     known_markers = set(existing_markers) | old_rosters.keys()
@@ -78,4 +82,4 @@ def verify_group_labels(
             # group the header names. Require a complete same-key roster.
             if not old_keys or old_keys != new_rosters.get(marker) or any(
                     candidate != marker and keys == old_keys for candidate, keys in old_rosters.items()):
-                raise ValueError(error)
+                raise JournalGroupLabelConflict(error)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any
@@ -10,6 +11,7 @@ from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
+from backend.services.journal_group_labels import JournalGroupLabelConflict
 from backend.services.journal_import import classify_journal_values, parse_journal_values, subject_period_from_title, sync_journal_values
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
@@ -52,6 +54,10 @@ def _client(settings: Settings, database: Database | None = None) -> tuple[Googl
 
 class TeacherDirectoryApplyBlocked(RuntimeError):
     """The authoritative teacher source is not safe to apply yet."""
+
+
+class JournalImportBusy(GoogleLiveError):
+    """A validated selection cannot claim the existing workbook run."""
 
 
 class JournalSourceExcluded(ValueError):
@@ -255,7 +261,8 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": sheet_title, "sheet_id": selected.get("sheetId"), "counts": counts}
 
 
-def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual", run_id: Any | None = None, term_number: int | None = None, dry_run: bool = False) -> dict[str, Any]:
+def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual", run_id: Any | None = None, term_number: int | None = None, dry_run: bool = False,
+                          selected_sheet_ids: list[str] | None = None, preflight_token: str | None = None) -> dict[str, Any]:
     if grade not in CURRENT_JOURNAL_SPREADSHEETS and not spreadsheet_id:
         raise ValueError("Для этого класса не задан источник журнала")
     target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS[grade]
@@ -265,10 +272,12 @@ def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9
         with database.journal_workbook_lock(target_id) as acquired:
             if not acquired:
                 raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
-            return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id, term_number=term_number, dry_run=dry_run)
+            return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id, term_number=term_number, dry_run=dry_run,
+                                                 selected_sheet_ids=selected_sheet_ids, preflight_token=preflight_token)
 
 
-def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None, term_number: int | None, dry_run: bool) -> dict[str, Any]:
+def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None, term_number: int | None, dry_run: bool,
+                                  selected_sheet_ids: list[str] | None, preflight_token: str | None) -> dict[str, Any]:
     """Import every gradebook tab in one connected workbook using stable Google tab IDs."""
     client, _ = _client(settings, database)
     metadata = client.spreadsheet(target_id)
@@ -280,7 +289,8 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
     valid_tabs = [tab for tab in tabs if str(tab.get("title", "")).strip() and tab.get("sheetId") is not None]
     if term_number is not None and trigger_kind != "scheduled":
         return _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs,
-                                       term_number=term_number, dry_run=dry_run, run_id=run_id)
+                                       term_number=term_number, dry_run=dry_run, run_id=run_id,
+                                       selected_sheet_ids=selected_sheet_ids, preflight_token=preflight_token)
     scheduled_ids = None
     if trigger_kind == "scheduled":
         scope = database.journal_import_scope(target_id, grade)
@@ -294,6 +304,12 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             row.get("period_status") != "unassigned" and
             subject_period_from_title(tab["title"])[1] in (None, current_term)
         )}
+    if trigger_kind != "scheduled" and term_number is None and not dry_run:
+        current_scope = database.journal_import_scope(target_id, grade)
+        previously_connected = {str(row["sheet_id"]) for row in current_scope["sources"]
+                                 if row["last_synced_at"] is not None and row["period_status"] != "unassigned"}
+        valid_tabs = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] in (None, 1)
+                      or str(tab["sheetId"]) in previously_connected]
     source_settings = load_source_settings(database, target_id)
     sync_tabs, skipped_count, excluded_count = select_sync_tabs(valid_tabs, source_settings, trigger_kind=trigger_kind)
     if scheduled_ids is not None:
@@ -377,12 +393,19 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             "skipped_tabs": skipped_count, "excluded_tabs": excluded_count, "tabs": outcomes}
 
 
-def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs, *, term_number, dry_run, run_id):
+def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs, *, term_number, dry_run, run_id,
+                             selected_sheet_ids, preflight_token):
     """Plan selected tabs with one Google read each, then write only if all pass."""
     year = "2026/27"
     scope = database.journal_import_scope(target_id, grade, year)
     sources = scope["sources"]
-    selected = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] == term_number]
+    is_selection = selected_sheet_ids is not None or preflight_token is not None
+    connected_ids = {str(row["sheet_id"]) for row in sources if row["sheet_id"] is not None
+                     and row["grade"] == grade and row["academic_year"] == year and row["term_number"] == term_number
+                     and row["period_status"] != "unassigned" and row["last_synced_at"] is not None
+                     and not row["classification"]}
+    selected = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] == term_number
+                and (dry_run or is_selection or str(tab["sheetId"]) in connected_ids)]
     registered_grade = next((number for number, book in CURRENT_JOURNAL_SPREADSHEETS.items() if book == target_id), grade)
     if registered_grade != grade or any(row["grade"] != grade for row in sources):
         raise ValueError("Выбранный класс не соответствует этому источнику журнала.")
@@ -405,7 +428,11 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
     rows, prepared = [], []
     for tab in selected:
         sheet_id, sheet_title = str(tab["sheetId"]), str(tab["title"])
-        row = {"sheet_id": sheet_id, "subject": sheet_title}
+        # Instructions are never exposed as pickable subject rows, even if a
+        # valid subject ID has been unexpectedly repurposed as an instruction.
+        if classify_journal_values([], sheet_title=sheet_title):
+            continue
+        row = {"sheet_id": sheet_id, "subject": sheet_title, "connected": sheet_id in connected_ids}
         rows.append(row)
         if metadata_ids[sheet_id] > 1:
             row.update(status="error", error_code="sheet_identity_conflict", error="ID вкладки встречается в книге больше одного раза.")
@@ -438,16 +465,60 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
             values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
             auxiliary = classify_journal_values(values, sheet_title=sheet_title)
             if auxiliary:
-                row.update(status="skipped", classification=auxiliary["kind"], reason=auxiliary["reason"])
+                rows.remove(row)
                 continue
             parsed = parse_journal_values(values, grade=grade, subject=label, sheet_title=sheet_title, sheet_id=sheet_id)
+            # Match the snapshot writer: prefer exact GID, then an unupgraded
+            # record with the same title. This read does not reconnect a tab.
+            prior = next((item for item in stable if str(item["sheet_id"]) == sheet_id), None)
+            if prior is None:
+                prior = next((item for item in stable if item["sheet_id"] is None and item["sheet_title"] == sheet_title), None)
+            if prior is not None:
+                database.preview_journal_group_label_import(prior["id"], parsed["assessments"], parsed["students"])
             row.update(status="success", counts={name: len(parsed[name]) for name in ("assessments", "students", "results", "summaries")})
             prepared.append((row, label, parsed))
         except Exception as error:
             diagnostic = _journal_error_diagnostic(error)
             row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"])
 
-    blocked = not prepared or any(row["status"] == "error" for row in rows)
+    def metadata_identity(tabs):
+        return sorted((str(tab["sheetId"]), str(tab["title"])) for tab in tabs
+                      if str(tab.get("title", "")).strip() and tab.get("sheetId") is not None)
+
+    token = hashlib.sha256(json.dumps({
+        "book": target_id, "grade": grade, "term": term_number, "year": year,
+        "metadata": metadata_identity(valid_tabs),
+        "sources": sorted(sources, key=lambda row: str(row["id"])),
+        "rows": rows, "data": [(row["sheet_id"], parsed["source_hash"]) for row, _, parsed in prepared],
+    }, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest() if dry_run or is_selection else None
+    message = None
+    if is_selection and not dry_run:
+        requested = selected_sheet_ids or []
+        eligible = {row["sheet_id"] for row, _, _ in prepared}
+        if not preflight_token or token != preflight_token:
+            message = "Список вкладок или данные изменились после проверки. Проверьте таблицу ещё раз."
+        elif not requested or len(set(requested)) != len(requested) or not set(requested) <= eligible:
+            message = "Выберите хотя бы одну проверенную предметную вкладку из этого источника."
+        else:
+            # Values are read using exact escaped tab titles. Recheck that the
+            # title-to-GID mapping did not change during those Google reads.
+            latest = client.spreadsheet(target_id)
+            latest_tabs = [sheet.get("properties") or {} for sheet in latest.get("sheets") or []]
+            if metadata_identity(latest_tabs) != metadata_identity(valid_tabs):
+                message = "Вкладки изменились во время проверки. Проверьте таблицу ещё раз."
+            else:
+                chosen = set(requested)
+                rows = [row for row in rows if row["sheet_id"] in chosen]
+                prepared = [entry for entry in prepared if entry[0]["sheet_id"] in chosen]
+    elif not dry_run and not prepared and not rows:
+        message = "Нет подключённых предметных вкладок. Сначала выберите их при подключении."
+    blocked = bool(message) or not prepared or (not dry_run and any(row["status"] == "error" for row in rows))
+    own_run = None
+    if not dry_run and not blocked and is_selection:
+        own_run = database.start_journal_sync(target_id, grade, None, "manual", book_lock_held=True)
+        if own_run is None:
+            raise JournalImportBusy("Для этой таблицы уже выполняется синхронизация.")
+        run_id = own_run
     if not dry_run and not blocked:
         for index, (row, label, parsed) in enumerate(prepared, start=1):
             try:
@@ -462,9 +533,12 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
                 row.pop("counts", None)
                 row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"])
             if run_id is not None:
-                database.update_journal_sync_progress(run_id, {
-                    "completed_tabs": len(rows) - len(prepared) + index, "total_tabs": len(rows),
-                })
+                try:
+                    database.update_journal_sync_progress(run_id, {
+                        "completed_tabs": len(rows) - len(prepared) + index, "total_tabs": len(rows),
+                    })
+                except Exception:
+                    logging.getLogger(__name__).warning("Journal import progress update unavailable")
     succeeded = sum(row["status"] == "success" for row in rows) if dry_run or not blocked else 0
     failures = sum(row["status"] == "error" for row in rows)
     skipped = sum(row["status"] == "skipped" for row in rows)
@@ -472,15 +546,22 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
         for row in rows:
             if row["status"] == "success":
                 row.update(status="not_imported", reason="Импорт остановлен: не все вкладки прошли проверку.")
+    status = "blocked" if blocked else "failed" if not succeeded else "partial" if failures else "success"
+    if own_run is not None:
+        database.finish_journal_sync(own_run, status="error" if status == "failed" else status,
+                                     counts={"tabs": len(rows), "succeeded": succeeded, "failed": failures})
     return {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade,
-            "status": "blocked" if blocked else "failed" if not succeeded else "partial" if failures else "success",
+            "status": status,
             "successful_tabs": succeeded, "failed_tabs": failures, "skipped_tabs": skipped,
-            "excluded_tabs": 0, "tabs": rows}
+            "excluded_tabs": 0, "tabs": rows, "message": message,
+            **({"preflight_token": token} if dry_run and prepared else {})}
 
 
 def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
     """Return admin-safe diagnostics; never copy request URLs, tokens, or roster rows to logs."""
     from backend.services.google_live import GoogleApiError
+    if isinstance(error, JournalGroupLabelConflict):
+        return {"code": "journal_group_label_conflict", "message": str(error), "details": "Прежние оценки и связи сохранены."}
     if isinstance(error, ValueError):
         detail = str(error)[:700]
         if any(token in detail.casefold() for token in ("конфликт сопоставления", "невозможно однозначно сопоставить", "неоднозначное сопоставление")):

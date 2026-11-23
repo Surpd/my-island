@@ -40,35 +40,87 @@ class ScopedImportTests(unittest.TestCase):
     def refresh(self, **kwargs):
         return refresh_grade_journal(self.db, object(), 6, spreadsheet_id=BOOK, **kwargs)
 
-    def test_cross_period_id_guide_retitle_blocks_entire_plan_without_marking_first_term(self):
+    def pick(self, *ids, preview=None):
+        preview = preview or self.refresh(term_number=2, dry_run=True)
+        return self.refresh(term_number=2, selected_sheet_ids=list(ids), preflight_token=preview.get("preflight_token"))
+
+    def test_group_label_conflict_is_read_only_and_other_tab_remains_selectable(self):
+        label = "II · Английский язык"
+        names = ("Synthetic Alpha", "Synthetic Beta")
+        def english(headers, roster=names):
+            values = []
+            for index, (heading, name) in enumerate(zip(headers, roster), 1):
+                values += [["Дата", heading, f"0{index}.12"], ["Работа", "", "Тренировка"],
+                           ["Вес", "", 1], ["Категория", "", "У"], [name, 4, 9]]
+            return values
+
+        self.source(2, label, english(("", "")))
+        source_id = self.rows()[0]["id"]
+        previous = self.db.journal_detail(source_id)
+        self.tabs((2, label), (3, "II · Биология"))
+        labels = ("II триместр · Английский 1", "II триместр · Английский 2")
+        def use(values):
+            self.google.sheet_values.side_effect = lambda book, address, **kwargs: values if "Английский" in address else SECOND
+
+        use(english(labels, names[::-1]))
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(preview["status"], "partial")
+        self.assertEqual(preview["tabs"][0]["error_code"], "journal_group_label_conflict")
+        self.assertEqual(preview["tabs"][1]["status"], "success")
+        self.assertEqual(self.db.journal_detail(source_id), previous)
+        self.assertEqual(self.pick("2", preview=preview)["status"], "blocked")
+        self.assertEqual(self.pick("3", preview=preview)["status"], "success")
+        self.assertEqual(self.db.journal_detail(source_id), previous)
+
+        use(english(labels))
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(preview["status"], "success")
+        self.assertEqual(self.db.journal_detail(source_id), previous)
+        self.assertEqual(self.pick("2", preview=preview)["status"], "success")
+        adopted = self.db.journal_detail(source_id)
+        self.assertEqual(adopted["group_labels"], {"block 1": "Английский 1", "block 2": "Английский 2"})
+        for key in ("groups", "students", "assessments", "mappings"):
+            self.assertEqual(adopted[key], previous[key])
+
+    def test_cross_period_and_guide_are_never_selectable_and_cannot_poison_first_term(self):
         self.source(1, "I · Биология")
         before = self.rows()
-        for label in ("II · Биология", "II · Как работать"):
-            self.tabs((1, label), (2, "II · История"))
-            dry = self.refresh(term_number=2, dry_run=True)
-            self.assertEqual(dry["status"], "blocked")
-            self.assertEqual(dry["tabs"][0]["error_code"], "period_conflict")
-            commit = self.refresh(term_number=2)
+        self.tabs((1, "II · Биология"), (2, "II · История"), (3, "II · Как работать"))
+        dry = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(dry["status"], "partial")
+        self.assertEqual(dry["tabs"][0]["error_code"], "period_conflict")
+        self.assertEqual([row["sheet_id"] for row in dry["tabs"]], ["1", "2"])
+        for ids in ([], ["1"], ["2", "3"], ["2", "2"], ["999"]):
+            commit = self.pick(*ids, preview=dry)
             self.assertEqual(commit["status"], "blocked")
-            self.assertEqual(commit["tabs"][1]["status"], "not_imported")
             self.assertEqual(self.rows(), before)
+        with self.db.connection() as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM journal_sync_runs").fetchone()[0], 0)
+        self.tabs((1, "II · Как работать"), (2, "II · История"))
+        dry = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual([row["sheet_id"] for row in dry["tabs"]], ["2"])
+        self.assertEqual(self.pick("1", preview=dry)["status"], "blocked")
+        self.assertEqual(self.rows(), before)
 
-    def test_fresh_commit_preflight_rejects_changed_structure_and_duplicates(self):
+    def test_fresh_commit_preflight_rejects_changed_structure_values_and_duplicates(self):
         self.tabs((1, "I · История"), (2, "II · История"))
-        self.assertEqual(self.refresh(term_number=2, dry_run=True)["status"], "success")
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(preview["status"], "success")
         self.assertEqual(self.rows(), [])
+        self.google.sheet_values.side_effect = lambda *args, **kwargs: [*SECOND[:-1], ["Fixture Only", "", 5]]
+        self.assertEqual(self.pick("2", preview=preview)["status"], "blocked")
         self.tabs((1, "I · История"), (2, "II · История"), (3, "II · География"))
         self.google.sheet_values.side_effect = lambda book, address, **kwargs: SECOND if "История" in address else [["Wrong", 1]]
-        result = self.refresh(term_number=2)
+        result = self.pick("2", preview=preview)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual([tab["status"] for tab in result["tabs"]], ["not_imported", "error"])
         self.assertEqual(self.rows(), [])
         self.tabs((2, "II · История"), (3, "II ·  История"))
-        self.assertEqual([tab["error_code"] for tab in self.refresh(term_number=2)["tabs"]],
+        self.assertEqual([tab["error_code"] for tab in self.refresh(term_number=2, dry_run=True)["tabs"]],
                          ["duplicate_subject_period", "duplicate_subject_period"])
         self.assertEqual(self.rows(), [])
         self.tabs((2, "II · История"), (2, "I · Математика"))
-        self.assertEqual(self.refresh(term_number=2)["tabs"][0]["error_code"], "sheet_identity_conflict")
+        self.assertEqual(self.refresh(term_number=2, dry_run=True)["tabs"][0]["error_code"], "sheet_identity_conflict")
         self.assertEqual(self.rows(), [])
 
     def test_pilot_repeat_and_two_crons_do_not_advance_first_term_or_auto_import_second(self):
@@ -84,7 +136,7 @@ class ScopedImportTests(unittest.TestCase):
         self.assertEqual([call.args[1] for call in self.google.sheet_values.call_args_list], ["'I · История'!A:ZZ"] * 2)
         self.assertFalse(any(row["sheet_id"] == "3" for row in self.rows()))
         for _ in range(2):
-            assessment = self.refresh(term_number=2)
+            assessment = self.pick("2", "3")
             self.assertEqual(assessment["status"], "success")
         by_id = {row["sheet_id"]: row for row in self.rows()}
         self.assertEqual({k: v["term_number"] for k, v in by_id.items()}, {"1": 1, "2": 2, "3": 2})
@@ -105,7 +157,7 @@ class ScopedImportTests(unittest.TestCase):
             return save(source, *args)
 
         with patch.object(self.db, "save_journal_snapshot", side_effect=sometimes):
-            result = self.refresh(term_number=2)
+            result = self.pick("2", "3")
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["successful_tabs"], 1)
         self.assertEqual(result["failed_tabs"], 1)
@@ -120,3 +172,37 @@ class ScopedImportTests(unittest.TestCase):
         self.assertEqual(self.refresh(term_number=2)["status"], "blocked")
         self.google.sheet_values.assert_not_called()
         self.assertEqual(self.rows(), [])
+
+    def test_partial_choice_refreshes_only_connected_tabs_and_keeps_omitted_existing_source(self):
+        self.source(1, "I · История")
+        self.source(6, "II · История: архивный курс", SECOND)
+        old = {row["sheet_id"]: row for row in self.rows()}
+        self.tabs((1, "I · История"), (2, "II · История"), (3, "II · История: практика"), (4, "II · Как работать"), (6, "II · История: архивный курс"))
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual([(row["sheet_id"], row["connected"]) for row in preview["tabs"]], [("2", False), ("3", False), ("6", True)])
+        self.assertEqual(self.pick("2", preview=preview)["status"], "success")
+        after = {row["sheet_id"]: row for row in self.rows()}
+        self.assertEqual(set(after), {"1", "2", "6"})
+        self.assertEqual(after["1"], old["1"])
+        self.assertEqual(after["6"], old["6"])
+        self.assertFalse(after["2"]["auto_sync_enabled"])
+        self.google.sheet_values.reset_mock()
+        self.assertEqual(self.refresh(term_number=2)["status"], "success")
+        self.assertEqual([call.args[1] for call in self.google.sheet_values.call_args_list],
+                         ["'II · История'!A:ZZ", "'II · История: архивный курс'!A:ZZ"])
+        self.refresh(trigger_kind="scheduled")
+        self.refresh()
+        self.assertEqual({row["sheet_id"] for row in self.rows()}, {"1", "2", "6"})
+
+
+    def test_retitle_during_fresh_read_leaves_no_run_or_source(self):
+        self.tabs((2, "II · История"))
+        check = self.refresh(term_number=2, dry_run=True)
+        before = self.google.spreadsheet.return_value
+        after = {"sheets": [{"properties": {"title": "II · История", "sheetId": 3}}]}
+        self.google.spreadsheet.side_effect = [before, after]
+        commit = self.pick("2", preview=check)
+        self.assertEqual(commit["status"], "blocked")
+        self.assertIn("изменились во время", commit["message"])
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.db.journal_sync_history(BOOK), [])
