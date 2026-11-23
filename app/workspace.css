@@ -1485,3 +1485,14 @@
 .journal-work-list li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; }
 .journal-work-list button { margin-top: 10px; }
 .journal-roster-details > summary { cursor: pointer; padding: 12px 0; }
+
+.journal-import-pick { min-width: 0; margin: 0; }
+.journal-import-pick ul { list-style: none; margin: 8px 0; padding: 0; }
+.journal-import-pick li { border-bottom: 1px solid var(--line, #ddd); padding: 5px 0; overflow-wrap: anywhere; }
+.journal-connect-panel .journal-import-pick li label {
+  display: flex; flex-direction: row; gap: 10px; align-items: center; min-height: 44px; cursor: pointer;
+}
+.journal-connect-panel .journal-import-pick input[type="checkbox"] {
+  flex: 0 0 auto; width: 18px; min-height: 18px; height: 18px; margin: 0;
+}
+.journal-import-pick li small { display: block; }
