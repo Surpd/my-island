@@ -41,6 +41,7 @@ import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { readableTeacherText } from './teacher-color-registry';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
+import { groupConflictPresentation, overlapInterval } from './schedule-conflict-presentation';
 import { fixedGroup, instructionalGroupIds, lessonLaneEntry, occupiedCellLanes, subgroupRank, timetableLanes } from './schedule-lanes';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
@@ -292,6 +293,7 @@ type Issue = {
   related?: string;
   category: 'conflict' | 'review' | 'incomplete' | 'import' | 'critical';
   affectedStudentIds?: string[];
+  pairCause?: string;
 };
 
 const DAYS = [
@@ -523,12 +525,14 @@ function issuesFor(
     related?: string,
     category?: Issue['category'],
     affectedStudentIds?: string[],
+    pairCause?: string,
   ) => result.push({
     lessonId,
     severity,
     message,
     related,
     affectedStudentIds,
+    pairCause,
     category: category || (/уже ведёт|кабинет .+ занят|назначено одновременно/i.test(message) ? 'conflict' : 'incomplete'),
     type: /преподавател/i.test(message) ? 'teacher' : /кабинет/i.test(message) ? 'room' : /ученик|группа «|группа одновременно|межклассов/i.test(message) ? 'audience' : 'data',
   });
@@ -562,7 +566,7 @@ function issuesFor(
       if (!sa.start || !sb.start || sa.start >= sb.end || sb.start >= sa.end) continue;
       const describe = (lesson: Lesson) =>
         `${lessonClasses(lesson).map((id) => groups.find((item) => item.id === id)?.name || 'класс не уточнён').join(', ') || 'класс'} в ${lessonTimes(lesson,payload.slots).start || 'неуказанное время'}`;
-      const pair = (message: string, studentIds?: string[]) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id, 'conflict', studentIds);
+      const pair = (message: string, studentIds?: string[]) => add(a.id, 'error', `${message}: ${describe(b)}.`, b.id, 'conflict', studentIds, message);
       const teacherIdsA = new Set([...(a.teacherIds || []), a.teacherId].filter(Boolean));
       const teacherIdsB = new Set([...(b.teacherIds || []), b.teacherId].filter(Boolean));
       const independentA = isSdepIndependentLesson(payload, a, groups);
@@ -2757,9 +2761,36 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     const lesson = payload?.lessons.find(entry => entry.id === id);
     return lesson && (!issueDay || String(lesson.day) === issueDay) && (!issueClass || displayedClasses(lesson).includes(issueClass));
   });
-  const filteredIssues = issues.filter(matchesIssueLocation).filter((item) => issueSeverity === 'all' || item.severity === issueSeverity).filter((item) => issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
+  const matchesIssueFilters = (item: Issue) => matchesIssueLocation(item)
+    && (issueSeverity === 'all' || item.severity === issueSeverity)
+    && (issueType === 'all' || (issueType === 'teacher' ? item.type === 'teacher' : issueType === 'room' ? item.type === 'room' : issueType === 'student' ? item.type === 'audience' : item.type === 'data'));
+  const filteredIssues = issues.filter(matchesIssueFilters);
+  const issueLessons = useMemo(() => new Map(payload?.lessons.map(lesson => [lesson.id, lesson])), [payload?.lessons]);
+  const issuePresentation = useMemo(() => groupConflictPresentation(issues, item => {
+    const timeFor = (id?: string) => {
+      const lesson = id ? issueLessons.get(id) : undefined;
+      return lesson && payload ? { day: lesson.day, ...lessonTimes(lesson, payload.slots) } : undefined;
+    };
+    return overlapInterval(timeFor(item.lessonId), timeFor(item.related));
+  }), [issues, issueLessons, payload]);
+  const filteredPairs = issuePresentation.pairs.filter(pair => pair.members.some(matchesIssueFilters));
+  const filteredSingles = issuePresentation.singles.filter(matchesIssueFilters);
+  const conflictTargetLabel = (id: string) => {
+    const lesson = issueLessons.get(id);
+    if (!lesson) return 'Занятие';
+    const targetGroup = groups.find(group => group.id === lesson.groupId);
+    const classes = lessonClasses(lesson).map(classId => groups.find(group => group.id === classId)?.name).filter(Boolean);
+    return [lesson.subject || 'Занятие', [...new Set([...classes, targetGroup?.name].filter(Boolean))].join(', ')].filter(Boolean).join(' · ');
+  };
+  const conflictPairTitle = (ids: string[]) => ids.map(conflictTargetLabel).join(' / ');
+  const workflowLabels = {
+    critical: 'Критическая проблема', decision: 'Требует решения администратора', quick: 'Исправляется быстро',
+    deferred: 'Отложено', acknowledged: 'Подтверждено',
+  };
+  const issueTypeLabels = { teacher: 'Преподаватель', room: 'Кабинет', audience: 'Группа или ученик', data: 'Данные занятия' };
   const conflictIssues = issues.filter((item) => item.category === 'conflict');
   const conflictLessons = new Set(conflictIssues.flatMap((item) => [item.lessonId, ...(item.related ? [item.related] : [])]));
+  const conflictLessonCount = russianCount(conflictLessons.size, 'занятие', 'занятия', 'занятий');
   const versionConflicts = versionConflict?.conflicts || [];
   const conflictFieldLabels: Record<string, string> = {
     '$lesson': 'занятие целиком', subject: 'предмет', teacherId: 'преподаватель', teacherIds: 'преподаватели',
@@ -3171,7 +3202,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             </span> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <button className="constructor-issue-count" onClick={() => {if(schoolReview) openReviewCenter('conflict'); else setConflictsOpen(open => !open);}} aria-expanded={schoolReview ? reviewMode === 'review' : conflictsOpen}>
-              <AlertTriangle size={14} /><span className="desktop-label">{schoolReview ? 'Конфликты в сетке' : 'Проверка'} · {conflictLessons.size}</span><span className="mobile-label">{schoolReview ? 'В сетке' : 'Проверка'} · {conflictLessons.size}</span>
+              <AlertTriangle size={14} /><span className="desktop-label">{schoolReview ? 'Конфликты в сетке' : 'Проверка'} · {conflictLessonCount}</span><span className="mobile-label">{schoolReview ? 'В сетке' : 'Проверка'} · {conflictLessonCount}</span>
             </button>
             <button onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>Фильтры</button>
               <button className="constructor-open-colors" onClick={() => setColorPanelOpen(true)} title="Поиск и цвета преподавателей"><Palette size={15}/><span>Преподаватели</span></button>
@@ -3423,8 +3454,31 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 <button type="button" onClick={()=>void copyIssueReport()}>Скопировать отчёт проверки</button>
               </div>
               {!filteredIssues.length ? <p role="status">По выбранным фильтрам проблем нет.</p> : null}
+              {filteredPairs.length ? <section className="constructor-issue-category constructor-paired-conflicts" aria-label="Пересечения занятий">
+                <h3>Пересечения занятий · {russianCount(filteredPairs.length, 'пара', 'пары', 'пар')}</h3>
+                <div className="constructor-conflict-list">{filteredPairs.map(pair =>
+                  <article className={pair.reasons.some(item => item.severity === 'error') ? 'error' : 'warning'}
+                    key={pair.key} data-conflict-pair={pair.ids.join(' ')}>
+                    <div>
+                      <strong>{conflictPairTitle(pair.ids)}</strong>
+                      <small>{DAYS[pair.interval.day]} · {formatLessonTimeRange(pair.interval.start, pair.interval.end)}</small>
+                      <ul className="constructor-pair-causes">{pair.reasons.map((item, index) => <li key={index} data-conflict-cause={item.type}>
+                        <span>{item.pairCause || item.message}</span>
+                        <small>{issueTypeLabels[item.type]} · {item.severity === 'error' ? 'Ошибка' : 'Предупреждение'} · {workflowLabels[workflowFor(item)]}</small>
+                        <button type="button" className={item.severity} aria-label={`Разобрать проблему: ${issueTypeLabels[item.type]}`}
+                          onClick={() => setResolutionIssue(item)}>Разобрать проблему</button>
+                      </li>)}</ul>
+                    </div>
+                    <div className="constructor-conflict-links">{pair.ids.map(id => <button key={id} type="button" data-issue-open={id}
+                      aria-label={`Показать в расписании — ${conflictTargetLabel(id)}`}
+                      onClick={() => showIssueLesson(id, 'grid', conflictPairTitle(pair.ids), pair.ids.filter(other => other !== id))}>
+                      Показать в расписании: {conflictTargetLabel(id)}
+                    </button>)}</div>
+                  </article>
+                )}</div>
+              </section> : null}
               {(['critical', 'decision', 'quick', 'deferred', 'acknowledged'] as const).map((category) => {
-                const categoryIssues = filteredIssues.filter((item) => workflowFor(item) === category);
+                const categoryIssues = filteredSingles.filter((item) => workflowFor(item) === category);
                 if (!categoryIssues.length) return null;
                 const title = category === 'quick' ? 'Исправляемые быстро' : category === 'decision' ? 'Требуют решения администратора' : category === 'acknowledged' ? 'Подтверждённые исключения' : category === 'deferred' ? 'Отложенные решения' : 'Критические технические проблемы';
                 const affected = new Set(categoryIssues.map((item) => item.lessonId));
@@ -4044,7 +4098,16 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                       </EditorDisclosure> : null}
                       {selectedActivityType === 'practice' ? <label>Ответственные за задание (без присутствия)<select multiple value={selected.responsible_teacher_ids || []} onChange={(event) => updateLesson(selected.id, { responsible_teacher_ids: [...event.target.selectedOptions].map(option => option.value) })}>{teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label> : null}
                       <div className="constructor-issues">
-                        {issues
+                        {issuePresentation.pairs.filter(pair => pair.ids.includes(selected.id)).map(pair => <article key={pair.key}
+                          className="constructor-inspector-pair" data-conflict-pair={pair.ids.join(' ')}>
+                          <strong>{conflictPairTitle(pair.ids)}</strong>
+                          <small>{formatLessonTimeRange(pair.interval.start, pair.interval.end)}</small>
+                          <ul>{pair.reasons.map((reason, index) => <li key={index} className={reason.severity}>{reason.pairCause || reason.message}</li>)}</ul>
+                          {pair.ids.filter(id => id !== selected.id).map(id => <button key={id} type="button" onClick={() => openReviewLesson(id)}>
+                            Открыть: {conflictTargetLabel(id)}
+                          </button>)}
+                        </article>)}
+                        {issuePresentation.singles
                           .filter((item) => item.lessonId === selected.id || item.related === selected.id)
                           .map((item, index) => (
                             <button
