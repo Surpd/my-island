@@ -1433,3 +1433,28 @@
   color: #9c2c23;
   font-size: 12px;
 }
+
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-exclusions {
+  min-width: 0;
+  margin-block: 4px 10px;
+}
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-list {
+  max-height: 15rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-list label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-list input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}

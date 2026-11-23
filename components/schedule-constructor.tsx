@@ -630,6 +630,57 @@ function EditorDisclosure({ label, children, resetKey = '' }: { label: string; c
   </div>;
 }
 
+// A stale preview may still supply candidates when the only change was this
+// lesson's exclusion toggles. Never reuse a roster after another schedule change.
+function exclusionRosterContext(key: string, lessonId: string) {
+  if (!key) return '';
+  const payload = JSON.parse(key) as ReturnType<typeof audiencePreviewPayload>;
+  return JSON.stringify({ ...payload, lessons: payload.lessons.map(lesson =>
+    lesson.id !== lessonId ? lesson : { ...lesson, audience_snapshot: undefined,
+      audience: lesson.audience ? { ...lesson.audience, exclude_student_ids: undefined } : undefined }) });
+}
+
+function AttendanceExceptions({ lesson, students, previewKey, snapshot, initialReason, onReason, onChange }: {
+  lesson: Lesson;
+  students: { id: string; name: string }[];
+  previewKey: string;
+  snapshot: { key: string; lessons: Record<string, AudiencePreview> } | null;
+  initialReason: string;
+  onReason: (value: string) => void;
+  onChange: (ids: string[]) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [reason, setReason] = useState(initialReason);
+  const past = snapshot?.lessons[lesson.id];
+  const eligible = useMemo(() => past?.status === 'ok' && snapshot
+    && (snapshot.key === previewKey || exclusionRosterContext(snapshot.key, lesson.id) === exclusionRosterContext(previewKey, lesson.id))
+    ? past.proposed_student_ids ?? past.student_ids ?? [] : [], [past, snapshot, previewKey, lesson.id]);
+  const selected = lesson.audience?.exclude_student_ids || [];
+  const candidates = new Set([...selected, ...eligible]);
+  const normalized = search.trim().toLocaleLowerCase('ru');
+  const options = students.filter(student => candidates.has(student.id)
+    && (selected.includes(student.id) || student.name.toLocaleLowerCase('ru').includes(normalized)));
+  return <>
+    <fieldset className="constructor-attendance-exclusions">
+      <legend>Не посещают это занятие</legend>
+      {candidates.size > 8 ? <label>Поиск ученика<input type="search" value={search} onChange={event => setSearch(event.target.value)} /></label> : null}
+      <div className="constructor-attendance-list">
+        {options.map(student => <label key={student.id}>
+          <input type="checkbox" checked={selected.includes(student.id)}
+            onChange={event => onChange(event.target.checked ? [...selected, student.id] : selected.filter(id => id !== student.id))} />
+          <span>{student.name}</span>
+        </label>)}
+      </div>
+      {!options.length ? <small>{eligible.length ? 'Никого не нашли.' : 'Дождитесь расчёта состава занятия. Уже выбранные ученики остаются здесь.'}</small> : null}
+    </fieldset>
+    <label>Причина (необязательно)<input value={reason} onChange={event => {
+      setReason(event.target.value);
+      onReason(event.target.value);
+    }} /></label>
+    {lesson.attendance_history?.map((entry,index) => <p key={index}>{entry.at.slice(0,10)} · {entry.actor}{entry.reason ? ` · ${entry.reason}` : ''}</p>)}
+  </>;
+}
+
 function LessonKindPicker({ value, onChange }: { value: EditorKind; onChange?: (kind: SelectableKind) => void }) {
   const choices = (kinds: typeof lessonKinds | typeof otherKinds) => <div className="constructor-creation-tabs">
     {(Object.keys(kinds) as SelectableKind[]).map(kind => <button key={kind} type="button"
@@ -878,6 +929,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     } catch (error) { setStatus(`Не удалось создать неделю: ${String((error as Error).message || error)}`); }
   };
   const draftRef = useRef<Draft | null>(null);
+  const attendanceReasons = useRef(new Map<string, string>());
   const linkedLesson = useRef<string | null>(null);
   const draftOpenRequest = useRef(0);
   const changeVersion = useRef(0);
@@ -1212,7 +1264,19 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (!current || savingRef.current || !dirty) return !dirty;
     const termComparisonKey = route?.origin === 'comparison' && comparisonFocus?.draftId === current.id
       ? comparisonFocus.key : undefined;
-    const prepared = prepareOptionalActivityPayload(current.payload, activities);
+    // Notes are buffered outside the timetable while typing. Include even the
+    // focused input's latest value in the explicit save (including on touch).
+    const reasons = new Map(current.payload.lessons.flatMap(lesson => {
+      const key = JSON.stringify([current.id, lesson.id]);
+      const reason = attendanceReasons.current.get(key);
+      return reason === undefined ? [] : [[key, reason] as const];
+    }));
+    const withReasons = (value: Draft): Payload => reasons.size ? { ...value.payload,
+      lessons: value.payload.lessons.map(lesson => {
+        const reason = reasons.get(JSON.stringify([value.id, lesson.id]));
+        return reason === undefined ? lesson : { ...lesson, attendance_reason: reason };
+      }) } : value.payload;
+    const prepared = prepareOptionalActivityPayload(withReasons(current), activities);
     if (prepared.problems.length) {
       setSaveFailed(true);
       setStatus(`Сохранение остановлено. ${prepared.problems.join(' ')}`);
@@ -1222,6 +1286,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     const savedVersion = changeVersion.current;
     const expectedRevision = revision.current;
     const acceptSaved = (value: Draft) => {
+      for (const [key, reason] of reasons) if (attendanceReasons.current.get(key) === reason) attendanceReasons.current.delete(key);
       revision.current = value.revision;
       baseDraftRef.current = value;
       setDraft((shown) =>
@@ -1282,7 +1347,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         try {
           const server = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`));
           const localNowRaw = draftRef.current?.id === current.id ? draftRef.current : current;
-          const preparedLocal = prepareOptionalActivityPayload(localNowRaw.payload, activities);
+          const preparedLocal = prepareOptionalActivityPayload(withReasons(localNowRaw), activities);
           if (preparedLocal.problems.length) throw new Error(`Сохранение остановлено. ${preparedLocal.problems.join(' ')}`);
           const localNow = preparedLocal.payload === localNowRaw.payload ? localNowRaw : { ...localNowRaw, payload: preparedLocal.payload };
           if (sameDraftContent(localNow, server)) {
@@ -3970,12 +4035,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         <label>Описание <textarea value={selected.description || ''} onChange={(event) => updateLesson(selected.id, { description: event.target.value })} /></label>
                         <label>Сопровождающие <select multiple aria-label="Сопровождающие преподаватели" value={selected.teacherIds || []} onChange={(event) => { const ids = [...event.target.selectedOptions].map((option) => option.value); updateLesson(selected.id, { teacherIds: ids, teacherId: ids[0] || '' }); }}>{teachers.map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ' · занят' : ''}</option>)}</select></label>
                       </fieldset> : null}
-                      {selected.audience && !['club', 'elective'].includes(selectedActivityType || '') ? <EditorDisclosure key={`exceptions-${selected.id}`} label={selected.audience.exclude_student_ids?.length
+                      {selected.audience && !['club', 'elective'].includes(selectedActivityType || '') ? <EditorDisclosure key={`exceptions-${draft.id}-${selected.id}`} label={selected.audience.exclude_student_ids?.length
                         ? `Кто не идёт на это занятие? · ${selected.audience.exclude_student_ids.length}` : 'Кто не идёт на это занятие?'}>
-                        <label>Причина<input value={selected.attendance_reason || ''} onChange={event => updateLesson(selected.id, { attendance_reason: event.target.value })} /></label>
-                        <small>Укажите причину, чтобы выбрать учеников.</small>
-                        <label>Не посещают это занятие<select multiple disabled={!selected.attendance_reason?.trim()} value={selected.audience.exclude_student_ids || []} onChange={event => updateLesson(selected.id, { audience: { ...selected.audience!, exclude_student_ids: [...event.target.selectedOptions].map(option => option.value) }, audience_snapshot: null })}>{students.filter(student => audiencePreviews[selected.id]?.student_ids?.includes(student.id) || selected.audience?.exclude_student_ids?.includes(student.id)).map(student => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>
-                        {selected.attendance_history?.map((entry,index) => <p key={index}>{entry.at.slice(0,10)} · {entry.actor} · {entry.reason}</p>)}</EditorDisclosure> : null}
+                        <AttendanceExceptions key={draft.revision} lesson={selected} students={students} previewKey={previewKey} snapshot={audienceSnapshot}
+                          initialReason={attendanceReasons.current.get(JSON.stringify([draft.id, selected.id])) || ''}
+                          onReason={reason => attendanceReasons.current.set(JSON.stringify([draft.id, selected.id]), reason)}
+                          onChange={ids => updateLesson(selected.id, { audience: { ...selected.audience!, exclude_student_ids: ids }, audience_snapshot: null })} />
+                      </EditorDisclosure> : null}
                       {selectedActivityType === 'practice' ? <label>Ответственные за задание (без присутствия)<select multiple value={selected.responsible_teacher_ids || []} onChange={(event) => updateLesson(selected.id, { responsible_teacher_ids: [...event.target.selectedOptions].map(option => option.value) })}>{teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label> : null}
                       <div className="constructor-issues">
                         {issues

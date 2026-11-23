@@ -726,6 +726,10 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   const groupId = await createGroup(page, 'E2E Английский · A', label);
   const studentId = await addStudentToClass(page, classId, label, `Ученик редактора ${suffix}`);
   await addMembership(page, groupId, studentId);
+  const extraNames = [`Второй ученик ${suffix}`, `Третий ученик ${suffix}`];
+  for (const name of extraNames) await addMembership(page, groupId, await addStudentToClass(page, classId, label, name));
+  const outsiderName = `Не входит в группу ${suffix}`;
+  await addStudentToClass(page, classId, label, outsiderName);
   const teacherResponse = await page.request.get(`${API}/api/admin/people?kind=teacher`, { headers: ADMIN });
   const teacherId = String((await teacherResponse.json()).items[0].id);
   const catalog = await page.request.post(`${API}/api/admin/schedule/activities`, {
@@ -777,14 +781,14 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
   const exceptions = editor.getByRole('button', { name: 'Кто не идёт на это занятие? · 1' });
   await expect(exceptions).toHaveAttribute('aria-expanded', 'false');
-  await expect(editor.getByLabel('Причина', { exact: true })).toBeHidden();
+  await expect(editor.getByLabel('Причина (необязательно)', { exact: true })).toBeHidden();
   await expect(editor.getByLabel('Поиск преподавателя', { exact: true })).toBeVisible();
   await expect(editor.getByRole('button', { name: 'Настройки преподавателя', exact: true })).toHaveCount(0);
   await exceptions.press('Enter');
-  await expect(editor.getByLabel('Причина', { exact: true })).toHaveValue(/Индивидуальное расписание/);
+  await expect(editor.getByLabel('Причина (необязательно)', { exact: true })).toHaveValue('');
   await expect(exceptions).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText(/Индивидуальное расписание/)).toBeVisible();
-  await expect(editor.getByLabel('Не посещают это занятие')).toHaveValues([studentId]);
+  await expect(editor.getByRole('group', { name: 'Не посещают это занятие' }).locator('input:checked')).toHaveCount(1);
   await exceptions.press('Space');
   await expect(exceptions).toHaveAttribute('aria-expanded', 'false');
   const availability = editor.getByRole('button', { name: 'Посмотреть занятость' });
@@ -792,6 +796,14 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await expect(editor.getByText(/Занятые кабинеты/)).toBeVisible();
   await availability.press('Space');
   await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
+
+  await exceptions.click();
+  for (const name of extraNames) await editor.getByRole('checkbox', { name, exact: true }).check();
+  await expect(editor.getByRole('button', { name: 'Кто не идёт на это занятие? · 3' })).toBeVisible();
+  await expect(editor.getByRole('checkbox', { name: outsiderName })).toHaveCount(0);
+  for (const name of extraNames) await editor.getByRole('checkbox', { name, exact: true }).uncheck();
+  await expect(exceptions).toBeVisible();
+  await exceptions.click();
 
   await kind.getByRole('button', { name: 'Практикум', exact: true }).click();
   await expect(editor.getByText('Преподаватель присутствует на практикуме?')).toBeVisible();
