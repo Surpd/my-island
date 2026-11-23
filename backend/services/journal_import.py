@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from backend.database import Database
+from backend.services.journal_group_labels import math_header_label
 
 
 SUMMARY_TYPES = {
@@ -224,7 +225,15 @@ def parse_journal_values(
     results: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
 
+    explicit_labels = [
+        math_header_label(_cell(values[min(block.values())], 1), grade=grade, subject=subject)
+        if "category" in block and len(blocks) > 1 else None
+        for block in blocks
+    ]
     for block_index, block in enumerate(blocks):
+        group_label = explicit_labels[block_index]
+        if group_label and explicit_labels.count(group_label) != 1:
+            group_label = None
         block_start = min(block.values())
         previous_end = max(blocks[block_index - 1].values()) + 1 if block_index else 0
         marker = "all"
@@ -351,7 +360,8 @@ def parse_journal_values(
                 "raw_source": {**({"category": metadata["category"]} if "category" in metadata else {}), "date": _cell(metadata_rows["date"], column), "title": metadata["title"],
                                "weight": _cell(metadata_rows.get("weight", []), column), "max_score": _cell(metadata_rows.get("max_score", []), column),
                                "header_rows": {key: index + 1 for key, index in block.items()}, "group_marker": marker,
-                               "column_identity": column_identity, "score_vector": score_vector},
+                               "column_identity": column_identity, "score_vector": score_vector,
+                               **({"source_group_label": group_label} if group_label else {})},
             }
             assessments.append(assessment)
             for result in pending:
