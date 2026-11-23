@@ -75,7 +75,7 @@ test('all five retired schedule mutations reject direct HTTP', async ({ request 
   }
 });
 
-test('school save verifies a corrected stale audience without rewriting the neighboring lesson', async ({ page }) => {
+test('school save keeps the explicitly confirmed cross-subject group without rewriting the neighboring lesson', async ({ page }) => {
   test.skip(!consolidation, 'Requires the isolated synthetic school workspace, not the demo API');
   const directoryResponse = await page.request.get(API + '/api/admin/schedule/experiments/school/directory', { headers: admin });
   expect(directoryResponse.ok()).toBeTruthy();
@@ -108,7 +108,7 @@ test('school save verifies a corrected stale audience without rewriting the neig
   await page.goto(`/admin/schedule/constructor?${new URLSearchParams({ role: 'admin', draft: draft.id, lesson: lessonId })}`);
   const editor = page.locator('.constructor-inspector');
   await expect(editor.getByRole('heading', { name: 'Русский язык', exact: true })).toBeVisible();
-  await editor.getByRole('button', { name: /Весь класс или параллель/ }).click();
+  await editor.getByRole('button', { name: 'Оставить эту группу', exact: true }).click();
   const response = page.waitForResponse(item => item.request().method() === 'PUT' && new URL(item.url()).pathname === savePath);
   await editor.getByRole('button', { name: 'Сохранить правку', exact: true }).click();
   const saved = await response;
@@ -119,6 +119,8 @@ test('school save verifies a corrected stale audience without rewriting the neig
   const { payload } = await reopened.json();
   expect(payload.lessons[0].needsClarification).not.toBe(true);
   expect(payload.lessons[0].clarificationReason || '').not.toContain('прежняя математическая группа удалена');
+  expect(payload.lessons[0].subject).toBe('Русский язык');
+  expect(payload.lessons[0].audience).toEqual({ kind: 'groups', group_ids: [oldGroup.id] });
   expect(payload.lessons[0].audience_snapshot.student_ids.length).toBeGreaterThan(0);
   expect(payload.lessons[1]).toEqual(draft.payload.lessons[1]);
 });

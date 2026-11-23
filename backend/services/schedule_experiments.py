@@ -15,8 +15,8 @@ from backend.services.schedule_rooms import display_room
 from backend.services.canonical_schedule import _assignment_metadata, canonical_group_grade, canonical_version, read_canonical_template
 from backend.services.schedule_activities import list_activities, validate_activity_lessons
 from backend.services.schedule_edit_validation import (
-    CLUB_LESSON_ONLY_NOTES, STALE_MATH, TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE,
-    UNCONFIRMED_STUDY_GROUP, audit_resolved_notes, normalized_note, notes, read_active_scope_directory,
+    CLUB_LESSON_ONLY_NOTES, GROUP_LINK_NOTES, TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE,
+    audit_resolved_notes, normalized_note, notes, read_active_scope_directory,
     scope_verified, selected_scope, subject_key,
 )
 
@@ -481,11 +481,11 @@ def _load_experiment_audience_snapshot(database: Database, start: str, end: str)
                 "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall(),
             "groups": database.execute(connection, """SELECT id,name AS raw_name,display_name,
                 COALESCE(display_name,name) AS name,group_type,base_class_name,semantic_dimension
-                FROM groups WHERE canonical IS TRUE""").fetchall(),
+                FROM groups WHERE canonical IS TRUE AND archived_at IS NULL""").fetchall(),
             "memberships": database.execute(connection, """SELECT m.identity_id,m.group_id,m.valid_from,m.valid_until FROM memberships m
                 JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
                 WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student'
-                  AND i.status='active' AND g.canonical IS TRUE
+                  AND i.status='active' AND g.canonical IS TRUE AND g.archived_at IS NULL
                   AND (m.valid_from IS NULL OR m.valid_from <= ?)
                   AND (m.valid_until IS NULL OR m.valid_until >= ?)""", (end, start)).fetchall(),
             "membership_overrides": database.execute(connection, """SELECT identity_id,group_id,action,valid_from,valid_until
@@ -1663,8 +1663,8 @@ def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolv
                 and all(previous.get(field) == lesson.get(field) for field in ordinary_fields)):
             continue
         clauses = {normalized_note(clause) for clause in notes(lesson.get("clarificationReason"))}
-        if STALE_MATH in clauses and key in explicit_ids and old_scope != new_scope:
-            scope_ids.update(old_scope[1] + new_scope[1])
+        if clauses & GROUP_LINK_NOTES and key in explicit_ids:
+            scope_ids.update(new_scope[1])
         edited.append((key, lesson, previous, type_after, old_scope, new_scope, clauses))
     active_directory = read_active_scope_directory(database, scope_ids)
     feedback = []
@@ -1676,32 +1676,28 @@ def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolv
             if retired:
                 evidence["activity_type"] = "club"
         subject = subject_key(lesson.get("subject"))
-        if STALE_MATH in clauses and key in explicit_ids and old_scope != new_scope and kind not in {"club", "elective", "event", "consultation"}:
-            old_is_wrong_math = (old_scope[0] == "groups" and subject
-                and subject != subject_key("Математика") and any(
-                    subject_key(active_directory.get(group_id, {}).get("subject")) == subject_key("Математика")
-                    for group_id in old_scope[1]))
+        if clauses & GROUP_LINK_NOTES and key in explicit_ids and kind not in {"club", "elective", "event", "consultation"}:
+            # Imports can supply a canonical ID and even a saved snapshot.
+            # Only this authorized editor gesture verifies the inherited link.
             raw_audience = lesson.get("audience") or {}
             raw_keys = "group_ids" if new_scope[0] == "groups" else "class_ids"
             explicit_scope = (isinstance(raw_audience, Mapping) and raw_audience.get("kind") == new_scope[0]
                               and _ids(raw_audience.get(raw_keys)) == new_scope[1])
             preview = resolved.get(str(lesson.get("id")), {})
-            verified = (explicit_scope and old_is_wrong_math and
-                        scope_verified(*new_scope, subject, active_directory) and
-                        preview.get("status") == "ok" and isinstance(preview.get("proposed_student_ids"), list))
-            if verified:
-                retired.update({STALE_MATH, UNCONFIRMED_STUDY_GROUP})
-                evidence["audience"] = {"before": {"kind": old_scope[0], "scope_ids": old_scope[1]},
-                                        "after": {"kind": new_scope[0], "scope_ids": new_scope[1]},
-                                        "participant_count": len(preview["proposed_student_ids"])}
-                # The administrator changed this precise rule; freeze the same
-                # server-resolved roster already used for this save.
+            proposed = preview.get("proposed_student_ids")
+            if not (explicit_scope and scope_verified(*new_scope, active_directory)
+                    and preview.get("status") == "ok" and isinstance(proposed, list)):
+                raise ValueError("Новый состав не подтверждён. Выберите действующую группу или конкретные классы с известным составом и повторите сохранение.")
+            retired.update(clauses & GROUP_LINK_NOTES)
+            evidence["audience"] = {"before": {"kind": old_scope[0], "scope_ids": old_scope[1]},
+                                    "after": {"kind": new_scope[0], "scope_ids": new_scope[1]},
+                                    "participant_count": len(proposed)}
+            if old_scope != new_scope:
+                # An explicit new selection authorizes its resolved membership.
                 reset_keys.add(key)
                 lesson["audience_snapshot"] = None
-            else:
-                # Reject an explicitly attempted but unproven repair rather
-                # than save the wrong rule or lose its evidence for a retry.
-                raise ValueError("Новый состав не подтверждён. Выберите действующую группу этого предмета или конкретные классы и повторите сохранение.")
+            # Reaffirming the same group does NOT silently replace a previously
+            # saved roster when membership has drifted; roster review stays separate.
         if clauses & {TEACHER_IDENTITY_NOTE, TEACHER_ASSIGNMENT_NOTE}:
             teacher_ids = {str(value) for value in [lesson.get("teacherId"), *(lesson.get("teacherIds") or [])] if value}
             day = _lesson_weekday(lesson)

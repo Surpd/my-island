@@ -512,12 +512,25 @@ function readableIssueReason(value: string | null | undefined, fallback: string)
   return value;
 }
 
+function legacyGroupLinkUnconfirmed(lesson: Lesson) {
+  return Boolean(lesson.needsClarification && !lesson.importError && lesson.clarificationReason?.split(';')
+    .some(clause => clause.trim().replace(/\.$/u, '').toLocaleLowerCase('ru') === 'прежняя математическая группа удалена'));
+}
+const unconfirmedGroupLinkText = 'Связь с группой из старой записи не подтверждена. Проверьте состав; если он подходит, оставьте эту группу.';
+
 function hasRelevantImportReview(lesson: Lesson, groups: Group[]) {
   return Boolean(lesson.importError || lesson.needsClarification && relevantImportReason(lesson, groups) !== '');
 }
 
 function relevantImportReason(lesson: Lesson, groups: Group[]) {
-  const reason = displayedClarificationReason(lesson, groups);
+  let reason = displayedClarificationReason(lesson, groups);
+  if (reason && legacyGroupLinkUnconfirmed(lesson)) {
+    const others = reason.split(';').map(part => part.trim()).filter(part => {
+      const normal = part.replace(/\.$/u, '').toLocaleLowerCase('ru');
+      return normal !== 'прежняя математическая группа удалена' && normal !== 'для этого предмета не подтверждена учебная группа';
+    });
+    reason = [unconfirmedGroupLinkText, ...others].join('; ');
+  }
   return !lesson.importError && reason && isTypedScheduleClub(lesson)
     ? effectiveClubReviewNote(reason) : reason;
 }
@@ -600,18 +613,13 @@ function issuesFor(
       }
     }
   return result.concat(payload.lessons.filter((lesson) => hasRelevantImportReview(lesson, groups)).map((lesson) => {
-    const mismatchedMathGroups = lesson.clarificationReason?.includes('прежняя математическая группа удалена')
-      ? linkedInstructionalGroups(lesson, groups).filter((group) => group.subject && subjectLabel(group.subject) !== subjectLabel(lesson.subject)) : [];
-    const classNames = lessonClasses(lesson).map((id) => groups.find((group) => group.id === id)?.name).filter(Boolean);
     return {
       lessonId: lesson.id,
-      ...(mismatchedMathGroups.length ? { code: 'stale_group_subject_mismatch' } : {}),
+      ...(legacyGroupLinkUnconfirmed(lesson) ? { code: 'stale_group_subject_mismatch' } : {}),
       type: 'data' as const,
       category: 'import' as const,
       severity: lesson.importError ? 'error' as const : 'warning' as const,
-      message: mismatchedMathGroups.length
-        ? `Ссылка ведёт в ${mismatchedMathGroups.map((group) => group.name).join(', ')} для математики, а предмет — ${subjectLabel(lesson.subject)}. Класс размещения: ${classNames.join(', ') || 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён.`
-        : readableIssueReason(relevantImportReason(lesson, groups), 'Уточните, какие ученики посещают это занятие.'),
+      message: readableIssueReason(relevantImportReason(lesson, groups), 'Уточните, какие ученики посещают это занятие.'),
     };
   }));
 }
@@ -2143,6 +2151,13 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
         return next;
       }),
     }));
+  const selectEditorAudience = (lesson: Lesson, audience: AudienceRule, keepPlacement = false) => {
+    if (!draft) return;
+    const edits = explicitAudienceEditIds.current.get(draft.id) || new Set<string>();
+    edits.add(lesson.id);
+    explicitAudienceEditIds.current.set(draft.id, edits);
+    updateLesson(lesson.id, keepPlacement ? { audience } : audiencePatch(audience, groups, students, lessonClasses(lesson)));
+  };
   const requestTypeChange = (lesson: Lesson, from: EditorKind, to: SelectableKind) => {
     setTypeChange(null);
     if (from === to) return;
@@ -4058,12 +4073,12 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                           {groups.filter(group => group.group_type === 'class' && payload.classes.includes(group.id)).map(group =>
                             <option key={group.id} value={group.id}>{group.name}</option>)}
                         </select></label><p>Поимённый список для кружка не нужен.</p></> : null}
-                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} recalculationLabel={schoolReview ? 'Открыть проверку сохранённого черновика' : undefined} onConfirmRecalculation={schoolReview && dirty ? undefined : () => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => {
-                          const edits = explicitAudienceEditIds.current.get(draft.id) || new Set<string>();
-                          edits.add(selected.id);
-                          explicitAudienceEditIds.current.set(draft.id, edits);
-                          updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)));
-                        }} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
+                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} recalculationLabel={schoolReview ? 'Открыть проверку сохранённого черновика' : undefined} onConfirmRecalculation={schoolReview && dirty ? undefined : () => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => selectEditorAudience(selected, audience)} />
+                        {workspace === 'school' && legacyGroupLinkUnconfirmed(selected) && audienceOf(selected, groups).kind === 'groups' &&
+                          audiencePreviews[selected.id]?.status === 'ok' && audiencePreviews[selected.id]?.proposed_student_ids != null &&
+                          previewRequest.status === 'complete' && <button type="button"
+                            onClick={() => selectEditorAudience(selected, audienceOf(selected, groups), true)}>Оставить эту группу</button>}
+                        {selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
                       <div className="constructor-field-row">
                         <label>
                           День

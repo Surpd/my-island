@@ -5,6 +5,7 @@ from backend.services.schedule_subjects import subject_label
 
 STALE_MATH = "прежняя математическая группа удалена"
 UNCONFIRMED_STUDY_GROUP = "для этого предмета не подтверждена учебная группа"
+GROUP_LINK_NOTES = {STALE_MATH, UNCONFIRMED_STUDY_GROUP}
 CLUB_LESSON_ONLY_NOTES = {
     UNCONFIRMED_STUDY_GROUP,
     "не определена учебная группа для урока английского",
@@ -35,14 +36,14 @@ def selected_scope(rule):
     return None, []
 
 
-def scope_verified(kind, ids, subject, directory):
+def scope_verified(kind, ids, directory):
+    """Stable active directory identity, not a subject/category recommendation."""
     if not ids or not kind:
         return False
     rows = [directory.get(str(value)) for value in ids]
     if kind == "classes":
         return all(row and row["group_type"] == "class" for row in rows)
-    return bool(subject) and all(row and row["group_type"] != "class"
-                                and subject_key(row["subject"]) == subject for row in rows)
+    return kind == "groups" and all(row and row["group_type"] != "class" for row in rows)
 
 
 def audit_resolved_notes(lesson, previous, remove, evidence, *, actor_user_id):
@@ -80,6 +81,6 @@ def read_active_scope_directory(database, ids):
         return {}
     marks = ",".join("?" for _ in ids)
     with database.connection() as connection:
-        rows = database.execute(connection, f"""SELECT id,group_type,subject FROM groups
+        rows = database.execute(connection, f"""SELECT id,group_type FROM groups
             WHERE canonical IS TRUE AND archived_at IS NULL AND CAST(id AS TEXT) IN ({marks})""", tuple(sorted(ids))).fetchall()
     return {str(row["id"]): dict(row) for row in rows}

@@ -4,6 +4,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from backend.services.constructor_publication import preview_publication
+from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import experiment_week_audience_preview, get_experiment, save_experiment
 from backend.services.schedule_normalization import normalization_preview
 from backend.tests import test_constructor_publication as fixtures
@@ -77,9 +78,10 @@ class OrdinarySaveValidationTests(TestCase):
 
     def test_explicit_class_preserves_other_reason_and_invalid_group_keeps_frozen_snapshot(self):
         draft, _ = self.stale_draft(note=LEGACY_MATH + "; " + UNKNOWN)
-        wrong = self.scope("Synthetic unrelated", "Биология", self.other_student)
+        invalid = self.scope("Synthetic archived", "Биология", self.other_student)
+        self.database.archive_admin_group(invalid, self.actor(), confirm_used=True)
         with self.assertRaisesRegex(ValueError, "Новый состав не подтверждён"):
-            self.edit(draft, lambda row: row.update(audience={"kind": "groups", "group_ids": [wrong]}), explicit=["stale"])
+            self.edit(draft, lambda row: row.update(audience={"kind": "groups", "group_ids": [invalid]}), explicit=["stale"])
         saved = get_experiment(self.database, draft["id"])
         self.assertEqual(saved["revision"], draft["revision"])
         self.assertEqual(saved["payload"], draft["payload"])
@@ -89,6 +91,100 @@ class OrdinarySaveValidationTests(TestCase):
         self.assertEqual(changed["editor_validation"][0]["status"], "audience_verified")
         self.assertEqual(row["clarificationReason"], UNKNOWN)
         self.assertTrue(row["needsClarification"])
+
+    def test_reaffirm_same_cross_subject_group_publishes_only_its_members(self):
+        draft, _ = self.stale_draft()
+        row = draft["payload"]["lessons"][0]
+        saved_roster = deepcopy(row["audience_snapshot"])
+        note_before = normalization_preview(draft)
+        self.assertEqual(note_before["retained_warning_count"], 1)
+        self.assertEqual(preview_publication(self.database, draft["id"], scope_kind="template",
+            expected_revision=draft["revision"])["summary"]["deferred_lessons"], 1)
+        edited = self.edit(draft, lambda row: None, explicit=["stale"])
+        kept = edited["payload"]["lessons"][0]
+        self.assertEqual(kept["subject"], "Русский язык")
+        self.assertEqual(kept["audience"], row["audience"])
+        self.assertEqual(kept["audience_snapshot"], saved_roster)
+        self.assertEqual(kept["edit_validation_history"][0]["retired"], LEGACY_MATH.split("; "))
+        self.assertEqual(normalization_preview(edited)["retained_warning_count"], 0)
+        self.publish(edited)
+        self.publish(edited, "week", week_start="2026-10-26")
+        activities = lambda person: [a["activity"] for a in canonical.project_student(
+            self.database, person["id"], "2026-10-26")["items"]]
+        self.assertIn("Русский язык", activities(self.student))
+        self.assertNotIn("Русский язык", activities(self.other_student))
+
+    def test_explicit_different_cross_subject_scope_and_compound_warning(self):
+        draft, _ = self.stale_draft(note=LEGACY_MATH + "; " + UNKNOWN)
+        candidate = self.scope("Synthetic biological subgroup", "Биология", self.other_student)
+        before = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        self.assertTrue(any(i["code"] == "review_required" and UNKNOWN in i["message"] for i in before["diagnostics"]))
+        saved = self.edit(draft, lambda row: row.update(audience={"kind": "groups", "group_ids": [candidate]},
+                                                     groupId=candidate, groupIds=[candidate]), explicit=["stale"])
+        row = saved["payload"]["lessons"][0]
+        self.assertEqual(row["audience"]["group_ids"], [candidate])
+        self.assertEqual(row["audience_snapshot"]["student_ids"], [str(self.other_student["id"])])
+        self.assertEqual(row["clarificationReason"], UNKNOWN)
+        self.assertEqual([r["reason"] for r in normalization_preview(saved)["retained_warnings"]], [UNKNOWN])
+        after = preview_publication(self.database, saved["id"], scope_kind="template", expected_revision=saved["revision"])
+        codes = [r["code"] for r in after["diagnostics"]]
+        self.assertNotIn("stale_group_subject_mismatch", codes)
+        self.assertIn("review_required", codes)
+
+    def test_reaffirming_old_scope_cannot_replace_frozen_members_after_drift(self):
+        draft, _ = self.stale_draft()
+        row = draft["payload"]["lessons"][0]
+        self.database.create_membership(row["audience"]["group_ids"][0], self.other_student["id"], "student", "synthetic")
+        saved = self.edit(draft, lambda row: None, explicit=["stale"])
+        stored = saved["payload"]["lessons"][0]
+        self.assertEqual(stored["audience_snapshot"], row["audience_snapshot"])
+        self.assertNotIn("clarificationReason", stored)
+        preview = preview_publication(self.database, saved["id"], scope_kind="template", expected_revision=saved["revision"])
+        self.assertIn("audience_unresolved", [entry["code"] for entry in preview["diagnostics"]])
+        self.assertEqual(preview["summary"]["deferred_lessons"], 1)
+
+    def test_missing_archived_and_empty_ids_never_resolve_by_a_matching_name(self):
+        for invalid_kind in ("missing", "archived", "empty"):
+            with self.subTest(invalid_kind=invalid_kind):
+                valid = self.scope("Active display namesake", "Русский язык", self.other_student)
+                group_id = valid
+                if invalid_kind == "missing":
+                    # An imported display string is not a stable group ID.
+                    group_id = "matching group display label"
+                    with self.database.connection() as c:
+                        self.database.execute(c, "UPDATE groups SET display_name=? WHERE id=?", (group_id, valid))
+                elif invalid_kind == "archived":
+                    self.database.archive_admin_group(valid, self.actor(), confirm_used=True)
+                    namesake = self.scope("New active group", "Русский язык", self.student)
+                    group_id = valid
+                    with self.database.connection() as c:
+                        self.database.execute(c, "UPDATE groups SET display_name='Archived namesake' WHERE id IN (?,?)", (valid, namesake))
+                else:
+                    with self.database.connection() as c:
+                        self.database.execute(c, "UPDATE memberships SET active=FALSE WHERE group_id=?", (valid,))
+                lesson = self.lesson(id="stale", subject="Русский язык", groupId=group_id, groupIds=[group_id],
+                    audience={"kind":"groups","group_ids":[group_id]}, needsClarification=True, clarificationReason=LEGACY_MATH)
+                draft = self.draft([lesson])
+                with self.assertRaisesRegex(ValueError, "Новый состав не подтверждён"):
+                    self.edit(draft, lambda row: None, explicit=["stale"])
+                self.assertEqual(get_experiment(self.database, draft["id"])["revision"], draft["revision"])
+                preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+                self.assertEqual(preview["summary"]["ready_lessons"], 0)
+                self.assertIn("audience_unresolved", [entry["code"] for entry in preview["diagnostics"]])
+
+    def test_cross_subject_group_reuse_still_reports_actual_student_overlap(self):
+        group = self.scope("Reusable math split", "Математика", self.student)
+        audience = {"kind": "groups", "group_ids": [group]}
+        draft = self.draft([
+            self.lesson(id="russian", subject="Русский язык", audience=audience),
+            self.lesson(id="art", subject="Пластика", audience=audience,
+                        teacherId=str(self.other_teacher["id"]), room="102"),
+        ])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        self.assertFalse(any(row["code"] == "stale_group_subject_mismatch" for row in preview["diagnostics"]))
+        conflicts = [row for row in preview["diagnostics"] if row["code"] == "student_overlap"]
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["affected_student_ids"], [str(self.student["id"])])
 
     def test_no_explicit_confirmation_does_not_change_legacy_or_frozen_members(self):
         draft, target = self.stale_draft()

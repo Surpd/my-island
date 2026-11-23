@@ -716,7 +716,7 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertNotIn("missing_teacher", codes)
         self.assertNotIn("missing_room", codes)
 
-    def test_stale_math_group_for_another_subject_is_deferred_as_reference_review(self):
+    def test_unverified_import_reference_is_deferred_without_subject_restrictions(self):
         stale_math = self.database.create_group("Synthetic math split", "subject_group", subject="Математика",
             subject_subgroup="1", base_class_name="9A")
         self.database.create_membership(stale_math["id"], self.student["id"], "student", "synthetic")
