@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from backend.database import Database
 from backend.config import get_settings
 from backend.handlers.api import GENERIC_PREVIEW_SCHOOL_MODE_DETAIL, create_router
+from backend.handlers.codex_diagnostic_api import PREFIX as DIAGNOSTIC_PREFIX, create_codex_diagnostic_router
+from backend.services.codex_diagnostics import bearer_token as diagnostic_bearer
 from backend.handlers.school_directory_api import create_school_directory_router
 from backend.services.auth import is_loopback_dev_auth_request
 from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
@@ -85,6 +87,11 @@ async def forward_admin_browser_session(request, call_next):
             )
             if (request.method, request.url.path) not in allowed_local_operations and not local_draft_operation:
                 return JSONResponse(status_code=403, content={"detail": "Local school mode is read-only"})
+    # A dedicated bearer is never treated as a human session, even if a
+    # request also carries an unrelated cookie or human header.
+    if diagnostic_bearer(request.headers.get("Authorization")) and not request.url.path.startswith(DIAGNOSTIC_PREFIX + "/"):
+        return JSONResponse({"detail": "Diagnostic session has no access to this route."}, status_code=403,
+                            headers={"Cache-Control": "no-store, private"})
     token = request.cookies.get("my_island_admin_session") or request.headers.get("X-Admin-Browser-Session")
     if token and not request.headers.get("X-Dev-Auth"):
         headers = list(request.scope.get("headers", []))
@@ -92,6 +99,7 @@ async def forward_admin_browser_session(request, call_next):
         request.scope["headers"] = headers
     return await call_next(request)
 
+app.include_router(create_codex_diagnostic_router(database))
 app.include_router(create_router(database))
 app.include_router(create_school_directory_router(database))
 app.include_router(create_constructor_publication_router(

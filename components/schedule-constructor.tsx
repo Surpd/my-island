@@ -57,7 +57,7 @@ import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './p
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
 
-const readOnlySchoolWorkspace = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_READ_ONLY_SCHOOL_WORKSPACE || '') === 'true';
+const environmentReadOnlySchoolWorkspace = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_READ_ONLY_SCHOOL_WORKSPACE || '') === 'true';
 const scheduleDataSourceLabel = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_DATA_SOURCE_LABEL || '');
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -653,7 +653,8 @@ function OnlineFormat({ byDay, checked, onChange }: { byDay: boolean; checked: b
       onChange={event => onChange(event.target.checked)} /> Этот урок проводится онлайн</label>;
 }
 
-export function ScheduleConstructor({ api }: { api: Api }) {
+export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; diagnostic?: boolean }) {
+  const readOnlySchoolWorkspace = environmentReadOnlySchoolWorkspace || diagnostic;
   const [workspace, setWorkspace] = useState<'demo' | 'school'>('demo');
   const workspaceRef = useRef<'demo' | 'school'>('demo');
   const [directoryAccess, setDirectoryAccess] = useState<'checking' | 'demo' | 'school'>('checking');
@@ -996,7 +997,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       if (comparisonOnly && !value.payload?.school_source?.term2_preparation?.comparison?.items.length) return false;
       let recovered: LocalDraftRecovery | null = null;
       try {
-        const stored = window.localStorage.getItem(recoveryKey(workspace, id));
+        const stored = diagnostic ? null : window.localStorage.getItem(recoveryKey(workspace, id));
         if (stored) {
           const parsed = JSON.parse(stored) as LocalDraftRecovery;
           if (parsed.id === id && parsed.payload && Array.isArray(parsed.payload.lessons)) recovered = parsed;
@@ -1149,6 +1150,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     } catch (error) { setStatus(String((error as Error).message || error)); }
   };
   const mutate = (change: (payload: Payload) => Payload, checkBaseline = false) => {
+    if (diagnostic) return;
     setDraft((current) => {
       if (!current) return current;
       const next = change(current.payload);
@@ -1200,6 +1202,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     setDirty(true);
   };
   const save = async () => {
+    if (diagnostic) return !dirty;
     const current = draftRef.current;
     if (!current || savingRef.current || !dirty) return !dirty;
     const termComparisonKey = route?.origin === 'comparison' && comparisonFocus?.draftId === current.id
@@ -1453,10 +1456,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     }
   };
   useEffect(() => {
-    if (!draft || !dirty) return;
+    if (diagnostic || !draft || !dirty) return;
     const recovery: LocalDraftRecovery = { id: draft.id, revision: revision.current, name: draft.name, payload: draft.payload, base: baseDraftRef.current };
     try { window.localStorage.setItem(recoveryKey(workspace, draft.id), JSON.stringify(recovery)); } catch { /* The in-memory draft and unload guard remain active. */ }
-  }, [draft, dirty, workspace]);
+  }, [draft, dirty, workspace, diagnostic]);
   useEffect(() => {
     const before = (event: BeforeUnloadEvent) => {
       if (dirty) event.preventDefault();
@@ -3171,13 +3174,14 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             >
               {workspace === 'school' ? 'К шаблону и неделям' : 'Все черновики'}
             </button>
-            <button type="button" onClick={() => { setLabReturn(undefined); setLaboratoriesOpen(true); }}>Лаборатории</button>
-            <button type="button" disabled={dirty || saving} onClick={() => setExportOpen(true)}>Подготовить экспорт в Google Sheets</button>
+            {!diagnostic && <button type="button" onClick={() => { setLabReturn(undefined); setLaboratoriesOpen(true); }}>Лаборатории</button>}
+            {!diagnostic && <button type="button" disabled={dirty || saving} onClick={() => setExportOpen(true)}>Подготовить экспорт в Google Sheets</button>}
             {workspace !== 'school' ? <><input type="date" aria-label="Понедельник новой недели" value={newWeekStart} onChange={(event) => setNewWeekStart(event.target.value)} /><button onClick={() => void createWeek()} disabled={dirty || saving || !newWeekStart}>Создать неделю</button></> : null}
 
             <input
               aria-label="Название черновика"
               value={draft.name}
+              readOnly={diagnostic}
               onChange={(event) => {
                 changeVersion.current++;
                 setSaveFailed(false);

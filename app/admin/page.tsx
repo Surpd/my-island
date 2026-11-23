@@ -155,6 +155,70 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+const diagnosticStorage = 'my_island_codex_read_session';
+type AdminApi = <T>(path: string, init?: RequestInit) => Promise<T>;
+
+async function diagnosticFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}/api/diagnostics${path}`, { ...init, credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', redirect: 'error' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(typeof (data as Record<string, unknown>)?.detail === 'string' ? String((data as Record<string, unknown>).detail) : 'Диагностический запрос недоступен.') as ApiError;
+    error.status = response.status;
+    throw error;
+  }
+  return data as T;
+}
+
+function diagnosticHeaders() {
+  return { Authorization: `Bearer ${window.sessionStorage.getItem(diagnosticStorage) || ''}` };
+}
+
+async function diagnosticApi<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!path.startsWith('/api/admin/') || (init?.method || 'GET').toUpperCase() !== 'GET') {
+    throw new Error('Диагностический режим: доступно только чтение.');
+  }
+  try {
+    return await diagnosticFetch<T>(`/view/${path.slice('/api/admin/'.length)}`, { signal: init?.signal, headers: diagnosticHeaders() });
+  } catch (error) {
+    if ([401, 404].includes((error as ApiError).status || 0)) {
+      // Check a 404 from a legitimate view before deciding the session expired.
+      try { await diagnosticFetch('/session', { headers: diagnosticHeaders() }); }
+      catch (sessionError) {
+        if ([401, 404].includes((sessionError as ApiError).status || 0)) {
+          window.sessionStorage.removeItem(diagnosticStorage); location.replace('/admin/diagnostics');
+        }
+      }
+    }
+    throw error;
+  }
+}
+
+function DiagnosticLogin({ onLoggedIn }: { onLoggedIn: () => void }) {
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const submit = async (event: SyntheticEvent) => {
+    event.preventDefault(); setBusy(true); setError('');
+    try {
+      const result = await diagnosticFetch<{ token: string }>('/exchange', {
+        method: 'POST', headers: { 'X-My-Island-Diagnostic-Key': key.trim() },
+      });
+      window.sessionStorage.setItem(diagnosticStorage, result.token);
+      setKey(''); onLoggedIn();
+    } catch (cause) { setKey(''); setError(friendlyError(cause)); }
+    finally { setBusy(false); }
+  };
+  return <main className="admin-login"><section className="admin-login-card">
+    <p className="admin-eyebrow">MY ISLAND / CODEX</p><h1>Диагностический вход</h1>
+    <p>Только просмотр. Имена учеников, оценки и ссылки на исходные таблицы скрыты.</p>
+    <form onSubmit={submit}><label>Диагностический ключ<input type="password" autoComplete="off" spellCheck={false}
+      value={key} onChange={event => setKey(event.target.value)} /></label>
+      {error && <p role="alert">{error}</p>}
+      <button className="admin-button admin-button--primary" disabled={busy || !key.trim()}>Войти для диагностики</button>
+    </form><a href="/admin">Обычный вход администратора</a>
+  </section></main>;
+}
+
 async function schoolApi<T>(path: string, init?: RequestInit): Promise<T> {
   const schoolPath = path.replace(/^\/api\/admin\/(groups|people|identities|memberships|teacher-assignments)(?=\/|\?|$)/, '/api/admin/school/$1');
   const headers = new Headers(init?.headers);
@@ -279,7 +343,7 @@ function Login({ onLoggedIn }: { onLoggedIn: (session: Session) => void }) {
   return <main className="admin-login"><div className="admin-login-card"><div className="admin-logo">MI</div><p className="admin-eyebrow">MY ISLAND / АДМИН</p><span className="admin-data-source">{dataSourceLabel}</span><h1>Вход в панель администратора</h1><p>Получите одноразовый код через Telegram-бота, затем введите его здесь. Код действует ограниченное время и используется один раз.</p><form onSubmit={submit}><label>Одноразовый код<input name="code" autoComplete="one-time-code" spellCheck={false} autoCapitalize="none" value={code} onChange={(event) => setCode(event.target.value)} placeholder="Вставьте код" /></label>{error && <div role="alert" className="admin-form-error">{error}</div>}<button className="admin-button admin-button--primary" disabled={busy || !code.trim()}>{busy ? 'Проверяем…' : 'Войти безопасно'}</button></form><small>Для входа ученика или преподавателя откройте My Island через Telegram.</small></div></main>;
 }
 
-function Sidebar({ path, navigate, onLogout }: { path: string; navigate: (href: string) => void; onLogout: () => void }) {
+function Sidebar({ path, navigate, onLogout, diagnostic = false }: { path: string; navigate: (href: string) => void; onLogout: () => void; diagnostic?: boolean }) {
   const [pinned, setPinned] = useState(false);
   const [hovered, setHovered] = useState(false);
   const menuRef = useRef<HTMLDialogElement>(null);
@@ -295,7 +359,7 @@ function Sidebar({ path, navigate, onLogout }: { path: string; navigate: (href: 
     <div className="admin-console-brand"><div className="admin-logo admin-logo--small" aria-hidden="true">MI</div><div><strong>My Island<span className="campus-wordmark-dot" aria-hidden="true">.</span></strong><small>Школьное пространство</small><small className="admin-data-source">{dataSourceLabel}</small></div>{compactRoute ? <button className="constructor-sidebar-pin" aria-label={pinned ? 'Открепить меню' : 'Закрепить меню'} title={pinned ? 'Открепить меню' : 'Закрепить меню'} onClick={() => setPinned((value) => !value)}><Pin size={15} /></button> : null}</div>
     <button className="campus-mobile-menu-button" aria-label="Все разделы" aria-haspopup="dialog" onClick={() => menuRef.current?.showModal()}><Menu size={20} /><span>Все разделы</span></button>
     <nav aria-label="Основные разделы">{nav.map((item) => { const Icon = item.icon; return <button key={item.href} title={item.label} aria-label={item.label} aria-current={active(item.href) ? 'page' : undefined} className={active(item.href) ? 'is-active' : ''} onClick={() => navigate(item.href)}><Icon size={18} /><span>{item.label}</span>{active(item.href) && <ChevronRight size={14} />}</button>; })}</nav>
-    <div className="admin-console-sidebar__footer"><span>Администратор</span><button onClick={onLogout}><LogOut size={16} /> Выйти</button></div>
+    <div className="admin-console-sidebar__footer"><span>{diagnostic ? 'Codex · чтение' : 'Администратор'}</span><button onClick={onLogout}><LogOut size={16} /> Выйти</button></div>
     <dialog ref={menuRef} className="campus-mobile-menu" aria-labelledby="campus-menu-title"><div className="campus-menu-heading"><div><h2 id="campus-menu-title">Разделы школы</h2><p>{dataSourceLabel}</p></div><button aria-label="Закрыть меню" onClick={() => menuRef.current?.close()}><X size={22} /></button></div><nav aria-label="Все разделы школы"><section><h3>Основные разделы</h3>{nav.map((item) => { const Icon = item.icon; return <button key={item.href} aria-current={active(item.href) ? 'page' : undefined} onClick={() => mobileNavigate(item.href)}><Icon size={19} /><span>{item.label}</span><ChevronRight size={15} /></button>; })}</section></nav><button className="campus-menu-logout" onClick={onLogout}><LogOut size={18} /> Выйти</button></dialog>
   </aside>;
 }
@@ -305,7 +369,7 @@ function Header({ path, navigate }: { path: string; navigate: (href: string) => 
   return <header className="admin-console-header"><div><div className="admin-breadcrumb"><button onClick={() => navigate('/admin')}>Админ</button><ChevronRight size={13} /><span>{path === '/admin' ? 'Сегодня' : title}</span></div><h1>{title}</h1></div><div className="admin-console-header__meta"><span className="campus-session-avatar" aria-hidden="true">А</span><span>Администратор</span></div></header>;
 }
 
-function Overview({ navigate }: { navigate: (href: string) => void }) {
+function Overview({ navigate, request = api }: { navigate: (href: string) => void; request?: AdminApi }) {
   const [state, setState] = useState<{ loading: boolean; error?: unknown; overview?: RecordValue; schedule?: RecordValue; scheduleDrafts?: RecordValue[] }>({ loading: true });
   const today = new Date();
   const monday = new Date(today);
@@ -314,9 +378,9 @@ function Overview({ navigate }: { navigate: (href: string) => void }) {
   const load = () => {
     setState({ loading: true });
     Promise.allSettled([
-      api<RecordValue>('/api/admin/overview'),
-      api<RecordValue>(`/api/admin/schedule/overview?week_start=${weekStart}`),
-      api<{ items: RecordValue[] }>('/api/admin/schedule/experiments/school'),
+      request<RecordValue>('/api/admin/overview'),
+      request<RecordValue>(`/api/admin/schedule/overview?week_start=${weekStart}`),
+      request<{ items: RecordValue[] }>('/api/admin/schedule/experiments/school'),
     ]).then(([overview, schedule, drafts]) => {
       if (overview.status === 'rejected') {
         setState({ loading: false, error: overview.reason });
@@ -355,11 +419,11 @@ function Overview({ navigate }: { navigate: (href: string) => void }) {
   </div>;
 }
 
-function System() {
+function System({ request = api }: { request?: AdminApi }) {
   const [state, setState] = useState<{ loading: boolean; error?: unknown; data?: RecordValue }>({ loading: true });
   const load = () => {
     setState({ loading: true });
-    api<RecordValue>('/api/admin/system').then(data => setState({ loading: false, data })).catch(error => setState({ loading: false, error }));
+    request<RecordValue>('/api/admin/system').then(data => setState({ loading: false, data })).catch(error => setState({ loading: false, error }));
   };
   useEffect(load, []);
   if (state.loading) return <Loading />;
@@ -370,11 +434,11 @@ function System() {
     <section className="admin-panel"><div className="admin-panel__heading"><h2>Backend и школьная база</h2><Status value={data.health?.schema_status} /></div>
       <dl className="admin-definition-list"><dt>Backend</dt><dd><Status value="healthy" /> доступен</dd><dt>Школьная база</dt><dd>{data.settings?.database_configured ? 'Подключена' : 'Локальный режим'}</dd></dl>
     </section>
-    <GoogleConnectionCard api={api} apiOrigin={API_BASE} />
+    <GoogleConnectionCard api={request} apiOrigin={API_BASE} />
   </div>;
 }
 
-function ResponsiveSchedule() {
+function ResponsiveSchedule({ request = api, diagnostic = false }: { request?: AdminApi; diagnostic?: boolean } = {}) {
   const [mobile, setMobile] = useState<boolean | null>(null);
   const [editor, setEditor] = useState(() => {
     const query = routeQuery();
@@ -389,28 +453,33 @@ function ResponsiveSchedule() {
   if (mobile === null) return <Loading />;
   return (
     <div className={mobile ? 'admin-stack responsive-schedule responsive-schedule--mobile' : 'responsive-schedule'}>
-      <button hidden={!mobile} className="admin-button admin-button--quiet" onClick={() => setEditor((value) => !value)}>
+      <button hidden={!mobile || diagnostic} className="admin-button admin-button--quiet" onClick={() => setEditor((value) => !value)}>
         {editor ? 'Просмотр опубликованного расписания' : 'Открыть редактор и разбор проблем'}
       </button>
       <div hidden={mobile && !editor}>
-        <ScheduleConstructor api={api} />
+        <ScheduleConstructor api={request} diagnostic={diagnostic} />
       </div>
-      {mobile && !editor ? <MobilePublishedSchedule api={api} /> : null}
+      {mobile && !editor ? <MobilePublishedSchedule api={request} /> : null}
     </div>
   );
 }
 
-function AppContent({ path, navigate }: { path: string; navigate: (href: string) => void }) {
-  if (path === '/admin/preview') return <MiniappPreview key={`${routeQuery().get('identity_id') || ''}:${routeQuery().get('kind') || ''}`} api={api} sourceLabel={dataSourceLabel} initialIdentity={routeQuery().get('identity_id') || ''} initialKind={routeQuery().get('kind') || 'student'} initialDay={routeQuery().get('day') || ''} localAdmin={Boolean(localDevAuth())} />;
-  if (path === '/admin/teachers') return <TeacherDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} schoolMode={schoolMode} navigate={navigate} />;
-  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={schoolMode ? schoolApi : api} section="groups" navigate={navigate} schoolMode={schoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
-  if (path === '/admin/schedule/published') return <MobilePublishedSchedule api={api} initialWeekStart={routeQuery().get('week_start') || undefined} />;
-  if (path === '/admin/schedule/constructor') return <ResponsiveSchedule />;
-  if (path === '/admin/schedule') return <ResponsiveSchedule />;
-  if (path === '/admin/journals') return <AdminJournals api={api} apiOrigin={API_BASE} />;
-  if (path === '/admin/settings') return <System />;
-  if (path === '/admin/system') return <System />;
-  return <Overview navigate={navigate} />;
+function AppContent({ path, navigate, diagnostic = false }: { path: string; navigate: (href: string) => void; diagnostic?: boolean }) {
+  const request = diagnostic ? diagnosticApi : api;
+  const directoryRequest = diagnostic ? diagnosticApi : schoolMode ? schoolApi : api;
+  const directorySchoolMode = diagnostic || schoolMode;
+  if (diagnostic && path === '/admin/schedule/published') return <ResponsiveSchedule request={request} diagnostic />;
+
+  if (path === '/admin/preview') return <MiniappPreview key={`${routeQuery().get('identity_id') || ''}:${routeQuery().get('kind') || ''}`} api={request} sourceLabel={dataSourceLabel} initialIdentity={diagnostic ? '' : routeQuery().get('identity_id') || ''} initialKind={routeQuery().get('kind') || 'student'} initialDay={routeQuery().get('day') || ''} localAdmin={!diagnostic && Boolean(localDevAuth())} />;
+  if (path === '/admin/teachers') return <TeacherDirectoryAdmin connectionLabel={dataSourceLabel} api={directoryRequest} schoolMode={directorySchoolMode} navigate={navigate} />;
+  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={directoryRequest} section="groups" navigate={navigate} schoolMode={directorySchoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
+  if (path === '/admin/schedule/published') return <MobilePublishedSchedule api={request} initialWeekStart={routeQuery().get('week_start') || undefined} />;
+  if (path === '/admin/schedule/constructor') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
+  if (path === '/admin/schedule') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
+  if (path === '/admin/journals') return <AdminJournals api={request} apiOrigin={API_BASE} readOnly={diagnostic} />;
+  if (path === '/admin/settings') return <System request={request} />;
+  if (path === '/admin/system') return <System request={request} />;
+  return <Overview navigate={navigate} request={request} />;
 }
 
 export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedSession?: Session; onRoleChange?: (role: CampusRole) => void } = {}) {
@@ -418,11 +487,26 @@ export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedS
   const { path, navigate } = useRoute();
   const [session, setSession] = useState<Session | null>(embeddedSession || null);
   const [checking, setChecking] = useState(true);
+  const [diagnostic, setDiagnostic] = useState(false);
+  const [diagnosticEntry, setDiagnosticEntry] = useState(false);
   const [connectionError, setConnectionError] = useState<unknown>(null);
   useEffect(() => {
     if (embeddedSession) { setSession(embeddedSession); setChecking(false); return; }
     let active = true;
     const check = async () => {
+      if (routeFromLocation() === '/admin/diagnostics') {
+        if (active) { setDiagnosticEntry(true); setChecking(false); }
+        return;
+      }
+      if (window.sessionStorage.getItem(diagnosticStorage)) {
+        try {
+          await diagnosticFetch('/session', { headers: diagnosticHeaders() });
+          if (active) { setDiagnostic(true); setChecking(false); }
+        } catch {
+          if (active) { window.sessionStorage.removeItem(diagnosticStorage); location.replace('/admin/diagnostics'); }
+        }
+        return;
+      }
       // Direct Telegram launches may hydrate before the SDK script arrives.
       if (!localDevAuth() && !window.sessionStorage.getItem('my_island_admin_session')) {
         const deadline = Date.now() + 3000;
@@ -441,12 +525,20 @@ export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedS
     if (onRoleChange) { onRoleChange(role); return; }
     window.location.assign(`/?role=${encodeURIComponent(role)}`);
   };
-  const logout = async () => { await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); window.sessionStorage.removeItem('my_island_telegram_init_data'); setSession(null); };
+  const logout = async () => {
+    if (diagnostic) {
+      await diagnosticFetch('/logout', { method: 'POST', headers: diagnosticHeaders() }).catch(() => undefined);
+      window.sessionStorage.removeItem(diagnosticStorage); location.replace('/admin/diagnostics'); return;
+    }
+    await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); window.sessionStorage.removeItem('my_island_telegram_init_data'); setSession(null); };
   if (checking) return <main className="admin-login"><Loading /></main>;
   if (connectionError) return <main className="admin-login"><div className="admin-login-card"><span className="admin-data-source">{dataSourceLabel}</span><ErrorState error={connectionError} onRetry={() => window.location.reload()} /></div></main>;
-  if (!session) return <Login onLoggedIn={setSession} />;
+  if (diagnosticEntry && !diagnostic) return <DiagnosticLogin onLoggedIn={() => {
+    setDiagnostic(true); setDiagnosticEntry(false); navigate('/admin');
+  }} />;
+  if (!session && !diagnostic) return <Login onLoggedIn={setSession} />;
   const modernWorkspace = ['/admin', '/admin/people', '/admin/people/groups', '/admin/teachers', '/admin/settings', '/admin/system', '/admin/preview', '/admin/schedule/constructor'].includes(path);
-  return <div className={`admin-console campus-shell ${modernWorkspace ? 'admin-workspace' : ''} ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''} ${path === '/admin/journals' ? 'admin-console--journals' : ''}`}>{modernWorkspace ? <a className="admin-skip-link" href="#admin-content">Перейти к содержимому</a> : null}<Sidebar path={path} navigate={navigate} onLogout={() => void logout()} /><main id="admin-content" tabIndex={-1} className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} /> : null}<div className="admin-role-toolbar"><CampusRoleSwitch roles={session.roles || [session.role]} value="admin" onChange={switchRole} /></div><AppContent path={path} navigate={navigate} /></main></div>;
+  return <div className={`admin-console campus-shell ${modernWorkspace ? 'admin-workspace' : ''} ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''} ${path === '/admin/journals' ? 'admin-console--journals' : ''}`}>{modernWorkspace ? <a className="admin-skip-link" href="#admin-content">Перейти к содержимому</a> : null}<Sidebar path={path} navigate={navigate} diagnostic={diagnostic} onLogout={() => void logout()} /><main id="admin-content" tabIndex={-1} className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} /> : null}{diagnostic ? <p role="status" className="admin-panel">Диагностика Codex · только чтение. Личные данные и внешние ссылки скрыты. Пустой список может означать ограничение доступа.</p> : session ? <div className="admin-role-toolbar"><CampusRoleSwitch roles={session.roles || [session.role]} value="admin" onChange={switchRole} /></div> : null}<AppContent path={path} navigate={navigate} diagnostic={diagnostic} /></main></div>;
 }
 
 
