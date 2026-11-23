@@ -74,3 +74,51 @@ test('all five retired schedule mutations reject direct HTTP', async ({ request 
     expect(response.status(), `${item.method} ${item.path}`).toBe(410);
   }
 });
+
+test('school save verifies a corrected stale audience without rewriting the neighboring lesson', async ({ page }) => {
+  test.skip(!consolidation, 'Requires the isolated synthetic school workspace, not the demo API');
+  const directoryResponse = await page.request.get(API + '/api/admin/schedule/experiments/school/directory', { headers: admin });
+  expect(directoryResponse.ok()).toBeTruthy();
+  const { groups, teachers } = await directoryResponse.json();
+  const oldGroup = groups.find((group: { subject: string; group_type: string }) => group.subject === 'Математика' && group.group_type !== 'class');
+  const targetClass = groups.find((group: { group_type: string; name: string; display_name?: string }) => group.group_type === 'class'
+    && [group.name, group.display_name].includes(oldGroup?.base_class_name));
+  expect(oldGroup).toBeTruthy();
+  expect(targetClass).toBeTruthy();
+  const classId = targetClass.id;
+  const lessonId = 'synthetic-correct-stale-audience';
+  const note = 'Для этого предмета не подтверждена учебная группа; прежняя математическая группа удалена';
+  const unresolved = 'Неоднозначная исходная ячейка';
+  const draftName = 'Синтетический тест · проверка состава после сохранения';
+  const endpoint = '/api/admin/schedule/experiments/school';
+  const teacherId = teachers[0].id;
+  const common = { day: 0, kind: 'lesson', activityType: 'lesson', classId, classIds: [classId], teacherId, teacherIds: [teacherId], room: '17' };
+  const created = await page.request.post(API + endpoint, { headers: admin, data: { name: draftName, source: 'empty', payload: {
+    classes: [classId], days: [0], slots: [{ start: '09:00', end: '09:45' }, { start: '10:00', end: '10:45' }],
+    lessons: [
+      { ...common, id: lessonId, period: 0, subject: 'Русский язык', groupId: oldGroup.id, groupIds: [oldGroup.id],
+        audience: { kind: 'groups', group_ids: [oldGroup.id] }, needsClarification: true, clarificationReason: note },
+      { ...common, id: 'untouched', period: 1, subject: 'Физика', groupId: classId, groupIds: [classId],
+        audience: { kind: 'classes', class_ids: [classId] }, needsClarification: true, clarificationReason: unresolved },
+    ],
+  } } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const draft = await created.json();
+  const savePath = endpoint + '/' + draft.id;
+  await page.goto(`/admin/schedule/constructor?${new URLSearchParams({ role: 'admin', draft: draft.id, lesson: lessonId })}`);
+  const editor = page.locator('.constructor-inspector');
+  await expect(editor.getByRole('heading', { name: 'Русский язык', exact: true })).toBeVisible();
+  await editor.getByRole('button', { name: /Весь класс или параллель/ }).click();
+  const response = page.waitForResponse(item => item.request().method() === 'PUT' && new URL(item.url()).pathname === savePath);
+  await editor.getByRole('button', { name: 'Сохранить правку', exact: true }).click();
+  const saved = await response;
+  expect(saved.ok(), await saved.text()).toBeTruthy();
+  expect(saved.request().postDataJSON().editor_audience_changes).toEqual([lessonId]);
+  expect((await saved.json()).editor_validation).toEqual([expect.objectContaining({ lesson_id: lessonId, status: 'audience_verified' })]);
+  const reopened = await page.request.get(API + savePath, { headers: admin });
+  const { payload } = await reopened.json();
+  expect(payload.lessons[0].needsClarification).not.toBe(true);
+  expect(payload.lessons[0].clarificationReason || '').not.toContain('прежняя математическая группа удалена');
+  expect(payload.lessons[0].audience_snapshot.student_ids.length).toBeGreaterThan(0);
+  expect(payload.lessons[1]).toEqual(draft.payload.lessons[1]);
+});

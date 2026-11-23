@@ -489,6 +489,7 @@ export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedS
   const [checking, setChecking] = useState(true);
   const [diagnostic, setDiagnostic] = useState(false);
   const [diagnosticEntry, setDiagnosticEntry] = useState(false);
+  const [diagnosticLogoutError, setDiagnosticLogoutError] = useState(false);
   const [connectionError, setConnectionError] = useState<unknown>(null);
   useEffect(() => {
     if (embeddedSession) { setSession(embeddedSession); setChecking(false); return; }
@@ -527,7 +528,11 @@ export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedS
   };
   const logout = async () => {
     if (diagnostic) {
-      await diagnosticFetch('/logout', { method: 'POST', headers: diagnosticHeaders() }).catch(() => undefined);
+      setDiagnosticLogoutError(false);
+      try { await diagnosticFetch('/logout', { method: 'POST', headers: diagnosticHeaders() }); }
+      catch (error) {
+        if (![401, 404].includes((error as ApiError).status || 0)) { setDiagnosticLogoutError(true); return; }
+      }
       window.sessionStorage.removeItem(diagnosticStorage); location.replace('/admin/diagnostics'); return;
     }
     await api('/api/admin/auth/logout', { method: 'POST' }).catch(() => undefined); window.sessionStorage.removeItem('my_island_admin_session'); window.sessionStorage.removeItem('my_island_telegram_init_data'); setSession(null); };
@@ -538,7 +543,7 @@ export default function AdminPage({ embeddedSession, onRoleChange }: { embeddedS
   }} />;
   if (!session && !diagnostic) return <Login onLoggedIn={setSession} />;
   const modernWorkspace = ['/admin', '/admin/people', '/admin/people/groups', '/admin/teachers', '/admin/settings', '/admin/system', '/admin/preview', '/admin/schedule/constructor'].includes(path);
-  return <div className={`admin-console campus-shell ${modernWorkspace ? 'admin-workspace' : ''} ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''} ${path === '/admin/journals' ? 'admin-console--journals' : ''}`}>{modernWorkspace ? <a className="admin-skip-link" href="#admin-content">Перейти к содержимому</a> : null}<Sidebar path={path} navigate={navigate} diagnostic={diagnostic} onLogout={() => void logout()} /><main id="admin-content" tabIndex={-1} className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} /> : null}{diagnostic ? <p role="status" className="admin-panel">Диагностика Codex · только чтение. Личные данные и внешние ссылки скрыты. Пустой список может означать ограничение доступа.</p> : session ? <div className="admin-role-toolbar"><CampusRoleSwitch roles={session.roles || [session.role]} value="admin" onChange={switchRole} /></div> : null}<AppContent path={path} navigate={navigate} diagnostic={diagnostic} /></main></div>;
+  return <div className={`admin-console campus-shell ${modernWorkspace ? 'admin-workspace' : ''} ${path.startsWith('/admin/schedule') ? 'admin-console--schedule' : ''} ${path === '/admin/schedule/constructor' ? 'admin-console--constructor' : ''} ${path === '/admin/journals' ? 'admin-console--journals' : ''}`}>{modernWorkspace ? <a className="admin-skip-link" href="#admin-content">Перейти к содержимому</a> : null}<Sidebar path={path} navigate={navigate} diagnostic={diagnostic} onLogout={() => void logout()} /><main id="admin-content" tabIndex={-1} className="admin-console-main">{!path.startsWith('/admin/schedule') ? <Header path={path} navigate={navigate} /> : null}{diagnostic ? <p role="status" className="admin-panel">Диагностика Codex · только чтение. Личные данные и внешние ссылки скрыты. Пустой список может означать ограничение доступа.</p> : session ? <div className="admin-role-toolbar"><CampusRoleSwitch roles={session.roles || [session.role]} value="admin" onChange={switchRole} /></div> : null}<>{diagnosticLogoutError && <p role="alert">Сервер не подтвердил выход. Повторите выход; сессия также истечёт автоматически.</p>}<AppContent path={path} navigate={navigate} diagnostic={diagnostic} /></></main></div>;
 }
 
 

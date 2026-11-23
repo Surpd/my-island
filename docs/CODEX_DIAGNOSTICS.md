@@ -61,11 +61,34 @@ Require HTTPS and reject redirects when supplying the long-lived key.
 
 The [OpenAI Vault documentation](https://developers.openai.com/api/docs/guides/agents-api/tools/vaults)
 describes outbound header substitution for supported hosted sessions. This
-cannot reveal the stored value for pasting into a browser input. Browser login
-requires a trusted, separately authorized credential holder; if the current
-Codex environment lacks supported Vault delivery, do not work around it by
-sending secrets to the agent. No live Vault/browser provisioning was part of
-this implementation.
+cannot reveal the stored value for pasting into a browser input. For an
+authorized Playwright process sharing the network-enabled environment, the
+process can exchange using the network credential without exposing that key
+to Chromium. It may pass only the returned 15-minute bearer directly to a
+same-origin, single-tab bootstrap in memory, then load the existing `/admin`
+UI. Restrict the bootstrap to the exact approved Sites origin and main frame;
+do not place either credential in code, URLs, traces, snapshots, screenshots,
+tool output or inherited browser contexts. Use a fresh browser context and
+revoke the session when finished. Diagnostic requests send no cookies; Sites
+and Render are different origins, so third-party cookie behavior is irrelevant.
+
+An unrelated hosted browser or the hidden browser tool cannot be assumed to
+share the network Vault or that Playwright context. This implementation does
+not assert that such a browser can sign in unattended. Its supported fallback
+is owner-driven entry in the dedicated password form using the trusted
+credential manager, not posting a key to Codex. Independently confirm both the
+allowed Render HTTPS hostname and Sites CORS origin before activating. No
+live Vault/browser provisioning was part of this implementation.
+
+### Verification
+
+Use the usual E2E runner with an owned synthetic workspace:
+`MY_ISLAND_E2E_VERIFY_DIAGNOSTICS=1 node scripts/run-e2e.mjs e2e/codex-diagnostic-login.spec.ts`.
+The runner generates a disposable key in memory, deliberately strips any
+production diagnostic configuration, and gives its isolated API only the
+synthetic verifier. The real-transport scenario checks browser CORS, legacy
+authority separation, write/read denials, logout revocation and human auth
+parity. Nothing is written to a school deployment.
 
 ## Boundary for future changes
 

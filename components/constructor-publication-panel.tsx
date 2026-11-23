@@ -1,13 +1,14 @@
 'use client';
 
-import {useEffect, useEffectEvent, useRef, useState} from 'react';
+import {useEffect, useEffectEvent, useLayoutEffect, useRef, useState} from 'react';
 import { ArrowRight, ChevronDown, X } from 'lucide-react';
 import Link from 'next/link';
 import { normalizeRoomDisplay } from './schedule-rooms';
 import { formatLessonTimeRange } from './lesson-time';
+import { readableReviewNote } from './constructor-review-language';
 import './constructor-publication-panel.css';
 import {
-  ConstructorLegacyReview, ConstructorRosterReview,
+  ConstructorLegacyReview, ConstructorRosterReview, ReviewDisclosure,
   type NormalizationCopy, type NormalizationPreview, type RosterPreview, type RosterScope,
 } from './constructor-review-fixes';
 
@@ -137,12 +138,6 @@ function diagnosticText(issue: Diagnostic): IssueText {
     : { type: 'record', title: 'Запись требует проверки', guidance: 'Сверьте данные записи с текущим расписанием.' });
 }
 
-function readableNote(message?: string) {
-  const text = message?.trim() || '';
-  if (!/[а-яё]/iu.test(text) || /[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|\b(?:canonical|campus-?projection|blockId|teacherId|lesson_id|[a-z]+_[a-z_]+)\b/i.test(text)) return '';
-  return text;
-}
-
 function safeNames(values: string[] | undefined, directory: Record<string, string> = {}) {
   return [...new Set((values || []).map(value => directory[value] || value).filter(value =>
     value.trim() && !/^(?:[a-z]+[a-z\d]*[-_][a-z\d_-]+|[a-z\d_-]+:\S+|[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12})$/i.test(value),
@@ -251,7 +246,7 @@ function storedDiagnostics(item:Publication) { return item.diagnostics||item.pre
 function storedDeferred(item:Publication) { return item.deferred||item.preview?.deferred||item.preview_metadata?.deferred||item.metadata?.deferred||[]; }
 
 export function ConstructorPublicationPanel({
-  api, draftId, revision, draftName, weekStart, dirty, readOnly, publicationEnabled, mode, day, classId, classLabel,
+  api, draftId, revision, draftName, weekStart, dirty, readOnly, publicationEnabled, mode, suspended = false, day, classId, classLabel,
   onClose, onSave, onRostersUpdated, onNormalizedCopy, onPublished, onOpenLesson,
   teacherNames, groupNames, studentNames = {}, lessonLabels, lessonDetails = {}, localIssues = [],
   onOpenComparison, onOpenGridDecisions, onResolveIssue, initialFilter,
@@ -265,6 +260,7 @@ export function ConstructorPublicationPanel({
   readOnly: boolean;
   publicationEnabled: boolean;
   mode: 'review' | 'history';
+  suspended?: boolean;
   day: number;
   classId?: string;
   classLabel?: string;
@@ -318,8 +314,16 @@ export function ConstructorPublicationPanel({
   const [classFilter, setClassFilter] = useState(initialFilter ? '' : initialView?.classFilter || '');
   const [typeFilter, setTypeFilter] = useState(initialFilter ? '' : initialView?.typeFilter || '');
   const [selectedKey, setSelectedKey] = useState<string | null>(initialFilter ? null : initialView?.selectedKey || null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useLayoutEffect(() => {
+    const node = dialog.current;
+    if (!node) return;
+    if (suspended && node.open) node.close();
+    else if (!suspended && !node.open) node.showModal();
+  }, [suspended]);
   const scrollBody = useRef<HTMLDivElement | null>(null);
   const restoreView = useRef(!initialFilter ? initialView : undefined);
+  const returningControl = useRef<HTMLElement | null>(null);
   const selectedControl = useRef<HTMLButtonElement | null>(null);
   const [restore,setRestore] = useState<{publication:Publication; expected_head_revision:number; preview:{preview_token:string;can_restore:boolean;blockers:{message:string}[];diff:Preview['diff']}}|null>(null);
   const [restoreConfirmed,setRestoreConfirmed] = useState(false);
@@ -376,7 +380,7 @@ export function ConstructorPublicationPanel({
     )).map(blocker => ({ ...blocker, severity: 'critical' as const })),
   ] : localIssues.map(localDiagnostic);
   const currentRosters = rosters?.revision === revision ? rosters : null;
-  const currentLegacy = legacy?.source_revision === revision ? legacy : null;
+  const currentLegacy = legacy?.source_id === draftId && legacy.source_revision === revision ? legacy : null;
   const rosterIssues: Diagnostic[] = (currentRosters?.lessons || [])
     .filter(lesson => lesson.changed || !lesson.safe)
     .map(lesson => ({
@@ -589,14 +593,14 @@ export function ConstructorPublicationPanel({
     }
   };
   const autoReview = useEffectEvent(() => {
-    if (dirty || historyOnly || published || automaticRevision.current === revision) return;
+    if (suspended || dirty || historyOnly || published || automaticRevision.current === revision) return;
     automaticRevision.current = revision;
     void review(true);
   });
   useEffect(() => {
     const timer = window.setTimeout(() => autoReview(), 0);
     return () => window.clearTimeout(timer);
-  }, [dirty, historyOnly, revision]);
+  }, [dirty, historyOnly, revision, suspended]);
   const saveForReview = async () => {
     setBusy(true);
     try { if (!await onSave()) close(); }
@@ -673,7 +677,8 @@ export function ConstructorPublicationPanel({
   };
   const openLesson = (id: string, issue?: ReturnType<typeof toDisplayIssue>) => {
     const relatedIds = issue?.targets.filter(target => target.available).map(target => target.id) || [];
-    saveView(issue?.key);
+    returningControl.current = scrollBody.current?.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+    restoreView.current = saveView(issue?.key);
     onOpenLesson(id, issue ? { title: issue.descriptions[0].title, relatedIds } : undefined);
   };
   const changeSection = (next: ReviewSection) => {
@@ -686,7 +691,7 @@ export function ConstructorPublicationPanel({
   useEffect(() => {
     const pending = restoreView.current;
     const scroller = scrollBody.current;
-    if (!pending || !scroller || checking || !dirty && !activePreview && reviewedRevision !== revision) return;
+    if (suspended || !pending || !scroller || checking || !dirty && !activePreview && reviewedRevision !== revision) return;
     const frame = window.requestAnimationFrame(() => {
       if (dirty && !selectedControl.current) return;
       for (const details of scroller.querySelectorAll<HTMLDetailsElement>('details[data-review-fix]')) {
@@ -696,18 +701,22 @@ export function ConstructorPublicationPanel({
       const fromFixes = pending.focusedFixLesson ?
         [...scroller.querySelectorAll<HTMLButtonElement>('button[data-review-fix-lesson-id]')]
           .find(button => button.dataset.reviewFixLessonId === pending.focusedFixLesson) : undefined;
-      const focus = selectedControl.current || fromFixes;
+      const originalControl = returningControl.current;
+      const focus = originalControl && scroller.contains(originalControl) ? originalControl : selectedControl.current || fromFixes;
       focus?.scrollIntoView({ block: 'nearest' });
       focus?.focus({ preventScroll: true });
       // A save can temporarily leave the server preview unavailable while the local list is visible.
-      if (!dirty) restoreView.current = undefined;
+      if (!dirty) {
+        restoreView.current = undefined;
+        returningControl.current = null;
+      }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activePreview, checking, dirty, reviewedRevision, revision]);
+  }, [activePreview, checking, dirty, reviewedRevision, revision, suspended]);
 
-  return <div className="constructor-conflict-backdrop">
+  return <div className="constructor-conflict-backdrop" style={suspended ? {display: 'none'} : undefined}>
     <dialog className="constructor-conflict-dialog constructor-publication-panel constructor-review-dialog"
-      aria-labelledby="publication-title" ref={node => { if (node && !node.open) node.showModal(); }}
+      aria-labelledby="publication-title" ref={dialog}
       onCancel={event => { event.preventDefault(); if (!busy) close(); }}>
       <header>
         <div><h2 id="publication-title">{historyOnly ? 'История публикаций' : 'Проверка расписания'}</h2><small>{draftName}</small></div>
@@ -779,7 +788,7 @@ export function ConstructorPublicationPanel({
               const primaryCode = primaryDiagnostic?.code;
               const statusText = [...new Set(issue.deferred.map(item => deferredOutcome(item.action, item.exclusion_scope)))];
               const note = primaryCode === 'review_required' || primaryDiagnostic && !issueText[primaryDiagnostic.code]
-                ? readableNote(primaryDiagnostic?.message) : issue.diagnostics.length ? '' : readableNote(issue.deferred[0]?.cause_codes?.length ? '' : issue.deferred[0]?.reason);
+                ? readableReviewNote(primaryDiagnostic?.message) : issue.diagnostics.length ? '' : readableReviewNote(issue.deferred[0]?.cause_codes?.length ? '' : issue.deferred[0]?.reason);
               const roster = issue.diagnostics.some(item => item.code === 'roster_review')
                 ? currentRosters?.lessons.find(lesson => lesson.id === first?.id) : undefined;
               const contextText = issue.diagnostics[0]?.context;
@@ -825,9 +834,9 @@ export function ConstructorPublicationPanel({
                     {text.guidance ? <p>{text.guidance}</p> : null}
                   </div>)}
                   {note && !issue.descriptions.some(item => item.title === note || item.guidance === note) ? <p>{note}</p> : null}
-                  {issue.affectedNames.length > 3 ? <details><summary>Все ученики с пересечением</summary>
+                  {issue.affectedNames.length > 3 ? <ReviewDisclosure title="Все ученики с пересечением" count={issue.affectedNames.length}>
                     <ul>{issue.affectedNames.map((name, index) => <li key={index}>{name}</li>)}</ul>
-                  </details> : null}
+                  </ReviewDisclosure> : null}
                   {issue.affectedCount > issue.affectedNames.length ? <p>Для {issue.affectedCount - issue.affectedNames.length} учеников имя ещё не подтверждено в справочнике.</p> : null}
                   {roster?.changed && roster.proposed_count !== null ? <p>В черновике — <b>{roster.old_count}</b>, в текущем составе — <b>{roster.proposed_count}</b>.</p> : null}
                   {statusText.map(text => <p className="constructor-review-outcome" key={text}>{text}</p>)}
@@ -854,11 +863,10 @@ export function ConstructorPublicationPanel({
                       related ? 'Разобрать конфликт' : 'Исправить'}</button> : null}
                   {!issue.targets.length && issue.descriptions.some(item => item.type === 'publication') && publicationEnabled ?
                     <button type="button" onClick={() => changeSection('publication')}>Перейти к публикации</button> : null}
-                  {issue.diagnostics.length || issue.deferred.some(item => item.reason) ? <details className="constructor-review-technical">
-                    <summary>Технические подробности</summary>
+                  {issue.diagnostics.length || issue.deferred.some(item => item.reason) ? <ReviewDisclosure title="Сведения для поддержки" secondary>
                     {issue.diagnostics.map(item => <p key={item.code}><code>{item.code}</code> {item.message}</p>)}
                     {issue.deferred.map(item => item.reason ? <p key={item.lesson_id}>{item.reason}</p> : null)}
-                  </details> : null}
+                  </ReviewDisclosure> : null}
                 </div> : null}
               </li>;
             })}
@@ -868,7 +876,7 @@ export function ConstructorPublicationPanel({
               'Результаты полной проверки недоступны. Проверьте ещё раз.' :
               dirty ? 'В несохранённых правках пока нет обнаруженных проблем.' : 'По результатам проверки вопросов нет.'}
           </p> : null}
-          {diagnostics.length ? <details className="constructor-review-detail"><summary>Отчёт проверки</summary><button type="button" onClick={() => void copyReport()}>Скопировать отчёт проверки</button></details> : null}
+          {diagnostics.length ? <ReviewDisclosure title="Отчёт проверки" secondary><button type="button" onClick={() => void copyReport()}>Скопировать отчёт проверки</button></ReviewDisclosure> : null}
         </section> : null}
         {!historyOnly && section === 'fixes' ? <div className="constructor-review-fixes">
           {onOpenGridDecisions ? <button type="button" disabled={busy} onClick={() => { saveView(); onOpenGridDecisions(); }}>История решений в сетке</button> : null}
@@ -901,13 +909,12 @@ export function ConstructorPublicationPanel({
               <span><b>{summary.deferred_lessons}</b> ждут уточнения</span>
               <span><b>{counts.critical}</b> блокирующих ошибок</span>
             </div>
-            <details className="constructor-review-detail">
-              <summary>Что изменится для школы</summary>
+            <ReviewDisclosure title="Что изменится для школы">
               <p>{summary.source_lessons ?? summary.ready_lessons + summary.deferred_lessons} занятий в расписании. Затронуто учеников — {summary.affected_students ?? 0}.</p>
               <div className="constructor-publication-diff"><span>Добавится {activePreview.diff.added}</span><span>Изменится {activePreview.diff.changed}</span><span>Будет убрано {activePreview.diff.removed}</span></div>
-              {activePreview.change_items?.length ? <details><summary>Сравнить с опубликованной версией</summary><div className="constructor-publication-changes">{activePreview.change_items.map(item =>
-                <article key={item.block_key}><div><small>Опубликовано</small>{describe(item.before)}</div><div><small>После публикации</small>{describe(item.after)}</div></article>)}</div></details> : null}
-            </details>
+              {activePreview.change_items?.length ? <ReviewDisclosure title="Сравнить с опубликованной версией" count={activePreview.change_items.length} secondary><div className="constructor-publication-changes">{activePreview.change_items.map(item =>
+                <article key={item.block_key}><div><small>Опубликовано</small>{describe(item.before)}</div><div><small>После публикации</small>{describe(item.after)}</div></article>)}</div></ReviewDisclosure> : null}
+            </ReviewDisclosure>
             {activePreview.publication_available === false || readOnly ? <p role="note">Публикация для этой версии недоступна.</p> :
               activePreview.can_publish ? <label className="constructor-publication-confirm">
                 <input type="checkbox" checked={confirmed && previewMatches} disabled={controlsBusy} onChange={event => setConfirmed(event.target.checked)} />
@@ -923,7 +930,7 @@ export function ConstructorPublicationPanel({
           <button type="button" onClick={close}>К оставшимся записям черновика</button>
         </nav> : null}
     {restore ? <section aria-label="Проверка восстановления"><h3>Восстановление отдельной новой версией</h3><p>Версия от {new Date(restore.publication.created_at).toLocaleString('ru-RU')}. Добавить: {restore.preview.diff.added}; изменить: {restore.preview.diff.changed}; удалить: {restore.preview.diff.removed}.</p>{restore.preview.blockers.map((item,index)=><p key={index} role="alert">{item.message}</p>)}<label className="constructor-publication-confirm"><input type="checkbox" checked={restoreConfirmed} onChange={event=>setRestoreConfirmed(event.target.checked)}/>Подтверждаю замену текущей публикации новой восстановленной версией.</label><button disabled={busy||!restore.preview.can_restore||!restoreConfirmed} onClick={()=>void confirmRestore()}>Подтвердить восстановление</button><button disabled={busy} onClick={()=>setRestore(null)}>Отмена</button></section> : null}
-    {historyOnly ? <details open><summary>Журнал публикаций этого черновика ({history.items.length})</summary>{historyPending ? <output>Загружаем публикации…</output> : !history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><details><summary>Сведения о проверке</summary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnostic.message}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</details><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{!readOnly && !dirty && history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</details> : null}
+    {historyOnly ? <ReviewDisclosure title="Журнал публикаций этого черновика" count={history.items.length} initiallyOpen>{historyPending ? <output>Загружаем публикации…</output> : !history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><ReviewDisclosure title="Сведения о проверке" secondary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnosticText(diagnostic).title}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</ReviewDisclosure><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{!readOnly && !dirty && history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</ReviewDisclosure> : null}
     </div>
     <footer>
       <button type="button" disabled={busy} onClick={close}>К конструктору</button>

@@ -59,3 +59,35 @@ test('diagnostic login loads the existing admin shell, never borrowing the human
   expect(revoked).toBeTruthy();
   expect(legacyRequests).toEqual([]);
 });
+
+test('real diagnostic auth crosses origins and revokes without human privileges', async ({ page, request, baseURL }) => {
+  const fixtureKey = process.env.MY_ISLAND_E2E_DIAGNOSTIC_KEY;
+  test.skip(!fixtureKey, 'Enable the e2e runner’s disposable diagnostic credential.');
+  const apiOrigin = 'http://127.0.0.1:8011';
+  expect(baseURL).toBe('http://localhost:3011');
+  const isolatedHumanAuth = { 'X-Dev-Auth': 'admin:1' };
+  expect((await request.get(apiOrigin + '/api/admin/overview', { headers: isolatedHumanAuth })).status()).toBe(200);
+  await page.goto('/admin/diagnostics');
+  await page.getByLabel('Диагностический ключ').fill(fixtureKey!);
+  await page.getByRole('button', { name: 'Войти для диагностики' }).click();
+  await expect(page.getByText(/Диагностика Codex · только чтение/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Расписание школы' })).toBeVisible();
+
+  const bearer = await page.evaluate(() => sessionStorage.getItem('my_island_codex_read_session'));
+  expect(Boolean(bearer)).toBeTruthy();
+  const authorization = { Authorization: 'Bearer ' + bearer };
+  for (const [method, path] of [
+    ['POST', '/api/admin/journals/connect'],
+    ['GET', '/api/admin/schedule/experiments/school/example/export/link'],
+    ['GET', '/api/admin/previews/people'],
+    ['GET', '/api/diagnostics/view/people?kind=student'],
+    ['PUT', '/api/diagnostics/view/schedule/experiments/school/example'],
+  ]) {
+    const result = await request.fetch(apiOrigin + path, { method, headers: { ...isolatedHumanAuth, ...authorization } });
+    expect([403, 405]).toContain(result.status());
+  }
+  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Диагностический вход' })).toBeVisible();
+  expect((await request.get(apiOrigin + '/api/diagnostics/session', { headers: authorization })).status()).toBe(401);
+  expect((await request.get(apiOrigin + '/api/admin/overview', { headers: isolatedHumanAuth })).status()).toBe(200);
+});

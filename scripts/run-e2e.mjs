@@ -1,6 +1,7 @@
 import { cp, mkdir, lstat, readlink, readdir, rm, stat, symlink, unlink } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,14 +12,20 @@ const frontendPort = 3011;
 const apiPort = 8011;
 const reuseExistingServer = process.env.MY_ISLAND_E2E_REUSE_SERVER === '1';
 const execFileAsync = promisify(execFile);
+const verifyDiagnostics = process.env.MY_ISLAND_E2E_VERIFY_DIAGNOSTICS === '1';
+if (verifyDiagnostics && reuseExistingServer) throw new Error('Diagnostic browser validation must own the isolated API.');
+const fixtureDiagnosticKey = verifyDiagnostics ? randomBytes(32).toString('base64url') : '';
 const ownedServerEnv = {
   ...process.env,
   MY_ISLAND_TEST_PROFILE: 'e2e',
   MY_ISLAND_CONSOLIDATED_SCHEDULE: '1',
   MY_ISLAND_TEST_FRONTEND_PORT: String(frontendPort),
   MY_ISLAND_TEST_API_PORT: String(apiPort),
+  MY_ISLAND_TEST_DIAGNOSTIC_KEY_HASH: fixtureDiagnosticKey ? createHash('sha256').update(fixtureDiagnosticKey).digest('hex') : '',
 };
 delete ownedServerEnv.MY_ISLAND_E2E_REUSE_SERVER;
+delete ownedServerEnv.MY_ISLAND_CODEX_DIAGNOSTICS;
+delete ownedServerEnv.MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256;
 const ignored = new Set([
   '.git', '.local-test', 'node_modules', '.next', '.vinext', '.wrangler', 'dist', 'data', 'test-results',
   'archive', 'artifacts', 'docs', 'site-scaffold', '.playwright-mcp',
@@ -227,7 +234,7 @@ process.once('SIGINT', onSigint);
 process.once('SIGTERM', onSigterm);
 
 try {
-  let runnerEnv = process.env;
+  let runnerEnv = { ...process.env, MY_ISLAND_E2E_DIAGNOSTIC_KEY: '' };
   if (!reuseExistingServer) {
     ownedServer = spawn(process.execPath, [path.join(workspace, 'scripts', 'dev-local.mjs')], {
       cwd: workspace,
@@ -237,10 +244,12 @@ try {
     });
     ownedServer.once('error', (error) => { ownedServer.spawnError = error; });
     await waitForOwnedServer(ownedServer);
-    runnerEnv = { ...process.env, MY_ISLAND_E2E_REUSE_SERVER: '1' };
+    runnerEnv = { ...runnerEnv, MY_ISLAND_E2E_REUSE_SERVER: '1', MY_ISLAND_E2E_DIAGNOSTIC_KEY: fixtureDiagnosticKey };
   }
   if (signalSent) throw new Error(`Interrupted before Playwright started (${String(signalSent)})`);
 
+  delete runnerEnv.MY_ISLAND_CODEX_DIAGNOSTICS;
+  delete runnerEnv.MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256;
   runner = spawn(process.execPath, [
     path.join(modules, '@playwright', 'test', 'cli.js'),
     'test',
