@@ -41,7 +41,7 @@ import { ConstructorInspectorShell } from './constructor-inspector-shell';
 import { useConstructorLayout } from './use-constructor-layout';
 import { readableTeacherText } from './teacher-color-registry';
 import { useSchoolTeacherColors } from './use-school-teacher-colors';
-import { fixedGroup, instructionalGroupIds, lessonLaneEntry, subgroupRank, timetableLanes } from './schedule-lanes';
+import { fixedGroup, instructionalGroupIds, lessonLaneEntry, occupiedCellLanes, subgroupRank, timetableLanes } from './schedule-lanes';
 import { ConstructorPublicationPanel } from './constructor-publication-panel';
 import { ConstructorAudienceRecalculation } from './constructor-audience-recalculation';
 import { ConstructorScheduleExport, ScheduleExportLink } from './constructor-schedule-export';
@@ -3486,7 +3486,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           (!query || `${item.subject} ${item.room} ${groups.find((g) => g.id === item.groupId)?.name || ''} ${teachers.find((t) => t.id === item.teacherId)?.name || ''}`.toLocaleLowerCase('ru').includes(query.toLocaleLowerCase('ru'))),
                       );
                       const lanes = columnLanes[col];
-                      const layout = lanes.layouts[payload.days.indexOf(cellDay) * payload.slots.length + period];
+                      const layout = occupiedCellLanes(lanes.layouts[payload.days.indexOf(cellDay) * payload.slots.length + period], lessons.map(item => item.id));
                       return (
                         <div
                           key={column.key}
@@ -3548,9 +3548,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             setContext({ x: event.clientX, y: event.clientY });
                           }}
                         >
-                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${layout?.columns || 1}, minmax(0, 1fr))` }}>
+                          <div className={`constructor-cell-lessons ${lessons.length > 3 ? 'many' : ''}`} style={{ gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))` }}>
                             {lessons.map((item) => {
-                              const placement = layout?.positions.get(item.id);
+                              const placement = layout.positions.get(item.id);
                               const primaryTeacher = item.teacherId || item.teacherIds?.find(Boolean);
                               const teacherFill = item.specialMark === 'lunch' ? '#FABF8F' : item.specialMark === 'no_lesson' ? '#F3F4F6' :
                                 item.kind === 'event' || item.activityType === 'event' ? '#D9EAD3' : primaryTeacher ? teacherRegistry.color(primaryTeacher) : '#F1F3F8';
@@ -3885,6 +3885,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                       {selected.kind === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.informational)} onChange={(event) => updateLesson(selected.id, event.target.checked ? { informational: true, audience: undefined, groupId: '', groupIds: [] } : { informational: false, ...audiencePatch({ kind: 'classes', class_ids: lessonClasses(selected) }, groups, students) })} /> Информационное событие без назначенных учеников</label> : null}
 
                       {!isLunch(selected) ? <>
+                      {!isSpecialMark(selected) && <label>Поиск преподавателя
+                        <input value={teacherQuery} onChange={event => setTeacherQuery(event.target.value)}
+                          placeholder="Имя или фамилия" />
+                      </label>}
                       <label>
                         Преподаватель
                         <select
@@ -3967,30 +3971,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         <label>Сопровождающие <select multiple aria-label="Сопровождающие преподаватели" value={selected.teacherIds || []} onChange={(event) => { const ids = [...event.target.selectedOptions].map((option) => option.value); updateLesson(selected.id, { teacherIds: ids, teacherId: ids[0] || '' }); }}>{teachers.map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ' · занят' : ''}</option>)}</select></label>
                       </fieldset> : null}
                       {selected.audience && !['club', 'elective'].includes(selectedActivityType || '') ? <EditorDisclosure key={`exceptions-${selected.id}`} label={selected.audience.exclude_student_ids?.length
-                        ? `Изменить исключения · ${selected.audience.exclude_student_ids.length}` : 'Изменить исключения'}>
-                        <label>Основание<input value={selected.attendance_reason || ''} onChange={event => updateLesson(selected.id, { attendance_reason: event.target.value })} /></label>
+                        ? `Кто не идёт на это занятие? · ${selected.audience.exclude_student_ids.length}` : 'Кто не идёт на это занятие?'}>
+                        <label>Причина<input value={selected.attendance_reason || ''} onChange={event => updateLesson(selected.id, { attendance_reason: event.target.value })} /></label>
+                        <small>Укажите причину, чтобы выбрать учеников.</small>
                         <label>Не посещают это занятие<select multiple disabled={!selected.attendance_reason?.trim()} value={selected.audience.exclude_student_ids || []} onChange={event => updateLesson(selected.id, { audience: { ...selected.audience!, exclude_student_ids: [...event.target.selectedOptions].map(option => option.value) }, audience_snapshot: null })}>{students.filter(student => audiencePreviews[selected.id]?.student_ids?.includes(student.id) || selected.audience?.exclude_student_ids?.includes(student.id)).map(student => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>
                         {selected.attendance_history?.map((entry,index) => <p key={index}>{entry.at.slice(0,10)} · {entry.actor} · {entry.reason}</p>)}</EditorDisclosure> : null}
                       {selectedActivityType === 'practice' ? <label>Ответственные за задание (без присутствия)<select multiple value={selected.responsible_teacher_ids || []} onChange={(event) => updateLesson(selected.id, { responsible_teacher_ids: [...event.target.selectedOptions].map(option => option.value) })}>{teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label> : null}
-                      {!isSpecialMark(selected) ? <EditorDisclosure key={`teacher-${selected.id}`} label="Настройки преподавателя">
-                      <label>
-                        Фамилия или имя
-                        <input
-                          value={teacherQuery}
-                          onChange={(event) =>
-                            setTeacherQuery(event.target.value)
-                          }
-                          placeholder="Фамилия или имя"
-                        />
-                      </label>
-                      {selected.teacherId ? <label className="constructor-teacher-color">Цвет преподавателя
-                        <input type="color" aria-label="Цвет преподавателя" disabled={!teacherRegistry.ready || teacherRegistry.pending.has(selected.teacherId)} value={teacherRegistry.color(selected.teacherId)} onChange={(event) => teacherRegistry.setColor(selected.teacherId, event.target.value)} />
-                        <button type="button" disabled={!teacherRegistry.overrides[selected.teacherId]} onClick={() => teacherRegistry.resetColor(selected.teacherId)}>Сбросить</button>
-                        {teacherRegistry.error ? <span role="alert">{teacherRegistry.error}</span> : null}
-                        {teacherRegistry.notice ? <output>{teacherRegistry.notice}</output> : null}
-                        <button type="button" onClick={() => setColorPanelOpen(true)}>Все преподаватели</button>
-                      </label> : null}
-                      </EditorDisclosure> : null}
                       <div className="constructor-issues">
                         {issues
                           .filter((item) => item.lessonId === selected.id || item.related === selected.id)

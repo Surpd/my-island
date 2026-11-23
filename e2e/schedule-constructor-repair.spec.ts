@@ -775,8 +775,13 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await page.locator('.constructor-card[data-lesson-id="group-lesson"]').dblclick();
   await expect(editor.getByRole('heading', { name: 'Английский язык' })).toBeVisible();
   await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
-  const exceptions = editor.getByRole('button', { name: 'Изменить исключения · 1' });
+  const exceptions = editor.getByRole('button', { name: 'Кто не идёт на это занятие? · 1' });
+  await expect(exceptions).toHaveAttribute('aria-expanded', 'false');
+  await expect(editor.getByLabel('Причина', { exact: true })).toBeHidden();
+  await expect(editor.getByLabel('Поиск преподавателя', { exact: true })).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Настройки преподавателя', exact: true })).toHaveCount(0);
   await exceptions.press('Enter');
+  await expect(editor.getByLabel('Причина', { exact: true })).toHaveValue(/Индивидуальное расписание/);
   await expect(exceptions).toHaveAttribute('aria-expanded', 'true');
   await expect(editor.getByText(/Индивидуальное расписание/)).toBeVisible();
   await expect(editor.getByLabel('Не посещают это занятие')).toHaveValues([studentId]);

@@ -167,6 +167,21 @@ export function timetableLanes(slots: LaneEntry[][], gradeWidth = 0) {
   return { width: Math.max(1, ...layouts.map((l) => l.columns)), layouts };
 }
 
+/** Display-only projection: discard empty seats, preserving layout order and diagnostics. */
+export function occupiedCellLanes(
+  layout: ReturnType<typeof timetableLanes>['layouts'][number] | undefined,
+  visibleIds: readonly string[],
+) {
+  const visible = visibleIds.map(id => ({ id, position: layout?.positions.get(id) }));
+  visible.sort((a, b) => (a.position?.col ?? Infinity) - (b.position?.col ?? Infinity));
+  return {
+    columns: Math.max(1, visible.length),
+    positions: new Map(visible.map(({ id, position }, col) => [
+      id, { ...position, col, row: position?.row ?? 0, span: 1 },
+    ])),
+  };
+}
+
 type Group = {
   id: string;
   name: string;
