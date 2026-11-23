@@ -327,13 +327,14 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     mark = _lesson_special_mark(lesson)
     if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping):
         return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
-    if (_is_lunch_lesson(lesson) and lesson.get("needsClarification") is True
-            and str(lesson.get("clarificationReason") or "").strip() == "Уточните охват обеда: класс или отдельная группа"):
-        # Historical lunch rows with an advisory-only class column never
-        # asserted which students were actually assigned. Keep them as
-        # informational markers until an explicit audience rule is authored.
-        return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     raw = lesson.get("audience")
+    if (_is_lunch_lesson(lesson) and not isinstance(raw, Mapping) and lesson.get("needsClarification") is True
+            and not lesson.get("groupId") and not lesson.get("groupIds")
+            and not lesson.get("audienceMode") and not lesson.get("canonical")
+            and str(lesson.get("clarificationReason") or "").strip() == "Уточните охват обеда: класс или отдельная группа"):
+        # Preserve a historical display-only row, but never discard a
+        # separately configured audience because the note is still present.
+        return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     if isinstance(raw, Mapping):
         kind = str(raw.get("kind") or "")
         if kind == "remaining":

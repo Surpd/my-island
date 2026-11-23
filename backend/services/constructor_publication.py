@@ -490,13 +490,21 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         is_event = activity_type == "event" or lesson.get("kind") == "event"
         informational_unassigned_event = is_event and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping)
         display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
-        lunch_scope_confirmed = is_lunch and (
-            bool(display_classes) and all(str(group_id) in groups and groups[str(group_id)]["group_type"] == "class"
-                                          for group_id in display_classes)
-            or result.get("status") == "ok" and _lesson_audience(lesson).get("kind") in {"groups", "classes", "available_slot", "legacy_remaining"}
+        rule = _lesson_audience(lesson)
+        lunch_has_configured_audience = is_lunch and (
+            isinstance(lesson.get("audience"), Mapping)
+            or rule.get("kind") in {"groups", "students", "available_slot", "legacy_remaining"}
+            or bool(rule.get("grade"))
         )
-        # Lunch is a visual marker in the class grid. Its audience is the
-        # displayed class, never a separately resolved instructional roster.
+        known_lunch_classes = bool(display_classes) and all(
+            str(group_id) in groups and groups[str(group_id)]["group_type"] == "class"
+            for group_id in display_classes)
+        lunch_scope_confirmed = is_lunch and (
+            (result.get("status") == "ok" and not result.get("needs_recalculation") and bool(rule.get("kind")))
+            if lunch_has_configured_audience else known_lunch_classes
+        )
+        if lunch_has_configured_audience and not lunch_scope_confirmed and result.get("status") == "ok" and not result.get("needs_recalculation"):
+            block("audience_unresolved", "Уточните, каким классам, группам или ученикам назначен обед.")
         if not lunch_scope_confirmed and not is_optional and (result.get("status") != "ok" or result.get("needs_recalculation")):
             block("audience_unresolved", str(result.get("reason") or "Audience requires confirmation or recalculation"))
         interval = _lesson_interval(lesson, payload.get("slots") or [])
@@ -553,10 +561,14 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             elif ("нет подтверждённого назначения преподавателя группе" in review_reason.casefold()
                   and teacher_evidence and not teacher_evidence - teachers.keys()):
                 reason_without_active_teacher_note = re.sub(r"нет подтверждённого назначения преподавателя группе", "", review_reason, flags=re.IGNORECASE).strip(" .,:;-и")
+            if is_lunch and lunch_scope_confirmed:
+                from backend.services.schedule_normalization import LUNCH_SCOPE_CLAUSE, without_scope_clauses
+                reason_without_active_teacher_note = without_scope_clauses(
+                    reason_without_active_teacher_note, frozenset({LUNCH_SCOPE_CLAUSE}))
+                if lesson.get("importError"):
+                    reason_without_active_teacher_note = reason_without_active_teacher_note or "Проверьте ошибку импорта обеда."
             if not reason_without_active_teacher_note:
-                pass  # Stale teacher/workload evidence is fully resolved.
-            elif is_lunch and lunch_scope_confirmed:
-                pass
+                pass  # Only the validated old clause is removed from review.
             elif is_optional:
                 pass
             else:
@@ -595,7 +607,6 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                               "activity_type": "event" if is_event else activity_type,
                               "elective_block_id": elective_block_id,
                               "sdep_independent": sdep_independent})
-        rule = _lesson_audience(lesson)
         grade = str(rule.get("grade") or lesson.get("grade_scope") or "")
         if not grade and is_optional:
             grade = ",".join(sorted({str(value) for value in lesson.get("eligibleGrades") or []}, key=lambda value: int(value) if value.isdigit() else 99))
@@ -617,12 +628,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         group_ids = list(rule.get("group_ids") or [])
         audience_rule: dict[str, Any]
         kind = rule.get("kind")
-        if is_lunch:
-            # A lunch marker is placed on the visible class, even when its
-            # saved audience rule names an instructional subgroup.
+        if is_lunch and any(str(value) not in groups or groups[str(value)].get("group_type") != "class"
+                            for value in display_classes):
+            block("unknown_class", "Для обеда указан отсутствующий или недействующий класс размещения.")
+        if is_lunch and not lunch_has_configured_audience:
+            # A trusted class-grid lunch marker may have no separate audience.
+            # Otherwise preserve the configured rule below (including exclusions).
             raw_lunch_classes = [str(value) for value in (display_classes or rule.get("class_ids") or [])]
-            if any(value not in groups for value in raw_lunch_classes):
-                block("unknown_class", "Lunch marker has an unknown canonical class")
             lunch_classes = [value for value in raw_lunch_classes
                              if str(value) in groups and groups[str(value)]["group_type"] == "class"]
             group_ids = lunch_classes
