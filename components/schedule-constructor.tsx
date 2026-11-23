@@ -2926,7 +2926,9 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
         </div>
       </header>
       {draft && termComparison?.items.length ? <div className="constructor-term-strip">
-        <span>Второй триместр · ждут первичной проверки {pendingTermItems}</span>
+        <span>Сверка II триместра · без решения: {russianCount(pendingTermItems, 'позиция', 'позиции', 'позиций')}
+          <small>Это сравнение с таблицей, а не число конфликтов или блокирующих ошибок.</small>
+        </span>
         <button type="button" className="admin-button" onClick={openTermComparison}>Сверка с таблицей</button>
       </div> : null}
       {draft && termComparison && comparisonOpen ? <ConstructorTermComparison
@@ -3196,7 +3198,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
             </span> : null}
             <label className="constructor-toolbar-search"><Search size={15} /><input aria-label="Найти занятие" placeholder="Найти урок…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <button className="constructor-issue-count" onClick={() => {if(schoolReview) openReviewCenter('conflict'); else setConflictsOpen(open => !open);}} aria-expanded={schoolReview ? reviewMode === 'review' : conflictsOpen}>
-              <AlertTriangle size={14} /><span className="desktop-label">{schoolReview ? 'Конфликты в сетке' : 'Проверка'} · {conflictLessonCount}</span><span className="mobile-label">{schoolReview ? 'В сетке' : 'Проверка'} · {conflictLessonCount}</span>
+              <AlertTriangle size={14} /><span className="desktop-label">{schoolReview ? 'Занятия с конфликтами в сетке' : 'Проверка'} · {conflictLessonCount}</span><span className="mobile-label">{schoolReview ? 'С конфликтами' : 'Проверка'} · {conflictLessonCount}</span>
             </button>
             <button onClick={() => setFiltersOpen((value) => !value)} aria-expanded={filtersOpen}>Фильтры</button>
               <button className="constructor-open-colors" onClick={() => setColorPanelOpen(true)} title="Поиск и цвета преподавателей"><Palette size={15}/><span>Преподаватели</span></button>

@@ -108,7 +108,7 @@ class ScheduleNormalizationTests(unittest.TestCase):
 
     def test_class_scope_retires_exact_lunch_clause_and_not_other_warnings(self):
         from backend.services.schedule_normalization import LUNCH_SCOPE_CLAUSE
-        marker = {"specialMark": "lunch", "classIds": ["7a", "7b"], "needsClarification": True,
+        marker = {"specialMark": "lunch", "classIds": ["7a", "7b"], "day": 1, "period": 0, "needsClarification": True,
                   "clarificationReason": LUNCH_SCOPE_CLAUSE}
         rows = [
             {**marker, "id": "exact"},
@@ -121,13 +121,16 @@ class ScheduleNormalizationTests(unittest.TestCase):
             {**marker, "id": "import-error", "importError": True},
             {**marker, "id": "not-lunch", "specialMark": "", "subject": "Математика"},
             {**marker, "id": "no-class", "classIds": []},
+            {**marker, "id": "no-time", "period": 1},
+            {**marker, "id": "exceptions", "excludedStudentIds": ["synthetic"]},
         ]
-        draft = {"revision": 1, "payload": {"lessons": rows}}
+        draft = {"revision": 1, "payload": {"lessons": rows, "slots": [{"start": "12:30", "end": "13:00"}]}}
         classes = {"7a": "7", "7b": "7"}
         preview = normalization_preview(draft, verified_classes=classes)
         self.assertEqual(preview["lunch_scope_warning_suppressed_count"], 2)
         self.assertEqual(preview["automatic_count"], 0)
-        self.assertEqual(preview["retained_warning_count"], 8)
+        self.assertEqual(preview["retained_warning_count"], 10)
+        self.assertEqual([p["lesson_id"] for p in preview["scope_proposals"]], ["exact", "combo"])
         copied = normalized_copy_payload(draft, preview)["lessons"]
         self.assertEqual(copied, rows)
         self.assertTrue(any(item["reason"] == "Нет соответствующего звонка" for item in preview["retained_warnings"]))
@@ -166,6 +169,26 @@ class ScheduleNormalizationTests(unittest.TestCase):
         self.assertNotIn("confirmedParticipantIds", copied[0])
         self.assertEqual(copied[1]["clarificationReason"], "Не подтверждён преподаватель")
         self.assertEqual(copied[2:], rows[2:])
+
+    def test_math_and_vibe_only_proposes_availability_and_changes_no_payload(self):
+        elective = {"id": "target", "subject": "Математика + вайб", "activityType": "elective",
+                    "day": 0, "period": 0, "blockId": "parallel-56", "classIds": ["5a"],
+                    "eligibleGrades": [5], "teacherId": "original", "confirmedParticipantIds": ["test-student"]}
+        peer = {**elective, "id": "peer", "subject": "Other option"}
+        other_name = {**elective, "id": "unrelated", "subject": "Математика + вайб 2"}
+        unknown = {**elective, "id": "unknown", "blockId": ""}
+        outside = {**elective, "id": "outside", "blockId": "other-block", "eligibleGrades": [5, 7]}
+        rows = [elective, peer, other_name, unknown, outside]
+        draft = {"revision": 1, "payload": {"lessons": rows, "slots": [{"start": "10:30", "end": "11:15"}]}}
+        preview = normalization_preview(draft, verified_classes={"5a": "5", "5b": "5", "6a": "6", "7a": "7"})
+        proposals = {p["lesson_id"]: p for p in preview["scope_proposals"]}
+        self.assertEqual(set(proposals), {"target", "unknown", "outside"})
+        self.assertEqual(proposals["target"]["eligible_grades"], [5, 6])
+        self.assertEqual(proposals["target"]["problem"], "")
+        self.assertIn("общий блок", proposals["unknown"]["problem"])
+        self.assertIn("выходит за рамки", proposals["outside"]["problem"])
+        self.assertEqual(preview["automatic_count"], 0)
+        self.assertEqual(normalized_copy_payload(draft, preview)["lessons"], rows)
 
     def test_class_evidence_excludes_archived_and_instructional_groups(self):
         with tempfile.TemporaryDirectory() as directory:
