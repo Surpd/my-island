@@ -60,7 +60,8 @@ class CodexDiagnosticAuthTests(TestCase):
         for flag, raw, configured_hash, status in (
             ("0", self.secret, verifier, "flag_off"),
             ("1", None, "", "no_key_configured"),
-            ("1", "synthetic-short-raw", "", "raw_rejected"),
+            ("1", "", "", "raw_empty"),
+            ("1", "x", "", "enabled"),
             ("1", self.secret + "\n", "", "raw_invalid_characters"),
             ("1", self.secret, "synthetic-malformed-digest", "digest_malformed"),
             ("1", self.secret, "0" * 64, "verifiers_mismatch"),
@@ -103,15 +104,42 @@ class CodexDiagnosticAuthTests(TestCase):
         self.assertTrue(all(self.secret not in row["credential_epoch"] and verifier != row["credential_epoch"]
                             and token != row["token_hash"] for row in stored))
 
-    def test_mismatched_or_weak_raw_config_fails_closed_without_using_hash_fallback(self):
-        cases = ("", "short", "a" * 43, "1234" * 11, ("abcdefghijklmnopqrstuvwxyz" * 2)[:43],
-                 self.secret + "\n", token_urlsafe(32))
+    def test_invalid_or_mismatched_raw_config_fails_closed_without_using_hash_fallback(self):
+        cases = ("", "short", self.secret + "\n", token_urlsafe(32))
         for raw in cases:
             with patch.dict(os.environ, {"MY_ISLAND_CODEX_DIAGNOSTIC_KEY": raw}):
                 response = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": self.secret})
                 self.assertEqual(response.status_code, 404)
                 self.assertNotIn(self.secret, response.text)
                 self.assertEqual(self.http.get("/api/diagnostics/session").status_code, 404)
+
+    def test_short_exact_key_and_shared_throttle_leave_active_session_usable(self):
+        # A second independent client and Database object represent another worker.
+        second_app = FastAPI()
+        second_app.include_router(create_codex_diagnostic_router(Database(self.db.path)))
+        with TestClient(second_app) as second, patch.dict(os.environ, {
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY": "x",
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": "",
+        }), patch("backend.services.codex_diagnostics.time.time", return_value=1_000_000) as clock:
+            endpoint = "/api/diagnostics/exchange"
+            key_header = "X-My-Island-Diagnostic-Key"
+            good = second.post(endpoint, headers={key_header: "x"})
+            self.assertEqual(good.status_code, 200)
+            bearer = {"Authorization": "Bearer " + good.json()["token"]}
+            for index, client in enumerate((self.http, second, self.http, second)):
+                attempt = client.post(endpoint, headers={
+                    key_header: "X", "X-Forwarded-For": f"192.0.2.{index}", "X-Real-IP": f"192.0.2.{index}",
+                })
+                self.assertEqual(attempt.status_code, 401)
+            self.assertEqual(second.post(endpoint, headers={key_header: "x"}).status_code, 429)
+            self.assertEqual(self.http.post(endpoint, headers={key_header: "X"}).status_code, 429)
+            self.assertEqual(second.get("/api/diagnostics/session", headers=bearer).status_code, 200)
+            self.assertEqual(second.get("/api/diagnostics/view/overview", headers=bearer).status_code, 200)
+            clock.return_value += 900
+            self.assertEqual(self.http.post(endpoint, headers={key_header: "x"}).status_code, 200)
+        with self.db.connection() as connection:
+            rows = connection.execute("SELECT * FROM codex_diagnostic_exchange_budget").fetchall()
+        self.assertEqual([dict(row) for row in rows], [{"id": 1, "attempts": 1, "reset_at": 1_001_800}])
 
     def test_visible_ascii_punctuation_key_exchanges_without_normalization(self):
         raw = self.secret + "".join(chr(code) for code in range(33, 127) if not chr(code).isalnum())

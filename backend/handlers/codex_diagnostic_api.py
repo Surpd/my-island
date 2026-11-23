@@ -160,7 +160,10 @@ def create_codex_diagnostic_router(database: Database) -> APIRouter:
     def exchange(x_my_island_diagnostic_key: str | None = Header(default=None)):
         if not auth.configured_epoch():
             raise _status(404, "Диагностический доступ выключен.")
-        result = auth.exchange(database, x_my_island_diagnostic_key)
+        try:
+            result = auth.exchange(database, x_my_island_diagnostic_key)
+        except auth.ExchangeThrottled:
+            raise _status(429, "Слишком много попыток входа. Попробуйте позже.") from None
         if not result:
             raise _status(401, "Диагностический ключ не принят.")
         return _response(result)
