@@ -71,13 +71,9 @@ test('capture masked rev45 diagnostics, lesson context, and mobile confirmation'
   await expect(page.getByText('Центр решений расписания', { exact: true })).toBeVisible();
   await page.screenshot({ path: artifact('rev45-sanitized-diagnostics.png'), fullPage: true });
 
-  const teacherReason = page.locator('.constructor-issue-reason').filter({
-    has: page.locator('summary').filter({ hasText: 'Преподаватель уже ведёт урок' }),
-  }).first();
-  await teacherReason.locator('summary').click();
-  const teacherIssue = teacherReason.locator('article').first();
+  const teacherIssue = page.locator('.constructor-conflict-panel [data-conflict-cause="teacher"]').first();
   await expect(teacherIssue).toBeVisible();
-  await teacherIssue.getByRole('button', { name: 'Разобрать проблему' }).click();
+  await teacherIssue.getByRole('button', { name: 'Разобрать проблему: Преподаватель', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Назначение преподавателя' });
   await expect(dialog).toBeVisible();
   await page.screenshot({ path: artifact('rev45-sanitized-issue-context.png'), fullPage: true });

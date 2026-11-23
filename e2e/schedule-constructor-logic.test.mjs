@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { confirmedClassLunchMarker, groupCourseContext, parseQuick, rankTeachersForAudience, shortGroup, shortSubject } from '../components/schedule-constructor-logic.ts';
+import { confirmedClassLunchMarker, displayedClarificationReason, groupCourseContext, parseQuick, rankTeachersForAudience, shortGroup, shortSubject } from '../components/schedule-constructor-logic.ts';
 
 const groups = [
   { id: '5', name: '5 класс', group_type: 'class' },
@@ -146,4 +146,17 @@ test('base and profile group metadata remains a separate course context', () => 
   const candidates = [{ id: 'profile', name: 'Профиль', assignments: [{ group_id: 'math11', subject: 'Математика', exam_track: 'Профиль' }] }];
   assert.equal(rankTeachersForAudience(candidates, [{ id: 'math11', name: 'Математика 11', group_type: 'instructional', base_class_name: '11' }], { groupIds: ['math11'], subject: 'Математика', examTrack: 'Профиль' }).defaultTeacherId, 'profile');
   assert.equal(rankTeachersForAudience(candidates, [{ id: 'math11', name: 'Математика 11', group_type: 'instructional', base_class_name: '11' }], { groupIds: ['math11'], subject: 'Математика' }).defaultTeacherId, '');
+});
+
+test('displayed lunch advisory strips only the exact obsolete clause with trusted class evidence', () => {
+  const old = 'Уточните охват обеда: класс или отдельная группа';
+  const lesson = { specialMark: 'lunch', classIds: ['7a'], needsClarification: true, clarificationReason: old };
+  const classes = [{ id: '7a', group_type: 'class' }];
+  assert.equal(displayedClarificationReason(lesson, classes), '');
+  assert.equal(lesson.clarificationReason, old);
+  assert.equal(displayedClarificationReason({ ...lesson, clarificationReason: `${old}; Нет соответствующего звонка` }, classes), 'Нет соответствующего звонка');
+  assert.equal(displayedClarificationReason({ ...lesson, clarificationReason: '' }, classes), undefined);
+  assert.equal(displayedClarificationReason({ ...lesson, importError: true }, classes), old);
+  assert.equal(displayedClarificationReason({ ...lesson, audience: {kind: 'groups', group_ids: ['7-lunch']} }, classes), old);
+  assert.equal(displayedClarificationReason(lesson, [{ ...classes[0], archived_at: '2026-11-20' }]), old);
 });

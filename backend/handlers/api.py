@@ -46,7 +46,7 @@ from backend.services.schedule_experiments import (
     ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment, manage_experiment,
     duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
-from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_teacher_directory_evidence
+from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence
 from backend.services.schedule_term_comparison import (
     apply_term_comparison_choice, preview_term_comparison_choices, record_term_comparison_decision,
 )
@@ -312,6 +312,7 @@ class ScheduleExperimentSavePayload(BaseModel):
     payload: dict
     name: str | None = None
     term_comparison_key: str | None = Field(default=None, min_length=1, max_length=360)
+    editor_audience_changes: list[str] | None = Field(default=None, max_length=365)
 
 
 class DraftRevisionRequest(BaseModel):
@@ -1729,7 +1730,8 @@ def create_router(database: Database) -> APIRouter:
             if draft["payload"].get("week_start"):
                 raise HTTPException(status_code=422, detail="Нормализация недельных копий отключена; сохраните переопределения отдельно.")
             teachers, assignments = verified_teacher_directory_evidence(store, draft)
-            return normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments)
+            return normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
+                                         verified_classes=verified_administrative_classes(store))
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -1746,7 +1748,8 @@ def create_router(database: Database) -> APIRouter:
             if draft["payload"].get("week_start"):
                 raise HTTPException(status_code=422, detail="Недельные копии не изменяются этим действием.")
             teachers, assignments = verified_teacher_directory_evidence(store, draft)
-            preview = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments)
+            preview = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
+                                         verified_classes=verified_administrative_classes(store))
             if draft["revision"] != payload.expected_revision or preview["source_hash"] != payload.expected_source_hash or preview["plan_hash"] != payload.expected_plan_hash:
                 raise HTTPException(status_code=409, detail="Шаблон изменился после предпросмотра. Повторите анализ.")
             if not preview["automatic_count"]:
@@ -2062,7 +2065,8 @@ def create_router(database: Database) -> APIRouter:
             source, store = school_stores()
             return save_experiment(store, experiment_id, expected_revision=payload.expected_revision,
                                    payload=payload.payload, name=payload.name, actor_user_id=actor["id"],
-                                   audience_database=source, term_comparison_key=payload.term_comparison_key)
+                                   audience_database=source, term_comparison_key=payload.term_comparison_key,
+                                   editor_audience_changes=payload.editor_audience_changes)
         except ExperimentConflict as error:
             raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:

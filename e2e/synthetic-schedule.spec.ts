@@ -51,6 +51,16 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   const lanes = page.locator('[data-cell="0:4"] .constructor-cell-lessons');
   await expect(lanes.locator('.constructor-card')).toHaveCount(3);
   await expect(lanes).toHaveCSS('grid-template-columns', /px .*px .*px/);
+  const measure = (node: Element) => getComputedStyle(node).gridTemplateColumns.split(' ').map(Number.parseFloat);
+  for (const [cell, expectedColumns] of [
+    [lanes, 3],
+    [page.locator('[data-cell="0:0"] .constructor-cell-lessons'), 2],
+    [page.locator('.constructor-card[data-lesson-id="e2e-digital-78"]').first().locator('xpath=..'), 1],
+  ] as const) {
+    const widths = await cell.evaluate(measure);
+    expect(widths).toHaveLength(expectedColumns);
+    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+  }
   const fitsViewport = await page.locator('.constructor-grid-wrap').evaluate((board) => board.scrollWidth <= board.clientWidth + 1);
   expect(fitsViewport).toBeTruthy();
   await page.locator('.constructor-issue-count').click();
@@ -77,10 +87,13 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await expect(page.locator(`[data-cell="${4 * periods + 4}:2"] [data-lesson-id="e2e-event"]`)).toHaveCount(1);
   await expect(page.locator(`[data-cell="${4 * periods + 5}:2"] [data-lesson-id="e2e-event"]`)).toHaveCount(1);
   await english.dblclick();
-  await page.getByRole('button', { name: 'Настройки преподавателя' }).click();
-  await page.getByLabel('Цвет преподавателя').fill('#bbddff');
-  await expect(english).toHaveCSS('background-color', 'rgb(187, 221, 255)');
+  const teacherControl = page.getByRole('combobox', { name: 'Преподаватель', exact: true });
+  const teacher = (await teacherControl.locator('option:checked').innerText()).split(' · ')[0];
   await page.getByRole('button', { name: 'Закрыть панель', exact: true }).click();
+  await page.getByRole('button', { name: 'Преподаватели', exact: true }).click();
+  await page.getByLabel(`Цвет: ${teacher}`, { exact: true }).fill('#bbddff');
+  await expect(english).toHaveCSS('background-color', 'rgb(187, 221, 255)');
+  await page.getByRole('button', { name: 'Закрыть цвета преподавателей', exact: true }).click();
   await english.click();
   await page.keyboard.press('Control+c');
   await page.locator(`[data-cell="${3 * periods + 4}:1"]`).click();
@@ -158,7 +171,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.locator('.constructor-create-form').locator(`input[type="checkbox"][value="${mixed!.id}"]`).check();
   await expect(page.locator('.constructor-create-form')).toContainText('Затронутые классы:');
   await page.getByRole('combobox', { name: 'Преподаватель нового занятия' }).fill(teacher!.display_name);
-  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('17');
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
   const mixedId = await (await gridCell(0, 5)).locator('.constructor-card').getAttribute('data-lesson-id');

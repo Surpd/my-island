@@ -266,8 +266,8 @@ function issueReason(panel: Locator, text: string | RegExp) {
   });
 }
 
-const roomConflict = /Кабинет (?:каб\. )?101 занят/;
-const teacherConflict = 'Преподаватель уже ведёт урок';
+const pairCards = (page: Page) => page.locator('.constructor-conflict-panel [data-conflict-pair]');
+const cause = (page: Page, type: string) => pairCards(page).locator(`[data-conflict-cause="${type}"]`);
 
 async function openReason(group: Locator) {
   await group.locator('summary').click();
@@ -275,7 +275,7 @@ async function openReason(group: Locator) {
 }
 
 async function openIssue(page: Page, type: 'room' | 'teacher') {
-  await openReason(issueReason(page.locator('.constructor-conflict-panel'), type === 'room' ? roomConflict : teacherConflict).first());
+  await cause(page, type).first().getByRole('button', { name: /Разобрать проблему/ }).click();
   return page.getByRole('dialog', {
     name:
       type === 'room'
@@ -310,12 +310,27 @@ test('room correction offers only free rooms, applies after confirmation and sup
   });
   expect(normalizeRoomKey(actions[0].room)).toBe('room:202');
   await expect(
-    issueReason(page.locator('.constructor-conflict-panel'), roomConflict),
+    cause(page, 'room'),
   ).toHaveCount(0);
   await page.getByRole('button', { name: 'Отменить', exact: true }).click();
   await expect(
-    issueReason(page.locator('.constructor-conflict-panel'), roomConflict).first(),
+    cause(page, 'room').first(),
   ).toBeVisible();
+});
+
+test('one conflict card shows both classes and separate room/teacher actions', async ({ page }) => {
+  await setup(page);
+  const card = pairCards(page);
+  await expect(card).toHaveCount(1);
+  await expect(card).toHaveAttribute('data-conflict-pair', 'lesson-a lesson-b');
+  await expect(card).toContainText(/Математика.*10А.*Математика.*11А/);
+  await expect(card).toContainText(/09:00.*09:45/);
+  await expect(card.getByRole('button', { name: 'Разобрать проблему: Кабинет', exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Разобрать проблему: Преподаватель', exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: /Показать в расписании/ })).toHaveCount(2);
+  await page.getByLabel('Тип проблемы').selectOption('room');
+  await expect(card).toHaveCount(1);
+  await expect(card.getByText('Преподаватель уже ведёт урок', { exact: true })).toBeVisible();
 });
 
 test('joint confirmation leaves unresolved list, can be reviewed and revoked', async ({
@@ -338,19 +353,9 @@ test('joint confirmation leaves unresolved list, can be reviewed and revoked', a
     action: 'joint',
     lesson_ids: ['lesson-a', 'lesson-b'],
   });
-  await expect(
-    page
-      .locator('.constructor-issue-category')
-      .filter({ hasText: 'Требуют решения администратора' }),
-  ).toBeVisible();
-  await expect(
-    issueReason(page.locator('.constructor-issue-category').filter({ hasText: 'Требуют решения администратора' }), teacherConflict)
-      .locator('.constructor-conflict-list article'),
-  ).toHaveCount(2);
-  await expect(
-    issueReason(page.locator('.constructor-issue-category').filter({ hasText: 'Подтверждённые исключения' }), teacherConflict)
-      .locator('.constructor-conflict-list article'),
-  ).toHaveCount(1);
+  await expect(pairCards(page)).toHaveCount(3);
+  await expect(cause(page, 'teacher').filter({ hasText: 'Требует решения администратора' })).toHaveCount(2);
+  await expect(cause(page, 'teacher').filter({ hasText: 'Подтверждено' })).toHaveCount(1);
   await page
     .getByText('Подтверждённые решения и отложенные записи', { exact: true })
     .click();
@@ -370,11 +375,7 @@ test('joint confirmation leaves unresolved list, can be reviewed and revoked', a
   await expect(
     page.getByRole('dialog', { name: 'Назначение преподавателя' }),
   ).not.toBeVisible();
-  await expect(
-    page
-      .locator('.constructor-issue-category')
-      .filter({ hasText: 'Требуют решения администратора' }),
-  ).toBeVisible();
+  await expect(cause(page, 'teacher').filter({ hasText: 'Требует решения администратора' })).toHaveCount(3);
 });
 
 test('independent practice is recorded only after explicit confirmation', async ({ page }) => {
@@ -430,8 +431,7 @@ test('audience review exposes all 26 safe bulk targets and links to the existing
   expect(actions[0]).toMatchObject({ action: 'confirm_roster' });
   expect((actions[0].lesson_ids as string[]).length).toBe(26);
   await expect(
-    page.locator('.constructor-issue-category').filter({ hasText: 'Требуют решения администратора' })
-      .getByText(/Учеников назначено одновременно/),
+    cause(page, 'audience').getByText(/Учеников назначено одновременно/),
   ).toBeVisible();
   await expect(page.locator('.constructor-conflict-list').getByText('student-a', { exact: true })).toHaveCount(0);
 });

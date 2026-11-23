@@ -1433,3 +1433,47 @@
   color: #9c2c23;
   font-size: 12px;
 }
+
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-exclusions {
+  min-width: 0;
+  margin-block: 4px 10px;
+}
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-list {
+  max-height: 15rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-list label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.campus-shell .constructor-ux .constructor-inspector .constructor-attendance-list input[type="checkbox"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.campus-shell .constructor :is(.constructor-pair-causes,.constructor-inspector-pair ul) {
+  margin: 6px 0;
+  padding-inline-start: 18px;
+}
+.campus-shell .constructor .constructor-pair-causes li { margin-block: 8px; }
+.campus-shell .constructor .constructor-pair-causes li small { display: block; }
+.campus-shell .constructor :is(.constructor-conflict-links,.constructor-inspector-pair) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.campus-shell .constructor .constructor-inspector-pair {
+  padding: 8px;
+  border: 1px solid var(--cp-line);
+  border-radius: 8px;
+}
