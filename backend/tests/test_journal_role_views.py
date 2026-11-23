@@ -201,6 +201,9 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual([row["numeric_score"] for row in visible[2]["results"]], [2, 4])
         self.assertEqual([row["numeric_value"] for row in visible[2]["summaries"]], [4])
         self.assertEqual([row["category"] for row in visible[2]["assessments"]], ["О", "П"])
+        admin = self.client.get(f"/api/admin/journals/{visible[2]['source']['source_id']}/detail",
+                                headers={"X-Dev-Auth": "admin-auth"}).json()
+        self.assertEqual([(row["category"], row["weight"]) for row in admin["assessments"]], [("О", 2), ("П", 1)])
         with self.assertRaisesRegex(ValueError, "Период вкладки"):
             sync_journal_values(self.database, second, spreadsheet_id=book, spreadsheet_title="Fixture",
                                 grade=7, subject="Математика/Физика", sheet_title=title, sheet_id=1)

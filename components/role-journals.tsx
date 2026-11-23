@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Info, LoaderCircle, RefreshCw } from 'lucide-react';
-import { isDefaultJournalPeriod, journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
+import { isDefaultJournalPeriod, journalCategoryLabel, studentPeriodStatus, studentSummaryPreview, journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
 import './student-journals.css';
 
 export type RoleJournalsApi = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -153,6 +153,7 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
   const [mappingState, setMappingState] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [view, setView] = useState('current');
+  const [workLimit, setWorkLimit] = useState(8);
   const [reload, setReload] = useState(0);
   const [localSelectedKey, setLocalSelectedKey] = useState('');
   const isControlled = controlledKey !== undefined;
@@ -187,7 +188,7 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
     return () => { active = false; };
   }, [api, reload]);
 
-  const visibleItems = useMemo(() => (items || []).filter(item => view === 'current' ? isDefaultJournalPeriod(item) : view.startsWith('period:') ? studentPeriodKey(item) === view : periodMatches(item.source?.period_status, view as JournalView)), [items, view]);
+  const visibleItems = useMemo(() => (items || []).filter(item => view === 'current' ? isDefaultJournalPeriod(item) : view.startsWith('period:') ? studentPeriodKey(item) === view : periodMatches(studentPeriodStatus(item), view as JournalView)), [items, view]);
   const periods = new Map((items || []).map(item => [studentPeriodKey(item), studentPeriodLabel(item)]));
   const currentPeriods = new Map((items || []).filter(isDefaultJournalPeriod).map(item => [studentPeriodKey(item), studentPeriodLabel(item)]));
   const periodGroups = new Map<string, StudentJournalItem[]>();
@@ -214,9 +215,10 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
   useEffect(() => {
     if (!selectedKey && initialScrollTop > 0) scrollContainer()?.scrollTo({ top: initialScrollTop });
   }, [initialScrollTop, items, selectedKey, scrollContainer]);
-  const archivedAvailable = Boolean(items?.some(item => item.source?.period_status === 'archived'));
+  const archivedAvailable = Boolean(items?.some(item => studentPeriodStatus(item) === 'archived'));
   const unassignedAvailable = Boolean(items?.some(item => item.source?.period_status === 'unassigned'));
   const openJournal = (item: StudentJournalItem) => {
+    setWorkLimit(8);
     listScrollTop.current = scrollContainer()?.scrollTop || 0;
     onSaveScroll?.(listScrollTop.current);
     if (isControlled) onOpenDetail?.(journalKey(item), listScrollTop.current);
@@ -263,6 +265,7 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
   };
 
   const emptyView = ['current', 'archived', 'all'].includes(view) ? view as JournalView : 'all';
+  const works = selected ? studentJournalRows(selected, true) : [];
   const detailSummaries = selected?.summaries.filter(summary => journalValue(summary.numeric_value ?? summary.text_value)) || [];
   const highlights = detailSummaries.filter(summary => ['term_grade', 'final_grade'].includes(summary.summary_type));
   const otherSummaries = detailSummaries.filter(summary => !highlights.includes(summary));
@@ -286,18 +289,18 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
           <div><h2 id="student-journals-title" ref={detailHeadingRef} tabIndex={-1}>{selected.source.subject}</h2><p>{studentPeriodLabel(selected)}{disambiguation(selected) ? ` · ${disambiguation(selected)}` : ''}</p></div>
         </header>
         {highlights.length ? <dl className="student-journal-summaries">{highlights.map(summary => <div key={`${summary.summary_type}:${summary.label}`}><dt>{summary.label}</dt><dd>{typeof summary.numeric_value === 'number' ? journalValue(summary.numeric_value) : summaryText(summary)}</dd></div>)}</dl> : null}
-        <ol className="student-journal-assessments" aria-label="Работы: сначала последние">{studentJournalRows(selected, true).map(({ assessment, result }) => {
+        <ol className="student-journal-assessments" aria-label="Работы: сначала последние">{works.slice(0, workLimit).map(({ assessment, result }) => {
           const presentation = studentResultDisplay(result, assessment.max_score);
-          const details = [assessment.category ? `Категория ${assessment.category}` : '', assessment.weight !== null && assessment.weight !== undefined && Number.isFinite(assessment.weight) && assessment.weight >= 0 ? `Вес ${journalValue(assessment.weight)}` : '',
-            assessment.max_score !== null && assessment.max_score !== undefined && Number.isFinite(assessment.max_score) && assessment.max_score > 0 ? `Максимум ${journalValue(assessment.max_score)}` : ''].filter(Boolean);
+          const maximum = assessment.max_score != null && assessment.max_score > 0 ? journalValue(assessment.max_score) : '';
           return <li className={`student-assessment is-${presentation.kind}`} key={assessment.id}>
-            <div><strong>{assessment.title}</strong><div className="student-assessment-date"><small>{formatDate(assessment.assessed_on)}</small>
-              {details.length ? <details className="student-assessment-meta"><summary aria-label="Вес и максимальный балл" title="Вес и максимальный балл"><Info size={13} aria-hidden="true" /></summary><span>{details.join(' · ')}</span></details> : null}
+            <div><strong>{assessment.title}</strong><div className="student-assessment-date"><small>{[formatDate(assessment.assessed_on), journalCategoryLabel(assessment.category), assessment.weight != null ? `Вес ${journalValue(assessment.weight)}` : ''].filter(Boolean).join(' · ')}</small>
+              {maximum ? <details className="student-assessment-meta"><summary aria-label="Максимальный балл" title="Максимальный балл"><Info size={13} aria-hidden="true" /></summary><span>Максимум {maximum}</span></details> : null}
             </div></div>
             <span className={`student-result is-${presentation.kind}`}>{presentation.value}{presentation.note ? <small>{presentation.note}</small> : null}</span>
           </li>;
         })}</ol>
-        {!studentJournalRows(selected).length ? <p className="sync-summary sync-summary--empty">Работы пока не опубликованы.</p> : null}
+        {works.length > workLimit && <button type="button" className="panel-refresh" onClick={() => setWorkLimit(value => value + 8)}>Показать ещё ({works.length - workLimit})</button>}
+        {!works.length ? <p className="sync-summary sync-summary--empty">Работы пока не опубликованы.</p> : null}
         <details className="student-journal-more"><summary>Показатели и сведения о журнале</summary>
           {otherSummaries.length ? <dl className="student-journal-summaries">{otherSummaries.map(summary => <div key={`${summary.summary_type}:${summary.label}`}><dt>{summaryLabel(summary)}</dt><dd>{typeof summary.numeric_value === 'number' ? journalValue(summary.numeric_value) : summaryText(summary)}</dd></div>)}</dl> : null}
           <p>{selected.source.sheet_title}</p>{selected.source.last_synced_at ? <p>Обновлено {formatDate(selected.source.last_synced_at)}</p> : null}
@@ -309,7 +312,7 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
           const results = recentStudentResults(item).slice(0, 3);
           const statuses = recentStudentStatuses(item);
           return <button type="button" className="student-subject-row" key={journalKey(item)} data-journal-key={journalKey(item)} aria-label={`Открыть журнал: ${item.source.subject}`} onClick={() => openJournal(item)}>
-            <span className="student-subject-copy"><strong title={item.source.subject}>{item.source.subject}</strong>{context ? <small>{context}</small> : null}</span>
+            <span className="student-subject-copy"><strong title={item.source.subject}>{item.source.subject}</strong>{context ? <small>{context}</small> : null}{studentSummaryPreview(item).map(summary => <small key={summary.label}>Итог · {journalValue(summary.numeric_value ?? summary.text_value)}</small>)}</span>
             <span className="student-subject-results" aria-label={results.length ? 'Последние оценки' : 'Нет оценок'}>{results.length ? results.map(({ assessment, result }) => { const presentation = studentResultDisplay(result, assessment.max_score); return <b className={`is-${presentation.kind}`} key={assessment.id}>{presentation.value}</b>; }) : <span>—</span>}{statuses.length ? <small className="student-subject-status">{statuses.map(({ status }) => status).join(' · ')}</small> : null}</span>
             <ChevronRight size={17} aria-hidden="true" />
           </button>;

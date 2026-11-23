@@ -316,19 +316,38 @@ test('student journals show a compact results table and preserve chronological d
   }
 });
 
-test('Campus reads the twice-imported synthetic journal from the local API', async ({ page }) => {
+for (const width of [390, 1440]) test(`Campus reads the twice-imported synthetic journal at ${width}px`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 900 });
   execFileSync('python', ['e2e/fixtures/journal-second-term.py'], {
     env: { ...process.env, PYTHONPATH: '.', MY_ISLAND_TEST_PROFILE: 'e2e' },
   });
   await openGrades(page);
-  const subject = page.locator('.student-subject-row').filter({ hasText: 'Синтетический предмет' });
+  const subject = page.locator('.student-subject-row').filter({ hasText: 'Математика' });
   await expect(subject).toHaveCount(1);
+  await expect(subject).toContainText('Итог · 4');
+  await expect(page.locator('.student-subject-row').filter({ hasText: 'История' })).not.toContainText('Итог');
+  await page.screenshot({ path: testInfo.outputPath(`student-list-${width}.png`) });
   await subject.click();
   const detail = page.locator('.student-journal-detail');
   await expect(detail).toContainText('Проверочная');
   await expect(detail).toContainText('Итог');
   await expect(detail).toContainText('4');
   await expect(detail).not.toContainText('Другой участник');
+  await expect(detail.locator('.student-assessment')).toHaveCount(8);
+  for (const type of ['Обязательная', 'Учебная', 'Пересдача']) await expect(detail).toContainText(type);
+  await page.screenshot({ path: testInfo.outputPath(`student-work-${width}.png`) });
+  await detail.getByRole('button', { name: /Показать ещё/ }).click();
+  await expect(detail.locator('.student-assessment')).toHaveCount(13);
+  await page.goto('/admin/journals?role=admin');
+  await page.getByRole('button', { name: /Математика/ }).first().click();
+  const list = page.locator('.journal-work-list');
+  await expect(list.locator('details')).toHaveCount(8);
+  await list.locator('summary').first().click();
+  await expect(list.locator('details').first()).toContainText('Тестовый ученик');
+  await list.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`admin-work-${width}.png`) });
+  await list.getByRole('button', { name: /Показать ещё/ }).click();
+  await expect(list.locator('details')).toHaveCount(13);
 });
 
 test('empty second term keeps first-term results behind explicit selection', async ({ page }) => {

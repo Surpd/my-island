@@ -4844,7 +4844,7 @@ class Database:
             if group_marker:
                 group_clause = " AND group_marker = ?"
                 params = (source_id, group_marker)
-            assignments = self.execute(connection, "SELECT id, title, assessed_on, weight, max_score, group_marker FROM journal_assessments WHERE source_id = ? AND active IS TRUE ORDER BY assessed_on, id", (source_id,)).fetchall()
+            assignments = self.execute(connection, "SELECT id, title, assessed_on, weight, max_score, group_marker, raw_source ->> 'category' AS category FROM journal_assessments WHERE source_id = ? AND active IS TRUE ORDER BY assessed_on, id", (source_id,)).fetchall()
             students = self.execute(connection, f"SELECT journal_student.id, journal_student.display_name, journal_student.group_marker, journal_student.identity_id, journal_student.match_status, journal_student.match_method, journal_student.entry_kind, journal_student.classification_method, identity.class_name FROM journal_students journal_student LEFT JOIN identities identity ON identity.id = journal_student.identity_id WHERE journal_student.source_id = ? AND journal_student.active IS TRUE{group_clause.replace('group_marker', 'journal_student.group_marker')} ORDER BY lower(journal_student.display_name)", params).fetchall()
             ids = [row["id"] for row in students]
             values: dict[tuple[Any, Any], dict[str, Any]] = {}
