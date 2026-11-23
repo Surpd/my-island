@@ -60,7 +60,8 @@ class CodexDiagnosticAuthTests(TestCase):
         for flag, raw, configured_hash, status in (
             ("0", self.secret, verifier, "flag_off"),
             ("1", None, "", "no_key_configured"),
-            ("1", "synthetic-malformed-raw", "", "raw_rejected"),
+            ("1", "synthetic-short-raw", "", "raw_rejected"),
+            ("1", self.secret + "\n", "", "raw_invalid_characters"),
             ("1", self.secret, "synthetic-malformed-digest", "digest_malformed"),
             ("1", self.secret, "0" * 64, "verifiers_mismatch"),
             ("1", self.secret, verifier, "enabled"),
@@ -111,6 +112,28 @@ class CodexDiagnosticAuthTests(TestCase):
                 self.assertEqual(response.status_code, 404)
                 self.assertNotIn(self.secret, response.text)
                 self.assertEqual(self.http.get("/api/diagnostics/session").status_code, 404)
+
+    def test_visible_ascii_punctuation_key_exchanges_without_normalization(self):
+        raw = self.secret + "".join(chr(code) for code in range(33, 127) if not chr(code).isalnum())
+        digest = sha256(raw.encode()).hexdigest()
+        with patch.dict(os.environ, {
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY": raw,
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": digest,
+        }):
+            response = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": raw})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(set(response.json()), {"token", "expires_at", "scope"})
+            self.assertNotIn(raw, response.text)
+            wrong = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": raw[:-1]})
+            self.assertEqual(wrong.status_code, 401)
+        for extra in (" ", "\t", "\r", "\n", "\x7f", "é"):
+            for invalid in (raw + extra, extra + raw, raw[:14] + extra + raw[14:]):
+                with patch.dict(os.environ, {
+                    "MY_ISLAND_CODEX_DIAGNOSTIC_KEY": invalid,
+                    "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": digest,
+                }):
+                    response = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": raw})
+                    self.assertEqual(response.status_code, 404)
 
     def test_rotating_raw_key_revokes_existing_tokens_and_flag_off_stays_closed(self):
         with patch.dict(os.environ, {
