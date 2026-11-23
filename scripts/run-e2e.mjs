@@ -26,6 +26,7 @@ const ownedServerEnv = {
 delete ownedServerEnv.MY_ISLAND_E2E_REUSE_SERVER;
 delete ownedServerEnv.MY_ISLAND_CODEX_DIAGNOSTICS;
 delete ownedServerEnv.MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256;
+delete ownedServerEnv.MY_ISLAND_CODEX_DIAGNOSTIC_KEY;
 const ignored = new Set([
   '.git', '.local-test', 'node_modules', '.next', '.vinext', '.wrangler', 'dist', 'data', 'test-results',
   'archive', 'artifacts', 'docs', 'site-scaffold', '.playwright-mcp',
@@ -250,6 +251,7 @@ try {
 
   delete runnerEnv.MY_ISLAND_CODEX_DIAGNOSTICS;
   delete runnerEnv.MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256;
+  delete runnerEnv.MY_ISLAND_CODEX_DIAGNOSTIC_KEY;
   runner = spawn(process.execPath, [
     path.join(modules, '@playwright', 'test', 'cli.js'),
     'test',

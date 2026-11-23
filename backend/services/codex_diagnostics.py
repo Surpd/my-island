@@ -16,15 +16,39 @@ READ_SCOPE = "diagnostic.read"
 TTL = timedelta(minutes=15)
 
 
-def configured_epoch() -> str | None:
-    digest = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")
-    if os.getenv("MY_ISLAND_CODEX_DIAGNOSTICS") != "1" or not re.fullmatch(r"[a-f0-9]{64}", digest):
-        return None
-    return _hash("diagnostics epoch:" + digest)
+_KEY_FORMAT = re.compile(r"[A-Za-z0-9_-]{43,128}")
+_DIGEST_FORMAT = re.compile(r"[a-f0-9]{64}")
 
 
 def _hash(value: str) -> str:
     return sha256(value.encode()).hexdigest()
+
+
+def _configured_verifier() -> str | None:
+    if os.getenv("MY_ISLAND_CODEX_DIAGNOSTICS") != "1":
+        return None
+    provided = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")
+    if provided and not _DIGEST_FORMAT.fullmatch(provided):
+        return None
+    raw = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY")
+    if raw is None:
+        return provided or None
+    # Use generated random text, not a memorable password. Format, diversity
+    # and repetition checks catch accidental blanks and obvious placeholders;
+    # they are not a substitute for cryptographic random generation.
+    if not _KEY_FORMAT.fullmatch(raw) or len(set(raw)) < 20:
+        return None
+    if any(raw[index:] == raw[:-index] for index in range(1, len(raw) // 2 + 1)):
+        return None
+    derived = _hash(raw)
+    if provided and not hmac.compare_digest(derived, provided):
+        return None
+    return derived
+
+
+def configured_epoch() -> str | None:
+    digest = _configured_verifier()
+    return _hash("diagnostics epoch:" + digest) if digest else None
 
 
 def bearer_token(value: str | None) -> str | None:
@@ -43,11 +67,12 @@ def _audit(database: Database, connection, action: str, session_id: str, view: s
 
 
 def exchange(database: Database, key: str | None) -> dict | None:
-    epoch = configured_epoch()
-    if not epoch or not key or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", key):
+    digest = _configured_verifier()
+    if not digest or not key or not _KEY_FORMAT.fullmatch(key):
         return None
-    if not hmac.compare_digest(_hash(key), os.environ.get("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")):
+    if not hmac.compare_digest(_hash(key), digest):
         return None
+    epoch = _hash("diagnostics epoch:" + digest)
     token = SESSION_PREFIX + token_urlsafe(32)
     session_id, expires = uuid4().hex, datetime.now(timezone.utc) + TTL
     with database.connection() as connection:
