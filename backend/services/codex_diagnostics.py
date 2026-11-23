@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from hashlib import sha256
 import hmac
+import logging
 import os
 import re
 from secrets import token_urlsafe
@@ -16,15 +18,59 @@ READ_SCOPE = "diagnostic.read"
 TTL = timedelta(minutes=15)
 
 
-def configured_epoch() -> str | None:
-    digest = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")
-    if os.getenv("MY_ISLAND_CODEX_DIAGNOSTICS") != "1" or not re.fullmatch(r"[a-f0-9]{64}", digest):
-        return None
-    return _hash("diagnostics epoch:" + digest)
+_KEY_FORMAT = re.compile(r"[A-Za-z0-9_-]{43,128}")
+_DIGEST_FORMAT = re.compile(r"[a-f0-9]{64}")
 
 
 def _hash(value: str) -> str:
     return sha256(value.encode()).hexdigest()
+
+
+class DiagnosticReadiness(StrEnum):
+    ENABLED = "enabled"
+    FLAG_OFF = "flag_off"
+    NO_KEY_CONFIGURED = "no_key_configured"
+    RAW_REJECTED = "raw_rejected"
+    DIGEST_MALFORMED = "digest_malformed"
+    VERIFIERS_MISMATCH = "verifiers_mismatch"
+
+
+def _verifier_and_readiness() -> tuple[str | None, DiagnosticReadiness]:
+    if os.getenv("MY_ISLAND_CODEX_DIAGNOSTICS") != "1":
+        return None, DiagnosticReadiness.FLAG_OFF
+    provided = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")
+    if provided and not _DIGEST_FORMAT.fullmatch(provided):
+        return None, DiagnosticReadiness.DIGEST_MALFORMED
+    raw = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY")
+    if raw is None:
+        return (provided, DiagnosticReadiness.ENABLED) if provided else (None, DiagnosticReadiness.NO_KEY_CONFIGURED)
+    # Use generated random text, not a memorable password. Format, diversity
+    # and repetition checks catch accidental blanks and obvious placeholders;
+    # they are not a substitute for cryptographic random generation.
+    if not _KEY_FORMAT.fullmatch(raw) or len(set(raw)) < 20:
+        return None, DiagnosticReadiness.RAW_REJECTED
+    if any(raw[index:] == raw[:-index] for index in range(1, len(raw) // 2 + 1)):
+        return None, DiagnosticReadiness.RAW_REJECTED
+    derived = _hash(raw)
+    if provided and not hmac.compare_digest(derived, provided):
+        return None, DiagnosticReadiness.VERIFIERS_MISMATCH
+    return derived, DiagnosticReadiness.ENABLED
+
+
+def _configured_verifier() -> str | None:
+    return _verifier_and_readiness()[0]
+
+
+def log_startup_readiness(logger: logging.Logger) -> None:
+    # The enum is the only dynamic value written here. Never log config,
+    # verifier, request values, or any derived details.
+    _, readiness = _verifier_and_readiness()
+    logger.info("Codex diagnostic startup: %s", readiness.value)
+
+
+def configured_epoch() -> str | None:
+    digest = _configured_verifier()
+    return _hash("diagnostics epoch:" + digest) if digest else None
 
 
 def bearer_token(value: str | None) -> str | None:
@@ -43,11 +89,12 @@ def _audit(database: Database, connection, action: str, session_id: str, view: s
 
 
 def exchange(database: Database, key: str | None) -> dict | None:
-    epoch = configured_epoch()
-    if not epoch or not key or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", key):
+    digest = _configured_verifier()
+    if not digest or not key or not _KEY_FORMAT.fullmatch(key):
         return None
-    if not hmac.compare_digest(_hash(key), os.environ.get("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")):
+    if not hmac.compare_digest(_hash(key), digest):
         return None
+    epoch = _hash("diagnostics epoch:" + digest)
     token = SESSION_PREFIX + token_urlsafe(32)
     session_id, expires = uuid4().hex, datetime.now(timezone.utc) + TTL
     with database.connection() as connection:

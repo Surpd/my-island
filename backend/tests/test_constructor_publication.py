@@ -1260,6 +1260,24 @@ class ConstructorPublicationTests(unittest.TestCase):
             self.assertTrue(all(r["state"] == "UNRESOLVED" or r["activity"] == "Math" for r in rows))
         self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-26")["items"][0]["activity"], "Math")
 
+    def test_stale_saved_roster_is_withheld_from_student_schedule(self):
+        from backend.services.schedule_experiments import save_experiment
+        scoped = self.lesson(id="scoped", subject="Scoped", audience={"kind": "groups", "group_ids": [str(self.math["id"])]})
+        draft = self.draft([scoped, self.lesson(id="other", subject="Other", period=1)])
+        draft = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=draft["payload"])
+        self.database.create_membership(self.math["id"], self.other_student["id"], "student", "synthetic")
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        from backend.services.constructor_resolution import bulk_audience_preview
+        rosters = bulk_audience_preview(self.database, draft["id"], expected_revision=draft["revision"], scope="template")
+        row = next(row for row in rosters["lessons"] if row["id"] == "scoped")
+        self.assertEqual((row["old_count"], row["proposed_count"]), (1, 2))
+        self.assertEqual([row["lesson_id"] for row in preview["deferred"]], ["scoped"])
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-26")
+        for identity in (self.student, self.other_student):
+            rows = canonical.project_student(self.database, identity["id"], "2026-10-26")["items"]
+            self.assertEqual([row["activity"] for row in rows if row["state"] == "ACTIVITY"], ["Other"])
+
     def test_bad_parallel_member_does_not_expand_remaining_audience(self):
         draft = self.draft([
             self.lesson(teacherId="unknown", audience={"kind":"groups", "group_ids":[str(self.math["id"])]}),

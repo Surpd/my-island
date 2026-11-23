@@ -4066,6 +4066,10 @@ class Database:
             if self.database_url:
                 lock_key = f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}"
                 self.execute(connection, "SELECT pg_advisory_xact_lock(hashtext(?))", (lock_key,))
+            else:
+                self.execute(connection, "BEGIN IMMEDIATE")
+            source["academic_year"] = source.get("academic_year") or "2026/27"
+            self._lock_journal_period(connection, (source["spreadsheet_id"], source["grade"], source["academic_year"]))
             if source.get("sheet_id") is not None:
                 source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
                 if not source_row:
@@ -4086,7 +4090,6 @@ class Database:
                     raise ValueError("Период вкладки отличается от сохранённого.")
             settings = self.execute(connection, "SELECT current_term FROM journal_term_settings WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ?", (source["spreadsheet_id"], source["grade"], source.get("academic_year", "2026/27"))).fetchone()
             current_term = int(settings["current_term"]) if settings else 1
-            source["academic_year"] = source.get("academic_year") or "2026/27"
             if not settings:
                 self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id, grade, academic_year, current_term) VALUES (?, ?, ?, ?)", (source["spreadsheet_id"], source["grade"], source["academic_year"], current_term))
             if source_row and source_row["term_number"]:
@@ -4823,35 +4826,77 @@ class Database:
             # An absent extension/schema means disabled.
             return False
 
+    def _lock_journal_period(self, connection: Any, scope: tuple[str, int, str]) -> None:
+        if self.database_url:
+            # The two-key advisory namespace cannot collide with the one-key
+            # workbook/sheet import locks. All period writers share this key.
+            self.execute(connection, "SELECT pg_advisory_xact_lock(hashtext('my-island-journal-period'), hashtext(?))",
+                         (json.dumps(scope, ensure_ascii=False, separators=(",", ":")),))
+
+    def _switch_journal_period(self, connection: Any, scope: tuple[str, int, str], term_number: int) -> None:
+        # PostgreSQL enforces the partial unique index as each row is written;
+        # a CASE update can promote before demoting for the same subject.
+        self.execute(connection, """UPDATE journal_sources
+            SET period_status=CASE WHEN term_number IS NULL THEN 'unassigned' ELSE 'archived' END
+            WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND period_status='current'
+              AND (term_number IS NULL OR term_number<>?)""", (*scope, term_number))
+        self.execute(connection, """UPDATE journal_sources SET period_status='current'
+            WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND term_number=? AND period_status='archived'""",
+            (*scope, term_number))
+        self.execute(connection, """INSERT INTO journal_term_settings(spreadsheet_id,grade,academic_year,current_term)
+            VALUES (?,?,?,?) ON CONFLICT(spreadsheet_id,grade,academic_year)
+            DO UPDATE SET current_term=excluded.current_term,updated_at=CURRENT_TIMESTAMP""", (*scope, term_number))
+
     def set_journal_current_term(self, spreadsheet_id: str, grade: int, academic_year: str, term_number: int) -> bool:
         if term_number not in (1, 2, 3):
             return False
+        scope = (spreadsheet_id, grade, academic_year)
         with self.connection() as connection:
-            row = self.execute(connection, "SELECT 1 FROM journal_sources WHERE spreadsheet_id=? AND grade=? LIMIT 1", (spreadsheet_id, grade)).fetchone()
-            if not row:
+            if not self.database_url:
+                self.execute(connection, "BEGIN IMMEDIATE")
+            self._lock_journal_period(connection, scope)
+            target = self.execute(connection, """SELECT 1 FROM journal_sources
+                WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND term_number=?
+                  AND period_status IN ('current','archived') LIMIT 1""", (*scope, term_number)).fetchone()
+            if not target:
                 return False
-            self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id,grade,academic_year,current_term) VALUES (?,?,?,?) ON CONFLICT(spreadsheet_id,grade,academic_year) DO UPDATE SET current_term=excluded.current_term,updated_at=CURRENT_TIMESTAMP", (spreadsheet_id, grade, academic_year, term_number))
-            self.execute(connection, "UPDATE journal_sources SET period_status=CASE WHEN term_number IS NULL THEN 'unassigned' WHEN term_number=? THEN 'current' ELSE 'archived' END WHERE spreadsheet_id=? AND grade=? AND academic_year=?", (term_number, spreadsheet_id, grade, academic_year))
+            self._switch_journal_period(connection, scope, term_number)
             return True
 
     def set_journal_source_term(self, source_id: Any, term_number: int, make_current: bool = False) -> bool:
         if term_number not in (1, 2, 3):
             return False
         with self.connection() as connection:
-            source = self.execute(connection, "SELECT * FROM journal_sources WHERE id=?", (source_id,)).fetchone()
+            if not self.database_url:
+                self.execute(connection, "BEGIN IMMEDIATE")
+            def find_source():
+                return self.execute(connection, "SELECT spreadsheet_id,grade,academic_year,subject FROM journal_sources WHERE id=?", (source_id,)).fetchone()
+            source = find_source()
             if not source:
                 return False
-            conflict = self.execute(connection, "SELECT 1 FROM journal_sources WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND subject=? AND term_number=? AND id<>? LIMIT 1", (source["spreadsheet_id"], source["grade"], source["academic_year"], source["subject"], term_number, source_id)).fetchone()
+            scope = (source["spreadsheet_id"], source["grade"], source["academic_year"])
+            self._lock_journal_period(connection, scope)
+            if self.database_url:
+                source = find_source()
+                if not source or (source["spreadsheet_id"], source["grade"], source["academic_year"]) != scope:
+                    return False
+            conflict = self.execute(connection, """SELECT 1 FROM journal_sources
+                WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND subject=? AND term_number=? AND id<>? LIMIT 1""",
+                (*scope, source["subject"], term_number, source_id)).fetchone()
             if conflict:
                 return False
-            setting = self.execute(connection, "SELECT current_term FROM journal_term_settings WHERE spreadsheet_id=? AND grade=? AND academic_year=?", (source["spreadsheet_id"], source["grade"], source["academic_year"])).fetchone()
-            current_term = term_number if make_current else (int(setting["current_term"]) if setting else 1)
             if make_current:
-                self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id,grade,academic_year,current_term) VALUES (?,?,?,?) ON CONFLICT(spreadsheet_id,grade,academic_year) DO UPDATE SET current_term=excluded.current_term,updated_at=CURRENT_TIMESTAMP", (source["spreadsheet_id"], source["grade"], source["academic_year"], term_number))
-            self.execute(connection, "UPDATE journal_sources SET term_number=?,period_status=CASE WHEN ? THEN 'current' WHEN ?=? THEN 'current' ELSE 'archived' END WHERE id=?", (term_number, make_current, term_number, current_term, source_id))
-            if make_current:
-                self.execute(connection, "UPDATE journal_sources SET period_status=CASE WHEN term_number IS NULL THEN 'unassigned' WHEN term_number=? THEN 'current' ELSE 'archived' END WHERE spreadsheet_id=? AND grade=? AND academic_year=? AND id<>?", (term_number, source["spreadsheet_id"], source["grade"], source["academic_year"], source_id))
+                self.execute(connection, "UPDATE journal_sources SET term_number=?,period_status='archived' WHERE id=?",
+                             (term_number, source_id))
+                self._switch_journal_period(connection, scope, term_number)
+            else:
+                setting = self.execute(connection, """SELECT current_term FROM journal_term_settings
+                    WHERE spreadsheet_id=? AND grade=? AND academic_year=?""", scope).fetchone()
+                current_term = int(setting["current_term"]) if setting else 1
+                self.execute(connection, "UPDATE journal_sources SET term_number=?,period_status=? WHERE id=?",
+                             (term_number, "current" if term_number == current_term else "archived", source_id))
             return True
+
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
             source = self.execute(connection, "SELECT id, spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, academic_year, term_number, period_status, status, last_synced_at, last_error, last_error_code, last_error_details, classification, classification_reason, auto_sync_enabled, excluded_from_journals FROM journal_sources WHERE id = ?", (source_id,)).fetchone()
@@ -5208,8 +5253,8 @@ class Database:
             if row:
                 self.execute(connection, "UPDATE journal_sources SET status='skipped', classification=?, classification_reason=?, last_error=NULL, last_error_code=NULL, last_error_details=NULL WHERE id=?", (kind, reason, row["id"]))
             else:
-                self.execute(connection, """INSERT INTO journal_sources (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, classification, classification_reason)
-                    VALUES (?, ?, ?, ?, ?, ?, 'skipped', ?, ?)
+                self.execute(connection, """INSERT INTO journal_sources (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, period_status, status, classification, classification_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, 'unassigned', 'skipped', ?, ?)
                     ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status='skipped', classification=excluded.classification, classification_reason=excluded.classification_reason, last_error=NULL, last_error_code=NULL, last_error_details=NULL""", (spreadsheet_id, spreadsheet_title, grade, sheet_title.strip(), sheet_title, str(sheet_id), kind, reason))
 
     def record_journal_failure(self, spreadsheet_id: str, subject: str, error: str, *, code: str | None = None, details: str | None = None, grade: int | None = None,
@@ -5224,8 +5269,8 @@ class Database:
             )
             if not changed.rowcount and grade is not None:
                 self.execute(connection, """INSERT INTO journal_sources
-                    (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, status, last_error, last_error_code, last_error_details)
-                    VALUES (?, ?, ?, ?, ?, ?, 'error', ?, ?, ?)
+                    (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title, sheet_id, period_status, status, last_error, last_error_code, last_error_details)
+                    VALUES (?, ?, ?, ?, ?, ?, 'unassigned', 'error', ?, ?, ?)
                     ON CONFLICT(spreadsheet_id, sheet_title) DO UPDATE SET status = 'error', last_error = excluded.last_error,
                         last_error_code = excluded.last_error_code, last_error_details = excluded.last_error_details""",
                     (spreadsheet_id, spreadsheet_title, grade, subject, sheet_title or subject,

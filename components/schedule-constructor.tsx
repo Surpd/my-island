@@ -3000,7 +3000,8 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
           const groupNames = linkedInstructionalGroups(lesson, groups).map(audienceLabel).filter(label => !technicalGroup(label));
           const audience = [...new Set([...classNames, ...groupNames])].join(' / ') || 'Класс или группа не указаны';
           const {start, end} = lessonTimes(lesson, draft.payload.slots);
-          return [lesson.id, [lesson.subject || 'Занятие', DAYS[lesson.day], formatLessonTimeRange(start, end) || 'Время не указано', audience].filter(Boolean).join(' · ')];
+          const kind = isLunch(lesson) ? 'lunch' : isNoLesson(lesson) ? 'no_lesson' : editorActivityType(lesson) || 'lesson';
+          return [lesson.id, [lesson.subject || 'Занятие', editorKinds[kind], DAYS[lesson.day], formatLessonTimeRange(start, end) || 'Время не указано', audience].filter(Boolean).join(' · ')];
         }))}
         onClose={() => setReviewMode(null)}
         onSave={save}
@@ -3015,6 +3016,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
           setReviewMode(null);setResolutionFromReview(true);setResolutionIssue(matches[0]);return true;
         }}
         lessonDetails={Object.fromEntries(draft.payload.lessons.map(lesson => [lesson.id, {
+          kind: isLunch(lesson) ? 'lunch' : isNoLesson(lesson) ? 'no_lesson' : editorActivityType(lesson),
           ...lessonTimes(lesson,draft.payload.slots),day:lesson.day,subject:lesson.subject,
           classes:displayedClasses(lesson).flatMap(id => groups.find(g=>g.id===id)?.name || []),
           teachers:[...new Set([lesson.teacherId,...(lesson.teacherIds || [])])].flatMap(id=>teachers.find(t=>t.id===id)?.name || []),
@@ -4056,7 +4058,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                           {groups.filter(group => group.group_type === 'class' && payload.classes.includes(group.id)).map(group =>
                             <option key={group.id} value={group.id}>{group.name}</option>)}
                         </select></label><p>Поимённый список для кружка не нужен.</p></> : null}
-                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} onConfirmRecalculation={() => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => {
+                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} recalculationLabel={schoolReview ? 'Открыть проверку сохранённого черновика' : undefined} onConfirmRecalculation={schoolReview && dirty ? undefined : () => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => {
                           const edits = explicitAudienceEditIds.current.get(draft.id) || new Set<string>();
                           edits.add(selected.id);
                           explicitAudienceEditIds.current.set(draft.id, edits);
@@ -4278,7 +4280,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               <div className="constructor-editor-actions">
                 {structuredCreation && creationError && <p role="alert" className="constructor-create-error">{creationError}</p>}
                 <button type="button" onClick={() => setPanelOpen(false)}>К сетке</button>
-                <span>{structuredCreation ? '' : saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span>
+                <span>{structuredCreation ? '' : saving ? 'Сохраняется' : dirty ? 'При сохранении запишутся все правки черновика' : 'Сохранено'}</span>
                 {structuredCreation ? <button type="button" onClick={addFromEditor}><Plus size={15} aria-hidden="true" /> {addLabel}</button>
                   : <button type="button" onClick={() => void save()} disabled={!dirty || saving}><Save size={15} aria-hidden="true" /> Сохранить правку</button>}
               </div>
