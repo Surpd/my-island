@@ -69,8 +69,9 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   };
 }
 
-async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean } = {}) {
+async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean } = {}) {
   let previewCount = 0;
+  let normalizationCount = 0;
   let publishPayload: Record<string, unknown> | null = null;
   let historyItems: Record<string, unknown>[] = [];
   await page.route(`${API}/api/admin/**`, async (route) => {
@@ -83,7 +84,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       return route.fulfill({ json: { items: [{ id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, updated_at: '2026-10-27T08:00:00Z', is_primary_template: true, draft_kind: 'school', lesson_count: 1, event_count: 0, group_count: 1, day_count: 1 }] } });
     }
     if (path.endsWith('/schedule/experiments/school/directory')) {
-      return route.fulfill({ json: { groups: [{ id: 'group-fixture', name: '7А', display_name: '7А', group_type: 'class', base_class_name: '7' }], teachers: [{ id: 'teacher-fixture', display_name: 'Анна Учитель' }], students: [{id: 'student-fixture', display_name: 'Мария Тестова'}], rooms: [] } });
+      return route.fulfill({ json: { groups: [{ id: 'group-fixture', name: '7А', display_name: '7А', group_type: 'class', base_class_name: '7' }, ...(options.legacyReview ? [{ id: 'group-secondary', name: '7Б', display_name: '7Б', group_type: 'class', base_class_name: '7' }] : [])], teachers: [{ id: 'teacher-fixture', display_name: 'Анна Учитель' }], students: [{id: 'student-fixture', display_name: 'Мария Тестова'}], rooms: [] } });
     }
     if (path.endsWith('/export/link')) return route.fulfill({ json: { url: 'https://docs.google.com/spreadsheets/d/synthetic/edit#gid=1088', current: true, revision: 1, previous_revision: null } });
     if (path === '/api/admin/schedule/experiments/school/audience-preview') return route.fulfill({json:{lessons:{}}});
@@ -92,12 +93,19 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path.startsWith('/api/admin/schedule/activities')) return route.fulfill({ json: { items: [] } });
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}`) {
       const lessons = ['lesson-info', 'lesson-conflict', 'lesson-related', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
-        id, day: 0, period: 0, subject: id === 'lesson-related' ? 'Физика' : 'Математика', room: '309', classId: 'group-fixture', teacherId: 'teacher-fixture',
+        id, day: 0, period: 0, subject: id === 'lesson-related' ? 'Физика' : 'Математика', room: '309', classId: 'group-fixture', ...(options.legacyReview && id === 'lesson-info' ? { classIds: ['group-fixture', 'group-secondary'] } : {}), teacherId: 'teacher-fixture',
       }));
-      return route.fulfill({ json: { id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, base_version_id: 'base-version-hidden-in-ui', payload: { days: [0], slots: [{ start: '09:00', end: '09:45' }], classes: ['group-fixture'], lessons } } });
+      return route.fulfill({ json: { id: DRAFT_ID, name: 'Шаблон для публикации', revision: 1, base_version_id: 'base-version-hidden-in-ui', payload: { days: [0], slots: [{ start: '09:00', end: '09:45' }], classes: ['group-fixture', ...(options.legacyReview ? ['group-secondary'] : [])], lessons } } });
     }
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}/normalization-preview`) {
-      return route.fulfill({ json: { source_id: DRAFT_ID, source_revision: 1, automatic_count: 0, changes: [], manual: [], retained_warning_count: 0 } });
+      normalizationCount += 1;
+      const examples = [{ lesson_id: 'lesson-info', subject: 'Математика' }];
+      const warnings = options.legacyReview ? [
+        { reason: 'Нет подтверждённого назначения преподавателя группе', count: 1, examples },
+        { reason: 'Не подтверждён преподаватель', count: 1, examples },
+        { reason: 'У исходной записи отсутствует код данных', count: 1, examples },
+      ] : [];
+      return route.fulfill({ json: { source_id: DRAFT_ID, source_revision: 1, automatic_count: 0, changes: [], manual: [], retained_warning_count: warnings.length, retained_warnings: warnings } });
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
       return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
@@ -131,7 +139,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
   await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Проверка расписания' });
   await expect(dialog).toBeVisible();
-  return { dialog, getPublishPayload: () => publishPayload };
+  return { dialog, getPublishPayload: () => publishPayload, getReviewRequests: () => ({ previewCount, normalizationCount }) };
 }
 
 test('publication preview groups pairs, separates severity and keeps the affected lesson details', async ({ page }) => {
@@ -270,4 +278,29 @@ test('показывает имя из справочника в единой к
   await sheet.getByRole('button', {name: 'Создать лист экспорта'}).click();
   await expect(sheet.getByRole('link', {name: 'Открыть экспортированный лист'})).toHaveAttribute('href', /#gid=1088$/);
   expect(writes).toBe(1);
+});
+
+
+test('legacy warning rows name both classes and return to the same review without rechecking', async ({ page }) => {
+  const { dialog, getReviewRequests } = await openPublicationPanel(page, { legacyReview: true });
+  const fixesTab = dialog.getByRole('button', { name: 'Составы и старые записи', exact: true });
+  await fixesTab.click();
+  const retained = dialog.locator('details[data-review-fix="legacy-retained"]');
+  await retained.locator('summary').click();
+  await expect(retained.getByText('У исходной записи отсутствует код данных', { exact: true })).toBeVisible();
+  await expect(retained.getByText('Не подтверждён преподаватель', { exact: true })).toBeVisible();
+  await expect(retained.getByText('Нет подтверждённого назначения преподавателя группе', { exact: true })).toBeVisible();
+  const target = retained.locator('.constructor-review-warning').filter({ hasText: 'У исходной записи отсутствует код данных' })
+    .getByRole('button', { name: /Показать в расписании/ });
+  await expect(target.locator('..')).toContainText(/7А\s*\/\s*7Б/);
+  await target.focus();
+  const checks = getReviewRequests();
+  expect(checks).toEqual({ previewCount: 1, normalizationCount: 1 });
+  await target.press('Enter');
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Назад к проверке', exact: true }).first().click();
+  await expect(fixesTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(retained).toHaveAttribute('open', '');
+  await expect(target).toBeFocused();
+  expect(getReviewRequests()).toEqual(checks);
 });

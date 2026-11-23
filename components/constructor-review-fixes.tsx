@@ -55,7 +55,7 @@ function reasonLabel(reason: string) {
   if (/класс.*не (найден|выбран)/i.test(reason)) return 'Выберите действующий класс.';
   if (/нет.*(членства|участников)|пуст.*групп/i.test(reason)) return 'Проверьте, кто входит в эту группу.';
   if (/не.*(определ|подтверж).*состав|аудитори/i.test(reason)) return 'Уточните, кто должен посещать занятие, и проверьте состав.';
-  return 'Проверьте данные занятия в конструкторе.';
+  return reason.trim() || 'Причина не сохранена.';
 }
 
 function LessonButton({ id, label, action = 'Показать в расписании', onOpen, disabled, available }: {
@@ -177,6 +177,7 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
           <div>
             <strong>{lessonLabels[item.lesson_id] || 'Занятие'}</strong>
             <p>{reasonLabel(item.reason)}</p>
+            {reasonLabel(item.reason) !== item.reason ? <ReasonDetails reason={item.reason} /> : null}
           </div>
           {lessonButton(item.lesson_id, lessonLabels[item.lesson_id] || 'занятие')}
         </li>)}</ul>
@@ -184,12 +185,12 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
       {preview.retained_warning_count ? <details data-review-fix="legacy-retained">
         <summary>Предупреждения, которые сохранятся ({preview.retained_warning_count})</summary>
         {preview.retained_warnings.map(warning => <div className="constructor-review-warning" key={warning.reason}>
-          <strong>{reasonLabel(warning.reason)}</strong>
+          <strong>{warning.reason.trim() || 'Причина не сохранена.'}</strong>
+          {reasonLabel(warning.reason) !== warning.reason ? <p>{reasonLabel(warning.reason)}</p> : null}
           <p>Записей — {warning.count}{warning.count > warning.examples.length ? `. Показаны первые ${warning.examples.length}` : ''}.</p>
           <ul className="constructor-review-list">{warning.examples.map(example => <li key={example.lesson_id}>
             <span>{lessonLabels[example.lesson_id] || example.subject}</span>{lessonButton(example.lesson_id, example.subject)}
           </li>)}</ul>
-          <ReasonDetails reason={warning.reason} />
         </div>)}
       </details> : null}
       {preview.automatic_count > 0 && !readOnly ? <>

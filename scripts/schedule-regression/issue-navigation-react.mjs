@@ -272,7 +272,7 @@ async function modern(page, width) {
   await button(route, activeId === fixture.cases.Q53 ? physics : english).click();
   route = await inspectAt(page, otherId, activeId, width, 'Пятница');
   await backToGrid(page, route);
-  await button(route, 'К проверке').click();
+  await button(route, 'Назад к проверке').click();
   dialog = page.getByRole('dialog', { name: 'Проверка расписания' });
   await dialog.waitFor();
   await expectEventually('Search survives return to review', async () => (await dialog.getByRole('searchbox', { name: 'Поиск по вопросам' }).inputValue()) === english);
@@ -405,7 +405,7 @@ async function correctRoom(initial) {
     const refreshed = page.waitForResponse(response =>
       response.url().endsWith('/publication/preview') && response.request().method() === 'POST'
       && response.request().postDataJSON().expected_revision === edited.revision);
-    await button(inspector, 'К проверке').click();
+    await button(inspector, 'Назад к проверке').click();
     const updateResponse = await refreshed;
     assert.ok(updateResponse.ok(), 'Updated revision was checked through the real API');
     const updatedReview = await updateResponse.json();

@@ -2896,14 +2896,22 @@ export function ScheduleConstructor({ api }: { api: Api }) {
           return response;
         }} />}
       {resolutionIssue && draft ? <ConstructorResolutionPanel api={api} draftId={draft.id} revision={draft.revision} lessons={draft.payload.lessons} slots={draft.payload.slots} issue={resolutionIssue} teacherNames={Object.fromEntries(teachers.map(t=>[t.id,t.name]))} groupNames={Object.fromEntries(groups.map(g=>[g.id,g.name]))} studentNames={Object.fromEntries(students.map(s=>[s.id,s.name]))} dirty={dirty} onClose={()=>{setResolutionIssue(null);if(resolutionFromReview){setReviewFilter(undefined);setReviewMode('review');}setResolutionFromReview(false);}} onNavigate={id=>{showIssueLesson(id,resolutionFromReview?'review':'grid',resolutionIssue.message,[resolutionIssue.lessonId,...(resolutionIssue.related?[resolutionIssue.related]:[])]);setResolutionIssue(null);setResolutionFromReview(false);}} onUpdated={async(value)=>{const updated=value as Draft|undefined;if(updated?.payload){setHistory(items=>[...items.slice(-49),draft.payload]);setFuture([]);revision.current=updated.revision;baseDraftRef.current=updated;setDraft(updated);setDirty(false);changeVersion.current++;}else{await open(draft.id);}await refreshDrafts();}} /> : null}
-      {reviewMode && draft && schoolReview ? <ConstructorPublicationPanel
-        key={`${draft.id}:${reviewMode}`} api={api} mode={reviewMode} draftId={draft.id} draftName={draft.name}
+      {(reviewMode || route?.origin === 'review') && draft && schoolReview ? <ConstructorPublicationPanel
+        key={`${draft.id}:${reviewMode || 'review'}`} api={api} mode={reviewMode || 'review'} suspended={!reviewMode} draftId={draft.id} draftName={draft.name}
         revision={draft.revision} weekStart={draft.payload.week_start} dirty={dirty} readOnly={readOnlySchoolWorkspace} publicationEnabled={consolidatedSchedule}
         day={day} classId={rosterClassId} classLabel={rosterClassLabel}
         teacherNames={Object.fromEntries(teachers.map(item => [item.id, item.name]))}
         groupNames={Object.fromEntries(groups.map(item => [item.id, item.name]))}
         studentNames={Object.fromEntries(students.map(item => [item.id, item.name]))}
-        lessonLabels={Object.fromEntries(draft.payload.lessons.map(lesson => [lesson.id, `${lesson.subject || 'Занятие'} · ${DAYS[lesson.day]}, ${lesson.start || draft.payload.slots[lesson.period]?.start || 'время не указано'}`]))}
+        lessonLabels={Object.fromEntries(draft.payload.lessons.map(lesson => {
+          // Use saved placement and explicit group links, not a transient roster or filtered lane.
+          const classIds = visualClasses(lesson, groups);
+          const classNames = [...new Set(classIds.map(id => groups.find(group => group.id === id)?.name || 'Класс не уточнён'))];
+          const groupNames = linkedInstructionalGroups(lesson, groups).map(audienceLabel).filter(label => !technicalGroup(label));
+          const audience = [...new Set([...classNames, ...groupNames])].join(' / ') || 'Класс или группа не указаны';
+          const {start, end} = lessonTimes(lesson, draft.payload.slots);
+          return [lesson.id, [lesson.subject || 'Занятие', DAYS[lesson.day], formatLessonTimeRange(start, end) || 'Время не указано', audience].filter(Boolean).join(' · ')];
+        }))}
         onClose={() => setReviewMode(null)}
         onSave={save}
         onRostersUpdated={applyRosterDraft}
@@ -3391,7 +3399,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               setPanelOpen(true);}}>{selected?'Редактировать занятие':'Создать занятие в слоте'}</button> : null}
             {route.mayCreate && customSlotTime ? <small>Показан пересекающийся урок. Для создания занятия уточните время по звонкам.</small> : null}
             {route.slot && !selectedCell ? <small>Для этого времени или класса в сетке нет подходящей ячейки. Уточните размещение в сверке.</small> : null}
-            <button onClick={backToIssues}>К проверке</button>
+            <button onClick={backToIssues}>{route.origin === 'review' ? 'Назад к проверке' : 'К проверке'}</button>
           </section> : null}
           <div className={`constructor-layout ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
             <div ref={gridWrap} className={`constructor-grid-wrap ${density} ${compactDay ? "constructor-day-overview" : ""}`} onScroll={(event) => {
@@ -3696,7 +3704,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         : 'Выберите ячейку'}
                   </h2>
                 </div>
-                <div className="constructor-inspector-head-actions">{route ? <button onClick={backToIssues}>К проверке</button> : null}<button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
+                <div className="constructor-inspector-head-actions">{route ? <button onClick={backToIssues}>{route.origin === 'review' ? 'Назад к проверке' : 'К проверке'}</button> : null}<button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
               </div>
               {focus || selected ? (
                 <>
