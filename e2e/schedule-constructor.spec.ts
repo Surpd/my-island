@@ -156,7 +156,7 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
     .filter({ hasText: 'Преподаватель' })
     .locator('select');
   await teacher.selectOption(teacherId);
-  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
   await page
     .locator('.constructor-inspector label')
     .filter({ hasText: 'Кабинет' })
