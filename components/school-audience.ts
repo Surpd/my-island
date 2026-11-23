@@ -38,7 +38,11 @@ const audienceParts = (group: DirectoryRow) => {
   const key = text(group.name);
   const rawName = text(group.display_name || group.name);
   const isClass = String(group.group_type || '') === 'class';
-  if (isClass) return [classLabel(group.base_class_name || rawName)];
+  if (isClass) {
+    // The base grade is shared by multiple classes; keep a human class caption's suffix.
+    const explicitName = [rawName, key].find(value => /^(?:5|6|7|8|9|10|11)(?:(?:\s*[-–—]\s*|\s+)\p{L}[\p{L}\d]*|\p{L}[\p{L}\d]*)(?:\s*класс)?$/iu.test(value));
+    return [classLabel(explicitName || group.base_class_name || rawName)];
+  }
   if (String(group.semantic_dimension || '') === 'grade7_shared_split' && String(group.role || '') === 'instructional_partition') {
     const split = text(group.subject_subgroup || key.match(/^grade7:split:(\d+)$/u)?.[1]);
     return [split ? `Математика · 7-${split}` : rawName];

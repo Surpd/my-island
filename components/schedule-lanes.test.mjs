@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   fixedGroup,
+  occupiedCellLanes,
   schoolSourceLane,
   timetableLanes,
 } from './schedule-lanes.ts';
@@ -41,6 +42,45 @@ test('the ninth grade keeps empty seats and honors independent source positions'
   assert.equal(layouts[4].columns, 1);
   assert.equal(layouts[5].positions.get('unknown').unresolved, true);
 });
+test('compacts occupied ninth-grade slots independently, honoring source order', () => {
+  const make = (id, canonical, sourceLane, remainder = false) => ({
+    id, key: id, fixed: fixedGroup(canonical, '9'), sourceLane, remainder,
+  });
+  const left = make('base', 'grade9-math-A');
+  const red = make('red', '', 1, true);
+  const green = make('green', '', 2);
+  const { layouts } = timetableLanes([[green, red, left], [green, red], [left]], 3);
+  const map = (index, visible) => occupiedCellLanes(layouts[index], visible);
+  const expectedRows = [['base', 'red', 'green'], ['red', 'green'], ['base']];
+  for (const [index, expected] of expectedRows.entries()) {
+    const actual = map(index, [...expected].reverse());
+    assert.equal(actual.columns, expected.length);
+    assert.deepEqual([...actual.positions.keys()], expected);
+    expected.forEach((id, col) => assert.deepEqual(actual.positions.get(id), { col, row: 0, span: 1 }));
+  }
+  assert.equal(layouts[1].positions.get('red').col, 1, 'the stable layout is not changed');
+  assert.equal(map(0, ['green']).positions.get('green').col, 0, 'filters do not leave holes');
+  assert.equal(map(1, []).columns, 1);
+});
+
+test('seventh-grade continued cards fill the cell and same-lane conflicts remain explicit', () => {
+  const make = (id, lane) => ({ id, key: id, fixed: fixedGroup('grade7:split:' + lane, '7') });
+  const a = make('a', 1), b = make('b', 2), clash = make('clash', 2);
+  const { layouts } = timetableLanes([[a, b, clash], [a, b], [b]], 2);
+  const first = occupiedCellLanes(layouts[0], ['clash', 'b', 'a']);
+  assert.equal(first.columns, 3);
+  assert.deepEqual([...first.positions.keys()], ['a', 'b', 'clash']);
+  assert.equal(first.positions.get('b').conflict, true);
+  assert.equal(first.positions.get('clash').unresolved, true);
+  const second = occupiedCellLanes(layouts[1], ['b', 'a']);
+  assert.equal(second.columns, 2);
+  assert.deepEqual([...second.positions.keys()], ['a', 'b']);
+  const continued = occupiedCellLanes(layouts[2], ['b']);
+  assert.equal(continued.columns, 1);
+  assert.equal(continued.positions.get('b').col, 0);
+  assert.equal(continued.positions.get('b').conflict, undefined);
+});
+
 test('the second seventh-grade group stays right across subjects', () => {
   const { layouts } = timetableLanes([
     [{ id: 'history', key: '2', fixed: fixedGroup('grade7:split:2', '7') }],

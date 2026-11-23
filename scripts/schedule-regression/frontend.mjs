@@ -13,6 +13,12 @@ for (const name of ['app', 'components', 'public']) {
 for (const name of ['package.json', 'package-lock.json', 'vite.config.ts', 'tsconfig.json', 'next.config.ts']) {
   await cp(path.join(root, name), path.join(target, name));
 }
+// school-audience.ts imports this checked-in alias vocabulary. Mirror the
+// single shared asset, never the backend directory or any runtime data.
+const sharedSubjectAliases = 'backend/services/schedule_subject_aliases.json';
+await mkdir(path.dirname(path.join(target, sharedSubjectAliases)), { recursive: true });
+await cp(path.join(root, sharedSubjectAliases), path.join(target, sharedSubjectAliases));
+
 await mkdir(path.join(target, '.openai'), { recursive: true });
 await cp(path.join(root, '.openai/hosting.json'), path.join(target, '.openai/hosting.json'));
 await rm(path.join(target, 'components/schedule-admin.tsx'), { force: true });

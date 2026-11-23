@@ -29,10 +29,49 @@ export function schedulePlacementClassIds(lesson: PlacementLesson, selectedColum
   return [...new Set((ids?.length ? ids : selectedColumnClassIds).filter(Boolean))];
 }
 
-export function confirmedClassLunchMarker(lesson: { specialMark?: string; classId?: string; classIds?: string[] }, groups: Pick<ScheduleGroup, 'id' | 'group_type'>[]): boolean {
+const legacyLunchScope = 'Уточните охват обеда: класс или отдельная группа';
+
+type LunchMarker = {
+  specialMark?: string;
+  classId?: string;
+  classIds?: string[];
+  groupId?: string;
+  groupIds?: string[];
+  audienceMode?: string;
+  grade_scope?: string;
+  excludedGroupIds?: string[];
+  needsClarification?: boolean;
+  importError?: boolean;
+  clarificationReason?: string;
+  audience?: { kind?: string; class_ids?: string[]; group_ids?: string[]; grade?: string;
+    student_ids?: string[]; include_student_ids?: string[]; exclude_student_ids?: string[];
+    partition_group_ids?: string[]; partition_dimension?: string };
+};
+
+type ClassEvidence = Pick<ScheduleGroup, 'id' | 'group_type' | 'archived_at'>[];
+
+export function confirmedClassLunchMarker(lesson: LunchMarker, groups: ClassEvidence): boolean {
   if (lesson.specialMark !== 'lunch') return false;
-  const classIds = lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
-  return classIds.length > 0 && classIds.every((id) => groups.some((group) => group.id === id && group.group_type === 'class'));
+  const classIds = [...new Set((lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : []).filter(Boolean))];
+  if (classIds.length === 0 || (lesson.classId && !classIds.includes(lesson.classId))) return false;
+  if (!classIds.every(id => groups.some(group => group.id === id && group.group_type === 'class' && !group.archived_at))) return false;
+  const rule = lesson.audience;
+  const ruleClasses = [...new Set((rule?.class_ids || []).filter(Boolean))];
+  return !(lesson.audienceMode === 'remainder' || lesson.grade_scope || lesson.excludedGroupIds?.length
+    || [...(lesson.groupIds || []), lesson.groupId].some(id => id && !classIds.includes(id))
+    || (rule?.kind && rule.kind !== 'classes') || rule?.grade || rule?.group_ids?.length || rule?.student_ids?.length
+    || rule?.include_student_ids?.length || rule?.exclude_student_ids?.length || rule?.partition_group_ids?.length
+    || rule?.partition_dimension
+    || (ruleClasses.length && (ruleClasses.length !== classIds.length || ruleClasses.some(id => !classIds.includes(id)))));
+}
+
+/** An empty result means only the historical marker advisory was hidden, not saved away. */
+export function displayedClarificationReason(lesson: LunchMarker, groups: ClassEvidence): string | undefined {
+  const reason = lesson.clarificationReason;
+  if (!lesson.importError && reason && confirmedClassLunchMarker(lesson, groups)) {
+    return reason.trim().split('; ').filter(clause => clause !== legacyLunchScope).join('; ');
+  }
+  return reason || undefined;
 }
 
 export function addMinutes(time: string, amount: number) {
@@ -545,4 +584,22 @@ export function parseQuick(text: string, contextClassId: string, groups: Schedul
     room,
     unknown: words.filter((_, index) => !used.has(index)),
   };
+}
+
+export function isTypedScheduleClub(lesson: {
+  activityType?: string;
+  canonical?: { assignment?: { metadata?: { activity_type?: string } } };
+}) {
+  return (lesson.activityType || lesson.canonical?.assignment?.metadata?.activity_type) === 'club';
+}
+
+const clubLessonOnlyNotes = new Set([
+  'для этого предмета не подтверждена учебная группа',
+  'не определена учебная группа для урока английского',
+  'выберите группу и проверьте её состав',
+]);
+export function effectiveClubReviewNote(reason: string) {
+  return reason.split(';').map(clause => clause.trim()).filter(clause => !clubLessonOnlyNotes.has(
+    clause.replace(/[ .]+$/g, '').toLocaleLowerCase('ru').replace(/\s+/g, ' '),
+  )).join('; ');
 }

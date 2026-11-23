@@ -109,7 +109,7 @@ class SpecialSessionTests(TestCase):
             {"Physics", "Math"},
         )
         lesson = draft["payload"]["lessons"][0]
-        lesson.update(audience_snapshot=None, attendance_reason="Individual timetable")
+        lesson.update(audience_snapshot=None)
         lesson["audience"]["exclude_student_ids"] = [student]
         updated = save_experiment(
             self.database,
@@ -118,6 +118,8 @@ class SpecialSessionTests(TestCase):
             payload=draft["payload"],
             actor_user_id=self.database.get_or_create_user(29000001, "admin")["id"],
         )
+        updated = get_experiment(self.database, draft["id"])
+        self.assertTrue(updated["payload"]["lessons"][0]["attendance_history"][0]["actor"])
         self.assertEqual(
             updated["payload"]["lessons"][0]["attendance_history"][0]["excluded"],
             [student],

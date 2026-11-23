@@ -81,3 +81,10 @@ test('labels remain unique and idempotent across synthetic canonical directory g
     assert.equal(audienceLabel({ ...group, name: label, display_name: undefined }), label, `${group.id} label should be stable`);
   }
 });
+
+test('class labels keep the class suffix even when base grade is generic', () => {
+  for (const name of ['7А', '7Б', '10А', '11А', '9-Ан', '9-Д']) {
+    assert.equal(audienceLabel({ name: 'class-opaque', display_name: name, group_type: 'class', base_class_name: name.match(/^\d+/)[0] }), name);
+  }
+  assert.equal(audienceLabel({ name: 'class:opaque', group_type: 'class', base_class_name: '7' }), '7 класс');
+});

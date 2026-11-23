@@ -14,6 +14,11 @@ from backend.database import Database
 from backend.services.schedule_rooms import display_room
 from backend.services.canonical_schedule import _assignment_metadata, canonical_group_grade, canonical_version, read_canonical_template
 from backend.services.schedule_activities import list_activities, validate_activity_lessons
+from backend.services.schedule_edit_validation import (
+    CLUB_LESSON_ONLY_NOTES, STALE_MATH, TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE,
+    UNCONFIRMED_STUDY_GROUP, audit_resolved_notes, normalized_note, notes, read_active_scope_directory,
+    scope_verified, selected_scope, subject_key,
+)
 
 
 DEFAULT_SLOTS = [
@@ -1383,10 +1388,12 @@ def delete_experiment(database: Database, experiment_id: str) -> None:
     manage_experiment(database, experiment_id, expected_revision=current["revision"], action="delete", confirmed=True)
 
 
-def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, term_comparison_key: str | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def save_experiment(database: Database, experiment_id: str, *, expected_revision: int, payload: Mapping[str, Any], name: str | None = None, actor_user_id: Any = None, audience_database: Database | None = None, term_comparison_key: str | None = None, _trusted_resolution_history: bool = False, _preserve_unconfirmed_rosters: bool = False, _audience_resolution: Mapping[str, Any] | None = None,
+                    editor_audience_changes: list[str] | None = None) -> dict[str, Any]:
     clean = _clean_payload(payload)
     _validate_day_modes(database, clean)
-    clean["lessons"] = validate_activity_lessons(clean["lessons"], list_activities(database, include_archived=True))
+    submitted_lessons = clean["lessons"]
+    clean["lessons"] = validate_activity_lessons(submitted_lessons, list_activities(database, include_archived=True))
     normalized_name = str(name or "").strip() if name is not None else None
     if name is not None and not normalized_name:
         raise ValueError("name is required")
@@ -1443,10 +1450,71 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
 
     previous_lessons = current["payload"].get("lessons") or []
     previous_by_key = {lesson_key(item, index): item for index, item in enumerate(previous_lessons) if isinstance(item, Mapping)}
+    unchanged: set[str] = set()
+    dependent: set[str] = set()
+    if editor_audience_changes is not None and actor_user_id is not None:
+        explicit_keys = set(editor_audience_changes)
+        old_payload = current["payload"]
+        submitted_by_key = {lesson_key(item, index): item for index, item in enumerate(submitted_lessons)}
+        next_by_key = {lesson_key(item, index): item for index, item in enumerate(clean["lessons"])}
+        old_slots, new_slots = old_payload.get("slots") or [], clean["slots"]
+
+        def window(row, slots):
+            return (_lesson_weekday(row), _lesson_interval(row, slots)) if row else (None, None)
+
+        def authored(row):
+            return {k: v for k, v in row.items() if k not in {
+                "audience_snapshot", "attendance_history", "attendance_week_baseline", "edit_validation_history", "resolution_history",
+            }}
+
+        def explicit_reset(row):
+            return "audience_snapshot" in row and row["audience_snapshot"] is None
+
+        same_date = (old_payload.get("reference_date") or old_payload.get("week_start")) == (clean.get("reference_date") or clean.get("week_start"))
+        unchanged = {key for key, row in submitted_by_key.items()
+                     if key not in explicit_keys and key in previous_by_key and authored(row) == authored(previous_by_key[key])
+                     and (not explicit_reset(row) or explicit_reset(previous_by_key[key]))
+                     and same_date and window(row, new_slots) == window(previous_by_key[key], old_slots)}
+
+        # Include old and new windows: moving/deleting a concurrent lesson can
+        # also free seats in a remainder or lunch. Fixed rosters never inherit a
+        # neighbor's edit; dependent rosters still use the full resolver below.
+        dirty_windows: list[tuple[int | None, tuple[int, int]]] = []
+        for key in (previous_by_key.keys() | next_by_key.keys()) - unchanged:
+            before, after = previous_by_key.get(key), next_by_key.get(key)
+            if (before and after and window(before, old_slots) == window(after, new_slots)
+                    and _lesson_audience(before) == _lesson_audience(after)
+                    and _lesson_activity_type(before) == _lesson_activity_type(after)
+                    and _lesson_special_mark(before) == _lesson_special_mark(after)
+                    and before.get("blockId") == after.get("blockId")
+                    and before.get("classIds") == after.get("classIds")
+                    and not (explicit_reset(after) and not explicit_reset(before))):
+                continue  # A room/teacher-only edit did not change its occupancy.
+            for row, slots in ((before, old_slots), (after, new_slots)):
+                if row and not _is_lunch_lesson(row) and _lesson_activity_type(row) != "consultation" and _lesson_special_mark(row) != "no_lesson":
+                    day, interval = window(row, slots)
+                    if day is not None and interval:
+                        dirty_windows.append((day, interval))
+        for key in unchanged:
+            row = previous_by_key[key]
+            if _lesson_audience(row)["kind"] != "available_slot" and not _is_lunch_lesson(row):
+                continue
+            day, interval = window(row, old_slots)
+            if interval and any(day == other_day and interval[0] < other[1] and other[0] < interval[1]
+                                for other_day, other in dirty_windows):
+                dependent.add(key)
+
     reset_keys: set[str] = set()
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
+        if key in unchanged:
+            clean["lessons"][index] = dict(previous)
+            continue
+        if previous.get("edit_validation_history"):
+            lesson["edit_validation_history"] = previous["edit_validation_history"]
+        else:
+            lesson.pop("edit_validation_history", None)
         lesson.pop("attendance_week_baseline", None)
         if "attendance_week_baseline" in previous:
             lesson["attendance_week_baseline"] = previous["attendance_week_baseline"]
@@ -1501,9 +1569,23 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
     reference = date.fromisoformat(str(reference_date)[:10]) if reference_date else date.today()
     resolved = (_audience_resolution.get("lessons", {}) if isinstance(_audience_resolution, Mapping)
                 else experiment_week_audience_preview(audience_database or database, clean, reference)["lessons"])
+    editor_feedback: list[dict[str, Any]] = []
+    if editor_audience_changes is not None and actor_user_id is not None:
+        resets_before_validation = set(reset_keys)
+        editor_feedback = _validate_ordinary_editor_changes(
+            audience_database or database, clean, previous_by_key, resolved, reference,
+            set(editor_audience_changes), lesson_key, reset_keys, actor_user_id,
+        )
+        # The first preview deliberately includes frozen occupancy. Re-evaluate
+        # dependent rosters only after a verified correction releases that old roster.
+        if dependent and any(isinstance(previous_by_key[key].get("audience_snapshot"), Mapping)
+                             for key in reset_keys - resets_before_validation if key in previous_by_key):
+            resolved = experiment_week_audience_preview(audience_database or database, clean, reference)["lessons"]
     for index, lesson in enumerate(clean["lessons"]):
         key = lesson_key(lesson, index)
         previous = previous_by_key.get(key) or {}
+        if key in unchanged and key not in dependent:
+            continue
         if _lesson_activity_type(lesson) in {"club", "elective", "consultation"}:
             continue
         had_snapshot = isinstance(previous.get("audience_snapshot"), Mapping)
@@ -1535,13 +1617,116 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
                                        "fingerprint": _audience_fingerprint(lesson, clean),
                                        "resolved_at": datetime.now(timezone.utc).isoformat()}
     clean = _clean_payload(clean)
+    # Avoid even metadata normalization on neighbors the editor did not touch.
+    # Only a confirmed derived snapshot may change on a dependent lesson.
+    for index, lesson in enumerate(clean["lessons"]):
+        key = lesson_key(lesson, index)
+        if key not in unchanged:
+            continue
+        preserved = dict(previous_by_key[key])
+        if key in dependent and "audience_snapshot" in lesson:
+            preserved["audience_snapshot"] = lesson["audience_snapshot"]
+        clean["lessons"][index] = preserved
     if blueprint_history:
         clean["laboratory_blueprint_history"] = blueprint_history
     for field in ("week_variant", "draft_lifecycle_history"):
         if field in current["payload"]:
             clean[field] = current["payload"][field]
-    return _write_experiment_revision(database, experiment_id, expected_revision, clean,
-                                      normalized_name=normalized_name, actor_user_id=actor_user_id)
+    saved = _write_experiment_revision(database, experiment_id, expected_revision, clean,
+                                       normalized_name=normalized_name, actor_user_id=actor_user_id)
+    if editor_feedback:
+        saved["editor_validation"] = editor_feedback
+    return saved
+
+
+def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolved, reference,
+                                      explicit_ids, lesson_key, reset_keys, actor_user_id):
+    from backend.services.schedule_normalization import verified_teacher_directory_evidence
+
+    edited = []
+    scope_ids = set()
+    for index, lesson in enumerate(payload["lessons"]):
+        key = lesson_key(lesson, index)
+        previous = previous_by_key.get(key)
+        if not previous:
+            lesson.pop("edit_validation_history", None)
+            continue
+        if not lesson.get("needsClarification") or lesson.get("importError") or not previous.get("needsClarification"):
+            continue
+        if lesson.get("clarificationReason") != previous.get("clarificationReason"):
+            continue  # This path only retires inherited notes; it never replaces a teacher-authored reason.
+        type_before, type_after = _lesson_activity_type(previous), _lesson_activity_type(lesson)
+        old_scope = selected_scope(_lesson_audience(previous))
+        new_scope = selected_scope(_lesson_audience(lesson))
+        ordinary_fields = ("subject", "room", "teacherId", "teacherIds", "day", "start", "end", "period", "format", "connectionInfo")
+        if (key not in explicit_ids and old_scope == new_scope and type_before == type_after
+                and all(previous.get(field) == lesson.get(field) for field in ordinary_fields)):
+            continue
+        clauses = {normalized_note(clause) for clause in notes(lesson.get("clarificationReason"))}
+        if STALE_MATH in clauses and key in explicit_ids and old_scope != new_scope:
+            scope_ids.update(old_scope[1] + new_scope[1])
+        edited.append((key, lesson, previous, type_after, old_scope, new_scope, clauses))
+    active_directory = read_active_scope_directory(database, scope_ids)
+    feedback = []
+    teachers_by_date = {}
+    for key, lesson, previous, kind, old_scope, new_scope, clauses in edited:
+        retired, evidence = set(), {}
+        if kind == "club":
+            retired.update(clauses & CLUB_LESSON_ONLY_NOTES)
+            if retired:
+                evidence["activity_type"] = "club"
+        subject = subject_key(lesson.get("subject"))
+        if STALE_MATH in clauses and key in explicit_ids and old_scope != new_scope and kind not in {"club", "elective", "event", "consultation"}:
+            old_is_wrong_math = (old_scope[0] == "groups" and subject
+                and subject != subject_key("Математика") and any(
+                    subject_key(active_directory.get(group_id, {}).get("subject")) == subject_key("Математика")
+                    for group_id in old_scope[1]))
+            raw_audience = lesson.get("audience") or {}
+            raw_keys = "group_ids" if new_scope[0] == "groups" else "class_ids"
+            explicit_scope = (isinstance(raw_audience, Mapping) and raw_audience.get("kind") == new_scope[0]
+                              and _ids(raw_audience.get(raw_keys)) == new_scope[1])
+            preview = resolved.get(str(lesson.get("id")), {})
+            verified = (explicit_scope and old_is_wrong_math and
+                        scope_verified(*new_scope, subject, active_directory) and
+                        preview.get("status") == "ok" and isinstance(preview.get("proposed_student_ids"), list))
+            if verified:
+                retired.update({STALE_MATH, UNCONFIRMED_STUDY_GROUP})
+                evidence["audience"] = {"before": {"kind": old_scope[0], "scope_ids": old_scope[1]},
+                                        "after": {"kind": new_scope[0], "scope_ids": new_scope[1]},
+                                        "participant_count": len(preview["proposed_student_ids"])}
+                # The administrator changed this precise rule; freeze the same
+                # server-resolved roster already used for this save.
+                reset_keys.add(key)
+                lesson["audience_snapshot"] = None
+            else:
+                # Reject an explicitly attempted but unproven repair rather
+                # than save the wrong rule or lose its evidence for a retry.
+                raise ValueError("Новый состав не подтверждён. Выберите действующую группу этого предмета или конкретные классы и повторите сохранение.")
+        if clauses & {TEACHER_IDENTITY_NOTE, TEACHER_ASSIGNMENT_NOTE}:
+            teacher_ids = {str(value) for value in [lesson.get("teacherId"), *(lesson.get("teacherIds") or [])] if value}
+            day = _lesson_weekday(lesson)
+            actual_day = reference - timedelta(days=reference.weekday()) + timedelta(days=day) if day is not None else reference
+            if teacher_ids and actual_day not in teachers_by_date:
+                teachers_by_date[actual_day] = verified_teacher_directory_evidence(database, {
+                    "payload": {"reference_date": actual_day.isoformat()}})
+            active, assignments = teachers_by_date.get(actual_day, (set(), set()))
+            if teacher_ids and teacher_ids <= active:
+                if TEACHER_IDENTITY_NOTE in clauses:
+                    retired.add(TEACHER_IDENTITY_NOTE)
+                    evidence["teacher_directory"] = "active_identity"
+                if TEACHER_ASSIGNMENT_NOTE in clauses and new_scope[1] and subject:
+                    matches = {(teacher, scope) for teacher, scope, name in assignments
+                               if teacher in teacher_ids and scope in new_scope[1] and subject_key(name) == subject}
+                    if {teacher for teacher, _ in matches} == teacher_ids and {scope for _, scope in matches} == set(new_scope[1]):
+                        retired.add(TEACHER_ASSIGNMENT_NOTE)
+                        evidence["teacher_directory"] = "active_subject_assignment"
+        if retired and audit_resolved_notes(lesson, previous, retired, evidence, actor_user_id=actor_user_id):
+            if "audience" in evidence:
+                feedback.append({"lesson_id": key, "status": "audience_verified",
+                                 "participant_count": evidence["audience"]["participant_count"]})
+            else:
+                feedback.append({"lesson_id": key, "status": "legacy_notes_resolved"})
+    return feedback
 
 
 def _write_experiment_revision(database: Database, experiment_id: str, expected_revision: int,

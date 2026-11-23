@@ -2,6 +2,7 @@
 
 import { useId, useMemo, useState } from 'react';
 import styles from './participants-picker.module.css';
+import { audienceRequestMessage, type AudienceRequestState } from './schedule-audience-request';
 import { audienceGrade, audienceLabel, classLabel, subjectLabel } from './school-audience';
 
 export type AudienceRule = {
@@ -53,6 +54,7 @@ type Props = {
   contextClassIds?: string[];
   gradeScope?: string;
   preview?: AudiencePreview | null;
+  requestState?: AudienceRequestState;
   legacyNotice?: string;
   onRetryPreview?: () => void;
   onOpenBlockingLesson?: (id: string) => void;
@@ -90,6 +92,7 @@ export function ParticipantsPicker({
   contextClassIds = [],
   gradeScope = '',
   preview,
+  requestState,
   legacyNotice,
   onRetryPreview,
   onOpenBlockingLesson,
@@ -145,7 +148,7 @@ export function ParticipantsPicker({
     ? classes.filter((item) => audienceGrade(item) === audience.grade).map((item) => item.id)
     : selectedIds;
   const previewClasses = unique(preview?.class_ids).map((id) => classNames.get(id) || id);
-  const statusLabel = preview?.status === 'ok' ? 'Состав определён' : preview?.status === 'ambiguous' ? 'Требует уточнения' : preview?.status === 'incomplete' ? 'Недостаточно данных' : preview?.status === 'error' ? 'Ошибка расчёта' : preview?.status || 'Состав рассчитывается';
+  const statusLabel = preview?.status === 'ok' ? 'Состав определён' : preview?.status === 'ambiguous' ? 'Требует уточнения' : preview?.status === 'incomplete' ? 'Недостаточно данных' : preview?.status === 'error' ? 'Ошибка расчёта' : preview?.status || 'Состав ещё не рассчитан';
   const contextGrade = gradeScope || (contextGrades.size === 1 ? [...contextGrades][0] : '');
   const audienceCaption = audience.kind === 'available_slot'
     ? `Все остальные · ${audience.class_ids?.length ? audience.class_ids.map((id) => classNames.get(id) || id).join(', ') : audience.grade || contextGrade ? `${audience.grade || contextGrade} класс` : 'исходная аудитория не определена'}`
@@ -253,9 +256,12 @@ export function ParticipantsPicker({
 
       <div className={`${styles.preview} ${preview?.status && preview.status !== 'ok' ? styles.previewAttention : ''}`} aria-live="polite">
         {preview?.needs_recalculation ? <div className={styles.legacyNotice}><strong>Изменился расчёт участников</strong><p>Сохранённый состав остаётся прежним. Сейчас по правилу получилось бы {preview.proposed_student_ids?.length ?? 'неизвестное число'} учеников.</p>{preview.proposed_student_ids ? <details><summary>Посмотреть новый состав</summary><div className={styles.previewStudents}>{preview.proposed_student_ids.map((id) => <span key={id}>{studentNames.get(id) || 'Ученик недоступен'}</span>)}</div></details> : null}{onConfirmRecalculation && preview.proposed_student_ids ? <button type="button" onClick={onConfirmRecalculation}>Пересчитать и подтвердить состав</button> : null}</div> : null}
-        <div><strong>{statusLabel}</strong>{preview?.status === 'ok' && preview.count != null ? <b>{preview.count} учеников</b> : audience.kind === 'available_slot' && preview ? <b>Состав не подтверждён</b> : null}</div>
+        {requestState?.status === 'pending' || requestState?.status === 'unavailable' ? (
+          <p>{audienceRequestMessage(requestState)}{preview?.status === 'ok' ? ' Ниже — предыдущий расчёт для этих же настроек.' : ''}</p>
+        ) : null}
+        {!preview && requestState?.status !== 'complete' && requestState?.status !== undefined ? null : <div><strong>{statusLabel}</strong>{preview?.status === 'ok' && preview.count != null ? <b>{preview.count} учеников</b> : audience.kind === 'available_slot' && preview ? <b>Состав не подтверждён</b> : null}</div>}
         {preview?.reason ? <p>{preview.reason}</p> : null}
-        {preview?.status === 'error' && onRetryPreview ? <button type="button" onClick={onRetryPreview}>Повторить расчёт</button> : null}
+        {(requestState?.status === 'unavailable' || (requestState?.status !== 'pending' && preview?.status === 'error')) && onRetryPreview ? <button type="button" onClick={onRetryPreview}>Повторить расчёт</button> : null}
         {audience.kind === 'available_slot' && preview?.source_count != null ? <p>Исходная аудитория: {preview.source_count} учеников</p> : null}
         {audience.kind === 'available_slot' && preview?.potential_count != null ? <p>Потенциально свободны: {preview.potential_count}</p> : null}
         {previewClasses.length ? <p>Затронутые классы: {previewClasses.join(', ')}</p> : null}
