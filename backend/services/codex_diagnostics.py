@@ -18,7 +18,7 @@ READ_SCOPE = "diagnostic.read"
 TTL = timedelta(minutes=15)
 
 
-_KEY_FORMAT = re.compile(r"[A-Za-z0-9_-]{43,128}")
+_KEY_FORMAT = re.compile(r"[!-~]*")
 _DIGEST_FORMAT = re.compile(r"[a-f0-9]{64}")
 
 
@@ -30,6 +30,7 @@ class DiagnosticReadiness(StrEnum):
     ENABLED = "enabled"
     FLAG_OFF = "flag_off"
     NO_KEY_CONFIGURED = "no_key_configured"
+    RAW_INVALID_CHARACTERS = "raw_invalid_characters"
     RAW_REJECTED = "raw_rejected"
     DIGEST_MALFORMED = "digest_malformed"
     VERIFIERS_MISMATCH = "verifiers_mismatch"
@@ -47,7 +48,11 @@ def _verifier_and_readiness() -> tuple[str | None, DiagnosticReadiness]:
     # Use generated random text, not a memorable password. Format, diversity
     # and repetition checks catch accidental blanks and obvious placeholders;
     # they are not a substitute for cryptographic random generation.
-    if not _KEY_FORMAT.fullmatch(raw) or len(set(raw)) < 20:
+    # Visible ASCII is transported losslessly in the HTTPS header. Do not
+    # trim, normalize, or allow whitespace/controls (including CR and LF).
+    if not _KEY_FORMAT.fullmatch(raw):
+        return None, DiagnosticReadiness.RAW_INVALID_CHARACTERS
+    if not 43 <= len(raw) <= 128 or len(set(raw)) < 20:
         return None, DiagnosticReadiness.RAW_REJECTED
     if any(raw[index:] == raw[:-index] for index in range(1, len(raw) // 2 + 1)):
         return None, DiagnosticReadiness.RAW_REJECTED
