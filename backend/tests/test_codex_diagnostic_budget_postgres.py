@@ -38,13 +38,31 @@ class CodexDiagnosticBudgetPostgresTests(unittest.TestCase):
             with psycopg.connect(URL, connect_timeout=5) as connection:
                 connection.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
-        ddl = (Path(__file__).parents[1] / "migrations/053_codex_diagnostic_exchange_budget.sql").read_text()
+        migrations = Path(__file__).parents[1] / "migrations"
+        names = ("052_codex_diagnostic_sessions.sql", "053_codex_diagnostic_exchange_budget.sql")
+        session_table = "codex_diagnostic_sessions"
+        budget_table = "codex_diagnostic_exchange_budget"
         with psycopg.connect(URL, connect_timeout=5) as connection:
             connection.execute(f'CREATE SCHEMA "{schema}"')
         self.addCleanup(clean)
         with IsolatedDatabase(database_url=URL).connection() as connection:
-            # Use the actual migration table shape, isolated from public.
-            connection.execute(ddl.split("ALTER TABLE", 1)[0].replace("public.", ""))
+            # Run full migration SQL, including RLS and GRANT boundaries, in
+            # a disposable schema. Supply normal Supabase roles in the
+            # disposable cluster setup only; never mutate roles here.
+            for name in names:
+                text = (migrations / name).read_text().replace("public.", f'"{schema}".')
+                connection.execute(text)
+            for table in (session_table, budget_table):
+                rel = f"{schema}.{table}"
+                access = connection.execute("""SELECT relrowsecurity AS rls,
+                    has_table_privilege('anon', %s, 'SELECT,INSERT,UPDATE,DELETE') AS anon_access,
+                    has_table_privilege('authenticated', %s, 'SELECT,INSERT,UPDATE,DELETE') AS authenticated_access,
+                    has_table_privilege(current_user, %s, 'SELECT') AS owner_read,
+                    has_table_privilege(current_user, %s, 'INSERT') AS owner_insert,
+                    has_table_privilege(current_user, %s, 'UPDATE') AS owner_update
+                    FROM pg_class WHERE oid=to_regclass(%s)""", (rel, rel, rel, rel, rel, rel)).fetchone()
+                self.assertEqual(access, {"rls": True, "anon_access": False, "authenticated_access": False,
+                                          "owner_read": True, "owner_insert": True, "owner_update": True})
         gate = Barrier(12)
 
         def attempt(_):
