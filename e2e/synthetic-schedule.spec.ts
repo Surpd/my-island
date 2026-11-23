@@ -77,6 +77,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   await expect(page.locator(`[data-cell="${4 * periods + 4}:2"] [data-lesson-id="e2e-event"]`)).toHaveCount(1);
   await expect(page.locator(`[data-cell="${4 * periods + 5}:2"] [data-lesson-id="e2e-event"]`)).toHaveCount(1);
   await english.dblclick();
+  await page.getByRole('button', { name: 'Настройки преподавателя' }).click();
   await page.getByLabel('Цвет преподавателя').fill('#bbddff');
   await expect(english).toHaveCSS('background-color', 'rgb(187, 221, 255)');
   await page.getByRole('button', { name: 'Закрыть панель', exact: true }).click();
@@ -157,6 +158,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.locator('.constructor-create-form').locator(`input[type="checkbox"][value="${mixed!.id}"]`).check();
   await expect(page.locator('.constructor-create-form')).toContainText('Затронутые классы:');
   await page.getByRole('combobox', { name: 'Преподаватель нового занятия' }).fill(teacher!.display_name);
+  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('17');
   await page.getByRole('button', { name: 'Добавить занятие' }).click();
   const mixedId = await (await gridCell(0, 5)).locator('.constructor-card').getAttribute('data-lesson-id');
@@ -167,7 +169,8 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await expect((await gridCell(0, 5)).locator(`[data-lesson-id="${mixedId}"]`)).toContainText('практика');
 
   await (await gridCell(4, 7)).click();
-  await page.getByRole('group', { name: 'Что добавляем?' }).getByRole('button', { name: 'Событие', exact: true }).click();
+  await page.getByRole('button', { name: /Другие типы…/ }).click();
+  await page.getByRole('group', { name: 'Тип занятия' }).getByRole('button', { name: 'Событие', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Поездка в музей');
   await page.locator('.constructor-create-form').getByLabel('На весь день').check();
   await expect(page.locator('.constructor-create-form input[type="time"]').first()).toBeDisabled();
@@ -178,7 +181,7 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await page.locator('.constructor-create-form').getByRole('checkbox', { name: '8 класс', exact: true }).check();
   await page.locator('.constructor-create-form label').filter({ hasText: 'Конец' }).locator('input').fill('14:25');
   await page.locator('.constructor-create-form label').filter({ hasText: 'Место' }).locator('input').fill('Музей');
-  await page.locator('.constructor-create-form label').filter({ hasText: 'Формат' }).locator('select').selectOption('offsite');
+  await page.locator('.constructor-inspector').getByRole('combobox', { name: 'Формат', exact: true }).selectOption('offsite');
   await page.locator('.constructor-create-form label').filter({ hasText: 'Описание' }).locator('textarea').fill('Сбор у входа');
   await page.getByRole('listbox', { name: 'Сопровождающие нового события' }).selectOption({ index: 1 });
   await page.getByRole('button', { name: 'Добавить событие' }).click();
@@ -195,5 +198,5 @@ test('form creates one mixed-class lesson and one multi-slot event that survive 
   await expect((await gridCell(5, 8)).locator(`[data-lesson-id="${eventId}"]`)).toHaveCount(1);
   await (await gridCell(4, 7)).locator(`[data-lesson-id="${eventId}"]`).dblclick();
   await expect(page.locator('.constructor-event-fields textarea')).toHaveValue('Сбор у входа');
-  await expect(page.locator('.constructor-event-fields select').first()).toHaveValue('offsite');
+  await expect(page.locator('.constructor-inspector').getByRole('combobox', { name: 'Формат', exact: true })).toHaveValue('offsite');
 });

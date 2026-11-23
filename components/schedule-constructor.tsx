@@ -4,12 +4,14 @@
 import {
   Fragment,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
 import {
   AlertTriangle,
@@ -373,6 +375,11 @@ function visualClasses(lesson: Lesson, groups: Group[]) {
   if (lesson.eligibleGrades?.length) return groups.filter((group) => group.group_type === 'class' && lesson.eligibleGrades?.includes(Number(audienceGrade(group)))).map((group) => group.id);
   return lesson.classIds?.length ? lesson.classIds : lesson.classId ? [lesson.classId] : [];
 }
+function gradeNumbers(classIds: string[], groups: Group[]) {
+  const classes = new Set(classIds);
+  return [...new Set(groups.filter(group => classes.has(group.id))
+    .map(group => Number(audienceGrade(group))).filter(grade => Number.isInteger(grade) && grade > 0))];
+}
 function linkedInstructionalGroups(lesson: Lesson, groups: Group[]) {
   return instructionalGroupIds(lesson, id => groups.find(group => group.id === id)?.group_type === 'class')
     .map((id) => groups.find((group) => group.id === id))
@@ -593,14 +600,57 @@ function issuesFor(
   }));
 }
 
-const lessonKinds = {lesson: 'Урок', practice: 'Практикум', consultation: 'Консультация'} as const;
-type LessonKind = keyof typeof lessonKinds;
-function LessonKindPicker({value, onChange}: {value: LessonKind; onChange: (kind: LessonKind) => void}) {
-  return <div className="constructor-creation-tabs" role="group" aria-label="Вид занятия">
-    {(Object.keys(lessonKinds) as LessonKind[]).map(kind =>
-      <button key={kind} type="button" aria-pressed={value === kind} className={value === kind ? 'active' : ''}
-        onClick={() => onChange(kind)}>{lessonKinds[kind]}</button>)}
+const lessonKinds = { lesson: 'Урок', practice: 'Практикум', consultation: 'Консультация' } as const;
+const otherKinds = { club: 'Кружок', elective: 'Курс по выбору', event: 'Событие', lunch: 'Обед' } as const;
+const editorKinds = { ...lessonKinds, ...otherKinds, laboratory: 'Лаборатория', no_lesson: 'Нет урока' } as const;
+type EditorKind = keyof typeof editorKinds;
+type SelectableKind = keyof typeof lessonKinds | keyof typeof otherKinds;
+
+function EditorDisclosure({ label, children, resetKey = '' }: { label: string; children: ReactNode; resetKey?: string }) {
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  const open = openedFor === resetKey;
+  const trigger = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  const id = useId();
+  useLayoutEffect(() => {
+    if (open || openedFor === null) return;
+    setOpenedFor(null);
+    if (restoreFocus.current) trigger.current?.focus();
+    restoreFocus.current = false;
+  }, [open, openedFor]);
+  return <div className="constructor-editor-disclosure">
+    <button ref={trigger} type="button" aria-expanded={open} aria-controls={id} onClick={() => {
+      restoreFocus.current = false;
+      setOpenedFor(open ? null : resetKey);
+    }}>
+      {label}<ChevronDown size={14} aria-hidden="true" />
+    </button>
+    <div id={id} className="constructor-editor-disclosure-panel" hidden={!open}
+      onFocusCapture={() => { if (resetKey) restoreFocus.current = true; }}>{open ? children : null}</div>
   </div>;
+}
+
+function LessonKindPicker({ value, onChange }: { value: EditorKind; onChange?: (kind: SelectableKind) => void }) {
+  const choices = (kinds: typeof lessonKinds | typeof otherKinds) => <div className="constructor-creation-tabs">
+    {(Object.keys(kinds) as SelectableKind[]).map(kind => <button key={kind} type="button"
+      aria-pressed={value === kind} className={value === kind ? 'active' : ''}
+      onClick={() => onChange?.(kind)}>{editorKinds[kind]}</button>)}
+  </div>;
+  return <fieldset className="constructor-kind-picker">
+    <legend>Тип занятия</legend>
+    {onChange ? <>
+      {choices(lessonKinds)}
+      <EditorDisclosure resetKey={value} label={value in otherKinds ? `Другие типы… · ${editorKinds[value]}` : 'Другие типы…'}>
+        {choices(otherKinds)}
+      </EditorDisclosure>
+    </> : <strong>{editorKinds[value]}</strong>}
+  </fieldset>;
+}
+
+function OnlineFormat({ byDay, checked, onChange }: { byDay: boolean; checked: boolean; onChange: (checked: boolean) => void }) {
+  return byDay ? <p className="constructor-day-format"><Monitor size={16} aria-hidden="true" /> Онлайн по режиму дня</p>
+    : <label className="constructor-online-format"><input type="checkbox" checked={checked}
+      onChange={event => onChange(event.target.checked)} /> Этот урок проводится онлайн</label>;
 }
 
 export function ScheduleConstructor({ api }: { api: Api }) {
@@ -628,7 +678,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [activities, setActivities] = useState<ScheduleActivity[]>([]);
   const [activityEditor, setActivityEditor] = useState<{ item?: ScheduleActivity; name: string; type: 'club' | 'elective'; aliases: string; teacher_ids: string[]; room: string; eligible_grades: number[] } | null>(null);
   const [catalogSaving, setCatalogSaving] = useState(false);
-  const [activityType, setActivityType] = useState<'lesson' | 'practice' | 'consultation' | 'club' | 'elective' | 'event'>('lesson');
+  const [creationKind, setCreationKind] = useState<Exclude<EditorKind, 'laboratory'>>('lesson');
+  const activityType = creationKind === 'lunch' || creationKind === 'no_lesson' ? 'lesson' : creationKind;
   const [exportOpen, setExportOpen] = useState(false);
   const comparisonFromReview = useRef(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
@@ -707,8 +758,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [focus, setFocus] = useState<Cell | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [quick, setQuick] = useState('');
-  const [creationMode, setCreationMode] = useState<'quick' | 'form' | 'event' | 'lunch' | 'no_lesson'>('quick');
+  const [creationInput, setCreationInput] = useState<'quick' | 'form'>('quick');
+  const creationMode = creationKind === 'event' || creationKind === 'lunch' || creationKind === 'no_lesson' ? creationKind : creationInput;
   const [creationError, setCreationError] = useState('');
+  const [quickOnlineChoice, setQuickOnlineChoice] = useState<boolean | undefined>();
+  const [newTypeChange, setNewTypeChange] = useState<SelectableKind | null>(null);
   const [renameValue, setRenameValue] = useState<string | null>(null);
   const [renameError, setRenameError] = useState('');
   const [recalculationOpen, setRecalculationOpen] = useState(false);
@@ -773,7 +827,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const [labReturn, setLabReturn] = useState<LaboratoryBlueprint>();
   const [laboratoriesOpen, setLaboratoriesOpen] = useState(false);
   const revision = useRef(0);
-  const [confirmPractice, setConfirmPractice] = useState('');
+  const [typeChange, setTypeChange] = useState<{ id: string; from: EditorKind; to: SelectableKind } | null>(null);
   const offlineBeforeToggle = useRef(new Map<string, Lesson>());
   const baseDraftRef = useRef<Draft | null>(null);
   const schedulePath = (suffix = '') => workspace === 'school'
@@ -932,7 +986,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   };
   const open = async (id: string, lessonId?: string, comparisonOnly = false) => {
     offlineBeforeToggle.current.clear();
-    setConfirmPractice('');
+    setTypeChange(null);
     const request = ++draftOpenRequest.current;
     try {
       const value = await api<Draft>(
@@ -1651,6 +1705,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   }, [payload, groups, students, audiencePreviews, dirty, draft?.revision, resolutionRevision, resolutionStates]);
   const selected = payload?.lessons.find((item) => item.id === selectedId);
   const selectedActivityType = selected ? editorActivityType(selected) : undefined;
+  const selectedKind = selected && (isLunch(selected) ? 'lunch' : isNoLesson(selected) ? 'no_lesson' : selectedActivityType || 'lesson');
+  const pendingType = selected && typeChange?.id === selected.id && typeChange.from === selectedKind ? typeChange.to : null;
+  const pendingTeacherChoice = pendingType === 'practice' && Boolean(selected?.teacherId || selected?.teacherIds?.length);
+  const pendingOptionalKind = pendingType === 'club' || pendingType === 'elective';
+  const typeChangeBlocked = pendingOptionalKind && Boolean(selected?.audience?.exclude_student_ids?.length);
   useLayoutEffect(() => {
     if (!selected || !payload || linkedLesson.current !== selected.id || day !== selected.day || viewMode !== 'day') return;
     const classIds = selected.activityType === 'club' ? visualClasses(selected, groups) : displayedClasses(selected);
@@ -1707,6 +1766,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     : selectedCell?.classId
       ? [selectedCell.classId]
       : focus ? gridColumns[focus.col]?.classIds || [] : [];
+  const newInformational = creationMode === 'event' && Boolean(newLesson.informational);
   const previewDay = newLesson.day ?? selectedCell?.day ?? day;
   const previewPeriod = creationMode === 'event' && newLesson.start && newLesson.end
     ? Math.max(0, firstOverlappingSlot(newLesson.start, newLesson.end, payload?.slots || []))
@@ -1729,7 +1789,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     week_start: previewPayload?.week_start,
     slots: previewPayload?.slots,
     concurrentLessons: concurrentPreviewLessons,
-    audience: previewAudience, informational: newLesson.informational,
+    audience: previewAudience, informational: newInformational,
     contextClassIds: newAudienceContextClassIds,
     gradeScope: selectedCell?.gradeScope,
     day: previewDay, period: previewPeriod,
@@ -1754,9 +1814,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         subject: newLesson.subject, teacherId: newLesson.teacherId, room: newLesson.room,
         groupId: mirror.groupId || '', classId: mirror.classId || '',
         groupIds: mirror.groupIds, classIds: mirror.classIds,
-        audience: newLesson.informational ? undefined : audience,
+        audience: newInformational ? undefined : audience,
         grade_scope: selectedCell?.gradeScope || undefined,
-        informational: newLesson.informational, specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined, kind: creationMode === 'event' ? 'event' : 'lesson',
+        informational: newInformational, specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined, kind: creationMode === 'event' ? 'event' : 'lesson',
         start: newLesson.start, end: newLesson.end,
       };
       void queuePreview(async () => {
@@ -1796,6 +1856,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const quickGroupId = quickChoice.groupId ?? (quickParsed.groupIds.length === 1 ? quickParsed.groupIds[0] : '');
   const quickRoom = quickChoice.room ?? quickParsed.room;
   const quickClassIds = quickChoice.classIds ?? (quickParsed.classIds.length === 1 ? quickParsed.classIds : selectedCell?.classId ? [selectedCell.classId] : []);
+  const quickLessonClassIds = quickGroupId ? groupClassIds(quickGroupId, groups, students, quickClassIds) : quickClassIds;
   const contextualSubjects = useMemo(() => {
     const context = new Set(quickClassIds);
     const grade = quickClassIds.map((id) => groups.find((item) => item.id === id)?.name.match(/^\d+/)?.[0]).find(Boolean) || '';
@@ -1846,13 +1907,23 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       col >= bounds.left &&
       col <= bounds.right,
     );
+  const resetQuickCreation = () => {
+    setCreationInput('quick');
+    setCreationKind('lesson');
+    setQuickOnlineChoice(undefined);
+    setNewTypeChange(null);
+    setTypeChange(null);
+    setCreationError('');
+    setNewTeacherManuallySelected(false);
+    setTeacherQuery('');
+  };
   const selectCell = (row: number, col: number, extend = false, focusEditor = false) => {
     const cell = { row, col };
     if (!extend || !anchor) setAnchor(cell);
     setFocus(cell);
     setSelectedId('');
     if (!extend) { setQuick(''); setQuickChoice({}); }
-    setCreationMode('quick');
+    resetQuickCreation();
     setPanelMode('lesson');
     if (viewMode === 'day' && gridColumns[col]?.classIds.length === 1)
       setTargetClassId(gridColumns[col].classIds[0]);
@@ -1876,6 +1947,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (found && !initial) setSelectedId(found.id);
     else {
       setSelectedId('');
+      resetQuickCreation();
       setQuick(initial || '');
       setQuickChoice({});
     }
@@ -1948,17 +2020,17 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     mutate((state) => ({ ...state, lessons: [...state.lessons, lesson] }));
     setSelectedId(lesson.id);
     setCreationError('');
-    setCreationMode('quick');
+    setCreationInput('quick');
   };
   const addLesson = () => {
     if (quickParsed.unknown.length || quickParsed.groupIds.length > 1 && !quickChoice.groupId || quickParsed.teacherIds.length > 1 && !quickChoice.teacherId) {
       setStatus('Уточните нераспознанные слова или выберите совпадение в предпросмотре.');
       return;
     }
-    const classIds = quickGroupId ? groupClassIds(quickGroupId, groups, students, quickClassIds) : quickClassIds;
-    const fallbackClassId = classIds[0];
+    const fallbackClassId = quickLessonClassIds[0];
     const groupId = quickGroupId || groups.find((item) => item.id === fallbackClassId)?.id || '';
-    addStructured({ subject: quickSubject, groupId, teacherId: resolvedQuickTeacherId, room: quickRoom, classIds, raw: quick });
+    addStructured({ subject: quickSubject, groupId, teacherId: resolvedQuickTeacherId, room: quickOnline ? '' : quickRoom, classIds: quickLessonClassIds, raw: quick,
+      ...(!quickDayOnline && quickOnline ? { format: 'online' } : {}) });
   };
   const updateLesson = (id: string, patch: Partial<Lesson>) =>
     mutate((state) => ({
@@ -2010,6 +2082,60 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         return next;
       }),
     }));
+  const requestTypeChange = (lesson: Lesson, from: EditorKind, to: SelectableKind) => {
+    setTypeChange(null);
+    if (from === to) return;
+    if (from in otherKinds || to in otherKinds || to === 'practice' && (lesson.teacherId || lesson.teacherIds?.length)) {
+      setTypeChange({ id: lesson.id, from, to });
+    } else {
+      updateLesson(lesson.id, { activityType: to === 'lunch' ? 'lesson' : to });
+    }
+  };
+  const applyTypeChange = (lesson: Lesson, from: EditorKind, to: SelectableKind, teacherResponsible = false) => {
+    if (!payload) return;
+    const optional = to === 'club' || to === 'elective';
+    const wasOptional = from === 'club' || from === 'elective';
+    const classIds = visualClasses(lesson, groups);
+    const audience = wasOptional
+      ? { kind: 'students' as const, student_ids: lesson.confirmedParticipantIds || [],
+          exclude_student_ids: lesson.audience?.exclude_student_ids }
+      : audienceOf(lesson, groups);
+    const slot = payload.slots[lesson.period];
+    let patch: Partial<Lesson> = { activityType: to === 'lunch' ? 'lesson' : to };
+    if (optional) {
+      patch = { ...patch, ...audiencePatch({ kind: 'students', student_ids: [] }, groups, students),
+        classIds: to === 'club' ? [] : classIds, classId: to === 'club' ? '' : classIds[0] || '',
+        displayClassIds: to === 'club' ? classIds : undefined,
+        confirmedParticipantIds: undefined,
+        eligibleGrades: to === 'elective' ? gradeNumbers(classIds, groups) : undefined,
+        electiveDirection: undefined,
+      };
+    } else if (wasOptional || lesson.informational && to !== 'event') {
+      patch = { ...patch, ...audiencePatch(lesson.informational ? { kind: 'students', student_ids: [] } : audience,
+        groups, students, classIds), displayClassIds: undefined, audience_snapshot: null,
+        confirmedParticipantIds: undefined, eligibleGrades: undefined, electiveDirection: undefined };
+    }
+    if (to === 'event') {
+      Object.assign(patch, { kind: 'event', start: lesson.start || slot?.start, end: lesson.end || slot?.end });
+    } else if (from === 'event') {
+      Object.assign(patch, { kind: 'lesson', start: undefined, end: undefined, allDay: undefined,
+        informational: undefined, place: undefined, description: undefined,
+        ...(lesson.format === 'offsite' ? { format: 'offline' } : {}) });
+    }
+    if (to === 'lunch') {
+      Object.assign(patch, { specialMark: 'lunch', canonicalRole: 'lunch', subject: 'Обед', teacherId: '', teacherIds: [],
+        responsible_teacher_ids: undefined, format: undefined, connectionInfo: undefined });
+    } else if (from === 'lunch') {
+      Object.assign(patch, { specialMark: undefined, canonicalRole: undefined, subject: '' });
+    }
+    if (teacherResponsible) {
+      Object.assign(patch, { responsible_teacher_ids: [...new Set([
+        ...(lesson.responsible_teacher_ids || []), lesson.teacherId, ...(lesson.teacherIds || []),
+      ].filter(Boolean).map(String))], teacherId: '', teacherIds: [] });
+    }
+    updateLesson(lesson.id, patch);
+    setTypeChange(null);
+  };
   const openReviewLesson = (id: string, revealGrid = false) => {
     const lesson = payload?.lessons.find((item) => item.id === id);
     if (!lesson) { setStatus('В этой редакции такого занятия нет. Откройте исходную неделю или выберите слот в сверке.'); return false; }
@@ -2071,9 +2197,9 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     if (!draft) return;
     setIssueRoute({draftId:draft.id,origin:'comparison',title:`Слот · ${side.subject || 'Новое занятие'}`,ids:[],active:'',slot:side,mayCreate});
     setNewLesson({subject:side.subject || '',groupId:'',teacherId:'',room:side.room || '',classIds:[]});
-    setQuick(''); setQuickChoice({}); setCreationError('');
+    setQuick(''); setQuickChoice({}); setCreationError(''); setNewTypeChange(null); setTypeChange(null);
     setTeacherQuery(''); setNewTeacherManuallySelected(false);
-    setActivityType(side.kind === 'club' || side.kind === 'elective' || side.kind === 'event' ? side.kind : 'lesson');
+    setCreationKind(side.kind === 'club' || side.kind === 'elective' || side.kind === 'event' || side.kind === 'lunch' || side.kind === 'no_lesson' ? side.kind : 'lesson');
     setViewMode('day'); setDay(side.day);
     setFiltersOpen(false);
     setClassFilter(''); setTeacherFilter(''); setSubjectFilter(''); setQuery('');
@@ -2400,7 +2526,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   };
   useEffect(() => {
     const handleGridShortcut = (event: KeyboardEvent) => {
-      if (!root.current?.contains(document.activeElement) || editable(event.target))
+      if (!root.current?.contains(document.activeElement) || editable(event.target) ||
+        event.target instanceof Element && event.target.closest('.constructor-inspector'))
         return;
       if (event.key === 'Enter' && event.target instanceof Element && event.target.closest('button, a, [role="button"]'))
         return;
@@ -2450,7 +2577,67 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const resolvedNewTeacherId = newTeacherManuallySelected || activityType === 'elective' || activityType === 'practice' ? newLesson.teacherId : newLesson.teacherId || recommendedTeacherId;
   const newDayOnline = Boolean(payload && allLessonClassesHaveMode(payload, { classIds: newAudienceContextClassIds, day: previewDay } as Lesson, 'online', groups));
   const selectedDayOnline = Boolean(payload && selected && allLessonClassesHaveMode(payload, selected, 'online', groups));
-  const newOnline = newDayOnline || newLesson.format === 'online' || isVirtualRoom(newLesson.room);
+  const quickDayOnline = Boolean(payload && selectedCell && allLessonClassesHaveMode(payload,
+    { classIds: quickLessonClassIds, day: selectedCell.day } as Lesson, 'online', groups));
+  // A room explicitly entered in the quick line means an in-person lesson unless the switch was used.
+  const quickFormatOnline = quickOnlineChoice ?? (!quickRoom || isVirtualRoom(quickRoom));
+  const quickOnline = quickDayOnline || quickFormatOnline;
+  const newOnline = newDayOnline || (newLesson.format ?? 'online') === 'online';
+  const setNewOnline = (online: boolean) => setNewLesson(item => ({
+    ...item, format: online ? 'online' : 'offline', room: isVirtualRoom(item.room) ? '' : item.room,
+  }));
+  const startStructuredForm = () => {
+    setNewLesson({ subject: quickSubject, groupId: quickGroupId, teacherId: resolvedQuickTeacherId,
+      room: isVirtualRoom(quickRoom) ? '' : quickRoom, classIds: quickLessonClassIds,
+      format: quickFormatOnline ? 'online' : 'offline',
+      audience: audienceFromGroup(quickGroupId, quickLessonClassIds, groups) });
+    setNewTeacherManuallySelected(Boolean(quickChoice.teacherId));
+    setTeacherQuery('');
+    setCreationInput('form');
+  };
+  const changeNewType = (kind: SelectableKind) => {
+    if (!payload) return;
+    if (creationMode === 'quick') startStructuredForm();
+    setNewLesson(item => {
+      const slot = payload.slots[item.period ?? selectedCell?.period ?? 0];
+      return {
+        ...item,
+        ...(kind === 'elective' && !item.eligibleGrades?.length
+          ? { eligibleGrades: gradeNumbers(newAudienceContextClassIds, groups) } : {}),
+        ...(kind === 'event' ? { start: item.start || slot?.start, end: item.end || slot?.end } : {}),
+      };
+    });
+    setCreationKind(kind);
+    setCreationInput('form');
+    setCreationError('');
+    setNewTypeChange(null);
+  };
+  const structuredCreation = Boolean(!selected && selectedCell && creationMode !== 'quick');
+  const addLabel = {
+    lesson: 'Добавить занятие', practice: 'Добавить практикум', consultation: 'Добавить консультацию',
+    club: 'Добавить кружок', elective: 'Добавить курс по выбору', event: 'Добавить событие',
+    lunch: 'Добавить обед', no_lesson: 'Добавить пометку «Нет урока»',
+  }[creationKind];
+  const addFromEditor = () => {
+    const specialMark = creationMode === 'lunch' || creationMode === 'no_lesson' ? creationMode : undefined;
+    const event = creationMode === 'event';
+    const optional = activityType === 'club' || activityType === 'elective';
+    const format = specialMark || !event && newDayOnline ? undefined : newLesson.format ?? 'online';
+    const catalog = optional && activities.find(item => item.id === newLesson.activityCatalogId && item.type === activityType);
+    addStructured({ ...newLesson, specialMark, format, activityType,
+      subject: specialMark === 'lunch' ? 'Обед' : specialMark === 'no_lesson' ? 'Нет урока' : newLesson.subject,
+      kind: event ? 'event' : 'lesson', teacherId: specialMark ? '' : resolvedNewTeacherId,
+      teacherIds: event ? newLesson.teacherIds : undefined,
+      room: !specialMark && (event ? format === 'online' : newOnline) ? '' : newLesson.room,
+      start: event ? newLesson.start : undefined, end: event ? newLesson.end : undefined,
+      allDay: event && newLesson.allDay, informational: newInformational,
+      place: event ? newLesson.place : undefined, description: event ? newLesson.description : undefined,
+      connectionInfo: specialMark ? undefined : newLesson.connectionInfo,
+      activityCatalogId: catalog ? catalog.id : undefined, activityNameSnapshot: catalog ? catalog.name : undefined,
+      eligibleGrades: activityType === 'elective' ? newLesson.eligibleGrades : undefined,
+      electiveDirection: activityType === 'elective' ? newLesson.electiveDirection : undefined,
+    });
+  };
   const selectedOnline = selectedDayOnline || selected?.format === 'online' || isVirtualRoom(selected?.room);
   const toggleOnline = (lesson: Lesson, online: boolean) => {
     const key = JSON.stringify([draft?.id, draft?.revision, lesson.id]);
@@ -3200,10 +3387,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               const label = lesson && [lesson.subject || 'Занятие', ...(duplicateSubject ? [displayedClasses(lesson).flatMap(classId => groups.find(g => g.id === classId)?.name || []).join(', '), normalizeRoomDisplay(lesson.room)] : [])].filter(Boolean).join(' · ');
               return lesson ? <button key={id} aria-pressed={route.active===id} onClick={()=>{openReviewLesson(id,true);setIssueRoute({...route,active:id});}}>{label}</button> : null;
             })}</div> : null}
-            {!panelOpen && (selected || canCreateAtSlot) ? <button onClick={()=>{if (route.slot && !selected) {
-                const kind = route.slot.kind;
-                setCreationMode(kind === 'lunch' || kind === 'event' || kind === 'no_lesson' ? kind : 'form');
-              }
+            {!panelOpen && (selected || canCreateAtSlot) ? <button onClick={()=>{if (route.slot && !selected) setCreationInput('form');
               setPanelOpen(true);}}>{selected?'Редактировать занятие':'Создать занятие в слоте'}</button> : null}
             {route.mayCreate && customSlotTime ? <small>Показан пересекающийся урок. Для создания занятия уточните время по звонкам.</small> : null}
             {route.slot && !selectedCell ? <small>Для этого времени или класса в сетке нет подходящей ячейки. Уточните размещение в сверке.</small> : null}
@@ -3484,7 +3668,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                                   setSelectedId('');
                                   setQuick('');
                                   setQuickChoice({});
-                                  setCreationMode('quick');
+                                  resetQuickCreation();
                                   setPanelMode('lesson');
                                   setPanelOpen(true);
                                   scheduleQuickFocus();
@@ -3503,7 +3687,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
             <ConstructorInspectorShell open={panelOpen} onClose={() => setPanelOpen(false)}>
               <div className="constructor-inspector-head">
                 <div>
-                  <small>{selected ? selected.kind === 'event' ? 'СОБЫТИЕ' : 'ЗАНЯТИЕ' : 'ВЫБРАННАЯ ЯЧЕЙКА'}</small>
+                  <small>{selected ? selected.kind === 'event' ? 'СОБЫТИЕ' : 'ЗАНЯТИЕ' : selectedCell ? 'НОВОЕ ЗАНЯТИЕ' : 'РЕДАКТОР'}</small>
                   <h2>
                     {selected
                       ? selected.subject || 'Новое занятие'
@@ -3514,55 +3698,41 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                 </div>
                 <div className="constructor-inspector-head-actions">{route ? <button onClick={backToIssues}>К проверке</button> : null}<button onClick={() => setPanelOpen(false)} aria-label="Закрыть панель"><X size={17} /></button></div>
               </div>
-              {selected && focus ? (
-                <button
-                  className="constructor-slot-choice"
-                  onClick={() => setSelectedId('')}
-                >
-                  Выделить весь слот
-                </button>
-              ) : null}
               {focus || selected ? (
                 <>
-                  {focus && !selected && creationMode === 'quick' && (gridColumns[focus.col]?.classIds.length || 0) > 1 ? (
-                    <label>Класс занятия
-                      <select aria-label="Класс занятия в параллели" value={targetClassId} onChange={(event) => { setTargetClassId(event.target.value); setQuick(''); setQuickChoice({}); }}>
-                        <option value="">Выберите класс</option>
-                        {gridColumns[focus.col].classIds.map((id) => <option key={id} value={id}>{groups.find((item) => item.id === id)?.name}</option>)}
-                      </select>
-                    </label>
-                  ) : null}
                   {!selected ? (
                     <div className="constructor-creation">
-                      <strong>Что добавляем?</strong>
-                      <div className="constructor-creation-tabs" role="group" aria-label="Что добавляем?">
-                        {(['lesson', 'lunch', 'club', 'elective', 'event'] as const).map((type) => <button key={type} aria-pressed={type === 'lunch' ? creationMode === 'lunch' : creationMode !== 'lunch' && activityType === type} className={(type === 'lunch' ? creationMode === 'lunch' : creationMode !== 'lunch' && activityType === type) ? 'active' : ''} onClick={() => {
-                          setCreationError(''); setActivityType(type === 'lunch' ? 'lesson' : type);
-                          setCreationMode(type === 'lunch' ? 'lunch' : type === 'event' ? 'event' : 'form');
-                          const classIds = quickClassIds.length ? quickClassIds : selectedCell?.classId ? [selectedCell.classId] : focus ? gridColumns[focus.col]?.classIds || [] : [];
-                          const slot = payload.slots[selectedCell?.period ?? 0];
-                          const eligibleGrades = [...new Set(classIds.map((id) => Number(audienceGrade(groups.find((group) => group.id === id) || { id, name: '', group_type: 'class' }))).filter((grade) => Number.isFinite(grade) && grade > 0))];
-                          setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds, audience: type === 'elective' ? { kind: 'students', student_ids: [] } : { kind: 'classes', class_ids: classIds }, ...(type === 'elective' ? { eligibleGrades, confirmedParticipantIds: [] } : {}), ...(type === 'event' ? { day: selectedCell?.day, start: slot?.start, end: slot?.end } : {}) });
-                          setNewTeacherManuallySelected(false); setTeacherQuery('');
-                        }}>{type === 'lesson' ? 'Учебное занятие' : type === 'lunch' ? 'Обед' : type === 'club' ? 'Кружок' : type === 'elective' ? 'Курс по выбору' : 'Событие'}</button>)}
-                      </div>
-                      {['quick', 'form'].includes(creationMode) && activityType in lessonKinds &&
-                        <LessonKindPicker value={activityType as LessonKind} onChange={kind => {
-                          if (creationMode === 'quick' && kind !== 'lesson') {
-                            setNewLesson({subject:quickSubject, groupId:quickGroupId, teacherId:resolvedQuickTeacherId,
-                              room:quickRoom, classIds:quickClassIds, audience:audienceFromGroup(quickGroupId, quickClassIds, groups)});
-                            setNewTeacherManuallySelected(Boolean(resolvedQuickTeacherId));
-                            setTeacherQuery('');
-                            setCreationMode('form');
-                          }
-                          setActivityType(kind);
-                        }} />}
-                      {activityType === 'lesson' && creationMode !== 'lunch' ? <div className="constructor-creation-tabs" role="group" aria-label="Способ редактирования урока">
-                        <button className={creationMode === 'quick' ? 'active' : ''} onClick={() => setCreationMode('quick')}>Быстрый ввод</button>
-                        <button className={creationMode === 'form' ? 'active' : ''} onClick={() => { setNewLesson({ subject: quickSubject, groupId: quickGroupId, teacherId: resolvedQuickTeacherId, room: quickRoom, classIds: quickClassIds, audience: audienceFromGroup(quickGroupId, quickClassIds, groups) }); setNewTeacherManuallySelected(Boolean(quickChoice.teacherId)); setTeacherQuery(''); setCreationMode('form'); }}>Форма</button>
+                      <LessonKindPicker value={creationKind}
+                        onChange={kind => {
+                          if (kind === creationKind && creationMode !== 'quick') { setNewTypeChange(null); return; }
+                          if (creationMode !== 'quick' && (creationKind in otherKinds || kind in otherKinds) && (newLesson.subject.trim() || newLesson.groupId || newLesson.room)) {
+                            setNewTypeChange(kind);
+                          } else changeNewType(kind);
+                        }} />
+                      {creationMode === 'quick' || creationMode === 'form' ? <OnlineFormat
+                        byDay={creationMode === 'quick' ? quickDayOnline : newDayOnline}
+                        checked={creationMode === 'quick' ? quickOnline : newOnline}
+                        onChange={creationMode === 'quick' ? setQuickOnlineChoice : setNewOnline} />
+                        : creationMode === 'event' ? <label>Формат <select value={newLesson.format ?? 'online'}
+                          onChange={event => setNewLesson(item => ({ ...item, format: event.target.value }))}>
+                          <option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option>
+                        </select></label> : null}
+                      {newTypeChange ? <div className="constructor-type-confirm">
+                        <p>Выбрать «{editorKinds[newTypeChange]}»? Проверьте участников и поля нового типа перед добавлением.</p>
+                        <button type="button" onClick={() => changeNewType(newTypeChange)}>Продолжить</button>
+                        <button type="button" onClick={() => setNewTypeChange(null)}>Отмена</button>
                       </div> : null}
-                      {creationError ? <p role="alert" className="constructor-unrecognized">{creationError}</p> : null}
+                      {focus && creationMode === 'quick' && (gridColumns[focus.col]?.classIds.length || 0) > 1 ? (
+                        <label>Класс занятия
+                          <select aria-label="Класс занятия в параллели" value={targetClassId} onChange={(event) => { setTargetClassId(event.target.value); setQuick(''); setQuickChoice({}); }}>
+                            <option value="">Выберите класс</option>
+                            {gridColumns[focus.col].classIds.map((id) => <option key={id} value={id}>{groups.find((item) => item.id === id)?.name}</option>)}
+                          </select>
+                        </label>
+                      ) : null}
+                      {creationMode === 'quick' ? <button type="button" className="constructor-editor-secondary" onClick={startStructuredForm}>Форма</button> : null}
                       {creationMode === 'quick' ? <>
+                        {creationError ? <p role="alert" className="constructor-unrecognized">{creationError}</p> : null}
                         <label className="constructor-mobile-quick-field">Быстрый ввод<input className="constructor-mobile-quick" aria-label="Быстрый ввод занятия" value={quick} placeholder="Предмет, группа, преподаватель, кабинет" onChange={(event) => { setQuick(event.target.value); setQuickChoice({}); }} onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); addLesson(); } }} /></label>
                         {quick.trim() ? <div className="constructor-suggestions">
                           <strong>Распознано из ввода в ячейке</strong>
@@ -3579,60 +3749,239 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             <option value="">{quickParsed.teacherIds.length > 1 ? 'Несколько совпадений — выберите' : 'Не назначен'}</option>
                             {rankedTeachers.filter((item) => item.id === resolvedQuickTeacherId || !teacherQuery || item.name.toLocaleLowerCase('ru').includes(teacherQuery.toLocaleLowerCase('ru'))).map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ` · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : ' · свободен'}</option>)}
                           </select></label>
-                          <label>Кабинет <input aria-label="Распознанный кабинет" value={quickRoom} onChange={(event) => setQuickChoice((choice) => ({ ...choice, room: event.target.value }))} /></label>
-                          <span>Аудитория: {(quickGroupId ? groupClassIds(quickGroupId, groups, students, quickClassIds) : quickClassIds).map((id) => groups.find((item) => item.id === id)?.name || id).join(', ') || 'уточните в форме'}</span>
+                          <label>Кабинет <input aria-label="Распознанный кабинет" disabled={quickOnline} value={quickOnline ? '' : quickRoom} onChange={(event) => setQuickChoice((choice) => ({ ...choice, room: event.target.value }))} /></label>
+                          <span>Аудитория: {quickLessonClassIds.map((id) => groups.find((item) => item.id === id)?.name || id).join(', ') || 'уточните в форме'}</span>
                           {quickParsed.unknown.length ? <p className="constructor-unrecognized">Не распознано: {quickParsed.unknown.join(', ')}. Уточните текст или откройте форму.</p> : null}
                           <button onClick={addLesson} disabled={!quickSubject || Boolean(quickParsed.unknown.length) || quickParsed.groupIds.length > 1 && !quickChoice.groupId || quickParsed.teacherIds.length > 1 && !quickChoice.teacherId}>Добавить занятие</button>
-                          <button onClick={() => { setNewLesson({ subject: quickSubject, groupId: quickGroupId, teacherId: resolvedQuickTeacherId, room: quickRoom, classIds: quickClassIds, audience: audienceFromGroup(quickGroupId, quickClassIds, groups) }); setNewTeacherManuallySelected(Boolean(quickChoice.teacherId)); setTeacherQuery(''); setCreationMode('form'); }}>Открыть подробную форму</button>
+
                         </div> : null}
                       </> : <div className="constructor-create-form">
-                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'event' ? 'Название события' : ['lesson', 'practice', 'consultation'].includes(activityType) ? 'Предмет' : activityType === 'club' ? 'Кружок' : 'Курс по выбору'} <input aria-label="Название активности" placeholder="Выберите или введите название" list="constructor-new-subjects" value={newLesson.subject} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => setNewLesson((item) => ({ ...item, subject: event.target.value }))} /></label><datalist id="constructor-new-subjects">{[...subjects, ...activities.filter((item) => item.status === 'active').map((item) => item.name)].filter((item, index, all) => all.indexOf(item) === index).map((item) => <option key={item} value={item} />)}</datalist></> : <p className="constructor-special-mark">{creationMode === 'lunch' ? 'Обед' : 'Нет урока'}</p>}
+                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'event' ? 'Название события' : ['lesson', 'practice', 'consultation'].includes(activityType) ? 'Предмет' : activityType === 'club' ? 'Кружок' : 'Курс по выбору'} <input aria-label="Название активности" placeholder="Выберите или введите название" list="constructor-new-subjects" value={newLesson.subject} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => setNewLesson((item) => ({ ...item, subject: event.target.value }))} /></label><datalist id="constructor-new-subjects">{[...subjects, ...activities.filter((item) => item.status === 'active').map((item) => item.name)].filter((item, index, all) => all.indexOf(item) === index).map((item) => <option key={item} value={item} />)}</datalist></> : null}
                         {(activityType === 'club' || activityType === 'elective') ? <>
-                          <label>Запись каталога <select value={newLesson.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); setNewLesson((current) => ({ ...current, activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || '', subject: item?.name || current.subject })); }}><option value="">Без привязки к каталогу</option>{activities.filter((item) => item.status === 'active' && item.type === activityType).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-                          <details><summary>Управление каталогом · {activities.length}</summary><div className="constructor-related-actions"><button onClick={() => { const item = activities.find((entry) => entry.id === newLesson.activityCatalogId); editActivity(item, activityType as 'club' | 'elective'); }}>Создать / изменить выбранную запись</button>{activities.filter((item) => item.status === 'active').map((item) => <button key={item.id} onClick={() => void archiveActivity(item)}>В архив: {item.name}</button>)}{activities.filter((item) => item.status === 'archived').map((item) => <button key={item.id} onClick={() => void archiveActivity(item)}>Восстановить: {item.name}</button>)}</div></details>
+                          <label>Запись каталога <select value={activities.some(item => item.id === newLesson.activityCatalogId && item.type === activityType) ? newLesson.activityCatalogId : ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); setNewLesson((current) => ({ ...current, activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || '', subject: item?.name || current.subject })); }}><option value="">Без привязки к каталогу</option>{activities.filter((item) => item.status === 'active' && item.type === activityType).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+
                           {activityType === 'elective' ? <ElectiveClassFields groups={groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id))} classIds={newLesson.classIds} eligibleGrades={newLesson.eligibleGrades || []} onClassIdsChange={(classIds) => setNewLesson((current) => ({ ...current, classIds }))} onEligibleGradesChange={(eligibleGrades) => setNewLesson((current) => ({ ...current, eligibleGrades }))} /> : null}
                           {activityType === 'elective' ? <><label>Направление <select value={newLesson.electiveDirection || ''} onChange={(event) => setNewLesson((current) => ({ ...current, electiveDirection: event.target.value === 'digital' ? 'digital' : undefined }))}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label></> : null}
                         </> : null}
                         {creationMode === 'event' ? <p>{payload.week_start ? 'Событие относится только к этой неделе.' : 'Событие повторяется в неделях, созданных из этого шаблона.'}</p> : null}
                         {creationMode === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(newLesson.informational)} onChange={(event) => setNewLesson((item) => ({ ...item, informational: event.target.checked }))} /> Информационное событие без назначенных учеников</label> : null}
-                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'practice' ? 'Присутствующий преподаватель (необязательно)' : 'Преподаватель'} <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" disabled={newOnline} value={newOnline ? '' : normalizeRoomInput(newLesson.room)} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
+                        {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'practice' ? 'Присутствующий преподаватель (необязательно)' : 'Преподаватель'} <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" disabled={creationMode === 'event' ? (newLesson.format ?? 'online') === 'online' : newOnline} value={(creationMode === 'event' ? (newLesson.format ?? 'online') === 'online' : newOnline) ? '' : normalizeRoomInput(newLesson.room)} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
                         {creationMode === 'lunch' ? <label>Место (необязательно)<input aria-label="Место обеда" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label> : null}
                         {activityType === 'club' ? <><label>Размещение в сетке<select multiple aria-label="Классы размещения кружка" value={newAudienceContextClassIds} onChange={(event) => setNewLesson((item) => ({ ...item, classIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><p>Поимённый список не нужен. Ученики этих классов увидят кружок в отдельном разделе расписания.</p></> : null}
-                        {activityType === 'elective' ? <p>Ученики и учебные группы отдельно не назначаются. Параллельные курсы доступны выбранным классам независимо друг от друга.</p> : !newLesson.informational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
+                        {activityType === 'elective' ? <p>Ученики и учебные группы отдельно не назначаются. Параллельные курсы доступны выбранным классам независимо друг от друга.</p> : !newInformational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
+                        {creationMode !== 'event' && <div className="constructor-field-row">
+                          <label>День <select value={previewDay}
+                            onChange={event => setNewLesson(item => ({ ...item, day: Number(event.target.value) }))}>
+                            {payload.days.map(value => <option key={value} value={value}>{DAYS[value]}</option>)}
+                          </select></label>
+                          <label>Время <select value={previewPeriod}
+                            onChange={event => setNewLesson(item => ({ ...item, period: Number(event.target.value) }))}>
+                            {payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {formatLessonTimeRange(slot.start, slot.end)}</option>)}
+                          </select></label>
+                        </div>}
                         {creationMode === 'event' ? <><div className="constructor-field-row"><label>День <select aria-label="День нового занятия" value={newLesson.day ?? selectedCell?.day ?? day} onChange={(event) => setNewLesson((item) => ({ ...item, day: Number(event.target.value) }))}>{payload.days.map((value) => <option key={value} value={value}>{DAYS[value]}</option>)}</select></label><label>Начало <input type="time" disabled={Boolean(newLesson.allDay)} value={newLesson.allDay ? '00:00' : newLesson.start || ''} onChange={(event) => setNewLesson((item) => ({ ...item, start: event.target.value }))} /></label></div><label className="constructor-informational"><input type="checkbox" checked={Boolean(newLesson.allDay)} onChange={(event) => setNewLesson((item) => ({ ...item, allDay: event.target.checked, start: event.target.checked ? '00:00' : payload.slots[selectedCell?.period ?? 0]?.start || '09:00', end: event.target.checked ? '23:59' : payload.slots[selectedCell?.period ?? 0]?.end || '09:45' }))} /> На весь день</label></> : null}
-                        {creationMode === 'form' ? <>{newDayOnline ? <p>Онлайн по режиму дня класса</p> : <details><summary>Формат занятия</summary><label className="constructor-online-format"><input type="checkbox" checked={newOnline} onChange={event => setNewLesson(item => ({ ...item, format: event.target.checked ? 'online' : '', room: isVirtualRoom(item.room) ? '' : item.room }))} /> Этот урок проводится онлайн</label></details>}{newOnline && <details><summary>Подключение</summary><label>Ссылка или сведения для подключения<input value={newLesson.connectionInfo || ''} onChange={event => setNewLesson(item => ({ ...item, connectionInfo: event.target.value }))} /></label></details>}</> : null}
-                        {creationMode === 'form' && newLesson.blockId ? <label>Название параллельного блока <input value={newLesson.blockName || ''} onChange={(event) => setNewLesson((item) => ({ ...item, blockName: event.target.value }))} placeholder="Например, курсы по выбору 5–6" /></label> : null}
                         {creationMode === 'event' ? <>
                           <label>Конец <input type="time" disabled={Boolean(newLesson.allDay)} value={newLesson.allDay ? '23:59' : newLesson.end || ''} onChange={(event) => setNewLesson((item) => ({ ...item, end: event.target.value }))} /></label>
                           {newLesson.start && newLesson.end && minutes(newLesson.end) > minutes(newLesson.start) ? <p className="constructor-affected-slots">Затронуты уроки: {affectedSlots(newLesson.start, newLesson.end, payload.slots).join(', ') || 'нет пересечений с сеткой'}</p> : null}
                           <label>Сопровождающие <select multiple aria-label="Сопровождающие нового события" value={newLesson.teacherIds || []} onChange={(event) => setNewLesson((item) => ({ ...item, teacherIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{rankedTeachers.map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ' · занят' : ''}</option>)}</select></label>
                           <label>Место <input value={newLesson.place || ''} onChange={(event) => setNewLesson((item) => ({ ...item, place: event.target.value }))} /></label>
-                          <label>Формат <select value={newLesson.format || ''} onChange={(event) => setNewLesson((item) => ({ ...item, format: event.target.value }))}><option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option></select></label>
+
                           <label>Описание <textarea value={newLesson.description || ''} onChange={(event) => setNewLesson((item) => ({ ...item, description: event.target.value }))} /></label>
                         </> : null}
-                        <button onClick={() => addStructured({ ...newLesson, subject: creationMode === 'lunch' ? 'Обед' : creationMode === 'no_lesson' ? 'Нет урока' : newLesson.subject, activityType, kind: activityType === 'event' || creationMode === 'event' ? 'event' : 'lesson', specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined, teacherId: creationMode === 'lunch' || creationMode === 'no_lesson' ? '' : resolvedNewTeacherId, room: newDayOnline && creationMode === 'form' && !isVirtualRoom(newLesson.room) ? '' : newLesson.room, start: activityType === 'event' || creationMode === 'event' ? newLesson.start : undefined, end: activityType === 'event' || creationMode === 'event' ? newLesson.end : undefined })}>Добавить {activityType === 'event' || creationMode === 'event' ? 'событие' : activityType === 'club' ? 'кружок' : activityType === 'elective' ? 'курс по выбору' : creationMode === 'lunch' ? 'обед' : creationMode === 'no_lesson' ? 'пометку «Нет урока»' : 'занятие'}</button>
+                        {(activityType === 'club' || activityType === 'elective') &&
+                          <EditorDisclosure label="Управление каталогом"><div className="constructor-related-actions"><button onClick={() => { const item = activities.find((entry) => entry.id === newLesson.activityCatalogId); editActivity(item, activityType as 'club' | 'elective'); }}>Создать / изменить выбранную запись</button>{activities.filter((item) => item.status === 'active').map((item) => <button key={item.id} onClick={() => void archiveActivity(item)}>В архив: {item.name}</button>)}{activities.filter((item) => item.status === 'archived').map((item) => <button key={item.id} onClick={() => void archiveActivity(item)}>Восстановить: {item.name}</button>)}</div></EditorDisclosure>}
+                        {(creationMode === 'form' && newOnline || creationMode === 'event' && (newLesson.format ?? 'online') === 'online') &&
+                          <EditorDisclosure label="Настроить подключение"><label>Ссылка или сведения для подключения
+                            <input value={newLesson.connectionInfo || ''} onChange={event => setNewLesson(item => ({ ...item, connectionInfo: event.target.value }))} />
+                          </label></EditorDisclosure>}
+                        {creationMode === 'form' && newLesson.blockId ? <label>Название параллельного блока <input value={newLesson.blockName || ''} onChange={(event) => setNewLesson((item) => ({ ...item, blockName: event.target.value }))} placeholder="Например, курсы по выбору 5–6" /></label> : null}
                       </div>}
                     </div>
                   ) : null}
                   {selected ? (
                     <>
-                      {!selected.specialMark && (selectedActivityType || 'lesson') in lessonKinds && <>
-                        <LessonKindPicker value={(selectedActivityType || 'lesson') as LessonKind} onChange={kind => {
-                          setConfirmPractice('');
-                          if (kind === selectedActivityType) return;
-                          if (kind === 'practice' && (selected.teacherId || selected.teacherIds?.length)) setConfirmPractice(selected.id);
-                          else updateLesson(selected.id, {activityType:kind});
-                        }} />
-                        {confirmPractice === selected.id && <div className="constructor-related-actions">
-                          <strong>Преподаватель присутствует на практикуме?</strong>
-                          <button onClick={() => {updateLesson(selected.id, {activityType:'practice'}); setConfirmPractice('');}}>Да, присутствует</button>
-                          <button onClick={() => {updateLesson(selected.id, {activityType:'practice', responsible_teacher_ids:
-                            [...new Set([...(selected.responsible_teacher_ids || []), selected.teacherId, ...(selected.teacherIds || [])].filter(Boolean))],
-                            teacherId:'', teacherIds:[]}); setConfirmPractice('');}}>Только отвечает за задание</button>
-                        </div>}
-                        {selectedActivityType === 'consultation' && !selected.teacherId && !selected.teacherIds?.length &&
-                          <p role="alert">Выберите преподавателя консультации.</p>}
+                      {selectedKind && <LessonKindPicker key={selected.id} value={selectedKind}
+                        onChange={selectedKind === 'laboratory' || selectedKind === 'no_lesson' ||
+                          selectedKind === 'lunch' && (selected.specialMark !== 'lunch' || Boolean(selected.canonical))
+                          ? undefined : kind => requestTypeChange(selected, selectedKind, kind)} />}
+                      {selectedKind && selectedKind !== 'event' && !isSpecialMark(selected) &&
+                        <OnlineFormat byDay={selectedDayOnline} checked={selectedOnline} onChange={online => toggleOnline(selected, online)} />}
+                      {selectedKind === 'event' && <label>Формат <select value={selected.format || ''}
+                        onChange={event => updateLesson(selected.id, { format: event.target.value })}>
+                        <option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option>
+                      </select></label>}
+                      {selectedKind && pendingType && <div className="constructor-type-confirm">
+                        <p>{pendingTeacherChoice ? 'Преподаватель присутствует на практикуме?' : `Выбрать «${editorKinds[pendingType]}»?`}</p>
+                        {typeChangeBlocked ? <p>У занятия отмечены персональные исключения. Сначала проверьте их, чтобы сменить тип.</p> : <>
+                          {pendingOptionalKind && <p>Классы размещения сохранятся. Учебные группы, поимённые назначения и прежняя привязка к каталогу будут сняты.</p>}
+                          {(selectedKind === 'club' || selectedKind === 'elective') && !pendingOptionalKind &&
+                            <p>Привязка к каталогу будет снята. После смены типа проверьте назначенных участников.</p>}
+                          {pendingType === 'lunch' && <p>Название заменится на «Обед». Преподаватели и данные подключения будут сняты.</p>}
+                          {selectedKind === 'event' && <p>Отдельное время события, место и описание будут сняты. Занятие останется в выбранном слоте.</p>}
+                          <button type="button" onClick={() => applyTypeChange(selected, selectedKind, pendingType)}>
+                            {pendingTeacherChoice ? 'Да, присутствует' : 'Продолжить'}
+                          </button>
+                          {pendingTeacherChoice && <button type="button" onClick={() => applyTypeChange(selected, selectedKind, pendingType, true)}>
+                            Только отвечает за задание
+                          </button>}
+                        </>}
+                        <button type="button" onClick={() => setTypeChange(null)}>Отмена</button>
+                      </div>}
+                      {selectedActivityType === 'consultation' && !selected.teacherId && !selected.teacherIds?.length &&
+                        <p role="alert">Выберите преподавателя консультации.</p>}
+                      {isLunch(selected) || isNoLesson(selected) ? null : <>
+                      <label>
+                        {selectedKind === 'club' ? 'Кружок' : selectedKind === 'elective' ? 'Курс по выбору' : selectedKind === 'event' ? 'Название события' : 'Предмет'}
+                        <input
+                          list="constructor-subjects"
+                          value={selected.subject}
+                          onChange={(event) =>
+                            updateLesson(selected.id, {
+                              subject: event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <datalist id="constructor-subjects">
+                        {subjects.map((item) => (
+                          <option key={item} value={item} />
+                        ))}
+                      </datalist>
+
                       </>}
+                      {(selectedActivityType === 'club' || selectedActivityType === 'elective') ? <>
+                      <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selectedActivityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
+                        {selectedActivityType === 'elective' ? <ElectiveClassFields groups={groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id))} classIds={lessonClasses(selected)} eligibleGrades={selected.eligibleGrades || []} onClassIdsChange={(classIds) => updateLesson(selected.id, { classIds, classId: classIds[0] || '' })} onEligibleGradesChange={(eligibleGrades) => updateLesson(selected.id, { eligibleGrades })} /> : null}
+                      {selectedActivityType === 'elective' ? <>
+                        <label>Общий блок курсов по выбору <select aria-label="Общий блок курсов по выбору" value={selected.blockId || ''} onChange={(event) => {
+                          const target = event.target.value;
+                          if (target === '__create__') {
+                            updateLesson(selected.id, { blockId: freshId(), blockName: selected.blockName || 'Курс по выбору' });
+                          } else if (!target) {
+                            updateLesson(selected.id, { blockId: undefined, blockName: undefined });
+                          } else {
+                            const source = payload.lessons.find((item) => item.blockId === target && item.id !== selected.id);
+                            updateLesson(selected.id, { blockId: target, blockName: source?.blockName || 'Курс по выбору' });
+                          }
+                        }}><option value="">Не сопоставлен</option><option value="__create__">Создать новый общий блок</option>{Array.from(new Map(payload.lessons.filter((item) => editorActivityType(item) === 'elective' && item.blockId).map((item) => [item.blockId!, item])).values()).map((item) => <option key={item.blockId} value={item.blockId}>{item.blockName || 'Курс по выбору'} · {item.day + 1}, {item.start || payload.slots[item.period]?.start || ''}</option>)}</select></label>
+                        {selected.blockId ? <label>Название общего блока <input aria-label="Название общего блока" value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, ...(editorActivityType(item) === 'elective' ? { activityType: 'elective' as const } : {}), blockName: event.target.value } : item) }))} placeholder="Курс по выбору" /></label> : <small>Укажите общий блок, чтобы связанные параллельные направления показывались ученикам одной карточкой.</small>}
+                        <label>Направление <select value={selected.electiveDirection || ''} onChange={(event) => updateLesson(selected.id, { electiveDirection: event.target.value === 'digital' ? 'digital' : undefined })}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label>
+                      </> : null}
+                      </> : null}
+                      {selected.kind === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.informational)} onChange={(event) => updateLesson(selected.id, event.target.checked ? { informational: true, audience: undefined, groupId: '', groupIds: [] } : { informational: false, ...audiencePatch({ kind: 'classes', class_ids: lessonClasses(selected) }, groups, students) })} /> Информационное событие без назначенных учеников</label> : null}
+
+                      {!isLunch(selected) ? <>
+                      <label>
+                        Преподаватель
+                        <select
+                          value={selected.teacherId}
+                          onChange={(event) =>
+                            updateLesson(selected.id, {
+                              teacherId: event.target.value,
+                            })
+                          }
+                        >
+                          <option value="">Не назначен</option>
+                          {rankedTeachers
+                            .filter(
+                              (item) =>
+                                item.id === selected.teacherId ||
+                                !teacherQuery ||
+                                item.name
+                                  .toLocaleLowerCase('ru')
+                                  .includes(
+                                    teacherQuery.toLocaleLowerCase('ru'),
+                                  ),
+                            )
+                            .map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.name}
+                                {busyTeachers.has(item.id) ? ` · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : ' · свободен'}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      </> : null}
+                      <label>
+                        Кабинет
+                        <input
+                          list="constructor-rooms"
+                          disabled={selectedOnline && !isLunch(selected)}
+                          value={selectedOnline && !isLunch(selected) ? '' : normalizeRoomInput(selected.room)}
+                          onChange={(event) =>
+                            updateLesson(selected.id, {
+                              room: normalizeRoomKey(event.target.value).startsWith('room:') ? normalizeRoomDisplay(event.target.value) : event.target.value,
+                            })
+                          }
+                        />
+                      </label>
+
+                      {selectedActivityType === 'club' ? <><label>Размещение в сетке
+                        <select multiple aria-label="Классы размещения кружка" value={visualClasses(selected, groups)}
+                          onChange={event => updateLesson(selected.id, { displayClassIds: [...event.target.selectedOptions].map(option => option.value) })}>
+                          {groups.filter(group => group.group_type === 'class' && payload.classes.includes(group.id)).map(group =>
+                            <option key={group.id} value={group.id}>{group.name}</option>)}
+                        </select></label><p>Поимённый список для кружка не нужен.</p></> : null}
+                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
+                      <div className="constructor-field-row">
+                        <label>
+                          День
+                          <select
+                            value={selected.day}
+                            onChange={(event) =>
+                              updateLesson(selected.id, {
+                                day: Number(event.target.value),
+                              })
+                            }
+                          >
+                            {payload.days.map((item) => (
+                              <option key={item} value={item}>
+                                {DAYS[item]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {selected.kind === 'event' ? <label>Начало <input type="time" disabled={Boolean(selected.allDay)} value={selected.allDay ? '00:00' : selected.start || payload.slots[selected.period]?.start || ''} onChange={(event) => updateLesson(selected.id, { start: event.target.value })} /></label> : <label>Время <select value={selected.period} onChange={(event) => updateLesson(selected.id, { period: Number(event.target.value) })}>{payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {formatLessonTimeRange(slot.start, slot.end)}</option>)}</select></label>}
+                      </div>
+                      {selected.kind !== 'event' && selected.end && selected.end !== payload.slots[selected.period]?.end ? <label>Конец многослотового занятия <input type="time" value={selected.end} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label> : null}
+                      {selected.kind === 'event' ? <fieldset className="constructor-event-fields"><legend>Событие · время и сопровождение</legend>
+                        <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.allDay)} onChange={(event) => updateLesson(selected.id, { allDay: event.target.checked, start: event.target.checked ? '00:00' : payload.slots[selected.period]?.start || '09:00', end: event.target.checked ? '23:59' : payload.slots[selected.period]?.end || '09:45' })} /> На весь день</label>
+                        <label>Конец <input type="time" disabled={Boolean(selected.allDay)} value={selected.allDay ? '23:59' : selected.end || payload.slots[selected.period]?.end || ''} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label>
+                        {selected.start && selected.end && minutes(selected.end) > minutes(selected.start) ? <p className="constructor-affected-slots">Затронуты уроки: {affectedSlots(selected.start, selected.end, payload.slots).join(', ') || 'нет пересечений с сеткой'}</p> : null}
+                        <label>Место <input value={selected.place || ''} onChange={(event) => updateLesson(selected.id, { place: event.target.value })} /></label>
+
+                        <label>Описание <textarea value={selected.description || ''} onChange={(event) => updateLesson(selected.id, { description: event.target.value })} /></label>
+                        <label>Сопровождающие <select multiple aria-label="Сопровождающие преподаватели" value={selected.teacherIds || []} onChange={(event) => { const ids = [...event.target.selectedOptions].map((option) => option.value); updateLesson(selected.id, { teacherIds: ids, teacherId: ids[0] || '' }); }}>{teachers.map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ' · занят' : ''}</option>)}</select></label>
+                      </fieldset> : null}
+                      {selected.audience && !['club', 'elective'].includes(selectedActivityType || '') ? <EditorDisclosure key={`exceptions-${selected.id}`} label={selected.audience.exclude_student_ids?.length
+                        ? `Изменить исключения · ${selected.audience.exclude_student_ids.length}` : 'Изменить исключения'}>
+                        <label>Основание<input value={selected.attendance_reason || ''} onChange={event => updateLesson(selected.id, { attendance_reason: event.target.value })} /></label>
+                        <label>Не посещают это занятие<select multiple disabled={!selected.attendance_reason?.trim()} value={selected.audience.exclude_student_ids || []} onChange={event => updateLesson(selected.id, { audience: { ...selected.audience!, exclude_student_ids: [...event.target.selectedOptions].map(option => option.value) }, audience_snapshot: null })}>{students.filter(student => audiencePreviews[selected.id]?.student_ids?.includes(student.id) || selected.audience?.exclude_student_ids?.includes(student.id)).map(student => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>
+                        {selected.attendance_history?.map((entry,index) => <p key={index}>{entry.at.slice(0,10)} · {entry.actor} · {entry.reason}</p>)}</EditorDisclosure> : null}
+                      {selectedActivityType === 'practice' ? <label>Ответственные за задание (без присутствия)<select multiple value={selected.responsible_teacher_ids || []} onChange={(event) => updateLesson(selected.id, { responsible_teacher_ids: [...event.target.selectedOptions].map(option => option.value) })}>{teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label> : null}
+                      {selectedOnline && !isSpecialMark(selected) ? <EditorDisclosure key={`connection-${selected.id}`} label="Настроить подключение">
+                        <label>Ссылка или сведения для подключения<input value={selected.connectionInfo || ''}
+                          onChange={event => updateLesson(selected.id, { connectionInfo: event.target.value })} /></label>
+                      </EditorDisclosure> : null}
+                      {!isSpecialMark(selected) ? <EditorDisclosure key={`teacher-${selected.id}`} label="Настройки преподавателя">
+                      <label>
+                        Фамилия или имя
+                        <input
+                          value={teacherQuery}
+                          onChange={(event) =>
+                            setTeacherQuery(event.target.value)
+                          }
+                          placeholder="Фамилия или имя"
+                        />
+                      </label>
+                      {selected.teacherId ? <label className="constructor-teacher-color">Цвет преподавателя
+                        <input type="color" aria-label="Цвет преподавателя" disabled={!teacherRegistry.ready || teacherRegistry.pending.has(selected.teacherId)} value={teacherRegistry.color(selected.teacherId)} onChange={(event) => teacherRegistry.setColor(selected.teacherId, event.target.value)} />
+                        <button type="button" disabled={!teacherRegistry.overrides[selected.teacherId]} onClick={() => teacherRegistry.resetColor(selected.teacherId)}>Сбросить</button>
+                        {teacherRegistry.error ? <span role="alert">{teacherRegistry.error}</span> : null}
+                        {teacherRegistry.notice ? <output>{teacherRegistry.notice}</output> : null}
+                        <button type="button" onClick={() => setColorPanelOpen(true)}>Все преподаватели</button>
+                      </label> : null}
+                      </EditorDisclosure> : null}
                       <div className="constructor-issues">
                         {issues
                           .filter((item) => item.lessonId === selected.id || item.related === selected.id)
@@ -3666,150 +4015,10 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                             </button>
                           ))}
                       </div>
-                      <div className="constructor-related-actions"><button disabled={!focus} onClick={() => { const isElective = selectedActivityType === 'elective'; const blockId = selected.blockId || freshId(); const blockName = selected.blockName || (isElective ? 'Курс по выбору' : 'Параллельные занятия'); if (!selected.blockId) updateLesson(selected.id, { blockId, blockName }); setSelectedId(''); setActivityType(isElective ? 'elective' : 'lesson'); setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds: lessonClasses(selected), day: selected.day, period: selected.period, blockId, blockName, ...(isElective ? { eligibleGrades: selected.eligibleGrades || [], audience: { kind: 'students', student_ids: [] }, confirmedParticipantIds: [] } : {}) }); setNewTeacherManuallySelected(false); setCreationMode('form'); }}>+ Параллельное занятие</button>{selected.blockId ? <span>{selected.blockName || 'Параллельные занятия'} · {payload.lessons.filter((item) => item.blockId === selected.blockId).length}</span> : null}</div>
+                      <div className="constructor-related-actions">
+                        {focus && <button type="button" onClick={() => { resetQuickCreation(); setSelectedId(''); }}>Выделить весь слот</button>}
+                        <button disabled={!focus} onClick={() => { const isElective = selectedActivityType === 'elective'; const blockId = selected.blockId || freshId(); const blockName = selected.blockName || (isElective ? 'Курс по выбору' : 'Параллельные занятия'); if (!selected.blockId) updateLesson(selected.id, { blockId, blockName }); setSelectedId(''); setCreationKind(isElective ? 'elective' : 'lesson'); setNewLesson({ subject: '', groupId: '', teacherId: '', room: '', classIds: lessonClasses(selected), day: selected.day, period: selected.period, blockId, blockName, ...(isElective ? { eligibleGrades: selected.eligibleGrades || [], audience: { kind: 'students', student_ids: [] }, confirmedParticipantIds: [] } : {}) }); setNewTeacherManuallySelected(false); setTeacherQuery(''); setNewTypeChange(null); setCreationInput('form'); }}>+ Параллельное занятие</button>{selected.blockId ? <span>{selected.blockName || 'Параллельные занятия'} · {payload.lessons.filter((item) => item.blockId === selected.blockId).length}</span> : null}</div>
                       {selected.blockId && selectedActivityType !== 'elective' ? <label>Название блока <input value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, blockName: event.target.value } : item) }))} /></label> : null}
-                      {isLunch(selected) ? <p className="constructor-special-mark">Обед</p> : <>
-                      <label>
-                        Предмет
-                        <input
-                          list="constructor-subjects"
-                          value={selected.subject}
-                          onChange={(event) =>
-                            updateLesson(selected.id, {
-                              subject: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <datalist id="constructor-subjects">
-                        {subjects.map((item) => (
-                          <option key={item} value={item} />
-                        ))}
-                      </datalist>
-                      <details><summary>Другие виды активности</summary><label>Тип активности <select value={!selected.activityType && selectedActivityType === 'elective' ? 'legacy_elective' : selectedActivityType || 'lesson'} onChange={(event) => { const type = event.target.value as Lesson['activityType']; if (type === 'practice' && (selected.teacherId || selected.teacherIds?.length) && (selectedActivityType || 'lesson') in lessonKinds) { setConfirmPractice(selected.id); return; } const explicitOnly = type === 'club'; const participants = selected.confirmedParticipantIds || []; updateLesson(selected.id, { activityType: type, kind: type === 'event' ? 'event' : 'lesson', ...(explicitOnly ? { audience: { kind: 'students', student_ids: type === 'club' ? [] : participants }, groupId: '', groupIds: [], ...(type === 'club' ? { confirmedParticipantIds: undefined, displayClassIds: visualClasses(selected, groups), classIds: [], classId: '' } : {}) } : {}) }); }}>{!selected.activityType && selectedActivityType === 'elective' ? <option value="legacy_elective" disabled>Курс по выбору (старая запись)</option> : null}<option value="lesson">Урок</option>{selectedActivityType === 'laboratory' && <option value="laboratory">Лаборатория</option>}<option value="practice">Практикум</option><option value="consultation">Консультация</option><option value="club">Кружок</option><option value="elective">Курс по выбору</option><option value="event">Событие</option></select></label></details>
-                      </>}
-                      {(selectedActivityType === 'club' || selectedActivityType === 'elective') ? <>
-                      <label>Каталог <select value={selected.activityCatalogId || ''} onChange={(event) => { const item = activities.find((entry) => entry.id === event.target.value); updateLesson(selected.id, { activityCatalogId: item?.id || '', activityNameSnapshot: item?.name || undefined, subject: item?.name || selected.subject }); }}><option value="">Без привязки</option>{activities.filter((item) => (item.status === 'active' || item.id === selected.activityCatalogId) && item.type === selectedActivityType).map((item) => <option key={item.id} value={item.id} disabled={item.status === 'archived'}>{item.name}{item.status === 'archived' ? ' · архив' : ''}</option>)}</select></label>
-                        {selectedActivityType === 'elective' ? <ElectiveClassFields groups={groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id))} classIds={lessonClasses(selected)} eligibleGrades={selected.eligibleGrades || []} onClassIdsChange={(classIds) => updateLesson(selected.id, { classIds, classId: classIds[0] || '' })} onEligibleGradesChange={(eligibleGrades) => updateLesson(selected.id, { eligibleGrades })} /> : null}
-                      {selectedActivityType === 'elective' ? <>
-                        <label>Общий блок курсов по выбору <select aria-label="Общий блок курсов по выбору" value={selected.blockId || ''} onChange={(event) => {
-                          const target = event.target.value;
-                          if (target === '__create__') {
-                            updateLesson(selected.id, { blockId: freshId(), blockName: selected.blockName || 'Курс по выбору' });
-                          } else if (!target) {
-                            updateLesson(selected.id, { blockId: undefined, blockName: undefined });
-                          } else {
-                            const source = payload.lessons.find((item) => item.blockId === target && item.id !== selected.id);
-                            updateLesson(selected.id, { blockId: target, blockName: source?.blockName || 'Курс по выбору' });
-                          }
-                        }}><option value="">Не сопоставлен</option><option value="__create__">Создать новый общий блок</option>{Array.from(new Map(payload.lessons.filter((item) => editorActivityType(item) === 'elective' && item.blockId).map((item) => [item.blockId!, item])).values()).map((item) => <option key={item.blockId} value={item.blockId}>{item.blockName || 'Курс по выбору'} · {item.day + 1}, {item.start || payload.slots[item.period]?.start || ''}</option>)}</select></label>
-                        {selected.blockId ? <label>Название общего блока <input aria-label="Название общего блока" value={selected.blockName || ''} onChange={(event) => mutate((state) => ({ ...state, lessons: state.lessons.map((item) => item.blockId === selected.blockId ? { ...item, ...(editorActivityType(item) === 'elective' ? { activityType: 'elective' as const } : {}), blockName: event.target.value } : item) }))} placeholder="Курс по выбору" /></label> : <small>Укажите общий блок, чтобы связанные параллельные направления показывались ученикам одной карточкой.</small>}
-                        <label>Направление <select value={selected.electiveDirection || ''} onChange={(event) => updateLesson(selected.id, { electiveDirection: event.target.value === 'digital' ? 'digital' : undefined })}><option value="">Не указано</option><option value="digital">Цифровое</option></select></label>
-                      </> : null}
-                      </> : null}
-                      {selected.kind === 'event' ? <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.informational)} onChange={(event) => updateLesson(selected.id, event.target.checked ? { informational: true, audience: undefined, groupId: '', groupIds: [] } : { informational: false, ...audiencePatch({ kind: 'classes', class_ids: lessonClasses(selected) }, groups, students) })} /> Информационное событие без назначенных учеников</label> : null}
-
-                      {!isLunch(selected) ? <>
-                      <label>
-                        Найти преподавателя
-                        <input
-                          value={teacherQuery}
-                          onChange={(event) =>
-                            setTeacherQuery(event.target.value)
-                          }
-                          placeholder="Фамилия или имя"
-                        />
-                      </label>
-                      <label>
-                        Преподаватель
-                        <select
-                          value={selected.teacherId}
-                          onChange={(event) =>
-                            updateLesson(selected.id, {
-                              teacherId: event.target.value,
-                            })
-                          }
-                        >
-                          <option value="">Не назначен</option>
-                          {rankedTeachers
-                            .filter(
-                              (item) =>
-                                item.id === selected.teacherId ||
-                                !teacherQuery ||
-                                item.name
-                                  .toLocaleLowerCase('ru')
-                                  .includes(
-                                    teacherQuery.toLocaleLowerCase('ru'),
-                                  ),
-                            )
-                            .map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.name}
-                                {busyTeachers.has(item.id) ? ` · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : ' · свободен'}
-                              </option>
-                            ))}
-                        </select>
-                      </label>
-                      {selected.teacherId ? <label className="constructor-teacher-color">Цвет преподавателя
-                        <input type="color" aria-label="Цвет преподавателя" disabled={!teacherRegistry.ready || teacherRegistry.pending.has(selected.teacherId)} value={teacherRegistry.color(selected.teacherId)} onChange={(event) => teacherRegistry.setColor(selected.teacherId, event.target.value)} />
-                        <button type="button" disabled={!teacherRegistry.overrides[selected.teacherId]} onClick={() => teacherRegistry.resetColor(selected.teacherId)}>Сбросить</button>
-                        {teacherRegistry.error ? <span role="alert">{teacherRegistry.error}</span> : null}
-                        {teacherRegistry.notice ? <output>{teacherRegistry.notice}</output> : null}
-                        <button type="button" onClick={() => setColorPanelOpen(true)}>Все преподаватели</button>
-                      </label> : null}
-                      </> : null}
-                      <label>
-                        Кабинет
-                        <input
-                          list="constructor-rooms"
-                          disabled={selectedOnline}
-                          value={selectedOnline ? '' : normalizeRoomInput(selected.room)}
-                          onChange={(event) =>
-                            updateLesson(selected.id, {
-                              room: normalizeRoomKey(event.target.value).startsWith('room:') ? normalizeRoomDisplay(event.target.value) : event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-
-                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
-                      <div className="constructor-field-row">
-                        <label>
-                          День
-                          <select
-                            value={selected.day}
-                            onChange={(event) =>
-                              updateLesson(selected.id, {
-                                day: Number(event.target.value),
-                              })
-                            }
-                          >
-                            {payload.days.map((item) => (
-                              <option key={item} value={item}>
-                                {DAYS[item]}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {selected.kind === 'event' ? <label>Начало <input type="time" disabled={Boolean(selected.allDay)} value={selected.allDay ? '00:00' : selected.start || payload.slots[selected.period]?.start || ''} onChange={(event) => updateLesson(selected.id, { start: event.target.value })} /></label> : <label>Время <select value={selected.period} onChange={(event) => updateLesson(selected.id, { period: Number(event.target.value) })}>{payload.slots.map((slot, index) => <option key={index} value={index}>{index + 1} · {formatLessonTimeRange(slot.start, slot.end)}</option>)}</select></label>}
-                      </div>
-                      {selected.audience && !['club', 'elective'].includes(selectedActivityType || '') ? <details key={selected.id}><summary>Персональные исключения · {selected.audience.exclude_student_ids?.length || 0}</summary>
-                        <label>Основание<input value={selected.attendance_reason || ''} onChange={event => updateLesson(selected.id, { attendance_reason: event.target.value })} /></label>
-                        <label>Не посещают это занятие<select multiple disabled={!selected.attendance_reason?.trim()} value={selected.audience.exclude_student_ids || []} onChange={event => updateLesson(selected.id, { audience: { ...selected.audience!, exclude_student_ids: [...event.target.selectedOptions].map(option => option.value) }, audience_snapshot: null })}>{students.filter(student => audiencePreviews[selected.id]?.student_ids?.includes(student.id) || selected.audience?.exclude_student_ids?.includes(student.id)).map(student => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label>
-                        {selected.attendance_history?.map((entry,index) => <p key={index}>{entry.at.slice(0,10)} · {entry.actor} · {entry.reason}</p>)}</details> : null}
-                      {selectedActivityType === 'practice' ? <label>Ответственные за задание (без присутствия)<select multiple value={selected.responsible_teacher_ids || []} onChange={(event) => updateLesson(selected.id, { responsible_teacher_ids: [...event.target.selectedOptions].map(option => option.value) })}>{teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label> : null}
-                      {selected.kind !== 'event' ? selectedDayOnline ? <p>Онлайн по режиму дня класса</p> : <details><summary>Формат занятия</summary><label className="constructor-online-format"><input type="checkbox" checked={selectedOnline} onChange={event => toggleOnline(selected, event.target.checked)} /> Этот урок проводится онлайн</label></details> : null}
-                      {selectedOnline ? <details><summary>Подключение</summary><label>Ссылка или сведения для подключения<input value={selected.connectionInfo || ''} onChange={event => updateLesson(selected.id, { connectionInfo: event.target.value })} /></label></details> : null}
-                      {selected.kind !== 'event' && selected.end && selected.end !== payload.slots[selected.period]?.end ? <label>Конец многослотового занятия <input type="time" value={selected.end} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label> : null}
-                      {selected.kind === 'event' ? <fieldset className="constructor-event-fields"><legend>Событие · время и сопровождение</legend>
-                        <label className="constructor-informational"><input type="checkbox" checked={Boolean(selected.allDay)} onChange={(event) => updateLesson(selected.id, { allDay: event.target.checked, start: event.target.checked ? '00:00' : payload.slots[selected.period]?.start || '09:00', end: event.target.checked ? '23:59' : payload.slots[selected.period]?.end || '09:45' })} /> На весь день</label>
-                        <label>Конец <input type="time" disabled={Boolean(selected.allDay)} value={selected.allDay ? '23:59' : selected.end || payload.slots[selected.period]?.end || ''} onChange={(event) => updateLesson(selected.id, { end: event.target.value })} /></label>
-                        {selected.start && selected.end && minutes(selected.end) > minutes(selected.start) ? <p className="constructor-affected-slots">Затронуты уроки: {affectedSlots(selected.start, selected.end, payload.slots).join(', ') || 'нет пересечений с сеткой'}</p> : null}
-                        <label>Место <input value={selected.place || ''} onChange={(event) => updateLesson(selected.id, { place: event.target.value })} /></label>
-                        <label>Формат <select value={selected.format || ''} onChange={(event) => updateLesson(selected.id, { format: event.target.value })}><option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option></select></label>
-                        <label>Описание <textarea value={selected.description || ''} onChange={(event) => updateLesson(selected.id, { description: event.target.value })} /></label>
-                        <label>Сопровождающие <select multiple aria-label="Сопровождающие преподаватели" value={selected.teacherIds || []} onChange={(event) => { const ids = [...event.target.selectedOptions].map((option) => option.value); updateLesson(selected.id, { teacherIds: ids, teacherId: ids[0] || '' }); }}>{teachers.map((item) => <option key={item.id} value={item.id}>{item.name}{busyTeachers.has(item.id) ? ' · занят' : ''}</option>)}</select></label>
-                      </fieldset> : null}
                       <button
                         className="constructor-delete"
                         onClick={removeSelected}
@@ -3823,8 +4032,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                   {creationMode === 'lunch' && !selected ? 'Выберите состав участников обеда; преподаватель и название занятия не требуются.' : activityType === 'club' && !selected ? 'Укажите название и размещение кружка. Преподаватель, место и каталог необязательны.' : selectedCell?.gradeScope ? 'Укажите название урока и аудиторию для всей параллели или выбранной учебной группы.' : 'Введите название урока и нажмите Enter. Двойной клик по карточке откроет поля занятия.'}
                     </div>
                   )}
-                  <details className="constructor-resources">
-                    <summary>Занятость в это время · {busyTeachers.size} преподавателей · {busyRooms.size} кабинетов</summary>
+                  <EditorDisclosure key={`resources-${selected?.id || 'new'}`} label="Посмотреть занятость">
+                    <div className="constructor-resources">
                     <strong>
                       Свободные преподаватели:{' '}
                       {
@@ -3876,7 +4085,8 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                     </div>
                     <strong>Занятые кабинеты: {busyRooms.size}</strong>
                     <div>{allRooms.filter((room) => busyRooms.has(normalizeRoomKey(room))).map((room) => <span key={room}>{room} · {occupied.find((item) => normalizeRoomKey(item.room) === normalizeRoomKey(room))?.subject}</span>)}</div>
-                  </details>
+                    </div>
+                  </EditorDisclosure>
                 </>
               ) : panelMode === 'settings' ? (
                 <div className="constructor-settings">
@@ -3938,7 +4148,13 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               ) : (
                 <div className="constructor-hint">Выберите ячейку расписания или откройте настройку шаблона.</div>
               )}
-              <div className="constructor-editor-actions"><button onClick={() => setPanelOpen(false)}>К сетке</button><span>{saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span><button onClick={() => void save()} disabled={!dirty || saving}><Save size={15}/> {termComparison ? 'Сохранить правку' : 'Сохранить черновик'}</button></div>
+              <div className="constructor-editor-actions">
+                {structuredCreation && creationError && <p role="alert" className="constructor-create-error">{creationError}</p>}
+                <button type="button" onClick={() => setPanelOpen(false)}>К сетке</button>
+                <span>{structuredCreation ? '' : saving ? 'Сохраняется' : dirty ? 'Есть изменения' : 'Сохранено'}</span>
+                {structuredCreation ? <button type="button" onClick={addFromEditor}><Plus size={15} aria-hidden="true" /> {addLabel}</button>
+                  : <button type="button" onClick={() => void save()} disabled={!dirty || saving}><Save size={15} aria-hidden="true" /> Сохранить правку</button>}
+              </div>
             </ConstructorInspectorShell>
             <button
               type="button"

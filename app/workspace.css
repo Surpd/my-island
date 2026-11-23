@@ -1365,3 +1365,71 @@
   }
 }
 .constructor-card[data-lane-review] { border-bottom-style:dashed; }
+
+/* Shared controls in the schedule editor, including the mobile drawer. */
+.campus-shell .constructor-ux .constructor-kind-picker {
+  min-width: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+}
+.campus-shell .constructor-ux .constructor-kind-picker legend { padding: 0; color: var(--cp-ink); font-weight: 700; }
+.campus-shell .constructor-ux .constructor-kind-picker .constructor-creation-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 5px 0;
+}
+.campus-shell .constructor-ux .constructor-kind-picker .constructor-editor-disclosure-panel .constructor-creation-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+.campus-shell .constructor-ux .constructor-kind-picker .constructor-creation-tabs button {
+  padding-inline: 3px;
+  overflow-wrap: anywhere;
+}
+.campus-shell .constructor-ux .constructor-editor-disclosure { margin: 6px 0; }
+.campus-shell .constructor-ux .constructor-editor-disclosure > button,
+.campus-shell .constructor-ux button.constructor-editor-secondary,
+.campus-shell .constructor-ux .constructor-type-confirm button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--cp-line);
+  border-radius: 7px;
+  background: var(--cp-bg);
+  color: var(--cp-ink);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+}
+.campus-shell .constructor-ux .constructor-editor-disclosure > button[aria-expanded="true"] svg { transform: rotate(180deg); }
+.campus-shell .constructor-ux .constructor-editor-disclosure-panel,
+.campus-shell .constructor-ux .constructor-type-confirm {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--cp-line);
+  border-radius: 8px;
+  background: var(--cp-bg);
+}
+.campus-shell .constructor-ux .constructor-editor-disclosure-panel .constructor-resources { margin: 0; padding: 0; border: 0; }
+.campus-shell .constructor-ux .constructor-type-confirm p { margin: 0 0 6px; }
+.campus-shell .constructor-ux .constructor-type-confirm button { margin: 2px 4px 0 0; background: white; }
+.campus-shell .constructor-ux .constructor-inspector :is(.constructor-online-format,.constructor-day-format) {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  margin: 4px 0;
+  color: var(--cp-ink);
+}
+.campus-shell .constructor-ux .constructor-inspector.is-open .constructor-editor-actions { display: flex; }
+.campus-shell .constructor-ux .constructor-editor-actions:has(.constructor-create-error) { flex-wrap: wrap; }
+.campus-shell .constructor-ux .constructor-create-error {
+  flex: 0 0 100%;
+  margin: 0;
+  color: #9c2c23;
+  font-size: 12px;
+}

@@ -26,7 +26,7 @@ async function addLessonForGroup(page: import('@playwright/test').Page, subject:
   const picker = form.getByRole('region', { name: 'Участники занятия' });
   await picker.getByRole('button', { name: /Учебные группы/ }).click();
   await picker.getByRole('checkbox', { name: groupName }).check();
-  await form.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
+  await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
 }
 
 test('constructor keeps edits local until manual save and persists a distinguishable English group', async ({ page }) => {
@@ -156,11 +156,13 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
     .filter({ hasText: 'Преподаватель' })
     .locator('select');
   await teacher.selectOption(teacherId);
+  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
   await page
     .locator('.constructor-inspector label')
     .filter({ hasText: 'Кабинет' })
     .locator('input')
     .fill('301');
+  await page.getByRole('button', { name: 'Посмотреть занятость' }).click();
   await expect(page.locator('.constructor-resources')).toContainText(
     'Свободные кабинеты',
   );

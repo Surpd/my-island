@@ -99,7 +99,21 @@
 .preview > div:first-child b { white-space: nowrap; }
 .preview p { margin: 5px 0 0; line-height: 1.35; }
 .preview details { margin-top: 8px; }
-.preview summary { cursor: pointer; }
+.preview summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 2px 8px;
+  border: 1px solid #ced8e6;
+  border-radius: 6px;
+  background: #fff;
+  color: #253451;
+  cursor: pointer;
+  font-weight: 650;
+  list-style: none;
+}
+.preview summary::-webkit-details-marker { display: none; }
+.preview details[open] summary { background: #eef2fb; }
 .previewStudents { display: flex; flex-wrap: wrap; gap: 4px 10px; max-height: 110px; overflow: auto; margin-top: 7px; color: #57697b; }
 
 @media (max-width: 560px) {
