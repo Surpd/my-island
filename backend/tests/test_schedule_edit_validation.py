@@ -132,3 +132,39 @@ class OrdinarySaveValidationTests(TestCase):
             self.database.execute(connection, "UPDATE teacher_assignments SET valid_from='2026-10-20' WHERE group_id=?", (class_id,))
         saved = self.edit(draft, lambda row: row.update(room="205"))
         self.assertEqual(saved["payload"]["lessons"][0]["clarificationReason"], f"{ASSIGNMENT}; {UNKNOWN}")
+
+    def test_scoped_save_only_seeds_the_edited_and_overlapping_dependent_rosters(self):
+        class_id = str(self.group["id"])
+        old_group = self.scope("Old Math subset", "Математика", self.student)
+        new_group = self.scope("Russian subset", "Русский язык", self.other_student)
+        stale = self.lesson(id="stale", subject="Русский язык", groupId=old_group, groupIds=[old_group],
+                           audience={"kind": "groups", "group_ids": [old_group]}, needsClarification=True,
+                           clarificationReason=LEGACY_MATH)
+        dependent = self.lesson(id="remainder", subject="Геометрия", needsClarification=True, clarificationReason=UNKNOWN,
+                                audience={"kind": "available_slot", "class_ids": [class_id]})
+        fixed = self.lesson(id="fixed", subject="Практика", audience={"kind": "students", "student_ids": []},
+                            needsClarification=True, clarificationReason=UNKNOWN)
+        unrelated = self.lesson(id="unrelated", subject="Физика", period=1, room="301",
+                                audience={"kind": "classes", "class_ids": [class_id]},
+                                needsClarification=True, clarificationReason=UNKNOWN)
+        draft = self.draft([stale, dependent, fixed, unrelated])
+        edits = lambda row: row.update(audience={"kind": "groups", "group_ids": [new_group]}, groupId=new_group, groupIds=[new_group])
+        # A pre-existing confirmed scope may release a different pupil than
+        # the new rule claims. Keep that case covered without pre-populating
+        # snapshots for the other three lessons.
+        payload = deepcopy(draft["payload"])
+        payload["lessons"][0]["audience_snapshot"] = {
+            "student_ids": [str(self.student["id"])], "fingerprint": "old-scope", "resolved_at": "2026-10-19T08:00:00+00:00",
+        }
+        from backend.services.schedule_experiments import _write_experiment_revision
+        draft = _write_experiment_revision(self.database, draft["id"], draft["revision"], payload)
+        saved = self.edit(draft, edits, explicit=["stale"])
+        reopened = get_experiment(self.database, saved["id"])
+        before = {row["id"]: row for row in draft["payload"]["lessons"]}
+        after = {row["id"]: row for row in reopened["payload"]["lessons"]}
+        self.assertEqual(after["stale"]["audience_snapshot"]["student_ids"], [str(self.other_student["id"])])
+        self.assertNotIn("needsClarification", after["stale"])
+        self.assertEqual(after["remainder"].pop("audience_snapshot")["student_ids"], [str(self.student["id"])])
+        self.assertEqual(after["remainder"], before["remainder"])
+        self.assertEqual(after["unrelated"], before["unrelated"])
+        self.assertEqual(after["fixed"], before["fixed"])
