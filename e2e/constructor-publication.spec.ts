@@ -103,7 +103,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       const warnings = options.legacyReview ? [
         { reason: 'Нет подтверждённого назначения преподавателя группе', count: 1, examples },
         { reason: 'Не подтверждён преподаватель', count: 1, examples },
-        { reason: 'У исходной записи отсутствует код данных', count: 1, examples },
+        { reason: 'unsupported_audience_v3: check legacy roster', count: 1, examples },
       ] : [];
       return route.fulfill({ json: { source_id: DRAFT_ID, source_revision: 1, automatic_count: 0, changes: [], manual: [], retained_warning_count: warnings.length, retained_warnings: warnings } });
     }
@@ -286,11 +286,15 @@ test('legacy warning rows name both classes and return to the same review withou
   const fixesTab = dialog.getByRole('button', { name: 'Составы и старые записи', exact: true });
   await fixesTab.click();
   const retained = dialog.locator('details[data-review-fix="legacy-retained"]');
-  await retained.locator('summary').click();
-  await expect(retained.getByText('У исходной записи отсутствует код данных', { exact: true })).toBeVisible();
+  const category = retained.locator(':scope > summary');
+  await expect(category).toHaveAttribute('aria-expanded', 'false');
+  await category.press('Enter');
+  await expect(category).toHaveAttribute('aria-expanded', 'true');
+  await expect(retained.getByText('unsupported_audience_v3: check legacy roster', { exact: true })).toBeHidden();
+  await expect(retained.getByText('Нужно уточнить данные занятия', { exact: true })).toBeVisible();
   await expect(retained.getByText('Не подтверждён преподаватель', { exact: true })).toBeVisible();
-  await expect(retained.getByText('Нет подтверждённого назначения преподавателя группе', { exact: true })).toBeVisible();
-  const target = retained.locator('.constructor-review-warning').filter({ hasText: 'У исходной записи отсутствует код данных' })
+  await expect(retained.getByText('Не подтверждено назначение преподавателя группе', { exact: true })).toBeVisible();
+  const target = retained.locator('.constructor-review-warning').filter({ hasText: 'Нужно уточнить данные занятия' })
     .getByRole('button', { name: /Показать в расписании/ });
   await expect(target.locator('..')).toContainText(/7А\s*\/\s*7Б/);
   await target.focus();
@@ -300,7 +304,7 @@ test('legacy warning rows name both classes and return to the same review withou
   await expect(dialog).toBeHidden();
   await page.getByRole('button', { name: 'Назад к проверке', exact: true }).first().click();
   await expect(fixesTab).toHaveAttribute('aria-pressed', 'true');
-  await expect(retained).toHaveAttribute('open', '');
+  await expect(category).toHaveAttribute('aria-expanded', 'true');
   await expect(target).toBeFocused();
   expect(getReviewRequests()).toEqual(checks);
 });
