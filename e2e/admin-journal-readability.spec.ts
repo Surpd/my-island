@@ -24,6 +24,7 @@ test.beforeEach(async ({ page }) => {
         known_sources: [
           { grade: 7, connected: true },
           { grade: 8, connected: true },
+          { grade: 5, spreadsheet_id: 'synthetic-journal-workbook-a', connected: false },
         ],
         scheduler_configured: true,
       };
@@ -34,6 +35,9 @@ test.beforeEach(async ({ page }) => {
     .getByRole('button', { name: /Математика/ })
     .first()
     .click();
+  await expect(page.getByRole('tab', { name: 'II триместр', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.journal-table')).toHaveCount(0);
+  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
   await expect(page.locator('.journal-table')).toBeVisible();
 });
 
@@ -148,6 +152,7 @@ test('journal selectors keep existing navigation and matching actions', async ({
     .selectOption('7');
   await page.getByRole('combobox', { name: 'Предмет' }).selectOption('Физика');
   await expect(page.locator('.journal-detail-title')).toContainText('Физика');
+  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
   await page
     .locator('.journal-table tbody tr')
     .first()
@@ -220,4 +225,42 @@ test('other routes retain their sidebar mode', async ({ page }) => {
   await expect(sidebar).not.toHaveClass(/is-collapsed/);
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(188);
   expect((await page.locator('.admin-console-main').boundingBox())!.x).toBeGreaterThanOrEqual(187);
+});
+
+test('II import is gated on fresh preflight of the exact class and book', async ({ page }) => {
+  let previewCalls = 0;
+  await page.route('**/api/admin/journals/connect', async (route) => {
+    const input = route.request().postDataJSON();
+    expect(input).toMatchObject({ grade: 5, term_number: 2, dry_run: true, auto_sync_enabled: false,
+      spreadsheet_url: previewCalls === 0 ? 'synthetic-journal-workbook-a' : 'synthetic-journal-workbook-b' });
+    previewCalls++;
+    await route.fulfill({ json: previewCalls === 1 ? {
+      status: 'success', tabs: [{ sheet_id: '2', label: 'II · История', status: 'success' }],
+    } : {
+      status: 'blocked', tabs: [{ sheet_id: '2', label: 'II · История', status: 'error',
+        reason: 'ID или название вкладки уже привязано к другому периоду.' }],
+    } });
+  });
+  await page.getByRole('button', { name: 'Все журналы' }).click();
+  await page.getByRole('tab', { name: /^5 класс/ }).click();
+  await page.getByRole('button', { name: 'Подключить журнал 5 класса', exact: true }).click();
+  const editor = page.locator('.journal-connect-panel');
+  const source = editor.getByLabel('Ссылка на таблицу');
+  const commit = editor.getByRole('button', { name: 'Подключить и импортировать' });
+  const preview = editor.getByRole('button', { name: 'Проверить без сохранения' });
+  await source.fill('synthetic-journal-workbook-a');
+  await expect(commit).toBeDisabled();
+  await preview.click();
+  await expect(editor.getByText('II · История')).toBeVisible();
+  await expect(commit).toBeEnabled();
+  await editor.getByLabel('Класс', { exact: true }).selectOption('7');
+  await expect(commit).toBeDisabled();
+  await editor.getByLabel('Класс', { exact: true }).selectOption('5');
+  await expect(commit).toBeDisabled();
+  await source.fill('synthetic-journal-workbook-b');
+  await expect(commit).toBeDisabled();
+  await preview.click();
+  await expect(editor.getByText(/привязано к другому периоду/)).toBeVisible();
+  await expect(commit).toBeDisabled();
+  expect(previewCalls).toBe(2);
 });

@@ -32,9 +32,13 @@ class JournalSourceSettingsTests(unittest.TestCase):
             "20": {"sheet_id": "20", "auto_sync_enabled": False, "excluded_from_journals": False},
             "30": {"sheet_id": "30", "auto_sync_enabled": True, "excluded_from_journals": True},
         }
+        registered = [{"spreadsheet_id": "book-settings", "grade": 9, "academic_year": "2026/27",
+                       "term_number": 1, **row} for row in settings.values()]
         with patch("backend.services.google_sync_service._client", return_value=(client, None)), patch(
             "backend.services.google_sync_service.load_source_settings", return_value=settings
-        ), patch("backend.services.google_sync_service.sync_journal_values", return_value={"assessments": 1}):
+        ), patch.object(self.database, "journal_import_scope", return_value={"current_term": 1, "sources": registered}), patch(
+            "backend.services.google_sync_service.sync_journal_values", return_value={"assessments": 1}
+        ):
             result = refresh_grade_journal(
                 self.database, object(), 9, spreadsheet_id="book-settings", trigger_kind="scheduled"
             )
