@@ -58,6 +58,7 @@ type Props = {
   legacyNotice?: string;
   onRetryPreview?: () => void;
   onOpenBlockingLesson?: (id: string) => void;
+  recalculationLabel?: string;
   onConfirmRecalculation?: () => void;
   onChange: (next: AudienceRule) => void;
 };
@@ -97,6 +98,7 @@ export function ParticipantsPicker({
   onRetryPreview,
   onOpenBlockingLesson,
   onConfirmRecalculation,
+  recalculationLabel = 'Пересчитать и подтвердить состав',
   onChange,
 }: Props) {
   const fieldId = useId();
@@ -255,7 +257,7 @@ export function ParticipantsPicker({
       </fieldset> : null}
 
       <div className={`${styles.preview} ${preview?.status && preview.status !== 'ok' ? styles.previewAttention : ''}`} aria-live="polite">
-        {preview?.needs_recalculation ? <div className={styles.legacyNotice}><strong>Изменился расчёт участников</strong><p>Сохранённый состав остаётся прежним. Сейчас по правилу получилось бы {preview.proposed_student_ids?.length ?? 'неизвестное число'} учеников.</p>{preview.proposed_student_ids ? <details><summary>Посмотреть новый состав</summary><div className={styles.previewStudents}>{preview.proposed_student_ids.map((id) => <span key={id}>{studentNames.get(id) || 'Ученик недоступен'}</span>)}</div></details> : null}{onConfirmRecalculation && preview.proposed_student_ids ? <button type="button" onClick={onConfirmRecalculation}>Пересчитать и подтвердить состав</button> : null}</div> : null}
+        {preview?.needs_recalculation ? <div className={styles.legacyNotice}><strong>Изменился расчёт участников</strong><p>Сохранённый состав остаётся прежним. Сейчас по правилу получилось бы {preview.proposed_student_ids?.length ?? 'неизвестное число'} учеников.</p>{preview.proposed_student_ids ? <details><summary>Посмотреть новый состав</summary><div className={styles.previewStudents}>{preview.proposed_student_ids.map((id) => <span key={id}>{studentNames.get(id) || 'Ученик недоступен'}</span>)}</div></details> : null}{onConfirmRecalculation && preview.proposed_student_ids ? <button type="button" onClick={onConfirmRecalculation}>{recalculationLabel}</button> : null}</div> : null}
         {requestState?.status === 'pending' || requestState?.status === 'unavailable' ? (
           <p>{audienceRequestMessage(requestState)}{preview?.status === 'ok' ? ' Ниже — предыдущий расчёт для этих же настроек.' : ''}</p>
         ) : null}

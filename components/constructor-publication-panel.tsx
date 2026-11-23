@@ -41,11 +41,12 @@ type Diagnostic = {
 };
 type Deferred = {lesson_id:string;reason:string;block_key?:string;exclusion_scope?:'direct'|'cascade';cause_codes?:string[];cause_lesson_ids?:string[];action:'excluded'|'preserved_base'|'unknown'|'retained_unresolved';context?:LessonContext};
 type Summary = {source_lessons?:number;resolved_lessons?:number;unresolved_lessons?:number;acknowledged_exceptions?:number;campus_lessons?:number;main_campus_cards?:number;elective_blocks?:number;elective_lanes?:number;clubs_hidden?:number;unresolved_personal_assignments?:number;non_blocking_warnings?:number;admin_only_lessons?:number;with_remarks_lessons?:number;diagnostic_events?:number;conflict_lessons?:number;affected_students?:number;day_mode_issues?:number;direct_exclusions?:number;cascade_exclusions?:number;ready_lessons:number;deferred_lessons:number;deferred_blocks:number;unchanged_lessons:number;replaced_lessons:number;info_count:number;conflict_count:number;critical_count:number};
-type Preview = {published_source?:unknown;preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
+type Preview = {published_source?:{records?:{lesson_id:string;status:string;conflict_student_ids?:string[]}[]};preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
 type Publication = {id:string;scope_kind:string;scope_key:string;created_at:string;published_id:string;version_id?:string;runtime_readback:{verified:boolean;block_count:number};restored_from?:string;summary?:Partial<Summary>;diagnostics?:Diagnostic[];deferred?:Deferred[];preview?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};preview_metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]}};
 type History = {items:Publication[];heads?:Record<string,{revision:number}>};
 
 export type ConstructorReviewLesson = {
+  kind?: string;
   day: number;
   start?: string;
   end?: string;
@@ -369,6 +370,25 @@ export function ConstructorPublicationPanel({
   const describe = (block:SemanticBlock|null) => block ? <><strong>{dayNames[block.weekday]} {block.start}–{block.end} · {block.grade} параллель</strong>{block.assignments.map((item,index)=><p key={index}>{item.activity} · {item.teachers.map(id=>teacherNames[id]||'Преподаватель не подтверждён').join(', ')||'без преподавателя'} · {item.groups.map(id=>groupNames[id]||'Группа не подтверждена').join(', ')}{item.metadata?.room ? ` · ${normalizeRoomDisplay(item.metadata.room)}` : ''}</p>)}</> : <span>Нет занятия</span>;
   const previewMatches=previewTarget?.draftId===draftId&&previewTarget.revision===revision&&previewTarget.scope===scope&&(scope!=='week'||previewTarget.week===week);
   const activePreview=previewMatches&&!dirty?preview:null;
+  const impact = new Map<string, string>();
+  for (const record of activePreview?.published_source?.records || []) {
+    if (record.status === 'unresolved') continue;
+    const kind = lessonDetails[record.lesson_id]?.kind;
+    const distribution = kind === 'elective' ? 'Курс появится в общем блоке выбора.'
+      : kind === 'club' ? 'Кружок будет доступен в разделе кружков.'
+      : kind === 'lunch' ? 'Обед появится как отметка для класса.'
+      : kind === 'no_lesson' ? 'Отметка свободного часа не создаёт урок для ученика.'
+      : 'При публикации занятие войдёт в расписание по подтверждённым назначениям.';
+    impact.set(record.lesson_id, record.conflict_student_ids?.length
+      ? 'Для учеников с пересечением потребуется отдельное решение. Остальные получат занятие по своему составу.'
+      : distribution);
+  }
+  for (const entry of activePreview?.deferred || []) {
+    impact.set(entry.lesson_id, deferredOutcome(entry.action, entry.exclusion_scope));
+  }
+  const lessonImpact = (id: string) => activePreview?.blockers.length
+    ? 'Публикация остановлена. Сначала исправьте блокирующие ошибки.'
+    : impact.get(id) || 'Выдача ещё не подтверждена. Откройте «Публикация» и проверьте выбранную неделю или шаблон.';
   const summary = {...emptySummary,...activePreview?.summary};
   const rawDiagnostics = activePreview?.diagnostics || [];
   const observedDiagnostics = activePreview ? [
@@ -880,12 +900,24 @@ export function ConstructorPublicationPanel({
         </section> : null}
         {!historyOnly && section === 'fixes' ? <div className="constructor-review-fixes">
           {onOpenGridDecisions ? <button type="button" disabled={busy} onClick={() => { saveView(); onOpenGridDecisions(); }}>История решений в сетке</button> : null}
-          {dirty ? <p>После сохранения можно заново проверить составы и старые записи.</p> : <>
+          {dirty ? <p>Для предварительной проверки одного занятия откройте его в сетке и посмотрите состав участников. Полная проверка использует сохранённую версию черновика.</p> : <>
+            {activePreview && <section aria-label="Выдача ученикам">
+              <h3>Выдача ученикам</h3>
+              <p>{sourceLabel(activePreview.source_kind)}{scope === 'week' && week ? ` · ${week}` : ''}</p>
+              {activePreview.blockers.length ? <p>Публикация остановлена. Блокирующие ошибки перечислены в разделе «Проблемы».</p>
+                : activePreview.deferred.length ? <ReviewDisclosure title="Занятия, ожидающие решения" count={activePreview.deferred.length} groupKey="delivery-deferred">
+                  <ul className="constructor-review-list">{activePreview.deferred.map(row => <li key={row.lesson_id}>
+                    <div><strong>{lessonLabels[row.lesson_id] || row.context?.subject || 'Занятие'}</strong>
+                      <p>{deferredOutcome(row.action, row.exclusion_scope)}</p><small>{readableReviewNote(row.reason)}</small></div>
+                    {lessonLabels[row.lesson_id] && <button type="button" disabled={controlsBusy} onClick={() => openLesson(row.lesson_id)}>Проверить занятие</button>}
+                  </li>)}</ul>
+                </ReviewDisclosure> : <p>Отложенных занятий в выбранной публикации нет.</p>}
+            </section>}
             {canCheckRosters ? <ConstructorRosterReview preview={currentRosters} error={rosterError} busy={controlsBusy}
-              readOnly={readOnly} scope={rosterScope} classLabel={classLabel} lessonLabels={lessonLabels}
+              lessonImpact={lessonImpact} checkingScope={checkingRosters} readOnly={readOnly} scope={rosterScope} classLabel={classLabel} lessonLabels={lessonLabels}
               onScopeChange={target => void checkRosterScope(target)} onApply={() => void applyRosters()} onOpenLesson={openLesson} /> : null}
             {canCheckLegacy ? <ConstructorLegacyReview preview={currentLegacy} error={legacyError} busy={controlsBusy}
-              readOnly={readOnly} lessonLabels={lessonLabels} onCopy={() => void copyNormalized()} onOpenLesson={openLesson} /> : null}
+              lessonImpact={lessonImpact} readOnly={readOnly} lessonLabels={lessonLabels} onCopy={() => void copyNormalized()} onOpenLesson={openLesson} /> : null}
           </>}
         </div> : null}
         {!historyOnly && section === 'publication' && !dirty && !published ? <section aria-label="Проверка публикации" className="constructor-review-results">
@@ -934,7 +966,7 @@ export function ConstructorPublicationPanel({
     </div>
     <footer>
       <button type="button" disabled={busy} onClick={close}>К конструктору</button>
-      {!historyOnly && dirty ? <button type="button" className="is-primary" disabled={busy} onClick={() => void saveForReview()}>{busy ? 'Сохраняем…' : 'Сохранить и проверить'}</button> : null}
+      {!historyOnly && dirty ? <button type="button" className="is-primary" disabled={busy} onClick={() => void saveForReview()}>{busy ? 'Сохраняем…' : 'Сохранить все правки и проверить'}</button> : null}
       {!historyOnly && section === 'publication' && activePreview && !published && activePreview.publication_available !== false && !readOnly ?
         <button type="button" className="is-primary" disabled={controlsBusy || !activePreview.can_publish || !confirmed} onClick={() => void publish()}>{activePreview.can_publish
           ? `${counts.info || counts.warning || counts.conflict || counts.deferred ? 'Опубликовать с замечаниями' : 'Опубликовать'} ${scope === 'week' ? 'неделю' : 'шаблон'}`
