@@ -27,20 +27,26 @@ synthetic workspace for cases requiring full student/teacher or journal detail.
 
 1. Apply additive Postgres migration 052 through the approved release procedure.
    Leave the feature disabled until the environment and credential are approved.
-2. Generate a 256-bit random base64url value in a trusted secret manager. Store
-   the original only in that manager or approved network Vault, and configure
-   `MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256` on the approved backend with its
-   lowercase SHA-256 fingerprint. Treat the verifier as sensitive configuration
-   too. Never paste either, or the returned session, into a chat, repository,
-   URL, screenshot, issue, trace, command arguments, or log. Do not enable
-   request/response header capture on these routes.
+2. Use your password manager to generate a 256-bit random URL-safe key
+   (for example 43 or more random characters from letters, digits, `_` and
+   `-`). Put the **same key** in the approved Render backend secret
+   `MY_ISLAND_CODEX_DIAGNOSTIC_KEY` and the approved host-scoped network
+   Vault. The backend hashes it internally; no manual hash is needed.
+   The existing `MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256` option still works
+   by itself. If both nonempty configurations are supplied, they must match
+   or access is disabled. An explicitly blank or malformed raw secret also
+   disables access. Do not store either form in a public frontend variable.
+   Never paste a key, verifier or session into chat, a repository, a URL,
+   screenshots, command arguments, or logs. Disable request/response header
+   capture on these routes.
 3. Set the server-only `MY_ISLAND_CODEX_DIAGNOSTICS=1` flag. Missing or invalid
    configuration disables access. This is not a Vite environment variable.
 4. To revoke one session, use its opaque ID from the restricted audit records
    and the operator-side session revoke operation (`revoke(database, id)`).
    Browser logout also revokes server-side. Removing the flag or the verifier
-   disables access on all refreshed server workers; rotating the verifier
-   invalidates all existing tokens. Keep the feature off or use a new key
+   disables access on all refreshed server workers; rotating the key or verifier
+   invalidates all existing tokens. Changing only the storage format while
+   using the same key preserves existing sessions. Keep the feature off or use a new key
    for re-enablement after suspected compromise.
 5. Treat audit entries and session data as restricted operator records. The
    audit logs only event type, opaque session ID and view category. No access

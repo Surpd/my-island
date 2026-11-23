@@ -32,6 +32,7 @@ class CodexDiagnosticAuthTests(TestCase):
         })
         self.settings.start()
         self.addCleanup(self.settings.stop)
+        os.environ.pop("MY_ISLAND_CODEX_DIAGNOSTIC_KEY", None)
         app = FastAPI()
         app.include_router(create_codex_diagnostic_router(self.db))
         app.include_router(create_router(self.db))
@@ -51,6 +52,55 @@ class CodexDiagnosticAuthTests(TestCase):
             with patch.dict(os.environ, changes):
                 self.assertEqual(self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": self.secret}).status_code, 404)
                 self.assertEqual(self.http.get("/api/diagnostics/view/overview").status_code, 404)
+
+    def test_raw_config_uses_same_credential_epoch_and_no_secret_is_returned(self):
+        headers, token = self.login()
+        verifier = sha256(self.secret.encode()).hexdigest()
+        for configured_hash in (verifier, ""):
+            with patch.dict(os.environ, {
+                "MY_ISLAND_CODEX_DIAGNOSTIC_KEY": self.secret,
+                "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": configured_hash,
+            }):
+                self.assertEqual(self.http.get("/api/diagnostics/session", headers=headers).status_code, 200)
+                response = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": self.secret})
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn(self.secret, response.text)
+                self.assertNotIn(verifier, response.text)
+                self.assertEqual(set(response.json()), {"token", "expires_at", "scope"})
+        with self.db.connection() as connection:
+            audit = connection.execute("SELECT details FROM audit_log WHERE entity_type='codex_diagnostic_session'").fetchall()
+            stored = connection.execute("SELECT credential_epoch, token_hash FROM codex_diagnostic_sessions").fetchall()
+        self.assertTrue(all(self.secret not in row["details"] and verifier not in row["details"] for row in audit))
+        self.assertTrue(all(self.secret not in row["credential_epoch"] and verifier != row["credential_epoch"]
+                            and token != row["token_hash"] for row in stored))
+
+    def test_mismatched_or_weak_raw_config_fails_closed_without_using_hash_fallback(self):
+        cases = ("", "short", "a" * 43, "1234" * 11, ("abcdefghijklmnopqrstuvwxyz" * 2)[:43],
+                 self.secret + "\n", token_urlsafe(32))
+        for raw in cases:
+            with patch.dict(os.environ, {"MY_ISLAND_CODEX_DIAGNOSTIC_KEY": raw}):
+                response = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": self.secret})
+                self.assertEqual(response.status_code, 404)
+                self.assertNotIn(self.secret, response.text)
+                self.assertEqual(self.http.get("/api/diagnostics/session").status_code, 404)
+
+    def test_rotating_raw_key_revokes_existing_tokens_and_flag_off_stays_closed(self):
+        with patch.dict(os.environ, {
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY": self.secret,
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": "",
+        }):
+            session, _ = self.login()
+        next_key = token_urlsafe(32)
+        with patch.dict(os.environ, {
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY": next_key,
+            "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": "",
+        }):
+            self.assertEqual(self.http.get("/api/diagnostics/session", headers=session).status_code, 401)
+            self.assertEqual(self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": self.secret}).status_code, 401)
+            new_session = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": next_key})
+            self.assertEqual(new_session.status_code, 200)
+            with patch.dict(os.environ, {"MY_ISLAND_CODEX_DIAGNOSTICS": "0"}):
+                self.assertEqual(self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": next_key}).status_code, 404)
 
     def test_wrong_or_url_key_never_authenticates(self):
         response = self.http.post("/api/diagnostics/exchange", headers={"X-My-Island-Diagnostic-Key": token_urlsafe(32)})
