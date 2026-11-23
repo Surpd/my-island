@@ -525,6 +525,17 @@ test('вид занятия и онлайн сохраняются через о
   await page.getByLabel('Кабинет нового занятия').fill('Кабинет 15');
   await page.getByText('Формат занятия',{exact:true}).click();
   const online = page.getByRole('checkbox', {name:'Этот урок проводится онлайн'});
+  const expectCompactOnline = async (mode: string) => {
+    const size = await online.boundingBox();
+    expect(size).not.toBeNull();
+    expect(size!.width).toBe(16);
+    expect(size!.height).toBe(16);
+    const label = page.locator('.constructor-online-format').filter({has: online});
+    await expect(label).toHaveCSS('display', 'flex');
+    await mkdir(shots, {recursive: true});
+    await label.screenshot({path: path.join(shots, `online-format-${mode}.png`)});
+  };
+  await expectCompactOnline('create');
   await online.check();
   await online.uncheck();
   await expect(page.getByLabel('Кабинет нового занятия')).toHaveValue(/15/);
@@ -540,6 +551,7 @@ test('вид занятия и онлайн сохраняются через о
   await card.dblclick();
   await page.getByText('Формат занятия',{exact:true}).click();
   await expect(online).toBeChecked();
+  await expectCompactOnline('edit');
   await page.getByText('Подключение', {exact: true}).click();
   await expect(page.getByLabel('Ссылка или сведения для подключения')).toHaveValue('Школьная видеокомната');
 });
