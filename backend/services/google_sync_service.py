@@ -11,6 +11,7 @@ from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
+from backend.services.journal_group_labels import JournalGroupLabelConflict
 from backend.services.journal_import import classify_journal_values, parse_journal_values, subject_period_from_title, sync_journal_values
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
@@ -467,6 +468,13 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
                 rows.remove(row)
                 continue
             parsed = parse_journal_values(values, grade=grade, subject=label, sheet_title=sheet_title, sheet_id=sheet_id)
+            # Match the snapshot writer: prefer exact GID, then an unupgraded
+            # record with the same title. This read does not reconnect a tab.
+            prior = next((item for item in stable if str(item["sheet_id"]) == sheet_id), None)
+            if prior is None:
+                prior = next((item for item in stable if item["sheet_id"] is None and item["sheet_title"] == sheet_title), None)
+            if prior is not None:
+                database.preview_journal_group_label_import(prior["id"], parsed["assessments"], parsed["students"])
             row.update(status="success", counts={name: len(parsed[name]) for name in ("assessments", "students", "results", "summaries")})
             prepared.append((row, label, parsed))
         except Exception as error:
@@ -552,6 +560,8 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
 def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
     """Return admin-safe diagnostics; never copy request URLs, tokens, or roster rows to logs."""
     from backend.services.google_live import GoogleApiError
+    if isinstance(error, JournalGroupLabelConflict):
+        return {"code": "journal_group_label_conflict", "message": str(error), "details": "Прежние оценки и связи сохранены."}
     if isinstance(error, ValueError):
         detail = str(error)[:700]
         if any(token in detail.casefold() for token in ("конфликт сопоставления", "невозможно однозначно сопоставить", "неоднозначное сопоставление")):

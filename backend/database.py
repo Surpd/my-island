@@ -4129,6 +4129,10 @@ class Database:
                 RETURNING id""", (source["spreadsheet_id"], source["spreadsheet_title"], f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}", json.dumps({"grade": source["grade"], "subject": source["subject"], "sheet_id": source.get("sheet_id")}, ensure_ascii=False))).fetchone()["id"]
 
             existing_assessments = [dict(row) for row in self.execute(connection, "SELECT * FROM journal_assessments WHERE source_id = ?", (source_id,)).fetchall()]
+            # Recheck against the state inside the write transaction, even
+            # when the selected-tab screen already checked in read-only mode.
+            new_labels = self._verify_journal_group_label_import(connection, source_id, assessments, students,
+                                                                 previous_assessments=existing_assessments)
             existing_result_vectors: dict[Any, list[tuple[str, Any]]] = {}
             for result in self.execute(connection, """SELECT result.assessment_id, student.student_key,
                     result.numeric_score, result.status
@@ -4384,10 +4388,34 @@ class Database:
                 self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (row["id"], row["numeric_score"], row["status"], coordinate, encoded_json(row["raw_source"]), True))
                 self.execute(connection, "UPDATE journal_results SET source_coordinate = ? WHERE id = ?", (f"removed:{row['id']}:{coordinate}", row["id"]))
             self.execute(connection, "UPDATE journal_sources SET status = ? WHERE id = ?", ('ready' if results else 'empty', source_id))
-            self._infer_journal_groups(connection, source_id)
+            self._infer_journal_groups(connection, source_id, subject_only_markers=set(new_labels))
             return {"assessments": len(assessments), "results": len(results), "roster_students": len(roster), "linked_students": linked_students, "mapped_results": mapped, "summary_values": len(summaries or [])}
 
-    def _infer_journal_groups(self, connection: Any, source_id: Any) -> None:
+    def preview_journal_group_label_import(self, source_id: Any, assessments: list[dict[str, Any]],
+                                           students: list[dict[str, Any]]) -> None:
+        """Read-only validation for the selected-sheet preview and preparation."""
+        with self.connection() as connection:
+            self._verify_journal_group_label_import(connection, source_id, assessments, students)
+
+    def _verify_journal_group_label_import(self, connection: Any, source_id: Any, assessments: list[dict[str, Any]],
+                                           students: list[dict[str, Any]] | None,
+                                           *, previous_assessments: list[dict[str, Any]] | None = None) -> dict[str, str]:
+        from backend.services.journal_group_labels import journal_group_labels, verify_group_labels
+        if previous_assessments is None:
+            previous_assessments = self.execute(connection, """SELECT active, group_marker, raw_source
+                FROM journal_assessments WHERE source_id = ?""", (source_id,)).fetchall()
+        old_labels = journal_group_labels(row for row in previous_assessments if row["active"])
+        new_labels = journal_group_labels(assessments)
+        if old_labels or new_labels:
+            saved_roster = self.execute(connection, """SELECT group_marker, student_key FROM journal_students
+                WHERE source_id = ? AND active IS TRUE""", (source_id,)).fetchall()
+            saved_mapped_markers = self.execute(connection, """SELECT group_marker FROM journal_group_mappings
+                WHERE source_id = ?""", (source_id,)).fetchall()
+            verify_group_labels(old_labels, new_labels, saved_roster, students or [],
+                [row["group_marker"] for row in (*previous_assessments, *saved_mapped_markers)])
+        return new_labels
+
+    def _infer_journal_groups(self, connection: Any, source_id: Any, *, subject_only_markers: set[str] | None = None) -> None:
         """Reuse a canonical group only when its complete roster matches exactly.
 
         An incomplete, mixed, team or ambiguous roster requires an admin mapping.
@@ -4420,8 +4448,10 @@ class Database:
             ids = {row['identity_id'] for row in rows}
             if len(ids) != len(rows):
                 continue
-            candidates = [g for g in groups.values() if g['members'] == ids and
-                (subject_key(g['subject']) == subject or g['group_type'] == 'class' and (marker == 'all' or marker.startswith('block ')))]
+            candidates = [g for g in groups.values() if g['members'] == ids and (
+                (g['group_type'] != 'class' and subject_key(g['subject']) == subject)
+                if marker in (subject_only_markers or ()) else
+                (subject_key(g['subject']) == subject or g['group_type'] == 'class' and (marker == 'all' or marker.startswith('block '))))]
             subject_groups = [g for g in candidates if g['group_type'] != 'class']
             candidates = subject_groups or candidates
             if len(candidates) != 1:
@@ -4908,6 +4938,9 @@ class Database:
                 group_clause = " AND group_marker = ?"
                 params = (source_id, group_marker)
             assignments = self.execute(connection, "SELECT id, title, assessed_on, weight, max_score, group_marker, raw_source ->> 'category' AS category FROM journal_assessments WHERE source_id = ? AND active IS TRUE ORDER BY assessed_on, id", (source_id,)).fetchall()
+            from backend.services.journal_group_labels import journal_group_labels
+            group_labels = journal_group_labels(self.execute(connection, """SELECT group_marker, raw_source FROM journal_assessments
+                WHERE source_id = ? AND active IS TRUE""", (source_id,)).fetchall())
             students = self.execute(connection, f"SELECT journal_student.id, journal_student.display_name, journal_student.group_marker, journal_student.identity_id, journal_student.match_status, journal_student.match_method, journal_student.entry_kind, journal_student.classification_method, identity.class_name FROM journal_students journal_student LEFT JOIN identities identity ON identity.id = journal_student.identity_id WHERE journal_student.source_id = ? AND journal_student.active IS TRUE{group_clause.replace('group_marker', 'journal_student.group_marker')} ORDER BY lower(journal_student.display_name)", params).fetchall()
             ids = [row["id"] for row in students]
             values: dict[tuple[Any, Any], dict[str, Any]] = {}
@@ -4942,6 +4975,7 @@ class Database:
             return {
                 "source": dict(source),
                 "groups": [row["group_marker"] for row in marker_rows],
+                "group_labels": group_labels,
                 "mappings": [dict(row) for row in mappings],
                 "assessments": [{**dict(row), "group_marker": row["group_marker"]} for row in assignments if not group_marker or row["group_marker"] in {"all", group_marker}],
                 "students": [{**dict(row), "canonical_classes": sorted(canonical_classes.get(str(row["identity_id"]), set())), "members": members.get(row['id'], []), "summaries": summaries.get(row["id"], []), "results": {str(item["id"]): values.get((row["id"], item["id"])) for item in assignments if not group_marker or item["group_marker"] in {"all", group_marker}}} for row in students],

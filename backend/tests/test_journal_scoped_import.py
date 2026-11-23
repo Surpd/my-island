@@ -44,6 +44,44 @@ class ScopedImportTests(unittest.TestCase):
         preview = preview or self.refresh(term_number=2, dry_run=True)
         return self.refresh(term_number=2, selected_sheet_ids=list(ids), preflight_token=preview.get("preflight_token"))
 
+    def test_group_label_conflict_is_read_only_and_other_tab_remains_selectable(self):
+        label = "II · Английский язык"
+        names = ("Synthetic Alpha", "Synthetic Beta")
+        def english(headers, roster=names):
+            values = []
+            for index, (heading, name) in enumerate(zip(headers, roster), 1):
+                values += [["Дата", heading, f"0{index}.12"], ["Работа", "", "Тренировка"],
+                           ["Вес", "", 1], ["Категория", "", "У"], [name, 4, 9]]
+            return values
+
+        self.source(2, label, english(("", "")))
+        source_id = self.rows()[0]["id"]
+        previous = self.db.journal_detail(source_id)
+        self.tabs((2, label), (3, "II · Биология"))
+        labels = ("II триместр · Английский 1", "II триместр · Английский 2")
+        def use(values):
+            self.google.sheet_values.side_effect = lambda book, address, **kwargs: values if "Английский" in address else SECOND
+
+        use(english(labels, names[::-1]))
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(preview["status"], "partial")
+        self.assertEqual(preview["tabs"][0]["error_code"], "journal_group_label_conflict")
+        self.assertEqual(preview["tabs"][1]["status"], "success")
+        self.assertEqual(self.db.journal_detail(source_id), previous)
+        self.assertEqual(self.pick("2", preview=preview)["status"], "blocked")
+        self.assertEqual(self.pick("3", preview=preview)["status"], "success")
+        self.assertEqual(self.db.journal_detail(source_id), previous)
+
+        use(english(labels))
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(preview["status"], "success")
+        self.assertEqual(self.db.journal_detail(source_id), previous)
+        self.assertEqual(self.pick("2", preview=preview)["status"], "success")
+        adopted = self.db.journal_detail(source_id)
+        self.assertEqual(adopted["group_labels"], {"block 1": "Английский 1", "block 2": "Английский 2"})
+        for key in ("groups", "students", "assessments", "mappings"):
+            self.assertEqual(adopted[key], previous[key])
+
     def test_cross_period_and_guide_are_never_selectable_and_cannot_poison_first_term(self):
         self.source(1, "I · Биология")
         before = self.rows()
