@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from backend.services.constructor_publication import (
@@ -63,6 +63,7 @@ class AudienceBulkApplyBody(AudienceBulkPreviewBody):
 def create_constructor_publication_router(
     resolve_stores: Callable[[], tuple[Any, Any]],
     require_school_admin: Callable[[str | None], Any],
+    require_school_preview_admin: Callable[[str | None, Request], Any] | None = None,
 ) -> APIRouter:
     """Caller supplies existing trusted school-session and store adapters.
 
@@ -71,10 +72,12 @@ def create_constructor_publication_router(
     """
     router = APIRouter(prefix="/api/admin/schedule/constructor")
 
-    def admin(token: str | None, *, preview_only: bool = False) -> tuple[Any, Any]:
+    def admin(token: str | None, *, preview_only: bool = False, request: Request | None = None) -> tuple[Any, Any]:
         if os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") != "1":
             raise HTTPException(404, "Constructor publication is disabled")
-        actor = require_school_admin(token)
+        actor = (require_school_preview_admin(token, request)
+                 if preview_only and request is not None and require_school_preview_admin is not None
+                 else require_school_admin(token))
         source, drafts = resolve_stores()
         same = source is drafts or (not source.database_url and not drafts.database_url
                                     and str(source.path) == str(drafts.path))
@@ -109,8 +112,8 @@ def create_constructor_publication_router(
             raise
 
     @router.post("/{draft_id}/publication/preview")
-    def preview(draft_id: str, body: PreviewBody, x_school_admin_session: str | None = Header(default=None)):
-        database, draft_database = admin(x_school_admin_session, preview_only=True)
+    def preview(draft_id: str, body: PreviewBody, request: Request, x_school_admin_session: str | None = Header(default=None)):
+        database, draft_database = admin(x_school_admin_session, preview_only=True, request=request)
         return call(preview_publication, database, draft_id, draft_database=draft_database, **body.model_dump())
 
     def resolution_stores(token):
@@ -135,9 +138,12 @@ def create_constructor_publication_router(
         return call(apply_resolution,drafts,draft_id,audience_database=source,actor_user_id=actor,**body.model_dump())
 
     @router.post('/{draft_id}/audiences/preview')
-    def bulk_audience_preview_route(draft_id: str, body: AudienceBulkPreviewBody, x_school_admin_session: str | None = Header(default=None)):
+    def bulk_audience_preview_route(draft_id: str, body: AudienceBulkPreviewBody, request: Request, x_school_admin_session: str | None = Header(default=None)):
         from backend.services.constructor_resolution import bulk_audience_preview
-        source,drafts,_=resolution_stores(x_school_admin_session)
+        source, drafts_override = admin(x_school_admin_session, preview_only=True, request=request)
+        drafts = source if drafts_override is None else drafts_override
+        if getattr(drafts, "read_only", False):
+            raise HTTPException(409, "Draft store is read only")
         return call(bulk_audience_preview,drafts,draft_id,audience_database=source,**body.model_dump())
 
     @router.post('/{draft_id}/audiences/apply')
