@@ -14,6 +14,7 @@ import time
 import os
 import sqlite3
 import logging
+from collections.abc import Mapping
 from html import escape
 from typing import Literal
 from uuid import UUID
@@ -44,9 +45,10 @@ from backend.services.schedule_drafts import (
 )
 from backend.services.schedule_experiments import (
     ExperimentConflict, ExperimentNotFound, create_experiment, delete_experiment, manage_experiment,
-    duplicate_experiment, experiment_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
+    duplicate_experiment, experiment_audience_preview, experiment_week_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
-from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence
+from backend.services.schedule_edit_validation import is_legacy_group_link_note
+from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence, verified_saved_group_warning_ids
 from backend.services.schedule_term_comparison import (
     apply_term_comparison_choice, preview_term_comparison_choices, record_term_comparison_decision,
 )
@@ -1735,14 +1737,15 @@ def create_router(database: Database) -> APIRouter:
             x_school_admin_session: str | None = Header(default=None)):
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         require_real_school_admin(x_school_admin_session, principal)
-        _, store = school_stores()
+        source, store = school_stores()
         try:
             draft = get_experiment(store, experiment_id)
             if draft["payload"].get("week_start"):
                 raise HTTPException(status_code=422, detail="Нормализация недельных копий отключена; сохраните переопределения отдельно.")
             teachers, assignments = verified_teacher_directory_evidence(store, draft)
             return normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
-                                         verified_classes=verified_administrative_classes(store))
+                                         verified_classes=verified_administrative_classes(store),
+                                         verified_group_links=verified_saved_group_warning_ids(source, draft))
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -1753,14 +1756,15 @@ def create_router(database: Database) -> APIRouter:
             x_school_admin_session: str | None = Header(default=None)):
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         require_real_school_admin(x_school_admin_session, principal)
-        _, store = school_stores()
+        source, store = school_stores()
         try:
             draft = get_experiment(store, experiment_id)
             if draft["payload"].get("week_start"):
                 raise HTTPException(status_code=422, detail="Недельные копии не изменяются этим действием.")
             teachers, assignments = verified_teacher_directory_evidence(store, draft)
             preview = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
-                                         verified_classes=verified_administrative_classes(store))
+                                         verified_classes=verified_administrative_classes(store),
+                                         verified_group_links=verified_saved_group_warning_ids(source, draft))
             if draft["revision"] != payload.expected_revision or preview["source_hash"] != payload.expected_source_hash or preview["plan_hash"] != payload.expected_plan_hash:
                 raise HTTPException(status_code=409, detail="Шаблон изменился после предпросмотра. Повторите анализ.")
             if not preview["automatic_count"]:
@@ -2008,8 +2012,15 @@ def create_router(database: Database) -> APIRouter:
             preview_started = perf_counter()
             raw_date = payload.payload.get("reference_date") or payload.payload.get("week_start")
             reference_date = date.fromisoformat(str(raw_date)[:10]) if raw_date else date.today()
-            snapshot = cached_audience_snapshot(reference_date, source)
-            result = experiment_audience_preview(source, payload.payload, snapshot=snapshot)
+            needs_dated_evidence = any(isinstance(lesson, Mapping) and lesson.get("audience_snapshot")
+                                       and is_legacy_group_link_note(lesson)
+                                       for lesson in (payload.payload.get("lessons") or []))
+            snapshot = None if needs_dated_evidence else cached_audience_snapshot(reference_date, source)
+            # The normal grid preview is cached for its reference date. When
+            # using it to clear an inherited group warning, prove the roster
+            # on the actual lesson day, as the publication check does.
+            result = (experiment_week_audience_preview(source, payload.payload, reference_date) if needs_dated_evidence
+                      else experiment_audience_preview(source, payload.payload, snapshot=snapshot))
             if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1":
                 logging.getLogger(__name__).info(
                     "school audience preview complete cached_snapshot=%s preview_ms=%.1f request_ms=%.1f lessons=%d",

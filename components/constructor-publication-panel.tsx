@@ -7,6 +7,7 @@ import { normalizeRoomDisplay } from './schedule-rooms';
 import { formatLessonTimeRange } from './lesson-time';
 import { readableReviewNote } from './constructor-review-language';
 import './constructor-publication-panel.css';
+import { anonymousReviewReport } from './constructor-anonymous-report';
 import {
   ConstructorLegacyReview, ConstructorRosterReview, ReviewDisclosure,
   type NormalizationCopy, type NormalizationPreview, type RosterPreview, type RosterScope,
@@ -107,7 +108,7 @@ const issueText: Record<string, IssueText> = {
   joint_activity: { type: 'teacher', title: 'Совместное занятие подтверждено', guidance: 'Составы групп сохранены.' },
   review_required: { type: 'record', title: 'Уточните данные занятия', guidance: 'Сверьте предмет, преподавателя и состав участников, затем подтвердите нужное назначение.' },
   audience_unresolved: { type: 'audience', title: 'Не подтверждён состав участников', guidance: 'Пока состав не подтверждён, ученики могут не увидеть занятие в личном расписании. Выберите класс или группу и проверьте состав.' },
-  stale_group_subject_mismatch: { type: 'audience', title: 'Группа относится к другому предмету', guidance: 'Ученики могут получить неверное назначение. Выберите группу для этого предмета и сверьте её состав.' },
+  stale_group_subject_mismatch: { type: 'audience', title: 'Не подтверждена связь с учебной группой', guidance: 'Сверьте состав. Если группа подходит, её можно оставить независимо от предмета.' },
   roster_review: { type: 'audience', title: 'Состав группы изменился', guidance: 'Сохранённый список учеников отличается от текущего. Сверьте изменения, включая ручные исключения, и подтвердите подходящий состав.' },
   missing_teacher: { type: 'teacher', title: 'Преподаватель не назначен', guidance: 'Занятие может отсутствовать в личном расписании преподавателя. Укажите преподавателя или подтвердите самостоятельную работу, если она предусмотрена.' },
   unknown_teacher: { type: 'teacher', title: 'Преподавателя нет среди действующих', guidance: 'Проверьте, кто ведёт занятие, и выберите преподавателя из справочника.' },
@@ -480,25 +481,15 @@ export function ConstructorPublicationPanel({
     setQuery('');
   };
   const copyReport = async () => {
-    const byCode = new Map<string, { count: number; ids: Set<string> }>();
-    for (const issue of issues) {
-      for (const diagnostic of issue.diagnostics) {
-        const group = byCode.get(diagnostic.code) || { count: 0, ids: new Set<string>() };
-        group.count++;
-        for (const id of issue.ids) if (lessonLabels[id]) group.ids.add(id);
-        byCode.set(diagnostic.code, group);
-      }
-    }
-    const rows = [...byCode].map(([code, group]) => {
-      const links = [...group.ids].map(id => {
-        const search = new URLSearchParams({ draft: draftId, lesson: id });
-        return `${window.location.origin}/admin/schedule/constructor?${search}`;
-      });
-      return [code, group.count, links.join(', ')].join('\t');
+    if (readOnly || checking) return;
+    const report = anonymousReviewReport({
+      target: {draftId, revision, scope, week}, loaded: previewTarget,
+      preview: activePreview, slots: lessonDetails, dirty, legacy: currentLegacy, rosters: rosterScope === 'template' ? currentRosters : null,
     });
+    if (!report) return;
     try {
-      await navigator.clipboard.writeText(['Отчёт проверки расписания', ...rows].join('\n'));
-      setMessage('Отчёт проверки скопирован. Он содержит коды, количества и ссылки на записи.');
+      await navigator.clipboard.writeText(report);
+      setMessage('Обезличенный отчёт проверки скопирован.');
     } catch {
       setMessage('Браузер не смог скопировать отчёт.');
     }
@@ -896,7 +887,7 @@ export function ConstructorPublicationPanel({
               'Результаты полной проверки недоступны. Проверьте ещё раз.' :
               dirty ? 'В несохранённых правках пока нет обнаруженных проблем.' : 'По результатам проверки вопросов нет.'}
           </p> : null}
-          {diagnostics.length ? <ReviewDisclosure title="Отчёт проверки" secondary><button type="button" onClick={() => void copyReport()}>Скопировать отчёт проверки</button></ReviewDisclosure> : null}
+          {!readOnly && activePreview ? <ReviewDisclosure title="Отчёт проверки" secondary><button type="button" disabled={controlsBusy} onClick={() => void copyReport()}>Скопировать обезличенный отчёт</button></ReviewDisclosure> : null}
         </section> : null}
         {!historyOnly && section === 'fixes' ? <div className="constructor-review-fixes">
           {onOpenGridDecisions ? <button type="button" disabled={busy} onClick={() => { saveView(); onOpenGridDecisions(); }}>История решений в сетке</button> : null}

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from backend.services.schedule_edit_validation import CLUB_LESSON_ONLY_NOTES, normalized_note, notes
+from backend.services.schedule_edit_validation import CLUB_LESSON_ONLY_NOTES, is_legacy_group_link_note, normalized_note, notes, without_legacy_group_notes
 
 
 def payload_hash(payload: Mapping[str, Any]) -> str:
@@ -116,7 +116,9 @@ def scope_warning_evidence(payload: Mapping[str, Any], classes: Mapping[str, str
         clauses = frozenset(str(row.get("clarificationReason") or "").strip().split("; "))
         class_ids = scope(row)
         if _is_lunch_lesson(row) and LUNCH_SCOPE_CLAUSE in clauses:
-            if not class_ids or not class_ids <= classes.keys():
+            day = _lesson_weekday(row)
+            interval = _lesson_interval(row, slots)
+            if day is None or not interval or not class_ids or not class_ids <= classes.keys():
                 continue
             raw = row.get("audience") or {}
             if not isinstance(raw, Mapping) or raw.get("kind") not in {None, "", "classes"}:
@@ -125,7 +127,9 @@ def scope_warning_evidence(payload: Mapping[str, Any], classes: Mapping[str, str
             if raw_classes and (not isinstance(raw_classes, list) or {str(c) for c in raw_classes} != class_ids):
                 continue
             if (ids(row, "groupIds", "groupId") - class_ids or raw.get("grade") or row.get("grade_scope")
-                    or row.get("audienceMode") == "remainder" or row.get("excludedGroupIds")
+                    or row.get("audienceMode") == "remainder"
+                    or any(row.get(key) for key in ("excludedGroupIds", "excludedStudentIds", "includedStudentIds",
+                                                    "confirmedParticipantIds", "include_student_ids", "exclude_student_ids"))
                     or any(raw.get(key) for key in ("group_ids", "groupIds", "student_ids", "studentIds",
                                                     "include_student_ids", "exclude_student_ids", "partition_group_ids", "partition_dimension"))):
                 continue
@@ -159,11 +163,87 @@ def apply_scope_warning_retirement(lesson: dict[str, Any], field: str, clauses: 
     }
 
 
+def verified_saved_group_warning_ids(database: Any, draft: Mapping[str, Any]) -> set[str]:
+    from backend.services.schedule_experiments import experiment_week_audience_preview
+
+    payload = draft["payload"]
+    ids = {str(row["id"]) for row in (payload.get("lessons") or [])
+           if row.get("id") and row.get("needsClarification") is True and is_legacy_group_link_note(row)}
+    if not ids:
+        return set()
+    reference = date.fromisoformat(str(payload.get("week_start") or payload.get("reference_date") or date.today().isoformat())[:10])
+    resolved = experiment_week_audience_preview(database, payload, reference)["lessons"]
+    return {lesson_id for lesson_id in ids if resolved.get(lesson_id, {}).get("verified_saved_group")}
+
+
+def reviewed_scope_proposals(payload: Mapping[str, Any], classes: Mapping[str, str],
+                             evidence: Mapping[str, tuple[str, frozenset[str]]]) -> list[dict[str, Any]]:
+    """Display evidence and authorized eligibility; do not edit the draft or its copy."""
+    from backend.services.schedule_experiments import _lesson_activity_type, _lesson_interval, _lesson_weekday
+
+    rows = [row for row in (payload.get("lessons") or []) if isinstance(row, Mapping)]
+    slots = payload.get("slots") or []
+    proposals = []
+    for row in rows:
+        lesson_id = str(row.get("id") or "")
+        if evidence.get(lesson_id, (None,))[0] == "lunch_scope_warning":
+            proposals.append({"lesson_id": lesson_id, "kind": "lunch_verified"})
+
+    def is_named(row: Mapping[str, Any]) -> bool:
+        subject = " ".join(str(row.get("subject") or "").casefold().split())
+        return subject == "математика + вайб"
+
+    def class_ids(row: Mapping[str, Any]) -> set[str]:
+        multi = set(map(str, row.get("classIds") or [])) if isinstance(row.get("classIds"), list) else set()
+        single = str(row.get("classId") or "")
+        if multi and single and single not in multi:
+            return set()
+        return multi or ({single} if single else set())
+
+    def period(row: Mapping[str, Any]) -> tuple:
+        return _lesson_weekday(row), _lesson_interval(row, slots)
+
+    # The name is authorized only for this exact direction, never as a new
+    # default for other programs or as a replacement for existing participants.
+    named = [row for row in rows if is_named(row)]
+    occurrences: Counter[tuple] = Counter((row.get("blockId"), *period(row)) for row in named
+                                         if isinstance(row.get("blockId"), str))
+    for row in named:
+        lesson_id = str(row.get("id") or "")
+        if not lesson_id:
+            continue
+        block = row.get("blockId")
+        slot = period(row)
+        ids = class_ids(row)
+        target = {"5", "6"}
+        old = row.get("eligibleGrades")
+        old_grades = {str(grade) for grade in old} if isinstance(old, list) else set()
+        peers = [peer for peer in rows if peer.get("blockId") == block] if isinstance(block, str) and block.strip() else []
+        problem = ""
+        if not all(any(grade == value for value in classes.values()) for grade in target):
+            problem = "Не подтверждены действующие классы обеих параллелей."
+        elif (_lesson_activity_type(row) != "elective" or row.get("importError") or not peers
+              or slot[0] is None or not slot[1] or occurrences[(block, *slot)] != 1
+              or any(_lesson_activity_type(peer) != "elective" or peer.get("importError") or period(peer) != slot
+                     for peer in peers)):
+            problem = "Проверьте тип занятия, его время и подтверждённый общий блок."
+        elif not ids or not ids <= classes.keys() or any(classes[value] not in target for value in ids):
+            problem = "Проверьте привязку к действующим классам 5–6."
+        elif old is not None and (not isinstance(old, list) or not old_grades <= target):
+            problem = "Текущая доступность выходит за рамки 5–6; сверьте запись перед изменением."
+        if problem or old_grades != target:
+            proposals.append({"lesson_id": lesson_id, "kind": "elective_availability",
+                              "eligible_grades": [5, 6], "problem": problem})
+    return proposals
+
+
 def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers: set[str] | None = None,
                           verified_teacher_assignments: set[tuple[str, str, str]] | None = None,
-                          verified_classes: Mapping[str, str] | None = None) -> dict[str, Any]:
+                          verified_classes: Mapping[str, str] | None = None,
+                          verified_group_links: set[str] | None = None) -> dict[str, Any]:
     """Plan only evidence-backed legacy type updates; all other rows are preserved."""
-    from backend.services.schedule_experiments import _lesson_activity_type
+    from backend.services.schedule_edit_validation import day_mode_review_reason
+    from backend.services.schedule_experiments import _lesson_activity_type, _lesson_day_modes, lesson_is_online, lesson_is_sdep_display
 
     payload = draft.get("payload") if isinstance(draft.get("payload"), Mapping) else {}
     lessons = payload.get("lessons") if isinstance(payload.get("lessons"), list) else []
@@ -174,6 +254,7 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             block_types.setdefault(str(row["blockId"]), set()).add(str(row.get("activityType") or ""))
     unresolved_electives: dict[str, str] = {}
     scope_evidence = scope_warning_evidence(payload, verified_classes or {}, unresolved_electives=unresolved_electives)
+    scope_proposals = reviewed_scope_proposals(payload, verified_classes or {}, scope_evidence)
     changes: list[dict[str, Any]] = []
     manual: list[dict[str, Any]] = []
     unchanged = 0
@@ -263,6 +344,17 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             reason = without_scope_clauses(reason, scope_evidence[lesson_id][1])
             if not reason:
                 continue
+        if lesson_id in (verified_group_links or ()) and is_legacy_group_link_note(row):
+            reason = without_legacy_group_notes(reason)
+            if not reason:
+                continue
+        if not row.get("importError"):
+            modes = _lesson_day_modes(payload, row, verified_classes or {})
+            if lesson_is_sdep_display(row, modes) or lesson_is_online(row, modes):
+                reason = day_mode_review_reason(reason, sdep_display=lesson_is_sdep_display(row, modes),
+                                                online=lesson_is_online(row, modes))
+                if not reason:
+                    continue
         retained_warning_counts[reason] += 1
         if len(retained_warning_examples[reason]) < 5:
             retained_warning_examples[reason].append({"lesson_id": lesson_id, "subject": str(row.get("subject") or "Занятие")})
@@ -276,6 +368,7 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
         "source_revision": plan["source_revision"], "source_hash": source_hash,
         "plan_hash": payload_hash(plan), "lesson_count": len(lessons),
         "automatic_count": len(changes), "activity_type_change_count": type_change_count,
+        "scope_proposals": scope_proposals,
         "teacher_warning_clear_count": teacher_warning_clear_count,
         "lunch_scope_warning_suppressed_count": sum(field == "lunch_scope_warning" for field, _ in scope_evidence.values()),
         "elective_scope_warning_clear_count": sum(r["field"] == "elective_scope_warning" for r in changes),

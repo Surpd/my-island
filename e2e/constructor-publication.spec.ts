@@ -189,20 +189,21 @@ test('publication preview groups pairs, separates severity and keeps the affecte
   await expect(severity).toHaveValue('critical');
 });
 
-test('diagnostics copy a report with lesson links and without internal messages', async ({ page }) => {
+test('diagnostics copy a report without names, codes or lesson links', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { document.documentElement.dataset.copiedReport = text; } } });
   });
   const { dialog } = await openPublicationPanel(page);
   await dialog.getByText('Отчёт проверки', { exact: true }).click();
-  await expect(dialog.getByRole('button', { name: 'Скопировать отчёт проверки' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Скопировать обезличенный отчёт' })).toBeVisible();
   await expect(dialog.locator('[data-review-issue~="teacher_overlap"]')).toHaveCount(1);
-  await dialog.getByRole('button', { name: 'Скопировать отчёт проверки' }).click();
-  await expect(dialog.getByText(/Отчёт проверки скопирован/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Скопировать обезличенный отчёт' }).click();
+  await expect(dialog.getByText(/Обезличенный отчёт проверки скопирован/)).toBeVisible();
   const copiedReport = await page.locator('html').getAttribute('data-copied-report');
-  expect(copiedReport).toContain('teacher_overlap\t1');
-  expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-related`);
-  expect(copiedReport).toContain(`?draft=${DRAFT_ID}&lesson=lesson-conflict`);
+  expect(copiedReport).toContain('У преподавателя пересекаются занятия');
+  expect(copiedReport).not.toContain(DRAFT_ID);
+  expect(copiedReport).not.toContain('lesson-conflict');
+  expect(copiedReport).not.toContain('teacher_overlap');
   expect(copiedReport).not.toContain('Нужно проверить пересечение занятий');
   await page.screenshot({ path: 'test-results/schedule-publication-preview.png', fullPage: true });
 });
@@ -318,20 +319,36 @@ test('legacy warning rows name both classes and return to the same review withou
 });
 
 test('checking the whole draft shows roster changes without saving them', async ({ page }) => {
-  const { dialog } = await openPublicationPanel(page);
   const writes: string[] = [];
   page.on('request', request => {
-    if (request.method() === 'PUT' || request.url().endsWith('/audiences/apply')) writes.push(request.url());
+    if (request.method() === 'PUT' || new URL(request.url()).pathname.endsWith('/audiences/apply')) writes.push(request.url());
   });
+  const { dialog } = await openPublicationPanel(page);
+  const rosterBodies: unknown[] = [];
   await page.route('**/audiences/preview', route => {
-    expect(route.request().postDataJSON().scope).toBe('template');
+    const body = route.request().postDataJSON();
+    rosterBodies.push(body);
+    const wholeDraft = body.scope === 'template';
     return route.fulfill({ json: { revision: 1, preview_token: 'synthetic',
-      summary: { selected_count: 1, changed_count: 1, safe_count: 1, unresolved_count: 0, added_count: 0, removed_count: 9 },
-      lessons: [{ id: 'lesson-excluded', subject: 'Математика', changed: true, safe: true, old_count: 25, proposed_count: 16 }] } });
+      summary: wholeDraft
+        ? { selected_count: 1, changed_count: 1, safe_count: 1, unresolved_count: 0, added_count: 0, removed_count: 9 }
+        : { selected_count: 0, changed_count: 0, safe_count: 0, unresolved_count: 0, added_count: 0, removed_count: 0 },
+      lessons: wholeDraft
+        ? [{ id: 'lesson-excluded', subject: 'Математика', changed: true, safe: true, old_count: 25, proposed_count: 16 }]
+        : [] } });
   });
+  const initialPreview = page.waitForResponse(response => response.url().endsWith('/audiences/preview'));
   await dialog.getByRole('button', { name: 'Составы и старые записи' }).click();
+  await initialPreview;
+  expect(rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }]);
   await dialog.locator('[data-review-fix="roster-scope"] > summary').click();
-  await dialog.getByLabel('Проверять при выборе').selectOption('template');
+  const scope = dialog.getByLabel('Проверять при выборе');
+  await expect(scope).toHaveValue('stale');
+  const wholeDraftPreview = page.waitForResponse(response => response.url().endsWith('/audiences/preview'));
+  await scope.selectOption({ label: 'Весь черновик' });
+  await wholeDraftPreview;
+  await expect(scope).toHaveValue('template');
+  expect(rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }, { expected_revision: 1, scope: 'template' }]);
   await expect(dialog.getByText(/Проверено занятий: 1/)).toBeVisible();
   const rosters = dialog.locator('[data-review-fix="roster-lessons"]');
   await rosters.locator('summary').click();

@@ -33,6 +33,7 @@ export type NormalizationPreview = {
   teacher_warning_clear_count: number;
   changes: { lesson_id: string; field?: string; before: string; after: string; reason: string }[];
   manual: { lesson_id: string; reason: string }[];
+  scope_proposals?: { lesson_id: string; kind: 'lunch_verified' | 'elective_availability'; problem?: string }[];
   retained_warning_count: number;
   retained_warnings: { reason: string; count: number; examples: { lesson_id: string; subject: string }[] }[];
 };
@@ -168,7 +169,20 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
           <div>
             <strong>{lessonLabels[item.lesson_id] || 'Занятие'}</strong>
             {item.field === 'activity_type' ? <p>Указать тип «Курс по выбору». Направления уже входят в один блок.</p> :
-              <p>Снять предупреждение о преподавателе. Назначение подтверждено по справочнику.</p>}
+              item.field === 'elective_scope_warning' ? <p>Снять устаревшую пометку о составе курса: подтверждены общий блок, время и классы. Зачисление учеников не меняется.</p> :
+                <p>Снять предупреждение о преподавателе. Назначение подтверждено по справочнику.</p>}
+          </div>
+          {lessonButton(item.lesson_id, lessonLabels[item.lesson_id] || 'занятие')}
+        </li>)}</ul>
+      </ReviewDisclosure> : null}
+      {preview.scope_proposals?.length ? <ReviewDisclosure title="Проверка охвата занятий" count={preview.scope_proposals.length} groupKey="scope-evidence">
+        <p>Эти сведения не меняют черновик и не входят в исправления копии.</p>
+        <ul className="constructor-review-list">{preview.scope_proposals.map(item => <li key={item.lesson_id}>
+          <div>
+            <strong>{lessonLabels[item.lesson_id] || 'Занятие'}</strong>
+            {item.kind === 'lunch_verified' ? <p>Классы и время обеда подтверждены. Старый вопрос об охвате не требует решения; остальные замечания остаются в проверке.</p> :
+              <><p>Предлагаем открыть курс для всех классов 5–6. Это доступность курса, а не зачисление учеников.</p>
+                {item.problem ? <p>{item.problem}</p> : <p>Преподавателя, время и существующий состав менять не нужно.</p>}</>}
           </div>
           {lessonButton(item.lesson_id, lessonLabels[item.lesson_id] || 'занятие')}
         </li>)}</ul>
