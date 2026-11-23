@@ -54,6 +54,7 @@ import { TeacherColorPanel } from './teacher-color-panel';
 import { minutes, addMinutes, lessonTimes, relocatedTimes, schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedClassLunchMarker, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { LaboratoryPanel, type LaboratoryBlueprint, type LaboratoryPreview } from './schedule-laboratory-panel';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
+import { audienceRequestMessage, audienceRequestState, prepareAudienceRequest, scopedAudienceKey } from './schedule-audience-request';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
 
@@ -696,9 +697,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   });
   const activityPath = () => `/api/admin/schedule/activities?${workspace === 'school' ? 'workspace=school&' : ''}include_archived=true`;
   const directoryByWorkspace = useRef<{ demo: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] }; school: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] } }>({ demo: { groups: [], teachers: [], students: [], rooms: [] }, school: { groups: [], teachers: [], students: [], rooms: [] } });
-  const [audienceSnapshot, setAudienceSnapshot] = useState<{ key: string; lessons: Record<string, AudiencePreview> } | null>(null);
-  const [previewRetryNonce, setPreviewRetryNonce] = useState(0);
-  const [newAudienceSnapshot, setNewAudienceSnapshot] = useState<{ key: string; preview: AudiencePreview } | null>(null);
+  const [audienceSnapshot, setAudienceSnapshot] = useState<{ key: string; attempt: number; lessons: Record<string, AudiencePreview> } | null>(null);
+  const [newAudienceSnapshot, setNewAudienceSnapshot] = useState<{ key: string; attempt: number; preview: AudiencePreview } | null>(null);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [newPreviewAttempt, setNewPreviewAttempt] = useState(0);
+  const [previewFailure, setPreviewFailure] = useState<{ key: string; attempt: number; reason: 'timeout' | 'request' } | null>(null);
+  const [newPreviewFailure, setNewPreviewFailure] = useState<{ key: string; attempt: number; reason: 'timeout' | 'request' } | null>(null);
   const [day, setDay] = useState(0);
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day');
   const [dayModeEditor, setDayModeEditor] = useState<{ grade: string; day: number } | null>(null);
@@ -1480,7 +1484,12 @@ export function ScheduleConstructor({ api }: { api: Api }) {
   const teacherRegistry = useSchoolTeacherColors(api, workspace, colorScope, teachers, colorPairs, consolidatedSchedule);
 
   const previewPayload = useMemo(() => payload ? audiencePreviewPayload(payload) : null, [payload]);
-  const previewKey = previewPayload ? JSON.stringify(previewPayload) : '';
+  const previewBody = previewPayload ? JSON.stringify({ payload: previewPayload }) : '';
+  const previewKey = scopedAudienceKey(workspace, draft?.id, previewBody);
+  // The candidate flow has its own smaller request; editing an existing lesson
+  // must not disable the only refresh for its current roster.
+  const previewEnabled = Boolean(previewKey) && (!focus || Boolean(selectedId) || creationMode === 'quick');
+  const previewRequest = audienceRequestState(previewKey, previewAttempt, audienceSnapshot, previewFailure, previewEnabled);
   const audiencePreviews = audienceSnapshot && audienceSnapshot.key === previewKey ? audienceSnapshot.lessons : EMPTY_AUDIENCE_PREVIEWS;
   const displayedClasses = (lesson: Lesson) => {
     if (lesson.activityType === 'club') return visualClasses(lesson, groups);
@@ -1493,31 +1502,18 @@ export function ScheduleConstructor({ api }: { api: Api }) {
       ? audiencePreviews[lesson.id].class_ids! : declared;
   };
   useEffect(() => {
-    if (!previewKey || (focus && creationMode !== 'quick') || audienceSnapshot?.key === previewKey) return;
-    let cancelled = false;
-    let controller: AbortController | null = null;
-    const timer = window.setTimeout(() => {
-      void queuePreview(async () => {
-        if (cancelled || savingRef.current) return;
-        controller = new AbortController();
-        const timeout = window.setTimeout(() => controller?.abort(), 10_000);
-        try {
-          const result = await api<{ lessons: Record<string, AudiencePreview> }>(schedulePath('/audience-preview'), {
-            method: 'POST', body: `{"payload":${previewKey}}`, signal: controller.signal,
-          });
-          if (!cancelled) setAudienceSnapshot({ key: previewKey, lessons: result.lessons || {} });
-        } finally { window.clearTimeout(timeout); }
-      }).catch((error: Error) => {
-        if (!cancelled && !savingRef.current) {
-          const reason = controller?.signal.aborted ? 'Сервер не ответил за 10 секунд. Повторите расчёт позже.' : `Не удалось рассчитать участников: ${error.message}`;
-          const ids = (JSON.parse(previewKey) as { lessons?: { id: string }[] }).lessons || [];
-          setAudienceSnapshot({ key: previewKey, lessons: Object.fromEntries(ids.map((lesson) => [lesson.id, { status: 'error', reason }])) });
-          setStatus(reason);
-        }
-      });
-    }, 600);
-    return () => { window.clearTimeout(timer); cancelled = true; controller?.abort(); };
-  }, [api, previewKey, workspace, focus, creationMode, audienceSnapshot, previewRetryNonce]);
+    if (saving || !previewEnabled || previewRequest.status !== 'pending') return;
+    return prepareAudienceRequest({
+      delayMs: 600,
+      enqueue: queuePreview,
+      isPaused: () => savingRef.current,
+      load: (signal) => api<{ lessons: Record<string, AudiencePreview> }>(schedulePath('/audience-preview'), {
+        method: 'POST', body: previewBody, signal,
+      }),
+      complete: (value) => setAudienceSnapshot({ key: previewKey, attempt: previewAttempt, lessons: value.lessons || {} }),
+      fail: (reason) => setPreviewFailure({ key: previewKey, attempt: previewAttempt, reason }),
+    });
+  }, [api, previewKey, previewEnabled, previewAttempt, previewRequest.status, saving]);
   const classes = (payload?.classes || [])
     .map((id) => groups.find((item) => item.id === id))
     .filter((item): item is Group => Boolean(item))
@@ -1784,73 +1780,44 @@ export function ScheduleConstructor({ api }: { api: Api }) {
         && minutes(existing.start) < minutes(candidate.end) && minutes(candidate.start) < minutes(existing.end));
     }).map(audiencePreviewLesson)
     : [];
-  const newAudienceKey = focus && creationMode !== 'quick' && activityType !== 'elective' ? JSON.stringify({
-    reference_date: previewPayload?.reference_date,
-    week_start: previewPayload?.week_start,
-    slots: previewPayload?.slots,
-    concurrentLessons: concurrentPreviewLessons,
-    audience: previewAudience, informational: newInformational,
-    contextClassIds: newAudienceContextClassIds,
-    gradeScope: selectedCell?.gradeScope,
-    day: previewDay, period: previewPeriod,
-    start: newLesson.start, end: newLesson.end, kind: creationMode,
-  }) : '';
+  const candidatePreviewId = '__new_audience_preview__';
+  const candidatePreviewBody = previewPayload && payload && focus && !selectedId && creationMode !== 'quick' && activityType !== 'elective' && activityType !== 'club' && !newInformational ? (() => {
+    const mirror = audiencePatch(previewAudience, groups, students, newAudienceContextClassIds);
+    const candidate: Lesson = {
+      id: candidatePreviewId, day: previewDay, period: previewPeriod,
+      subject: newLesson.subject, teacherId: newLesson.teacherId, room: newLesson.room,
+      groupId: mirror.groupId || '', classId: mirror.classId || '',
+      groupIds: mirror.groupIds, classIds: mirror.classIds,
+      audience: previewAudience, grade_scope: selectedCell?.gradeScope || undefined,
+      specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined,
+      kind: creationMode === 'event' ? 'event' : 'lesson',
+      start: newLesson.start, end: newLesson.end,
+    };
+    return JSON.stringify({ payload: {
+      ...previewPayload, lessons: [...concurrentPreviewLessons, audiencePreviewLesson(candidate)],
+    } });
+  })() : '';
+  const newAudienceKey = scopedAudienceKey(workspace, draft?.id, candidatePreviewBody);
   const newAudiencePreview = newAudienceSnapshot?.key === newAudienceKey ? newAudienceSnapshot.preview : undefined;
+  const newPreviewRequest = audienceRequestState(newAudienceKey, newPreviewAttempt, newAudienceSnapshot, newPreviewFailure, Boolean(newAudienceKey));
   useEffect(() => {
-    if (!payload || !previewPayload || !newAudienceKey || !focus) return;
-    let cancelled = false;
-    let controller: AbortController | null = null;
-    const timer = window.setTimeout(() => {
-      const rawAudience = activityType === 'club' ? { kind: 'students' as const, student_ids: [] as string[] } : newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups);
-      const audience = rawAudience.kind === 'available_slot' && !rawAudience.class_ids?.length && !rawAudience.grade && selectedCell?.gradeScope
-        ? { ...rawAudience, grade: selectedCell.gradeScope, class_ids: [] }
-        : rawAudience;
-      const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds);
-      const candidate: Lesson = {
-        id: '__new_audience_preview__', day: newLesson.day ?? selectedCell?.day ?? day,
-        period: creationMode === 'event' && newLesson.start && newLesson.end
-          ? Math.max(0, firstOverlappingSlot(newLesson.start, newLesson.end, payload.slots))
-          : newLesson.period ?? selectedCell?.period ?? 0,
-        subject: newLesson.subject, teacherId: newLesson.teacherId, room: newLesson.room,
-        groupId: mirror.groupId || '', classId: mirror.classId || '',
-        groupIds: mirror.groupIds, classIds: mirror.classIds,
-        audience: newInformational ? undefined : audience,
-        grade_scope: selectedCell?.gradeScope || undefined,
-        informational: newInformational, specialMark: creationMode === 'lunch' ? 'lunch' : creationMode === 'no_lesson' ? 'no_lesson' : undefined, kind: creationMode === 'event' ? 'event' : 'lesson',
-        start: newLesson.start, end: newLesson.end,
-      };
-      void queuePreview(async () => {
-        if (cancelled || savingRef.current) return;
-        controller = new AbortController();
-        const timeout = window.setTimeout(() => controller?.abort(), 10_000);
-        try {
-          const concurrentLessons = audience.kind === 'available_slot' || creationMode === 'lunch'
-            ? payload.lessons.filter((lesson) => {
-              if (lesson.day !== candidate.day) return false;
-              const existing = lessonTimes(lesson, payload.slots);
-              const target = lessonTimes(candidate, payload.slots);
-              return Boolean(existing.start && existing.end && target.start && target.end
-                && minutes(existing.start) < minutes(target.end) && minutes(target.start) < minutes(existing.end));
-            })
-            : [];
-          const result = await api<{ lessons: Record<string, AudiencePreview> }>(schedulePath('/audience-preview'), {
-            method: 'POST', body: JSON.stringify({ payload: {
-              ...previewPayload, lessons: [...concurrentLessons.map(audiencePreviewLesson), audiencePreviewLesson(candidate)],
-            } }), signal: controller.signal,
-          });
-          if (cancelled) return;
-          const preview = result.lessons?.[candidate.id];
-          setNewAudienceSnapshot({ key: newAudienceKey, preview: preview || { status: 'error', reason: 'Сервер не вернул состав для нового занятия.' } });
-        } finally { window.clearTimeout(timeout); }
-      }).catch((error: Error) => {
-        if (!cancelled && !savingRef.current) {
-          const reason = controller?.signal.aborted ? 'Сервер не ответил за 10 секунд. Повторите расчёт позже.' : `Не удалось рассчитать участников: ${error.message}`;
-          setNewAudienceSnapshot({ key: newAudienceKey, preview: { status: 'error', reason } });
-        }
-      });
-    }, 120);
-    return () => { window.clearTimeout(timer); cancelled = true; controller?.abort(); };
-  }, [api, newAudienceKey, groups, students, workspace, previewRetryNonce]);
+    if (saving || newPreviewRequest.status !== 'pending') return;
+    return prepareAudienceRequest({
+      delayMs: 120,
+      enqueue: queuePreview,
+      isPaused: () => savingRef.current,
+      load: async (signal) => {
+        const result = await api<{ lessons: Record<string, AudiencePreview> }>(schedulePath('/audience-preview'), {
+          method: 'POST', body: candidatePreviewBody, signal,
+        });
+        const preview = result.lessons?.[candidatePreviewId];
+        if (!preview) throw new Error('Missing audience preview');
+        return preview;
+      },
+      complete: (preview) => setNewAudienceSnapshot({ key: newAudienceKey, attempt: newPreviewAttempt, preview }),
+      fail: (reason) => setNewPreviewFailure({ key: newAudienceKey, attempt: newPreviewAttempt, reason }),
+    });
+  }, [api, newAudienceKey, newPreviewAttempt, newPreviewRequest.status, saving]);
   const quickParsed = parseQuick(quick, selectedCell?.classId || '', groups, teachers, students, subjects);
   const quickSubject = quickChoice.subject ?? (quickParsed.subjects.length === 1 ? quickParsed.subjects[0] : '');
   const quickGroupId = quickChoice.groupId ?? (quickParsed.groupIds.length === 1 ? quickParsed.groupIds[0] : '');
@@ -2759,6 +2726,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     baseDraftRef.current = updated;
     setDraft(updated);
     setAudienceSnapshot(null);
+    setPreviewAttempt((value) => value + 1);
     void refreshDrafts().catch(() => {});
   };
   const rosterClassId = classFilter || (selected
@@ -2776,6 +2744,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
     setDirty(false);
     changeVersion.current++;
     setAudienceSnapshot(null);
+    setPreviewAttempt((value) => value + 1);
     void refreshDrafts().catch(() => setStatus('Составы сохранены. Список черновиков обновится при следующем открытии.'));
   };
   const workspaceTabs = demoAvailable ? (
@@ -3336,6 +3305,11 @@ export function ScheduleConstructor({ api }: { api: Api }) {
               })}</tbody></table></div>
             </section>
           </div> : null}
+          {!panelOpen && (previewRequest.status === 'pending' || previewRequest.status === 'unavailable') ? (
+            <p role="status" className="constructor-status">{audienceRequestMessage(previewRequest)}{' '}
+              {previewRequest.status === 'unavailable' ? <button type="button" onClick={() => setPreviewAttempt((value) => value + 1)}>Повторить расчёт</button> : null}
+            </p>
+          ) : null}
           {conflictsOpen || route?.origin === 'grid' ? (
             <section className="constructor-conflict-panel" tabIndex={-1} style={conflictsOpen ? undefined : {display:'none'}}>
               <header><strong>Центр решений расписания</strong><button onClick={() => setConflictsOpen(false)} aria-label="Закрыть список проблем"><X size={15} /></button></header>
@@ -3768,7 +3742,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         {creationMode !== 'lunch' && creationMode !== 'no_lesson' ? <><label>{activityType === 'practice' ? 'Присутствующий преподаватель (необязательно)' : 'Преподаватель'} <input aria-label="Преподаватель нового занятия" placeholder="Начните вводить имя или фамилию" list="constructor-new-teachers" value={teacherQuery || teachers.find((item) => item.id === resolvedNewTeacherId)?.name || ''} onFocus={(event) => { try { event.currentTarget.showPicker(); } catch { /* Native datalist may open on typing instead. */ } }} onChange={(event) => { const value = event.target.value; const match = teachers.find((item) => item.name.toLocaleLowerCase('ru') === value.trim().toLocaleLowerCase('ru')); setNewTeacherManuallySelected(true); setTeacherQuery(match ? '' : value); setNewLesson((item) => ({ ...item, teacherId: match?.id || '' })); }} /><datalist id="constructor-new-teachers">{rankedTeachers.map((item) => <option key={item.id} value={item.name} label={busyTeachers.has(item.id) ? `${item.name} · занят: ${teacherBusyWith(item.id)?.subject || 'занятие'}` : `${item.name} · свободен`} />)}</datalist></label><label>Кабинет <input aria-label="Кабинет нового занятия" list="constructor-rooms" disabled={creationMode === 'event' ? (newLesson.format ?? 'online') === 'online' : newOnline} value={(creationMode === 'event' ? (newLesson.format ?? 'online') === 'online' : newOnline) ? '' : normalizeRoomInput(newLesson.room)} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label></> : null}
                         {creationMode === 'lunch' ? <label>Место (необязательно)<input aria-label="Место обеда" value={newLesson.room} onChange={(event) => setNewLesson((item) => ({ ...item, room: event.target.value }))} /></label> : null}
                         {activityType === 'club' ? <><label>Размещение в сетке<select multiple aria-label="Классы размещения кружка" value={newAudienceContextClassIds} onChange={(event) => setNewLesson((item) => ({ ...item, classIds: [...event.target.selectedOptions].map((option) => option.value) }))}>{groups.filter((group) => group.group_type === 'class' && payload.classes.includes(group.id)).map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label><p>Поимённый список не нужен. Ученики этих классов увидят кружок в отдельном разделе расписания.</p></> : null}
-                        {activityType === 'elective' ? <p>Ученики и учебные группы отдельно не назначаются. Параллельные курсы доступны выбранным классам независимо друг от друга.</p> : !newInformational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
+                        {activityType === 'elective' ? <p>Ученики и учебные группы отдельно не назначаются. Параллельные курсы доступны выбранным классам независимо друг от друга.</p> : !newInformational && activityType !== 'club' ? <ParticipantsPicker groups={groups} students={students} audience={newLesson.audience || audienceFromGroup(newLesson.groupId, newLesson.classIds, groups)} subject={newLesson.subject} contextClassIds={newAudienceContextClassIds} gradeScope={selectedCell?.gradeScope} preview={newAudiencePreview} requestState={newPreviewRequest} onRetryPreview={() => setNewPreviewAttempt((value) => value + 1)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} onChange={(audience) => { const mirror = audiencePatch(audience, groups, students, newAudienceContextClassIds); setNewLesson((item) => ({ ...item, audience, groupId: mirror.groupId || '', classIds: mirror.classIds || [] })); }} /> : null}
                         {creationMode !== 'event' && <div className="constructor-field-row">
                           <label>День <select value={previewDay}
                             onChange={event => setNewLesson(item => ({ ...item, day: Number(event.target.value) }))}>
@@ -3922,7 +3896,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                           {groups.filter(group => group.group_type === 'class' && payload.classes.includes(group.id)).map(group =>
                             <option key={group.id} value={group.id}>{group.name}</option>)}
                         </select></label><p>Поимённый список для кружка не нужен.</p></> : null}
-                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} onRetryPreview={() => { setAudienceSnapshot(null); setNewAudienceSnapshot(null); setPreviewRetryNonce((value) => value + 1); }} onConfirmRecalculation={() => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
+                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} onConfirmRecalculation={() => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => updateLesson(selected.id, audiencePatch(audience, groups, students, lessonClasses(selected)))} />{selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
                       <div className="constructor-field-row">
                         <label>
                           День
