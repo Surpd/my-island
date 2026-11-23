@@ -1,8 +1,9 @@
 import { instructionalGroupIds } from './schedule-lanes.ts';
 import { audienceGrade, subjectLabel, subjectAliases } from './school-audience.ts';
 import { assignmentIsActive } from './teacher-directory-logic.ts';
+import { isVirtualRoom } from './schedule-rooms.ts';
 
-export type ScheduleGroup = { id: string; name: string; group_type: string; subject?: string; base_class_name?: string; subject_subgroup?: string; role?: string; semantic_dimension?: string; course?: string; exam_track?: string; archived_at?: string | null };
+export type ScheduleGroup = { id: string; name: string; group_type: string; subject?: string; base_class_name?: string; display_name?: string; subject_subgroup?: string; role?: string; semantic_dimension?: string; course?: string; exam_track?: string; archived_at?: string | null };
 export type ScheduleTeacher = { id: string; name: string; assignments: { group_id?: string | null; subject: string; course?: string; grade_level?: string | number | null; exam_track?: string; active?: boolean | number; status?: string; valid_from?: string | null; valid_until?: string | null }[] };
 export type ScheduleStudent = { id: string; groups: string[]; classes: string[] };
 
@@ -72,6 +73,62 @@ export function displayedClarificationReason(lesson: LunchMarker, groups: ClassE
     return reason.trim().split('; ').filter(clause => clause !== legacyLunchScope).join('; ');
   }
   return reason || undefined;
+}
+
+type DayMode = 'online' | 'sdep';
+type DayModeConfig = { day_modes?: Record<string, Record<string, DayMode>>; grade_modes?: Record<string, Record<string, DayMode>> };
+type DayModeLesson = Pick<LunchMarker, 'classId' | 'classIds' | 'groupId' | 'groupIds' | 'grade_scope' | 'audience'>
+  & { day: number; activityType?: string; room?: string; format?: string };
+export type DayModeState = DayMode | 'normal' | 'conflict';
+export function canonicalGradeOfGroup(group: ScheduleGroup | undefined): string {
+  if (!group || group.archived_at || (group.group_type !== 'class' && group.role !== 'base_class')) return '';
+  for (const field of [group.base_class_name, group.display_name, group.name]) {
+    const grade = String(field || '').trim().match(/^(\d{1,2})(?:\D|$)/)?.[1];
+    if (grade) return grade;
+  }
+  return String(group.name || '').match(/^grade(\d{1,2}):base:/)?.[1] || '';
+}
+export function dayModeForGrade(payload: DayModeConfig, grade: string, classes: ScheduleGroup[], weekday: number): DayModeState {
+  const day = String(weekday);
+  const explicit = payload.grade_modes?.[grade]?.[day];
+  if (explicit) return explicit;
+  const modes = new Set(classes.filter((group) => canonicalGradeOfGroup(group) === grade)
+    .map((group) => payload.day_modes?.[group.id]?.[day] || 'normal'));
+  return modes.size > 1 ? 'conflict' : [...modes][0] || 'normal';
+}
+export function allLessonClassesHaveMode(payload: DayModeConfig, lesson: DayModeLesson, mode: DayMode, classes: ScheduleGroup[]): boolean {
+  const classIds = new Set([...(lesson.classIds || []), lesson.classId, ...(lesson.audience?.class_ids || [])].filter(Boolean));
+  const grades = new Set([...classIds].map((classId) => canonicalGradeOfGroup(classes.find((group) => group.id === classId))));
+  for (const id of [...(lesson.groupIds || []), lesson.groupId, ...(lesson.audience?.group_ids || [])]) {
+    const grade = canonicalGradeOfGroup(classes.find(group => group.id === id));
+    if (grade) grades.add(grade);
+  }
+  const audienceGrade = lesson.audience?.grade || lesson.grade_scope;
+  if (audienceGrade) grades.add(String(audienceGrade));
+  return !grades.has('') && grades.size > 0 && [...grades].every((grade) => dayModeForGrade(payload, grade, classes, lesson.day) === mode);
+}
+export function isSdepIndependentLesson(payload: DayModeConfig, lesson: DayModeLesson, classes: ScheduleGroup[]): boolean {
+  // Existing grade/day mode is the complete rule; imported staffing and the
+  // legacy per-lesson switch must not turn a self-study plan into a lesson.
+  return lesson.activityType !== 'consultation' && allLessonClassesHaveMode(payload, lesson, 'sdep', classes);
+}
+export function lessonOnline(payload: DayModeConfig, lesson: DayModeLesson, classes: ScheduleGroup[]): boolean {
+  return lesson.format === 'online' || isVirtualRoom(lesson.room) || allLessonClassesHaveMode(payload, lesson, 'online', classes);
+}
+export function lessonNeedsPhysicalRoom(payload: DayModeConfig, lesson: DayModeLesson, classes: ScheduleGroup[]): boolean {
+  if (lessonOnline(payload, lesson, classes)) return false;
+  return !isSdepIndependentLesson(payload, lesson, classes);
+}
+const roomModeReviewNotes = new Set(['кабинет не указан', 'не указан кабинет', 'для очного занятия не указан кабинет']);
+const sdepModeReviewNotes = new Set([...roomModeReviewNotes, 'не подтверждён преподаватель',
+  'нет подтверждённого назначения преподавателя группе', 'преподаватель пока не назначен',
+  'преподаватель занятия не подтверждён', 'преподаватель не указан', 'не указан преподаватель']);
+
+export function displayedDayModeWarning(reason: string, payload: DayModeConfig, lesson: DayModeLesson, groups: ScheduleGroup[]): string {
+  const ignored = isSdepIndependentLesson(payload, lesson, groups) ? sdepModeReviewNotes
+    : lessonOnline(payload, lesson, groups) ? roomModeReviewNotes : null;
+  return ignored ? reason.split(';').map(clause => clause.trim()).filter(clause =>
+    !ignored.has(clause.replace(/^ +|[. ]+$/g, '').toLocaleLowerCase('ru').replace(/\s+/g, ' '))).join('; ') : reason;
 }
 
 export function addMinutes(time: string, amount: number) {

@@ -15,9 +15,9 @@ from backend.services.schedule_rooms import display_room
 from backend.services.canonical_schedule import _assignment_metadata, canonical_group_grade, canonical_version, read_canonical_template
 from backend.services.schedule_activities import list_activities, validate_activity_lessons
 from backend.services.schedule_edit_validation import (
-    CLUB_LESSON_ONLY_NOTES, STALE_MATH, TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE,
-    UNCONFIRMED_STUDY_GROUP, audit_resolved_notes, normalized_note, notes, read_active_scope_directory,
-    scope_verified, selected_scope, subject_key,
+    CLUB_LESSON_ONLY_NOTES, GROUP_LINK_NOTES, TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE,
+    audit_resolved_notes, normalized_note, notes, read_active_scope_directory,
+    saved_group_is_current, scope_verified, selected_scope, subject_key,
 )
 
 
@@ -327,13 +327,14 @@ def _lesson_audience(lesson: Mapping[str, Any]) -> dict[str, Any]:
     mark = _lesson_special_mark(lesson)
     if mark == "no_lesson" or lesson.get("kind") == "event" and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping):
         return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
-    if (_is_lunch_lesson(lesson) and lesson.get("needsClarification") is True
-            and str(lesson.get("clarificationReason") or "").strip() == "Уточните охват обеда: класс или отдельная группа"):
-        # Historical lunch rows with an advisory-only class column never
-        # asserted which students were actually assigned. Keep them as
-        # informational markers until an explicit audience rule is authored.
-        return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     raw = lesson.get("audience")
+    if (_is_lunch_lesson(lesson) and not isinstance(raw, Mapping) and lesson.get("needsClarification") is True
+            and not lesson.get("groupId") and not lesson.get("groupIds")
+            and not lesson.get("audienceMode") and not lesson.get("canonical")
+            and str(lesson.get("clarificationReason") or "").strip() == "Уточните охват обеда: класс или отдельная группа"):
+        # Preserve a historical display-only row, but never discard a
+        # separately configured audience because the note is still present.
+        return {"kind": "", "group_ids": [], "class_ids": [], "grade": "", "student_ids": []}
     if isinstance(raw, Mapping):
         kind = str(raw.get("kind") or "")
         if kind == "remaining":
@@ -403,22 +404,35 @@ def _time_minutes(value: Any) -> int | None:
     return hour * 60 + minute if 0 <= hour < 24 and 0 <= minute < 60 else None
 
 
-def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], class_grades: Mapping[str, str]) -> set[str]:
+def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any],
+                      class_grades: Mapping[str, str], *, audience_grades: set[str] | None = None) -> set[str]:
     rule = _lesson_audience(lesson)
-    class_ids = {str(value) for value in (lesson.get("classIds") or []) if value}
-    class_ids.update(str(value) for value in (rule.get("class_ids") or rule.get("group_ids") or []) if value)
-    class_ids.update(str(value) for value in (lesson.get("groupIds") or []) if value)
-    class_ids.update(str(value) for value in (lesson.get("classId"), lesson.get("groupId")) if value)
+    classes = {str(value) for value in [*(lesson.get("classIds") or []), *(rule.get("class_ids") or []),
+                                       lesson.get("classId")] if value}
+    # Instructional group IDs need not encode a grade. Explicit administrative
+    # class IDs, on the other hand, must never disappear from the scope.
+    group_ids = {str(value) for value in [*(rule.get("group_ids") or []), *(lesson.get("groupIds") or []),
+                                         lesson.get("groupId")] if value}
     try:
         weekday = int(lesson.get("day", lesson.get("weekday", -1)))
     except (TypeError, ValueError):
         return set()
-    grades = {class_grades.get(str(class_id), "") for class_id in class_ids}
+    grades = {class_grades.get(key, "") for key in classes}
+    grades.update(grade for key in group_ids if (grade := class_grades.get(key)))
     if rule.get("grade"):
         grades.add(str(rule["grade"]))
-    grades.discard("")
-    modes = {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] for grade in grades}
-    return {str(mode) for mode in modes if mode is not None}
+    def modes_for(values):
+        return {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] or "unresolved"
+                if grade else "unresolved" for grade in values}
+
+    modes = modes_for(grades)
+    if audience_grades and modes in ({"sdep"}, {"online"}):
+        modes.update(modes_for(audience_grades))
+    return modes
+
+
+def lesson_is_sdep_display(lesson: Mapping[str, Any], modes: set[str]) -> bool:
+    return _lesson_activity_type(lesson) != "consultation" and modes == {"sdep"}
 
 
 def lesson_is_online(lesson: Mapping[str, Any], modes: set[str]) -> bool:
@@ -430,7 +444,7 @@ def lesson_is_online(lesson: Mapping[str, Any], modes: set[str]) -> bool:
 def physical_room_key(lesson, payload, grades):
     from backend.services.schedule_rooms import room_key
     modes = _lesson_day_modes(payload, lesson, grades)
-    if lesson_is_online(lesson, modes) or modes == {"sdep"}:
+    if lesson_is_online(lesson, modes) or lesson_is_sdep_display(lesson, modes):
         return ""
     key = room_key(lesson.get("room"))
     return "" if key in {"онлайн", "online"} else key
@@ -481,11 +495,11 @@ def _load_experiment_audience_snapshot(database: Database, start: str, end: str)
                 "SELECT id,display_name,class_name FROM identities WHERE kind='student' AND status='active'").fetchall(),
             "groups": database.execute(connection, """SELECT id,name AS raw_name,display_name,
                 COALESCE(display_name,name) AS name,group_type,base_class_name,semantic_dimension
-                FROM groups WHERE canonical IS TRUE""").fetchall(),
+                FROM groups WHERE canonical IS TRUE AND archived_at IS NULL""").fetchall(),
             "memberships": database.execute(connection, """SELECT m.identity_id,m.group_id,m.valid_from,m.valid_until FROM memberships m
                 JOIN identities i ON i.id=m.identity_id JOIN groups g ON g.id=m.group_id
                 WHERE m.active IS TRUE AND m.member_role='student' AND i.kind='student'
-                  AND i.status='active' AND g.canonical IS TRUE
+                  AND i.status='active' AND g.canonical IS TRUE AND g.archived_at IS NULL
                   AND (m.valid_from IS NULL OR m.valid_from <= ?)
                   AND (m.valid_until IS NULL OR m.valid_until >= ?)""", (end, start)).fetchall(),
             "membership_overrides": database.execute(connection, """SELECT identity_id,group_id,action,valid_from,valid_until
@@ -764,6 +778,8 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
                               "class_ids": sorted(set().union(*(student_classes.get(item, set()) for item in assigned))),
                               "excluded_count": len(excluded) if source_known else None, "blockers": blockers,
                               **({"reason": reason} if reason else {})}
+        results[lesson_id]["verified_saved_group"] = saved_group_is_current(
+            state["lesson"], rule, results[lesson_id])
     if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1":
         logging.getLogger(__name__).info(
             "school audience preview stages query_ms=%.1f calculation_ms=%.1f total_ms=%.1f lessons=%d students=%d groups=%d memberships=%d overrides=%d",
@@ -1663,8 +1679,8 @@ def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolv
                 and all(previous.get(field) == lesson.get(field) for field in ordinary_fields)):
             continue
         clauses = {normalized_note(clause) for clause in notes(lesson.get("clarificationReason"))}
-        if STALE_MATH in clauses and key in explicit_ids and old_scope != new_scope:
-            scope_ids.update(old_scope[1] + new_scope[1])
+        if clauses & GROUP_LINK_NOTES and key in explicit_ids:
+            scope_ids.update(new_scope[1])
         edited.append((key, lesson, previous, type_after, old_scope, new_scope, clauses))
     active_directory = read_active_scope_directory(database, scope_ids)
     feedback = []
@@ -1676,32 +1692,28 @@ def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolv
             if retired:
                 evidence["activity_type"] = "club"
         subject = subject_key(lesson.get("subject"))
-        if STALE_MATH in clauses and key in explicit_ids and old_scope != new_scope and kind not in {"club", "elective", "event", "consultation"}:
-            old_is_wrong_math = (old_scope[0] == "groups" and subject
-                and subject != subject_key("Математика") and any(
-                    subject_key(active_directory.get(group_id, {}).get("subject")) == subject_key("Математика")
-                    for group_id in old_scope[1]))
+        if clauses & GROUP_LINK_NOTES and key in explicit_ids and kind not in {"club", "elective", "event", "consultation"}:
+            # Imports can supply a canonical ID and even a saved snapshot.
+            # Only this authorized editor gesture verifies the inherited link.
             raw_audience = lesson.get("audience") or {}
             raw_keys = "group_ids" if new_scope[0] == "groups" else "class_ids"
             explicit_scope = (isinstance(raw_audience, Mapping) and raw_audience.get("kind") == new_scope[0]
                               and _ids(raw_audience.get(raw_keys)) == new_scope[1])
             preview = resolved.get(str(lesson.get("id")), {})
-            verified = (explicit_scope and old_is_wrong_math and
-                        scope_verified(*new_scope, subject, active_directory) and
-                        preview.get("status") == "ok" and isinstance(preview.get("proposed_student_ids"), list))
-            if verified:
-                retired.update({STALE_MATH, UNCONFIRMED_STUDY_GROUP})
-                evidence["audience"] = {"before": {"kind": old_scope[0], "scope_ids": old_scope[1]},
-                                        "after": {"kind": new_scope[0], "scope_ids": new_scope[1]},
-                                        "participant_count": len(preview["proposed_student_ids"])}
-                # The administrator changed this precise rule; freeze the same
-                # server-resolved roster already used for this save.
+            proposed = preview.get("proposed_student_ids")
+            if not (explicit_scope and scope_verified(*new_scope, active_directory)
+                    and preview.get("status") == "ok" and isinstance(proposed, list)):
+                raise ValueError("Новый состав не подтверждён. Выберите действующую группу или конкретные классы с известным составом и повторите сохранение.")
+            retired.update(clauses & GROUP_LINK_NOTES)
+            evidence["audience"] = {"before": {"kind": old_scope[0], "scope_ids": old_scope[1]},
+                                    "after": {"kind": new_scope[0], "scope_ids": new_scope[1]},
+                                    "participant_count": len(proposed)}
+            if old_scope != new_scope:
+                # An explicit new selection authorizes its resolved membership.
                 reset_keys.add(key)
                 lesson["audience_snapshot"] = None
-            else:
-                # Reject an explicitly attempted but unproven repair rather
-                # than save the wrong rule or lose its evidence for a retry.
-                raise ValueError("Новый состав не подтверждён. Выберите действующую группу этого предмета или конкретные классы и повторите сохранение.")
+            # Reaffirming the same group does NOT silently replace a previously
+            # saved roster when membership has drifted; roster review stays separate.
         if clauses & {TEACHER_IDENTITY_NOTE, TEACHER_ASSIGNMENT_NOTE}:
             teacher_ids = {str(value) for value in [lesson.get("teacherId"), *(lesson.get("teacherIds") or [])] if value}
             day = _lesson_weekday(lesson)

@@ -26,10 +26,14 @@ from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import (
     get_experiment, experiment_week_audience_preview, _is_lunch_lesson, _lesson_activity_type, _lesson_audience,
     _lesson_interval, _lesson_weekday, _canonical_time,
-    _lesson_day_modes, lesson_is_online, payload_day_mode_conflicts,
+    _lesson_day_modes, lesson_is_online, lesson_is_sdep_display, payload_day_mode_conflicts,
 )
 from backend.services.constructor_resolution import validated_exceptions
 from backend.services.schedule_rooms import room_key
+from backend.services.schedule_edit_validation import (
+    TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE, day_mode_review_reason,
+    is_legacy_group_link_note, normalized_note, notes, without_legacy_group_notes,
+)
 
 
 PUBLICATION_SCHEMA = (
@@ -160,7 +164,7 @@ class _PublicationDirectory:
         students = {str(row["id"]): row for row in data["identities"] if row["kind"] == "student" and row["status"] == "active"}
         teachers = {str(row["id"]): str(row["display_name"]) for row in data["identities"] if row["kind"] == "teacher" and row["status"] == "active"}
         all_groups = {str(row["id"]): row for row in data["groups"]}
-        groups = {key: group for key, group in all_groups.items() if group["canonical"]}
+        groups = {key: group for key, group in all_groups.items() if group["canonical"] and not group["archived_at"]}
         memberships = [{**row, "identity_status": "active", "identity_kind": "student", "group_canonical": True}
                        for row in data["memberships"] if row["active"] and row["member_role"] == "student"
                        and str(row["identity_id"]) in students and str(row["group_id"]) in groups]
@@ -208,7 +212,7 @@ _ISSUE_MESSAGES = {
     "student_overlap": "У ученика два занятия одновременно. Уточните составы групп или время.",
     "room_overlap": "В кабинете два очных занятия одновременно. Измените кабинет или время.",
     "joint_activity_unconfirmed": "Подтвердите совместное занятие или измените время.",
-    "stale_group_subject_mismatch": "Указана устаревшая группа другого предмета. Выберите нужную группу.",
+    "stale_group_subject_mismatch": "Связь с сохранённой группой не подтверждена. Проверьте выбранную группу.",
     "missing_teacher": "Для обычного занятия не указан преподаватель",
     "missing_room": "Для очного занятия не указан кабинет",
     "unknown_teacher": "Указанный преподаватель отсутствует или неактивен",
@@ -422,7 +426,8 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         audience_output.update(audience)
     teachers, groups = directory.teachers, directory.groups
     students = {student_id: str(row["class_name"] or "") for student_id, row in directory.students.items()}
-    class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()}
+    class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()
+                    if not group.get("archived_at")}
     elective_cohorts: dict[tuple[str, int, str], set[str]] = {}
     elective_block_names: dict[str, set[str]] = {}
     for lesson in lessons:
@@ -490,13 +495,21 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         is_event = activity_type == "event" or lesson.get("kind") == "event"
         informational_unassigned_event = is_event and lesson.get("informational") is True and not isinstance(lesson.get("audience"), Mapping)
         display_classes = lesson.get("classIds") or ([lesson["classId"]] if lesson.get("classId") else [])
-        lunch_scope_confirmed = is_lunch and (
-            bool(display_classes) and all(str(group_id) in groups and groups[str(group_id)]["group_type"] == "class"
-                                          for group_id in display_classes)
-            or result.get("status") == "ok" and _lesson_audience(lesson).get("kind") in {"groups", "classes", "available_slot", "legacy_remaining"}
+        rule = _lesson_audience(lesson)
+        lunch_has_configured_audience = is_lunch and (
+            isinstance(lesson.get("audience"), Mapping)
+            or rule.get("kind") in {"groups", "students", "available_slot", "legacy_remaining"}
+            or bool(rule.get("grade"))
         )
-        # Lunch is a visual marker in the class grid. Its audience is the
-        # displayed class, never a separately resolved instructional roster.
+        known_lunch_classes = bool(display_classes) and all(
+            str(group_id) in groups and groups[str(group_id)]["group_type"] == "class"
+            for group_id in display_classes)
+        lunch_scope_confirmed = is_lunch and (
+            (result.get("status") == "ok" and not result.get("needs_recalculation") and bool(rule.get("kind")))
+            if lunch_has_configured_audience else known_lunch_classes
+        )
+        if lunch_has_configured_audience and not lunch_scope_confirmed and result.get("status") == "ok" and not result.get("needs_recalculation"):
+            block("audience_unresolved", "Уточните, каким классам, группам или ученикам назначен обед.")
         if not lunch_scope_confirmed and not is_optional and (result.get("status") != "ok" or result.get("needs_recalculation")):
             block("audience_unresolved", str(result.get("reason") or "Audience requires confirmation or recalculation"))
         interval = _lesson_interval(lesson, payload.get("slots") or [])
@@ -524,48 +537,72 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         responsible_teacher_ids = sorted({str(value) for value in responsible_source if value})
         teacher_evidence = set(teacher_ids) | (set(responsible_teacher_ids) if practice or activity_type == "practice" else set())
         review_reason = str(lesson.get("clarificationReason") or "Занятие требует проверки")
-        rule_groups = _lesson_audience(lesson).get("group_ids") or []
-        stale_math_groups = [groups[str(group_id)] for group_id in rule_groups if str(group_id) in groups
-            and str(groups[str(group_id)].get("subject") or "").strip().casefold() == "математика"
-            and str(lesson.get("subject") or "").strip().casefold() != "математика"]
-        class_modes = _lesson_day_modes(payload, lesson, class_grades)
+        class_modes = _lesson_day_modes(payload, lesson, class_grades, audience_grades={
+            canonical._grade(students.get(str(student_id), "")) for student_id in result.get("student_ids") or []
+        })
         online_only = lesson_is_online(lesson, class_modes)
-        sdep_independent = activity_type != "consultation" and class_modes == {"sdep"}
+        sdep_independent = lesson_is_sdep_display(lesson, class_modes)
+        if not lesson.get("importError") and (sdep_independent or online_only):
+            review_reason = day_mode_review_reason(review_reason, sdep_display=sdep_independent, online=online_only)
+        if sdep_independent:
+            teacher_ids, responsible_teacher_ids, teacher_evidence = [], [], set()
         if len(class_modes) > 1 and (lesson.get("format") not in {"offline", "online"} or "sdep" in class_modes):
             block("mixed_day_modes_unsupported", "Занятие охватывает классы с разными режимами дня; разделите аудитории или режимы")
-        if stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
-            class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
-                            for group_id in display_classes if str(group_id) in groups]
-            blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
-                "message": f"Ссылка ведёт в {', '.join(str(group.get('display_name') or group.get('name')) for group in stale_math_groups)} для математики, а предмет — {subject or 'не указан'}. Класс размещения: {', '.join(class_labels) or 'не подтверждён'}. Подтвердите аудиторию вручную; состав учеников не изменён."})
+        if lesson.get("importError") and (sdep_independent or online_only):
+            block("review_required", review_reason)
         elif needs_review:
+            if is_legacy_group_link_note(lesson):
+                if not result.get("verified_saved_group"):
+                    class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
+                                    for group_id in display_classes if str(group_id) in groups]
+                    raw = _lesson_audience(lesson)
+                    labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name"))
+                              for group_id in raw.get("group_ids") or [] if str(group_id) in groups]
+                    blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
+                        "message": f"Связь с группой из старой записи не подтверждена. Предмет: {subject or 'не указан'}. Класс: {', '.join(class_labels) or 'не подтверждён'}. "
+                                   + (f"Сохранённая группа: {', '.join(labels)}. " if labels else "")
+                                   + "Проверьте состав. Если он подходит, оставьте эту группу."})
+                # Suppress only the obsolete label, never independent warnings.
+                review_reason = without_legacy_group_notes(review_reason)
             # An explicit, active teacher is sufficient for publication. A
             # separate workload row is not required evidence for the lesson.
             # Historical import notes can be compound. Clear only the teacher
             # clause when every explicitly named teacher is currently active.
             active_teacher_note = "не подтверждён преподаватель"
             reason_without_active_teacher_note = review_reason
-            if active_teacher_note in review_reason.casefold() and teacher_ids and not teacher_evidence - teachers.keys():
-                reason_without_active_teacher_note = re.sub(active_teacher_note, "", review_reason, flags=re.IGNORECASE)
-                reason_without_active_teacher_note = re.sub(r"\s*(?:[,;·]|\bи\b)\s*", " ", reason_without_active_teacher_note, flags=re.IGNORECASE).strip(" .,:;-")
-            if active_teacher_note in review_reason.casefold() and not teacher_ids:
-                reason_without_active_teacher_note = ""  # missing_teacher below reports the current condition.
-            elif ("нет подтверждённого назначения преподавателя группе" in review_reason.casefold()
-                  and teacher_evidence and not teacher_evidence - teachers.keys()):
-                reason_without_active_teacher_note = re.sub(r"нет подтверждённого назначения преподавателя группе", "", review_reason, flags=re.IGNORECASE).strip(" .,:;-и")
+            if sdep_independent:
+                pass  # Only the exact mode-dependent clauses above are waived.
+            elif online_only or is_lunch:
+                # The legacy substring fallback below may erase an unrelated
+                # compound reason. Mode-aware records retain every unwaived clause.
+                waived = {TEACHER_IDENTITY_NOTE} if not teacher_ids or not teacher_evidence - teachers.keys() else set()
+                if teacher_evidence and not teacher_evidence - teachers.keys():
+                    waived.add(TEACHER_ASSIGNMENT_NOTE)
+                reason_without_active_teacher_note = "; ".join(
+                    clause for clause in notes(review_reason) if normalized_note(clause) not in waived)
+            else:
+                if active_teacher_note in review_reason.casefold() and teacher_ids and not teacher_evidence - teachers.keys():
+                    reason_without_active_teacher_note = re.sub(active_teacher_note, "", review_reason, flags=re.IGNORECASE)
+                    reason_without_active_teacher_note = re.sub(r"\s*(?:[,;·]|\bи\b)\s*", " ", reason_without_active_teacher_note, flags=re.IGNORECASE).strip(" .,:;-")
+                if active_teacher_note in review_reason.casefold() and not teacher_ids:
+                    reason_without_active_teacher_note = ""  # missing_teacher below reports the current condition.
+                elif ("нет подтверждённого назначения преподавателя группе" in review_reason.casefold()
+                      and teacher_evidence and not teacher_evidence - teachers.keys()):
+                    reason_without_active_teacher_note = re.sub(r"нет подтверждённого назначения преподавателя группе", "", review_reason, flags=re.IGNORECASE).strip(" .,:;-и")
+            if is_lunch and lunch_scope_confirmed:
+                from backend.services.schedule_normalization import LUNCH_SCOPE_CLAUSE, without_scope_clauses
+                reason_without_active_teacher_note = without_scope_clauses(
+                    reason_without_active_teacher_note, frozenset({LUNCH_SCOPE_CLAUSE}))
+                if lesson.get("importError"):
+                    reason_without_active_teacher_note = reason_without_active_teacher_note or "Проверьте ошибку импорта обеда."
             if not reason_without_active_teacher_note:
-                pass  # Stale teacher/workload evidence is fully resolved.
-            elif is_lunch and lunch_scope_confirmed:
-                pass
+                pass  # Only the validated old clause is removed from review.
             elif is_optional:
                 pass
             else:
                 block("review_required", reason_without_active_teacher_note)
         if teacher_evidence - teachers.keys():
-            if sdep_independent:
-                blockers.append({"code": "unknown_teacher", "severity": "info", "lesson_id": lesson_id,
-                                 "message": "В исходных данных указан отсутствующий или неактивный преподаватель; в SDEP-день он не назначается для Campus"})
-            elif is_optional:
+            if is_optional:
                 blockers.append({"code": "unknown_teacher", "severity": "info", "lesson_id": lesson_id,
                                  "message": "У направления указан отсутствующий или неактивный преподаватель. Общее занятие остаётся в расписании учеников; неподтверждённое назначение преподавателя не публикуется."})
                 teacher_ids = [teacher_id for teacher_id in teacher_ids if teacher_id in teachers]
@@ -585,7 +622,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         elective_student_ids: set[str] = set()
         if elective_block_id:
             elective_student_ids = elective_students.get((elective_block_id, day, f"{interval[0]}:{interval[1]}"), set())
-        if not is_lunch and special != "no_lesson" and not informational_unassigned_event:
+        if not is_lunch and special != "no_lesson" and not informational_unassigned_event and not sdep_independent:
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set() if sdep_independent or practice else set(teacher_ids),
                               "students": (set(result.get("student_ids") or []) | elective_student_ids
@@ -595,7 +632,6 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                               "activity_type": "event" if is_event else activity_type,
                               "elective_block_id": elective_block_id,
                               "sdep_independent": sdep_independent})
-        rule = _lesson_audience(lesson)
         grade = str(rule.get("grade") or lesson.get("grade_scope") or "")
         if not grade and is_optional:
             grade = ",".join(sorted({str(value) for value in lesson.get("eligibleGrades") or []}, key=lambda value: int(value) if value.isdigit() else 99))
@@ -617,12 +653,13 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         group_ids = list(rule.get("group_ids") or [])
         audience_rule: dict[str, Any]
         kind = rule.get("kind")
-        if is_lunch:
-            # A lunch marker is placed on the visible class, even when its
-            # saved audience rule names an instructional subgroup.
+        if is_lunch and any(str(value) not in groups or groups[str(value)].get("group_type") != "class"
+                            for value in display_classes):
+            block("unknown_class", "Для обеда указан отсутствующий или недействующий класс размещения.")
+        if is_lunch and not lunch_has_configured_audience:
+            # A trusted class-grid lunch marker may have no separate audience.
+            # Otherwise preserve the configured rule below (including exclusions).
             raw_lunch_classes = [str(value) for value in (display_classes or rule.get("class_ids") or [])]
-            if any(value not in groups for value in raw_lunch_classes):
-                block("unknown_class", "Lunch marker has an unknown canonical class")
             lunch_classes = [value for value in raw_lunch_classes
                              if str(value) in groups and groups[str(value)]["group_type"] == "class"]
             group_ids = lunch_classes
