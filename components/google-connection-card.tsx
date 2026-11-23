@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ExternalLink, LoaderCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 
 type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
-type GoogleStatusName = 'connected' | 'reauthorization_required' | 'configuration_missing' | 'temporary_error' | 'insufficient_permissions' | 'spreadsheet_access_denied';
+type GoogleStatusName = 'diagnostic_only' | 'connected' | 'reauthorization_required' | 'configuration_missing' | 'temporary_error' | 'insufficient_permissions' | 'spreadsheet_access_denied';
 type GoogleStatus = {
   status: GoogleStatusName;
   account_email?: string | null;
@@ -16,6 +16,7 @@ type GoogleStatus = {
 };
 
 const labels: Record<GoogleStatusName, string> = {
+  diagnostic_only: 'Проверка подключения скрыта',
   connected: 'Подключено и проверено',
   reauthorization_required: 'Требуется переподключение',
   configuration_missing: 'Не настроена OAuth-конфигурация',
@@ -114,7 +115,7 @@ export function GoogleConnectionCard({
   }
 
   if (!showWhenConnected && status?.status === 'connected' && !statusError) return null;
-  const variant = status?.status === 'connected' ? 'is-good' : status?.status === 'configuration_missing' ? 'is-muted' : 'is-warning';
+  const variant = status?.status === 'connected' ? 'is-good' : ['diagnostic_only','configuration_missing'].includes(status?.status || '') ? 'is-muted' : 'is-warning';
   const noJournalAccess = status?.status === 'spreadsheet_access_denied';
 
   return <section className={`admin-panel google-connection-card ${variant}`} aria-live="polite">

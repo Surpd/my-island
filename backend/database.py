@@ -437,6 +437,12 @@ CREATE TABLE IF NOT EXISTS admin_login_challenges (
   consumed_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS codex_diagnostic_sessions (
+  id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, credential_epoch TEXT NOT NULL,
+  scopes TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS admin_browser_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_hash TEXT NOT NULL UNIQUE,

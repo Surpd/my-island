@@ -28,7 +28,10 @@ def configure_environment() -> None:
     frontend_port = int(os.getenv("MY_ISLAND_TEST_FRONTEND_PORT", "3011"))
     if not (1024 <= api_port <= 65535 and 1024 <= frontend_port <= 65535):
         raise RuntimeError("Local test ports must be unprivileged TCP ports")
+    diagnostic_fixture_hash = os.getenv("MY_ISLAND_TEST_DIAGNOSTIC_KEY_HASH", "") if PROFILE == "e2e" else ""
     os.environ.update({
+        "MY_ISLAND_CODEX_DIAGNOSTICS": "1" if diagnostic_fixture_hash else "0",
+        "MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256": diagnostic_fixture_hash,
         "APP_ENV": "development",
         "DEV_AUTH_ENABLED": "true",
         "MY_ISLAND_LOCAL_TEST_MODE": "true",
