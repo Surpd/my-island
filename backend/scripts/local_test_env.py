@@ -409,45 +409,52 @@ def seed_database() -> None:
         else:
             peer = database.execute(connection, """INSERT INTO identities(kind,display_name,class_name,origin,source_ref)
                 VALUES ('student','Local E2E Journal Peer','7','local_e2e',?) RETURNING id""", (peer_ref,)).fetchone()
-        source_id = database.execute(connection, """INSERT INTO journal_sources(
-            spreadsheet_id,spreadsheet_title,grade,subject,sheet_title,academic_year,period_status,status,source_hash)
-            VALUES ('local-e2e-journal','Local E2E journal',7,'Математика','Local E2E','2026/27','current','ready','local-e2e-journal-v1')
-            ON CONFLICT(spreadsheet_id,sheet_title) DO UPDATE SET spreadsheet_title=excluded.spreadsheet_title,
-                grade=excluded.grade,subject=excluded.subject,status=excluded.status,source_hash=excluded.source_hash
-            RETURNING id""").fetchone()["id"]
-        assessment_id = database.execute(connection, """INSERT INTO journal_assessments(
-            source_id,external_key,title,assessed_on,max_score,source_column,active,last_seen_at)
-            VALUES (?,'local-e2e-check','Local E2E check','2026-09-22',10,'B',1,CURRENT_TIMESTAMP)
-            ON CONFLICT(source_id,external_key) DO UPDATE SET title=excluded.title,assessed_on=excluded.assessed_on,
-                max_score=excluded.max_score,source_column=excluded.source_column,active=1
-            RETURNING id""", (source_id,)).fetchone()["id"]
-        student_rows = []
-        for identity_id, key, display_name, score in (
-            (identities["student"], "local-e2e-student", "Тестовый ученик", 8),
-            (peer["id"], "local-e2e-peer", "Local E2E Journal Peer", 3),
+        # Keep trimester I's legacy "current" status: the UI must treat it as
+        # history, even when both sources were previously marked current.
+        for spreadsheet_id, term, assessed_on, student_score, peer_score in (
+            ("local-e2e-journal", 1, "2026-09-22", 8, 3),
+            ("local-e2e-journal-term-2", 2, "2026-11-24", 9, 4),
         ):
-            journal_student_id = database.execute(connection, """INSERT INTO journal_students(
-                source_id,student_key,display_name,group_marker,identity_id,match_status,match_method,active)
-                VALUES (?,?,?,'7',?,'linked','local_e2e',1)
-                ON CONFLICT(source_id,group_marker,student_key) DO UPDATE SET display_name=excluded.display_name,
-                    identity_id=excluded.identity_id,match_status='linked',match_method='local_e2e',active=1
-                RETURNING id""", (source_id, key, display_name, identity_id)).fetchone()["id"]
-            student_rows.append((journal_student_id, identity_id, display_name, score))
-        database.execute(connection, """INSERT INTO journal_group_mappings(
-            source_id,group_marker,group_id,base_class_name,source,created_by)
-            VALUES (?,'7',?,'7','local_e2e',?)
-            ON CONFLICT(source_id,group_marker) DO UPDATE SET group_id=excluded.group_id,
-                base_class_name=excluded.base_class_name,source='local_e2e',created_by=excluded.created_by""",
-            (source_id, group_id, teacher_user_id))
-        for journal_student_id, identity_id, display_name, score in student_rows:
-            database.execute(connection, """INSERT INTO journal_results(
-                assessment_id,journal_student_id,identity_id,student_name,group_marker,numeric_score,status,source_coordinate,is_current)
-            VALUES (?,?,?,?,'7',?,'graded',?,1)
-                ON CONFLICT(assessment_id,source_coordinate) DO UPDATE SET journal_student_id=excluded.journal_student_id,
-                    identity_id=excluded.identity_id,student_name=excluded.student_name,numeric_score=excluded.numeric_score,
-                    status=excluded.status,group_marker=excluded.group_marker,is_current=1""",
-                (assessment_id, journal_student_id, identity_id, display_name, score,
-                 f"Local E2E!B{1 if identity_id == identities['student'] else 2}"))
+            source_id = database.execute(connection, """INSERT INTO journal_sources(
+                spreadsheet_id,spreadsheet_title,grade,subject,sheet_title,academic_year,term_number,period_status,status,source_hash)
+                VALUES (?,'Local E2E journal',7,'Математика','Local E2E','2026/27',?,'current','ready','local-e2e-journal-v1')
+                ON CONFLICT(spreadsheet_id,sheet_title) DO UPDATE SET spreadsheet_title=excluded.spreadsheet_title,
+                    grade=excluded.grade,subject=excluded.subject,term_number=excluded.term_number,
+                    status=excluded.status,source_hash=excluded.source_hash
+                RETURNING id""", (spreadsheet_id, term)).fetchone()["id"]
+            assessment_id = database.execute(connection, """INSERT INTO journal_assessments(
+                source_id,external_key,title,assessed_on,max_score,source_column,active,last_seen_at)
+                VALUES (?,'local-e2e-check','Local E2E check',?,10,'B',1,CURRENT_TIMESTAMP)
+                ON CONFLICT(source_id,external_key) DO UPDATE SET title=excluded.title,assessed_on=excluded.assessed_on,
+                    max_score=excluded.max_score,source_column=excluded.source_column,active=1
+                RETURNING id""", (source_id, assessed_on)).fetchone()["id"]
+            student_rows = []
+            for identity_id, key, display_name, score in (
+                (identities["student"], "local-e2e-student", "Тестовый ученик", student_score),
+                (peer["id"], "local-e2e-peer", "Local E2E Journal Peer", peer_score),
+            ):
+                journal_student_id = database.execute(connection, """INSERT INTO journal_students(
+                    source_id,student_key,display_name,group_marker,identity_id,match_status,match_method,active)
+                    VALUES (?,?,?,'7',?,'linked','local_e2e',1)
+                    ON CONFLICT(source_id,group_marker,student_key) DO UPDATE SET display_name=excluded.display_name,
+                        identity_id=excluded.identity_id,match_status='linked',match_method='local_e2e',active=1
+                    RETURNING id""", (source_id, key, display_name, identity_id)).fetchone()["id"]
+                student_rows.append((journal_student_id, identity_id, display_name, score))
+            database.execute(connection, """INSERT INTO journal_group_mappings(
+                source_id,group_marker,group_id,base_class_name,source,created_by)
+                VALUES (?,'7',?,'7','local_e2e',?)
+                ON CONFLICT(source_id,group_marker) DO UPDATE SET group_id=excluded.group_id,
+                    base_class_name=excluded.base_class_name,source='local_e2e',created_by=excluded.created_by""",
+                (source_id, group_id, teacher_user_id))
+            for journal_student_id, identity_id, display_name, score in student_rows:
+                database.execute(connection, """INSERT INTO journal_results(
+                    assessment_id,journal_student_id,identity_id,student_name,group_marker,numeric_score,status,source_coordinate,is_current)
+                VALUES (?,?,?,?,'7',?,'graded',?,1)
+                    ON CONFLICT(assessment_id,source_coordinate) DO UPDATE SET journal_student_id=excluded.journal_student_id,
+                        identity_id=excluded.identity_id,student_name=excluded.student_name,numeric_score=excluded.numeric_score,
+                        status=excluded.status,group_marker=excluded.group_marker,is_current=1""",
+                    (assessment_id, journal_student_id, identity_id, display_name, score,
+                     f"Local E2E!B{1 if identity_id == identities['student'] else 2}"))
 
 
 def run_api() -> None:

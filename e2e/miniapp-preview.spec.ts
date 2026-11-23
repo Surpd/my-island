@@ -46,13 +46,16 @@ async function previewFrame(page: Page) {
   return frame as Frame;
 }
 
-async function scoreFor(page: Page, previewId: string) {
+async function scoresForTerm(page: Page, previewId: string, term: 1 | 2) {
   const response = await page.request.get(`${PREVIEW_API}/api/student/journals`, {
     headers: { ...ADMIN_HEADERS, 'X-Preview-Id': previewId },
   });
   expect(response.ok()).toBeTruthy();
-  const journals = (await response.json()).items as Array<{ results: Array<{ numeric_score: number | null }> }>;
-  return journals.flatMap((journal) => journal.results.map((result) => result.numeric_score).filter((score): score is number => score !== null));
+  const journals = (await response.json()).items as Array<{
+    source: { academic_year: string; term_number: number | null };
+    results: Array<{ numeric_score: number | null }>;
+  }>;
+  return journals.filter(({ source }) => source.academic_year === '2026/27' && source.term_number === term).flatMap((journal) => journal.results.map((result) => result.numeric_score).filter((score): score is number => score !== null));
 }
 
 async function expandSchedule(frame: Frame, alreadySelected = false) {
@@ -96,9 +99,20 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect(frame.getByRole('button', { name: 'Оценки', exact: true }).first()).toBeVisible();
     await frame.getByRole('button', { name: 'Оценки', exact: true }).first().click();
     await frame.getByRole('button', { name: 'Развернуть раздел', exact: true }).click();
-    await expect(frame.getByRole('region', { name: 'Оценки' })).toBeVisible();
-    await expect.poll(async () => (await scoreFor(page, peerPreview)).includes(3)).toBe(true);
-    await expect(frame.locator('.student-subject-row').filter({ hasText: '3/10' })).toBeVisible();
+    const grades = frame.getByRole('region', { name: 'Оценки' });
+    await expect(grades).toBeVisible();
+    const period = grades.getByRole('combobox', { name: 'Период' });
+    const subjectRows = grades.locator('.student-subject-row');
+    await expect(period).toHaveValue('current');
+    await expect(period.locator('option:checked')).toHaveText('II триместр · 2026/27');
+    await expect.poll(() => scoresForTerm(page, peerPreview, 2)).toEqual([4]);
+    await expect(subjectRows).toHaveCount(1);
+    await expect(subjectRows.first()).toContainText('4/10');
+
+    await period.selectOption({ label: 'I триместр · 2026/27 · архив' });
+    await expect.poll(() => scoresForTerm(page, peerPreview, 1)).toEqual([3]);
+    await expect(subjectRows).toHaveCount(1);
+    await expect(subjectRows.first()).toContainText('3/10');
 
     const studentApiRequests: string[] = [];
     page.on('request', (request) => {
@@ -114,7 +128,8 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     const campusShots = resolve(process.cwd(), 'artifacts/canonical-campus-proof');
     mkdirSync(campusShots, { recursive: true });
     await page.getByTitle('Предпросмотр My Island').screenshot({ path: resolve(campusShots, 'student-campus-published.png') });
-    await expect.poll(async () => (await scoreFor(page, studentPreview)).includes(8)).toBe(true);
+    await expect.poll(() => scoresForTerm(page, studentPreview, 2)).toEqual([9]);
+    await expect.poll(() => scoresForTerm(page, studentPreview, 1)).toEqual([8]);
 
     // Duplicate config messages can arrive from both iframe onLoad and the ready handshake.
     // A repeated identical config must not remount Campus, collapse the open panel, or reload its APIs.
