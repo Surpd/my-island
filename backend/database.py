@@ -4075,6 +4075,8 @@ class Database:
                 self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id, grade, academic_year, current_term) VALUES (?, ?, ?, ?)", (source["spreadsheet_id"], source["grade"], source["academic_year"], current_term))
             if source_row and source_row["term_number"]:
                 term_number = int(source_row["term_number"])
+                if source.get("term_number") and int(source["term_number"]) != term_number:
+                    raise ValueError("Период вкладки отличается от сохранённого. Проверьте вкладку и повторите обновление.")
             elif source.get("term_number"):
                 term_number = int(source["term_number"])
             else:
@@ -5186,8 +5188,8 @@ class Database:
                 connection,
                 """UPDATE journal_sources
                       SET status = 'error', last_error = ?, last_error_code = ?, last_error_details = ?
-                    WHERE spreadsheet_id = ? AND (subject = ? OR sheet_id = ?)""",
-                (error[:500], code, (details or "")[:1000] or None, spreadsheet_id, subject, str(sheet_id) if sheet_id is not None else None),
+                    WHERE spreadsheet_id = ? AND ((sheet_id = ?) OR (? = 1 AND sheet_title = ?))""",
+                (error[:500], code, (details or "")[:1000] or None, spreadsheet_id, str(sheet_id) if sheet_id is not None else None, int(sheet_id is None), sheet_title or subject),
             )
             if not changed.rowcount and grade is not None:
                 self.execute(connection, """INSERT INTO journal_sources
@@ -5256,7 +5258,7 @@ class Database:
                 JOIN identities canonical_identity ON canonical_identity.id = student.identity_id
                     AND canonical_identity.kind = 'student' AND canonical_identity.status = 'active'
                 JOIN journal_sources source ON source.id = student.source_id
-                WHERE student.identity_id = ? AND student.active IS TRUE
+                WHERE student.identity_id = ? AND student.active IS TRUE AND TRIM(student.group_marker) <> ''
                     AND student.entry_kind = 'individual' AND student.match_status = 'linked'
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number, source.id""",
                 (identity_id,)).fetchall()
@@ -5265,7 +5267,8 @@ class Database:
             for student in students:
                 source_id = student["source_id"]
                 student_id = student["journal_student_id"]
-                assignments = self.execute(connection, """SELECT id, title, assessed_on, weight, max_score, group_marker
+                assignments = self.execute(connection, """SELECT id, title, assessed_on, weight, max_score, group_marker,
+                           raw_source ->> 'category' AS category
                     FROM journal_assessments
                     WHERE source_id = ? AND active IS TRUE AND group_marker IN (?, 'all')
                     ORDER BY assessed_on, source_column, id""", (source_id, student["group_marker"])).fetchall()
@@ -5275,10 +5278,10 @@ class Database:
                     placeholders = ",".join("?" for _ in assessment_ids)
                     results = [dict(row) for row in self.execute(connection, f"""SELECT assessment_id, numeric_score, status
                         FROM journal_results
-                        WHERE journal_student_id = ? AND is_current IS TRUE
+                        WHERE journal_student_id = ? AND group_marker = ? AND is_current IS TRUE
                           AND assessment_id IN ({placeholders})
                           AND (identity_id IS NULL OR identity_id = ?)
-                        ORDER BY assessment_id""", (student_id, *assessment_ids, identity_id)).fetchall()]
+                        ORDER BY assessment_id""", (student_id, student["group_marker"], *assessment_ids, identity_id)).fetchall()]
                 summaries = [dict(row) for row in self.execute(connection, """SELECT label, summary_type, numeric_value, text_value
                     FROM journal_student_summaries
                     WHERE journal_student_id = ? AND is_current IS TRUE

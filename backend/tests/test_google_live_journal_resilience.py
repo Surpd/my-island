@@ -16,7 +16,7 @@ from backend.database import Database
 from backend.handlers.api import create_router
 from backend.services.google_contract import GoogleIntegrationConfig
 from backend.services.google_live import GoogleApiError, GoogleLiveClient, GoogleTokenStore
-from backend.services.google_sync_service import refresh_grade_journal
+from backend.services.google_sync_service import _journal_error_diagnostic, refresh_grade_journal
 
 
 class _FakePostgresConnection:
@@ -61,6 +61,15 @@ class GoogleLiveClientMethodTests(unittest.TestCase):
             {"access_token": "access-token", "expires_at": int(time.time()) + 3600},
             self.store,
         )
+
+    def test_access_layout_and_ambiguous_mapping_have_distinct_diagnostics(self):
+        errors = [(GoogleApiError(403, {}), "google_access"),
+                  (ValueError("неполный блок журнала"), "unsupported_structure"),
+                  (ValueError("Неоднозначное сопоставление одинаковых колонок журнала"), "assessment_mapping_conflict"),
+                  (ValueError("Период вкладки отличается от сохранённого"), "period_conflict")]
+        for error, code in errors:
+            with self.subTest(code=code):
+                self.assertEqual(_journal_error_diagnostic(error)["code"], code)
 
     def test_expected_sheets_and_classroom_methods_are_real_client_methods(self):
         names = (

@@ -9,7 +9,7 @@ from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
-from backend.services.journal_import import classify_journal_values, sync_journal_values
+from backend.services.journal_import import classify_journal_values, parse_journal_values, subject_period_from_title, sync_journal_values
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
@@ -218,7 +218,8 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
         title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
         sheets = [sheet.get("properties") or {} for sheet in metadata.get("sheets") or []]
         selected = next((sheet for sheet in sheets if sheet_id is not None and str(sheet.get("sheetId")) == str(sheet_id)), None)
-        selected = selected or next((sheet for sheet in sheets if str(sheet.get("title", "")).strip().casefold() == subject.strip().casefold()), None)
+        if sheet_id is None:
+            selected = next((sheet for sheet in sheets if str(sheet.get("title", "")).strip().casefold() == subject.strip().casefold()), None)
         sheet_title = str(selected.get("title", "")) if selected else None
         if not selected or not sheet_title:
             raise GoogleLiveError(f"Journal tab {subject} was not found in {title}")
@@ -245,14 +246,14 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
         raise
     except (GoogleLiveError, ValueError, RuntimeError) as error:
         diagnostic = _journal_error_diagnostic(error)
-        database.record_journal_failure(spreadsheet_id, subject, diagnostic["message"], code=diagnostic["code"], details=diagnostic["details"])
+        database.record_journal_failure(spreadsheet_id, subject, diagnostic["message"], code=diagnostic["code"], details=diagnostic["details"], sheet_id=sheet_id)
         database.record_audit_event("journal_sync.failed", "journal_sync", {"grade": grade, "subject": subject, "error_code": diagnostic["code"]})
         raise
     database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": spreadsheet_id, "subject": sheet_title, **counts})
     return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade, "subject": sheet_title, "sheet_id": selected.get("sheetId"), "counts": counts}
 
 
-def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual", run_id: Any | None = None) -> dict[str, Any]:
+def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9, *, spreadsheet_id: str | None = None, trigger_kind: str = "manual", run_id: Any | None = None, term_number: int | None = None, dry_run: bool = False) -> dict[str, Any]:
     if grade not in CURRENT_JOURNAL_SPREADSHEETS and not spreadsheet_id:
         raise ValueError("Для этого класса не задан источник журнала")
     target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS[grade]
@@ -262,10 +263,10 @@ def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9
         with database.journal_workbook_lock(target_id) as acquired:
             if not acquired:
                 raise GoogleLiveError("Для этой таблицы уже выполняется синхронизация")
-            return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id)
+            return _refresh_grade_journal_locked(database, settings, grade, target_id, trigger_kind=trigger_kind, run_id=run_id, term_number=term_number, dry_run=dry_run)
 
 
-def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None) -> dict[str, Any]:
+def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None, term_number: int | None, dry_run: bool) -> dict[str, Any]:
     """Import every gradebook tab in one connected workbook using stable Google tab IDs."""
     client, _ = _client(settings, database)
     metadata = client.spreadsheet(target_id)
@@ -275,6 +276,10 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
         raise GoogleLiveError(f"В источнике {title} нет вкладок")
     outcomes = []
     valid_tabs = [tab for tab in tabs if str(tab.get("title", "")).strip() and tab.get("sheetId") is not None]
+    if term_number is not None:
+        valid_tabs = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] == term_number]
+        if not any(not classify_journal_values([], sheet_title=tab["title"]) for tab in valid_tabs):
+            raise ValueError("Предметных вкладок выбранного триместра нет. Проверьте источник.")
     source_settings = load_source_settings(database, target_id)
     sync_tabs, skipped_count, excluded_count = select_sync_tabs(valid_tabs, source_settings, trigger_kind=trigger_kind)
     total_tabs = len(valid_tabs)
@@ -297,10 +302,11 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             continue
         escaped_title = sheet_title.replace("'", "''")
         try:
-            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
+            values = [] if classify_journal_values([], sheet_title=sheet_title) else client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
             auxiliary = classify_journal_values(values, sheet_title=sheet_title)
             if auxiliary:
-                database.record_journal_classification(target_id, title, grade, sheet_title, sheet_id, auxiliary["kind"], auxiliary["reason"])
+                if not dry_run:
+                    database.record_journal_classification(target_id, title, grade, sheet_title, sheet_id, auxiliary["kind"], auxiliary["reason"])
                 outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "skipped",
                     "classification": auxiliary["kind"], "reason": auxiliary["reason"]})
                 skipped_count += 1
@@ -312,20 +318,26 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
                         "skipped": skipped_count, "excluded": excluded_count,
                     })
                 continue
-            counts = sync_journal_values(
-                database, values, spreadsheet_id=target_id, spreadsheet_title=title,
-                grade=grade, subject=sheet_title.strip(), sheet_title=sheet_title, sheet_id=sheet_id,
-            )
+            if dry_run:
+                subject, _ = subject_period_from_title(sheet_title)
+                preview = parse_journal_values(values, grade=grade, subject=subject, sheet_title=sheet_title, sheet_id=sheet_id)
+                counts = {key: len(preview[key]) for key in ("assessments", "students", "results", "summaries")}
+            else:
+                counts = sync_journal_values(
+                    database, values, spreadsheet_id=target_id, spreadsheet_title=title,
+                    grade=grade, subject=sheet_title.strip(), sheet_title=sheet_title, sheet_id=sheet_id,
+                )
             outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "success", "counts": counts})
         except Exception as error:
             diagnostic = _journal_error_diagnostic(error)
-            logging.getLogger(__name__).error("Journal tab import failed spreadsheet_id=%s sheet_id=%s error_type=%s category=%s", target_id, sheet_id, type(error).__name__, diagnostic["code"])
+            logging.getLogger(__name__).error("Journal tab import failed grade=%s error_type=%s category=%s", grade, type(error).__name__, diagnostic["code"])
             try:
-                database.record_journal_failure(target_id, sheet_title.strip(), diagnostic["message"],
-                    code=diagnostic["code"], details=diagnostic["details"],
-                    grade=grade, spreadsheet_title=title, sheet_title=sheet_title, sheet_id=sheet_id)
+                if not dry_run:
+                    database.record_journal_failure(target_id, sheet_title.strip(), diagnostic["message"],
+                        code=diagnostic["code"], details=diagnostic["details"],
+                        grade=grade, spreadsheet_title=title, sheet_title=sheet_title, sheet_id=sheet_id)
             except Exception as record_error:
-                logging.getLogger(__name__).error("Failed to persist journal tab failure spreadsheet_id=%s sheet_id=%s error_type=%s", target_id, sheet_id, type(record_error).__name__)
+                logging.getLogger(__name__).error("Failed to persist journal tab failure grade=%s error_type=%s", grade, type(record_error).__name__)
             outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "error",
                 "error_code": diagnostic["code"], "error": diagnostic["message"], "error_details": diagnostic["details"]})
         if run_id is not None:
@@ -338,9 +350,9 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             })
     success_count = sum(item["status"] == "success" for item in outcomes)
     failure_count = sum(item["status"] == "error" for item in outcomes)
-    if not success_count and not (skipped_count or excluded_count):
+    if not dry_run and not success_count and not (skipped_count or excluded_count):
         raise GoogleLiveError("Не удалось импортировать ни одной вкладки; предыдущие данные сохранены")
-    if trigger_kind == "manual":
+    if trigger_kind == "manual" and not dry_run:
         database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": target_id, "successful_tabs": success_count, "failed_tabs": len(outcomes) - success_count})
     status = "partial" if failure_count or (success_count and success_count + skipped_count + excluded_count != len(outcomes)) else "success"
     return {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade, "status": status,
@@ -352,8 +364,10 @@ def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
     from backend.services.google_live import GoogleApiError
     if isinstance(error, ValueError):
         detail = str(error)[:700]
-        if "конфликт сопоставления" in detail.casefold() or "невозможно однозначно сопоставить" in detail.casefold():
-            return {"code": "assessment_mapping_conflict", "message": "Конфликт сопоставления работ. Предыдущие данные сохранены.", "details": detail}
+        if any(token in detail.casefold() for token in ("конфликт сопоставления", "невозможно однозначно сопоставить", "неоднозначное сопоставление")):
+            return {"code": "assessment_mapping_conflict", "message": "Несколько работ совпадают. Проверьте даты и названия работ перед повтором.", "details": "Предыдущие оценки сохранены."}
+        if "период вкладки отличается" in detail.casefold():
+            return {"code": "period_conflict", "message": "ID вкладки уже относится к другому триместру. Проверьте источник.", "details": "Предыдущие оценки сохранены."}
         if "не найден блок" in detail.casefold() or "неполный блок журнала" in detail.casefold():
             return {"code": "unsupported_structure", "message": "Структура вкладки не распознана как журнал. Предыдущие данные сохранены.", "details": detail}
         return {"code": "invalid_journal_data", "message": "Данные вкладки не прошли проверку. Предыдущие данные сохранены.", "details": detail}

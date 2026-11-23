@@ -34,6 +34,9 @@ test.beforeEach(async ({ page }) => {
     .getByRole('button', { name: /Математика/ })
     .first()
     .click();
+  await expect(page.getByRole('tab', { name: 'II триместр', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.journal-table')).toHaveCount(0);
+  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
   await expect(page.locator('.journal-table')).toBeVisible();
 });
 
@@ -148,6 +151,7 @@ test('journal selectors keep existing navigation and matching actions', async ({
     .selectOption('7');
   await page.getByRole('combobox', { name: 'Предмет' }).selectOption('Физика');
   await expect(page.locator('.journal-detail-title')).toContainText('Физика');
+  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
   await page
     .locator('.journal-table tbody tr')
     .first()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, StrictBool, field_validator
@@ -211,6 +211,8 @@ class JournalMappingPayload(BaseModel):
 
 
 class JournalConnectPayload(BaseModel):
+    term_number: int | None = Field(default=None, ge=1, le=3)
+    dry_run: bool = False
     spreadsheet_url: str
     grade: int = Field(default=9, ge=5, le=11)
     auto_sync_enabled: bool = True
@@ -433,9 +435,9 @@ class ScheduleConfirmTemplatePayload(BaseModel):
     expected_version_id: str
 
 
-def _refresh_grade_journal_background(database: Database, settings: Any, grade: int, spreadsheet_id: str, run_id: Any, actor_id: Any = None, trigger_kind: str = "manual") -> None:
+def _refresh_grade_journal_background(database: Database, settings: Any, grade: int, spreadsheet_id: str, run_id: Any, actor_id: Any = None, trigger_kind: str = "manual", term_number: int | None = None) -> None:
     try:
-        result = refresh_grade_journal(database, settings, grade, spreadsheet_id=spreadsheet_id, trigger_kind=trigger_kind, run_id=run_id)
+        result = refresh_grade_journal(database, settings, grade, spreadsheet_id=spreadsheet_id, trigger_kind=trigger_kind, run_id=run_id, term_number=term_number)
         tabs = result.get("tabs", [])
         success_count = sum(item.get("status") == "success" for item in tabs)
         failed_count = sum(item.get("status") == "error" for item in tabs)
@@ -447,9 +449,7 @@ def _refresh_grade_journal_background(database: Database, settings: Any, grade: 
             except Exception:
                 logger.exception("Failed to record completed journal sync audit event run_id=%s", run_id)
     except Exception as error:
-        diagnostic = getattr(error, "diag", None)
-        safe_message = getattr(diagnostic, "message_primary", None) if diagnostic is not None else None
-        logger.error("Background journal refresh failed spreadsheet_id=%s grade=%s run_id=%s error_type=%s error=%s", spreadsheet_id, grade, run_id, type(error).__name__, safe_message or ("database error" if diagnostic is not None else type(error).__name__))
+        logger.error("Background journal refresh failed grade=%s run_id=%s error_type=%s", grade, run_id, type(error).__name__)
         message = str(error) if isinstance(error, (GoogleLiveError, ValueError, RuntimeError)) else f"Unexpected journal refresh failure: {type(error).__name__}"
         try:
             database.finish_journal_sync(run_id, status="error", error=message[:1000])
@@ -1160,12 +1160,21 @@ def create_router(database: Database) -> APIRouter:
         spreadsheet_id = match.group(1) if match else raw
         if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", spreadsheet_id):
             raise HTTPException(status_code=400, detail="Укажите ссылку на Google Таблицу или её идентификатор")
+        if payload.dry_run:
+            try:
+                preview = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id,
+                                               term_number=payload.term_number, dry_run=True)
+            except (GoogleLiveError, ValueError, RuntimeError) as error:
+                raise HTTPException(status_code=502, detail="Не удалось проверить вкладки. Проверьте доступ и выбранный период.") from error
+            return {"dry_run": True, "status": preview["status"], "tabs": [
+                {"status": tab["status"], "counts": tab.get("counts", {}), "error_code": tab.get("error_code")}
+                for tab in preview["tabs"]]}
         already_connected = any(item["spreadsheet_id"] == spreadsheet_id for item in database.journal_status())
         run_id = database.start_journal_sync(spreadsheet_id, payload.grade, None, "manual")
         if run_id is None:
             raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
         try:
-            result = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id)
+            result = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id, term_number=payload.term_number)
             success = result.get("status") == "success"
             scheduler_configured = database.journal_scheduler_configured()
             automation_enabled = success and payload.auto_sync_enabled and scheduler_configured
@@ -1178,7 +1187,7 @@ def create_router(database: Database) -> APIRouter:
             database.finish_journal_sync(run_id, status="error", error=str(error))
             raise HTTPException(status_code=502, detail=str(error)) from error
         except Exception as error:
-            logger.exception("Unexpected failure while connecting journal spreadsheet_id=%s grade=%s", spreadsheet_id, payload.grade)
+            logger.error("Unexpected failure while connecting journal grade=%s error_type=%s", payload.grade, type(error).__name__)
             try:
                 database.finish_journal_sync(run_id, status="error", error=f"Unexpected journal connection failure: {type(error).__name__}")
             except Exception:
@@ -1186,7 +1195,7 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=500, detail="Не удалось обновить журнал. Попробуйте ещё раз позже.") from error
 
     @router.post("/admin/journals/refresh-grade", status_code=202)
-    def admin_journal_refresh_grade(background_tasks: BackgroundTasks, grade: int = 9, spreadsheet_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_journal_refresh_grade(background_tasks: BackgroundTasks, grade: int = 9, term_number: int | None = Query(default=None, ge=1, le=3), spreadsheet_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
         target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS.get(grade)
@@ -1195,7 +1204,7 @@ def create_router(database: Database) -> APIRouter:
         run_id = database.start_journal_sync(target_id, grade, None, "manual")
         if run_id is None:
             raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
-        background_tasks.add_task(_refresh_grade_journal_background, database, get_settings(), grade, target_id, run_id, actor["id"])
+        background_tasks.add_task(_refresh_grade_journal_background, database, get_settings(), grade, target_id, run_id, actor["id"], term_number=term_number)
         return {"run_id": str(run_id), "spreadsheet_id": target_id, "grade": grade, "status": "running"}
 
     @router.get("/admin/journals/sync-runs/{run_id}")

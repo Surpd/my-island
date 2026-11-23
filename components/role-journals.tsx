@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Info, LoaderCircle, RefreshCw } from 'lucide-react';
-import { journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
+import { isDefaultJournalPeriod, journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
 import './student-journals.css';
 
 export type RoleJournalsApi = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -17,7 +17,7 @@ export function StudentGradesPeek({ api }: { api: RoleJournalsApi }) {
     }).catch(() => { if (active) { setItems([]); setFailed(true); } });
     return () => { active = false; };
   }, [api]);
-  const recent = recentResultsAcrossSubjects((items || []).filter(item => item.source.period_status === 'current'), 3);
+  const recent = recentResultsAcrossSubjects((items || []).filter(isDefaultJournalPeriod), 3);
   return <div className="student-grades-peek" aria-label="Последние оценки">
     {items === null ? <span className="student-grades-peek__quiet">Загружаем последние оценки…</span> : failed ? <span className="student-grades-peek__quiet">Не удалось загрузить оценки</span> : recent.length ? recent.map(({ item, assessment, result }) => <div key={`${journalKey(item)}:${assessment.id}`}>
       <span>{item.source.subject}</span><strong>{studentResultDisplay(result, assessment.max_score).value}</strong>
@@ -187,12 +187,12 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
     return () => { active = false; };
   }, [api, reload]);
 
-  const visibleItems = useMemo(() => (items || []).filter(item => view.startsWith('period:') ? studentPeriodKey(item) === view : periodMatches(item.source?.period_status, view as JournalView)), [items, view]);
+  const visibleItems = useMemo(() => (items || []).filter(item => view === 'current' ? isDefaultJournalPeriod(item) : view.startsWith('period:') ? studentPeriodKey(item) === view : periodMatches(item.source?.period_status, view as JournalView)), [items, view]);
   const periods = new Map((items || []).map(item => [studentPeriodKey(item), studentPeriodLabel(item)]));
-  const currentPeriods = new Map((items || []).filter(item => item.source.period_status === 'current').map(item => [studentPeriodKey(item), studentPeriodLabel(item)]));
+  const currentPeriods = new Map((items || []).filter(isDefaultJournalPeriod).map(item => [studentPeriodKey(item), studentPeriodLabel(item)]));
   const periodGroups = new Map<string, StudentJournalItem[]>();
   for (const item of visibleItems) { const key = studentPeriodKey(item); periodGroups.set(key, [...(periodGroups.get(key) || []), item]); }
-  const currentLabel = currentPeriods.size === 1 ? [...currentPeriods.values()][0] : 'Текущие периоды';
+  const currentLabel = 'II триместр · 2026/27';
   const disambiguation = (item: StudentJournalItem) => {
     const peers = (periodGroups.get(studentPeriodKey(item)) || []).filter(peer => peer.source.subject === item.source.subject);
     if (peers.length < 2) return '';
@@ -288,7 +288,7 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
         {highlights.length ? <dl className="student-journal-summaries">{highlights.map(summary => <div key={`${summary.summary_type}:${summary.label}`}><dt>{summary.label}</dt><dd>{typeof summary.numeric_value === 'number' ? journalValue(summary.numeric_value) : summaryText(summary)}</dd></div>)}</dl> : null}
         <ol className="student-journal-assessments" aria-label="Работы: сначала последние">{studentJournalRows(selected, true).map(({ assessment, result }) => {
           const presentation = studentResultDisplay(result, assessment.max_score);
-          const details = [assessment.weight !== null && assessment.weight !== undefined && Number.isFinite(assessment.weight) && assessment.weight >= 0 ? `Вес ${journalValue(assessment.weight)}` : '',
+          const details = [assessment.category ? `Категория ${assessment.category}` : '', assessment.weight !== null && assessment.weight !== undefined && Number.isFinite(assessment.weight) && assessment.weight >= 0 ? `Вес ${journalValue(assessment.weight)}` : '',
             assessment.max_score !== null && assessment.max_score !== undefined && Number.isFinite(assessment.max_score) && assessment.max_score > 0 ? `Максимум ${journalValue(assessment.max_score)}` : ''].filter(Boolean);
           return <li className={`student-assessment is-${presentation.kind}`} key={assessment.id}>
             <div><strong>{assessment.title}</strong><div className="student-assessment-date"><small>{formatDate(assessment.assessed_on)}</small>

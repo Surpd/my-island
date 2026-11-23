@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from backend.database import Database
 from backend.handlers.api import create_router
 from backend.services.auth import AuthError
+from backend.services.journal_import import parse_journal_values, sync_journal_values
 
 
 class JournalRoleViewTests(unittest.TestCase):
@@ -153,6 +154,67 @@ class JournalRoleViewTests(unittest.TestCase):
             self.assertEqual([summary["summary_type"] for summary in item["summaries"]], ["average_grade"])
             self.assertEqual([summary["label"] for summary in item["summaries"]], ["Средняя отметка"])
             self.assertTrue(all(assessment["group_marker"] == "A" for assessment in item["assessments"]))
+
+    def test_second_term_connect_and_repeat_through_student_api(self):
+        self._create_user("admin-auth", "admin", None)
+        book = "synthetic-school-journal"
+        first = [["Дата", "01.09"], ["Работа", "Архив"], ["Вес", 1],
+                 ["Оценка", 5], ["Student One", 3]]
+        second = [["Дата", "II триместр · Группа 1", "25.11", "26.11"], ["Задание / работа", "", "Отчёт", "Повтор"],
+                  ["Вес", "", 2, 1], ["Категория (У/О/П)", "", "О", "П"],
+                  ["Student One", 4, 2, 4], ["Other Fixture", 5, 5, ""]]
+        title = "II · Математика/Физика"
+        preview = parse_journal_values(second, grade=7, subject="Математика/Физика", sheet_title=title)
+        self.assertEqual([item["category"] for item in preview["assessments"]], ["О", "П"])
+        self.assertEqual({row["group_marker"] for row in preview["students"]}, {"Группа 1"})
+        self.assertEqual(len(preview["summaries"]), 2)
+        self.assertFalse(any(item["spreadsheet_id"] == book for item in self.database.journal_status()))
+        tabs = {"I · Математика/Физика": first, title: second, "II · Как работать": [["Инструкция"]]}
+        google = Mock()
+        google.spreadsheet.return_value = {"sheets": [
+            {"properties": {"sheetId": index, "title": name}} for index, name in enumerate(tabs, 1)]}
+        google.sheet_values.side_effect = lambda _, address, **kwargs: tabs[address.split("'")[1]]
+        with patch("backend.services.google_sync_service._client", return_value=(google, None)):
+            payload = {"grade": 7, "spreadsheet_url": book, "auto_sync_enabled": False, "term_number": 2}
+            dry = self.client.post("/api/admin/journals/connect", headers={"X-Dev-Auth": "admin-auth"}, json={**payload, "dry_run": True})
+            self.assertEqual(dry.status_code, 200)
+            self.assertEqual(dry.json()["tabs"][0]["counts"], {"students": 2, "results": 3, "summaries": 2, "assessments": 2})
+            self.assertFalse(any(row["spreadsheet_id"] == book for row in self.database.journal_status()))
+            sync_journal_values(self.database, first, spreadsheet_id=book, spreadsheet_title="Fixture",
+                                grade=7, subject="Математика/Физика", sheet_title="I · Математика/Физика", sheet_id=1)
+            google.sheet_values.reset_mock()
+            for attempt in range(2):
+                response = self.client.post("/api/admin/journals/connect", headers={"X-Dev-Auth": "admin-auth"},
+                    json=payload)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual([tab["status"] for tab in response.json()["tabs"]], ["success", "skipped"])
+                sources = [item for item in self.database.journal_status() if item["spreadsheet_id"] == book and item["status"] == "ready"]
+                self.assertEqual(sorted(item["term_number"] for item in sources), [1, 2])
+                if attempt == 0:
+                    for source in sources:
+                        student = next(row for row in self.database.journal_detail(source["id"])["students"] if row["display_name"] == "Student One")
+                        self.assertTrue(self.database.match_journal_student(source["id"], student["id"], self.student_identity))
+            self.assertEqual([call.args[1] for call in google.sheet_values.call_args_list], [f"'{title}'!A:ZZ"] * 2)
+        items = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"}).json()["items"]
+        visible = {item["source"]["term_number"]: item for item in items if item["source"]["subject"] == "Математика/Физика"}
+        self.assertEqual([row["numeric_score"] for row in visible[1]["results"]], [3])
+        self.assertEqual([row["numeric_score"] for row in visible[2]["results"]], [2, 4])
+        self.assertEqual([row["numeric_value"] for row in visible[2]["summaries"]], [4])
+        self.assertEqual([row["category"] for row in visible[2]["assessments"]], ["О", "П"])
+        with self.assertRaisesRegex(ValueError, "Период вкладки"):
+            sync_journal_values(self.database, second, spreadsheet_id=book, spreadsheet_title="Fixture",
+                                grade=7, subject="Математика/Физика", sheet_title=title, sheet_id=1)
+
+    def test_blank_student_group_and_conflicting_result_group_fail_closed(self):
+        with self.database.connection() as connection:
+            self.database.execute(connection, "UPDATE journal_students SET group_marker='' WHERE source_id=? AND identity_id=?",
+                                  (self.source_ids[0], self.student_identity))
+            self.database.execute(connection, "UPDATE journal_results SET group_marker='Other' WHERE identity_id=?",
+                                  (self.student_identity,))
+        items = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"}).json()["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["source"]["source_id"], self.source_ids[1])
+        self.assertEqual(items[0]["results"], [])
 
     def test_teacher_listing_has_only_accessible_pairs_and_detail_stays_scoped(self):
         response = self.client.get("/api/teacher/journals", headers={"X-Dev-Auth": "teacher-auth"})

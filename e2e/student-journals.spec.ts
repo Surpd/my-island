@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
 
 const SUBJECT = 'Математика';
@@ -313,6 +314,31 @@ test('student journals show a compact results table and preserve chronological d
     const sizes = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth }));
     expect(Math.max(sizes.document, sizes.body), `horizontal overflow at ${width}px`).toBeLessThanOrEqual(width + 1);
   }
+});
+
+test('Campus reads the twice-imported synthetic journal from the local API', async ({ page }) => {
+  execFileSync('python', ['e2e/fixtures/journal-second-term.py'], {
+    env: { ...process.env, PYTHONPATH: '.', MY_ISLAND_TEST_PROFILE: 'e2e' },
+  });
+  await openGrades(page);
+  const subject = page.locator('.student-subject-row').filter({ hasText: 'Синтетический предмет' });
+  await expect(subject).toHaveCount(1);
+  await subject.click();
+  const detail = page.locator('.student-journal-detail');
+  await expect(detail).toContainText('Проверочная');
+  await expect(detail).toContainText('Итог');
+  await expect(detail).toContainText('4');
+  await expect(detail).not.toContainText('Другой участник');
+});
+
+test('empty second term keeps first-term results behind explicit selection', async ({ page }) => {
+  await installStudentApi(page, { items: [journal('old', 'current', 1, 'A', 'История')] });
+  await openGrades(page);
+  await expect(page.getByLabel('Период').locator('option:checked')).toContainText('II триместр');
+  await expect(page.locator('.student-subject-row')).toHaveCount(0);
+  const first = page.getByLabel('Период').locator('option').filter({ hasText: /^I триместр/ });
+  await page.getByLabel('Период').selectOption(await first.getAttribute('value') || '');
+  await expect(page.locator('.student-subject-row')).toHaveCount(1);
 });
 
 test('returning from a journal restores the subject list scroll and focus', async ({ page }) => {
