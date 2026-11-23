@@ -198,10 +198,12 @@ function DiagnosticLogin({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const submit = async (event: SyntheticEvent) => {
-    event.preventDefault(); setBusy(true); setError('');
+    event.preventDefault();
+    if (!key || /[^!-~]/.test(key)) { setError('Введите ключ без пробелов или непечатаемых символов.'); return; }
+    setBusy(true); setError('');
     try {
       const result = await diagnosticFetch<{ token: string }>('/exchange', {
-        method: 'POST', headers: { 'X-My-Island-Diagnostic-Key': key.trim() },
+        method: 'POST', headers: { 'X-My-Island-Diagnostic-Key': key },
       });
       window.sessionStorage.setItem(diagnosticStorage, result.token);
       setKey(''); onLoggedIn();
@@ -214,7 +216,7 @@ function DiagnosticLogin({ onLoggedIn }: { onLoggedIn: () => void }) {
     <form onSubmit={submit}><label>Диагностический ключ<input type="password" autoComplete="off" spellCheck={false}
       value={key} onChange={event => setKey(event.target.value)} /></label>
       {error && <p role="alert">{error}</p>}
-      <button className="admin-button admin-button--primary" disabled={busy || !key.trim()}>Войти для диагностики</button>
+      <button className="admin-button admin-button--primary" disabled={busy || !key}>Войти для диагностики</button>
     </form><a href="/admin">Обычный вход администратора</a>
   </section></main>;
 }

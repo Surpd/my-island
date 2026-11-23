@@ -8,6 +8,7 @@ import hmac
 import logging
 import os
 import re
+import time
 from secrets import token_urlsafe
 from uuid import uuid4
 
@@ -18,7 +19,13 @@ READ_SCOPE = "diagnostic.read"
 TTL = timedelta(minutes=15)
 
 
-_KEY_FORMAT = re.compile(r"[!-~]*")
+_KEY_FORMAT = re.compile(r"[!-~]+")
+_EXCHANGE_ATTEMPTS = 5
+_EXCHANGE_WINDOW_SECONDS = 15 * 60
+
+
+class ExchangeThrottled(Exception):
+    """The global, persistent exchange budget has been exhausted."""
 _DIGEST_FORMAT = re.compile(r"[a-f0-9]{64}")
 
 
@@ -31,7 +38,7 @@ class DiagnosticReadiness(StrEnum):
     FLAG_OFF = "flag_off"
     NO_KEY_CONFIGURED = "no_key_configured"
     RAW_INVALID_CHARACTERS = "raw_invalid_characters"
-    RAW_REJECTED = "raw_rejected"
+    RAW_EMPTY = "raw_empty"
     DIGEST_MALFORMED = "digest_malformed"
     VERIFIERS_MISMATCH = "verifiers_mismatch"
 
@@ -45,17 +52,12 @@ def _verifier_and_readiness() -> tuple[str | None, DiagnosticReadiness]:
     raw = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY")
     if raw is None:
         return (provided, DiagnosticReadiness.ENABLED) if provided else (None, DiagnosticReadiness.NO_KEY_CONFIGURED)
-    # Use generated random text, not a memorable password. Format, diversity
-    # and repetition checks catch accidental blanks and obvious placeholders;
-    # they are not a substitute for cryptographic random generation.
-    # Visible ASCII is transported losslessly in the HTTPS header. Do not
-    # trim, normalize, or allow whitespace/controls (including CR and LF).
+    # Hash exactly what is configured. Empty and non-transportable header
+    # values fail closed; strength is not inferred from string shape.
+    if not raw:
+        return None, DiagnosticReadiness.RAW_EMPTY
     if not _KEY_FORMAT.fullmatch(raw):
         return None, DiagnosticReadiness.RAW_INVALID_CHARACTERS
-    if not 43 <= len(raw) <= 128 or len(set(raw)) < 20:
-        return None, DiagnosticReadiness.RAW_REJECTED
-    if any(raw[index:] == raw[:-index] for index in range(1, len(raw) // 2 + 1)):
-        return None, DiagnosticReadiness.RAW_REJECTED
     derived = _hash(raw)
     if provided and not hmac.compare_digest(derived, provided):
         return None, DiagnosticReadiness.VERIFIERS_MISMATCH
@@ -93,10 +95,31 @@ def _audit(database: Database, connection, action: str, session_id: str, view: s
                      (action, "codex_diagnostic_session", json.dumps({"session_id": session_id, **({"view": view} if view else {})})))
 
 
+def _take_exchange_attempt(database: Database) -> bool:
+    now = int(time.time())
+    # One atomic row update, shared by processes/replicas, with no IP,
+    # forwarded headers, credential material, or attacker-controlled buckets.
+    with database.connection() as connection:
+        row = database.execute(connection, """INSERT INTO codex_diagnostic_exchange_budget (id, reset_at, attempts)
+            VALUES (1, ?, 1)
+            ON CONFLICT (id) DO UPDATE SET
+              reset_at = CASE WHEN codex_diagnostic_exchange_budget.reset_at <= ? THEN excluded.reset_at
+                              ELSE codex_diagnostic_exchange_budget.reset_at END,
+              attempts = CASE WHEN codex_diagnostic_exchange_budget.reset_at <= ? THEN 1
+                              ELSE codex_diagnostic_exchange_budget.attempts + 1 END
+            WHERE codex_diagnostic_exchange_budget.reset_at <= ?
+               OR codex_diagnostic_exchange_budget.attempts < ?
+            RETURNING id""",
+            (now + _EXCHANGE_WINDOW_SECONDS, now, now, now, _EXCHANGE_ATTEMPTS)).fetchone()
+        return row is not None
+
+
 def exchange(database: Database, key: str | None) -> dict | None:
     digest = _configured_verifier()
     if not digest or not key or not _KEY_FORMAT.fullmatch(key):
         return None
+    if not _take_exchange_attempt(database):
+        raise ExchangeThrottled
     if not hmac.compare_digest(_hash(key), digest):
         return None
     epoch = _hash("diagnostics epoch:" + digest)

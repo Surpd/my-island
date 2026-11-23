@@ -443,6 +443,12 @@ CREATE TABLE IF NOT EXISTS codex_diagnostic_sessions (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS codex_diagnostic_exchange_budget (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  reset_at BIGINT NOT NULL,
+  attempts INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS admin_browser_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   token_hash TEXT NOT NULL UNIQUE,
