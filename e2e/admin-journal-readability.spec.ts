@@ -24,6 +24,7 @@ test.beforeEach(async ({ page }) => {
         known_sources: [
           { grade: 7, connected: true },
           { grade: 8, connected: true },
+          { grade: 5, spreadsheet_id: 'synthetic-journal-workbook-a', connected: false },
         ],
         scheduler_configured: true,
       };
@@ -230,7 +231,8 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   let previewCalls = 0;
   await page.route('**/api/admin/journals/connect', async (route) => {
     const input = route.request().postDataJSON();
-    expect(input).toMatchObject({ grade: 5, term_number: 2, dry_run: true, auto_sync_enabled: false });
+    expect(input).toMatchObject({ grade: 5, term_number: 2, dry_run: true, auto_sync_enabled: false,
+      spreadsheet_url: previewCalls === 0 ? 'synthetic-journal-workbook-a' : 'synthetic-journal-workbook-b' });
     previewCalls++;
     await route.fulfill({ json: previewCalls === 1 ? {
       status: 'success', tabs: [{ sheet_id: '2', label: 'II · История', status: 'success' }],
@@ -241,7 +243,7 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   });
   await page.getByRole('button', { name: 'Все журналы' }).click();
   await page.getByRole('tab', { name: /^5 класс/ }).click();
-  await page.getByRole('button', { name: 'Подключить таблицу', exact: true }).click();
+  await page.getByRole('button', { name: 'Подключить журнал 5 класса', exact: true }).click();
   const editor = page.locator('.journal-connect-panel');
   const source = editor.getByLabel('Ссылка на таблицу');
   const commit = editor.getByRole('button', { name: 'Подключить и импортировать' });
@@ -251,6 +253,10 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   await preview.click();
   await expect(editor.getByText('II · История')).toBeVisible();
   await expect(commit).toBeEnabled();
+  await editor.getByLabel('Класс', { exact: true }).selectOption('7');
+  await expect(commit).toBeDisabled();
+  await editor.getByLabel('Класс', { exact: true }).selectOption('5');
+  await expect(commit).toBeDisabled();
   await source.fill('synthetic-journal-workbook-b');
   await expect(commit).toBeDisabled();
   await preview.click();
