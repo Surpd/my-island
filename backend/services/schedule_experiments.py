@@ -17,7 +17,7 @@ from backend.services.schedule_activities import list_activities, validate_activ
 from backend.services.schedule_edit_validation import (
     CLUB_LESSON_ONLY_NOTES, GROUP_LINK_NOTES, TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE,
     audit_resolved_notes, normalized_note, notes, read_active_scope_directory,
-    scope_verified, selected_scope, subject_key,
+    saved_group_is_current, scope_verified, selected_scope, subject_key,
 )
 
 
@@ -764,6 +764,8 @@ def experiment_audience_preview(database: Database, payload: Mapping[str, Any], 
                               "class_ids": sorted(set().union(*(student_classes.get(item, set()) for item in assigned))),
                               "excluded_count": len(excluded) if source_known else None, "blockers": blockers,
                               **({"reason": reason} if reason else {})}
+        results[lesson_id]["verified_saved_group"] = saved_group_is_current(
+            state["lesson"], rule, results[lesson_id])
     if os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1":
         logging.getLogger(__name__).info(
             "school audience preview stages query_ms=%.1f calculation_ms=%.1f total_ms=%.1f lessons=%d students=%d groups=%d memberships=%d overrides=%d",

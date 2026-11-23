@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from backend.services.schedule_edit_validation import CLUB_LESSON_ONLY_NOTES, normalized_note, notes
+from backend.services.schedule_edit_validation import CLUB_LESSON_ONLY_NOTES, is_legacy_group_link_note, normalized_note, notes, without_legacy_group_notes
 
 
 def payload_hash(payload: Mapping[str, Any]) -> str:
@@ -159,9 +159,23 @@ def apply_scope_warning_retirement(lesson: dict[str, Any], field: str, clauses: 
     }
 
 
+def verified_saved_group_warning_ids(database: Any, draft: Mapping[str, Any]) -> set[str]:
+    from backend.services.schedule_experiments import experiment_week_audience_preview
+
+    payload = draft["payload"]
+    ids = {str(row["id"]) for row in (payload.get("lessons") or [])
+           if row.get("id") and row.get("needsClarification") is True and is_legacy_group_link_note(row)}
+    if not ids:
+        return set()
+    reference = date.fromisoformat(str(payload.get("week_start") or payload.get("reference_date") or date.today().isoformat())[:10])
+    resolved = experiment_week_audience_preview(database, payload, reference)["lessons"]
+    return {lesson_id for lesson_id in ids if resolved.get(lesson_id, {}).get("verified_saved_group")}
+
+
 def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers: set[str] | None = None,
                           verified_teacher_assignments: set[tuple[str, str, str]] | None = None,
-                          verified_classes: Mapping[str, str] | None = None) -> dict[str, Any]:
+                          verified_classes: Mapping[str, str] | None = None,
+                          verified_group_links: set[str] | None = None) -> dict[str, Any]:
     """Plan only evidence-backed legacy type updates; all other rows are preserved."""
     from backend.services.schedule_experiments import _lesson_activity_type
 
@@ -261,6 +275,10 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             reason = "; ".join(remaining)
         if lesson_id in scope_evidence:
             reason = without_scope_clauses(reason, scope_evidence[lesson_id][1])
+            if not reason:
+                continue
+        if lesson_id in (verified_group_links or ()) and is_legacy_group_link_note(row):
+            reason = without_legacy_group_notes(reason)
             if not reason:
                 continue
         retained_warning_counts[reason] += 1

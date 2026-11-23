@@ -124,3 +124,55 @@ test('school save keeps the explicitly confirmed cross-subject group without rew
   expect(payload.lessons[0].audience_snapshot.student_ids.length).toBeGreaterThan(0);
   expect(payload.lessons[1]).toEqual(draft.payload.lessons[1]);
 });
+
+test('school review accepts a previously saved unchanged group from another subject without a click', async ({ page }) => {
+  test.skip(!consolidation, 'Requires the isolated synthetic school workspace, not the demo API');
+  const base = '/api/admin/schedule/experiments/school';
+  const directory = await page.request.get(API + base + '/directory', { headers: admin });
+  expect(directory.ok(), await directory.text()).toBeTruthy();
+  const { groups, teachers } = await directory.json();
+  const split = groups.find((group: { subject: string; group_type: string }) => group.subject === 'Математика' && group.group_type !== 'class');
+  const targetClass = groups.find((group: { group_type: string; name: string; display_name?: string }) => group.group_type === 'class'
+    && [group.name, group.display_name].includes(split?.base_class_name));
+  expect(split).toBeTruthy();
+  expect(targetClass).toBeTruthy();
+  const lessonId = 'synthetic-keep-known-group';
+  const note = 'Для этого предмета не подтверждена учебная группа; прежняя математическая группа удалена';
+  const create = await page.request.post(API + base, { headers: admin, data: { name: 'Синтетический сохранённый состав', source: 'empty', payload: {
+    classes: [targetClass.id], days: [0], slots: [{ start: '09:00', end: '09:45' }],
+    lessons: [{ id: lessonId, day: 0, period: 0, kind: 'lesson', activityType: 'lesson', subject: 'Русский язык',
+      classId: targetClass.id, classIds: [targetClass.id], groupId: split.id, groupIds: [split.id], teacherId: teachers[0].id, room: '17',
+      audience: { kind: 'groups', group_ids: [split.id] }, needsClarification: true, clarificationReason: note }],
+  } } });
+  expect(create.ok(), await create.text()).toBeTruthy();
+  const draft = await create.json();
+  const savePath = base + '/' + draft.id;
+  // Seed the old, already stored snapshot without performing any modern
+  // editor confirmation gesture which could otherwise retire the old note.
+  const seed = await page.request.put(API + savePath, { headers: admin, data: { expected_revision: draft.revision, payload: draft.payload } });
+  expect(seed.ok(), await seed.text()).toBeTruthy();
+  const saved = await seed.json();
+  expect(saved.payload.lessons[0].clarificationReason).toBe(note);
+  expect(saved.payload.lessons[0].audience_snapshot.student_ids.length).toBeGreaterThan(0);
+  const count = await page.request.post(API + savePath + '/normalization-preview', { headers: admin });
+  expect(count.ok(), await count.text()).toBeTruthy();
+  expect((await count.json()).retained_warning_count).toBe(0);
+
+  const writes: string[] = [];
+  page.on('request', request => {
+    if (request.url().startsWith(API) && ['PUT', 'PATCH', 'DELETE'].includes(request.method())) writes.push(request.url());
+  });
+  const verified = page.waitForResponse(response =>
+    response.ok() && new URL(response.url()).pathname === base + '/audience-preview');
+  await page.goto(`/admin/schedule/constructor?${new URLSearchParams({ role: 'admin', draft: draft.id, lesson: lessonId })}`);
+  const evidence = await (await verified).json();
+  expect(evidence.lessons[lessonId].verified_saved_group).toBe(true);
+  const editor = page.locator('.constructor-inspector');
+  await expect(editor.getByRole('heading', { name: 'Русский язык', exact: true })).toBeVisible();
+  await expect(editor.getByText('Состав определён')).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Оставить эту группу' })).toHaveCount(0);
+  const reread = await page.request.get(API + savePath, { headers: admin });
+  expect(reread.ok(), await reread.text()).toBeTruthy();
+  expect((await reread.json()).revision).toBe(saved.revision);
+  expect(writes).toEqual([]);
+});

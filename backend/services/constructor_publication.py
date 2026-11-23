@@ -30,7 +30,7 @@ from backend.services.schedule_experiments import (
 )
 from backend.services.constructor_resolution import validated_exceptions
 from backend.services.schedule_rooms import room_key
-from backend.services.schedule_edit_validation import GROUP_LINK_NOTES, STALE_MATH, normalized_note, notes
+from backend.services.schedule_edit_validation import is_legacy_group_link_note, without_legacy_group_notes
 
 
 PUBLICATION_SCHEMA = (
@@ -531,21 +531,19 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         if len(class_modes) > 1 and (lesson.get("format") not in {"offline", "online"} or "sdep" in class_modes):
             block("mixed_day_modes_unsupported", "Занятие охватывает классы с разными режимами дня; разделите аудитории или режимы")
         if needs_review:
-            legacy_clauses = notes(review_reason)
-            if not lesson.get("importError") and STALE_MATH in {normalized_note(clause) for clause in legacy_clauses}:
-                # The legacy import warning is lack of verified authorship,
-                # not a prohibition on reusing a group across subjects.
-                class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
-                                for group_id in display_classes if str(group_id) in groups]
-                raw = _lesson_audience(lesson)
-                labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name"))
-                          for group_id in raw.get("group_ids") or [] if str(group_id) in groups]
-                blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
-                    "message": f"Связь с группой из старой записи не подтверждена. Предмет: {subject or 'не указан'}. Класс: {', '.join(class_labels) or 'не подтверждён'}. "
-                               + (f"Сохранённая группа: {', '.join(labels)}. " if labels else "")
-                               + "Проверьте состав. Если он подходит, оставьте эту группу."})
-                # Don't hide independent warnings on the same lesson.
-                review_reason = "; ".join(clause for clause in legacy_clauses if normalized_note(clause) not in GROUP_LINK_NOTES)
+            if is_legacy_group_link_note(lesson):
+                if not result.get("verified_saved_group"):
+                    class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
+                                    for group_id in display_classes if str(group_id) in groups]
+                    raw = _lesson_audience(lesson)
+                    labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name"))
+                              for group_id in raw.get("group_ids") or [] if str(group_id) in groups]
+                    blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
+                        "message": f"Связь с группой из старой записи не подтверждена. Предмет: {subject or 'не указан'}. Класс: {', '.join(class_labels) or 'не подтверждён'}. "
+                                   + (f"Сохранённая группа: {', '.join(labels)}. " if labels else "")
+                                   + "Проверьте состав. Если он подходит, оставьте эту группу."})
+                # Suppress only the obsolete label, never independent warnings.
+                review_reason = without_legacy_group_notes(review_reason)
             # An explicit, active teacher is sufficient for publication. A
             # separate workload row is not required evidence for the lesson.
             # Historical import notes can be compound. Clear only the teacher

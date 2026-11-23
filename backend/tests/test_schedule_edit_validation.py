@@ -6,7 +6,7 @@ from uuid import uuid4
 from backend.services.constructor_publication import preview_publication
 from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import experiment_week_audience_preview, get_experiment, save_experiment
-from backend.services.schedule_normalization import normalization_preview
+from backend.services.schedule_normalization import normalization_preview, verified_saved_group_warning_ids
 from backend.tests import test_constructor_publication as fixtures
 
 LEGACY_MATH = "Для этого предмета не подтверждена учебная группа; прежняя математическая группа удалена"
@@ -55,7 +55,7 @@ class OrdinarySaveValidationTests(TestCase):
         frozen = deepcopy(draft["payload"]["lessons"][1])
         self.assertEqual(draft["payload"]["lessons"][0]["audience_snapshot"]["student_ids"], [str(self.student["id"])])
         prev = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
-        self.assertIn("stale_group_subject_mismatch", [row["code"] for row in prev["diagnostics"]])
+        self.assertNotIn("stale_group_subject_mismatch", [row["code"] for row in prev["diagnostics"]])
         edit = lambda row: row.update(audience={"kind": "groups", "group_ids": [target]}, groupId=target, groupIds=[target])
         with patch("backend.services.schedule_experiments.experiment_week_audience_preview",
                    wraps=experiment_week_audience_preview) as resolver:
@@ -92,27 +92,53 @@ class OrdinarySaveValidationTests(TestCase):
         self.assertEqual(row["clarificationReason"], UNKNOWN)
         self.assertTrue(row["needsClarification"])
 
-    def test_reaffirm_same_cross_subject_group_publishes_only_its_members(self):
+    def test_saved_unchanged_cross_subject_group_publishes_without_clicks(self):
         draft, _ = self.stale_draft()
         row = draft["payload"]["lessons"][0]
-        saved_roster = deepcopy(row["audience_snapshot"])
-        note_before = normalization_preview(draft)
-        self.assertEqual(note_before["retained_warning_count"], 1)
-        self.assertEqual(preview_publication(self.database, draft["id"], scope_kind="template",
-            expected_revision=draft["revision"])["summary"]["deferred_lessons"], 1)
-        edited = self.edit(draft, lambda row: None, explicit=["stale"])
-        kept = edited["payload"]["lessons"][0]
-        self.assertEqual(kept["subject"], "Русский язык")
-        self.assertEqual(kept["audience"], row["audience"])
-        self.assertEqual(kept["audience_snapshot"], saved_roster)
-        self.assertEqual(kept["edit_validation_history"][0]["retired"], LEGACY_MATH.split("; "))
-        self.assertEqual(normalization_preview(edited)["retained_warning_count"], 0)
-        self.publish(edited)
-        self.publish(edited, "week", week_start="2026-10-26")
+        before = deepcopy(draft)
+        self.assertEqual(normalization_preview(draft)["retained_warning_count"], 1)
+        evidence = verified_saved_group_warning_ids(self.database, draft)
+        self.assertEqual(evidence, {"stale"})
+        self.assertEqual(normalization_preview(draft, verified_group_links=evidence)["retained_warning_count"], 0)
+        ready = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        self.assertEqual(ready["summary"]["deferred_lessons"], 0)
+        self.assertEqual(get_experiment(self.database, draft["id"]), before)
+        self.assertEqual(row["subject"], "Русский язык")
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-26")
         activities = lambda person: [a["activity"] for a in canonical.project_student(
             self.database, person["id"], "2026-10-26")["items"]]
         self.assertIn("Русский язык", activities(self.student))
         self.assertNotIn("Русский язык", activities(self.other_student))
+
+    def test_auto_check_ignores_only_the_deprecated_note_in_multiple_warnings(self):
+        draft, _ = self.stale_draft(note=LEGACY_MATH + "; " + UNKNOWN)
+        evidence = verified_saved_group_warning_ids(self.database, draft)
+        remaining = normalization_preview(draft, verified_group_links=evidence)
+        self.assertEqual([warning["reason"] for warning in remaining["retained_warnings"]], [UNKNOWN])
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        codes = {r["code"] for r in preview["diagnostics"]}
+        self.assertIn("review_required", codes)
+        self.assertNotIn("stale_group_subject_mismatch", codes)
+
+    def test_raw_id_without_snapshot_or_matching_fingerprint_cannot_auto_verify(self):
+        draft, _ = self.stale_draft()
+        for mode in ("missing", "wrong fingerprint", "fallback-only", "unresolved", "importError"):
+            with self.subTest(mode=mode):
+                row = deepcopy(draft["payload"]["lessons"][0])
+                if mode == "missing":
+                    row.pop("audience_snapshot")
+                elif mode == "wrong fingerprint":
+                    row["audience_snapshot"]["fingerprint"] = "not-the-saved-rule-fingerprint"
+                elif mode == "fallback-only":
+                    row.pop("audience")
+                else:
+                    row[mode] = True
+                unproven = self.draft([row])
+                self.assertEqual(verified_saved_group_warning_ids(self.database, unproven), set())
+                preview = preview_publication(self.database, unproven["id"], scope_kind="template",
+                    expected_revision=unproven["revision"])
+                self.assertEqual(preview["summary"]["deferred_lessons"], 1)
 
     def test_explicit_different_cross_subject_scope_and_compound_warning(self):
         draft, _ = self.stale_draft(note=LEGACY_MATH + "; " + UNKNOWN)
@@ -135,6 +161,7 @@ class OrdinarySaveValidationTests(TestCase):
         draft, _ = self.stale_draft()
         row = draft["payload"]["lessons"][0]
         self.database.create_membership(row["audience"]["group_ids"][0], self.other_student["id"], "student", "synthetic")
+        self.assertEqual(verified_saved_group_warning_ids(self.database, draft), set())
         saved = self.edit(draft, lambda row: None, explicit=["stale"])
         stored = saved["payload"]["lessons"][0]
         self.assertEqual(stored["audience_snapshot"], row["audience_snapshot"])

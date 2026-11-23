@@ -114,6 +114,8 @@ type Lesson = {
   needsClarification?: boolean;
   clarificationReason?: string;
   importError?: boolean;
+  unresolved?: boolean;
+  review_required?: boolean;
   canonical?: Raw;
   grade_scope?: string;
   activity?: string;
@@ -223,14 +225,14 @@ function scheduleDraftLink() {
 function audiencePreviewLesson(lesson: Lesson) {
   const { id, day, period, start, end, kind, canonicalRole, specialMark, informational,
     audience, audienceMode, groupId, groupIds, classId, classIds, excludedGroupIds,
-    grade_scope, activity, weekday, importError, subject, audience_snapshot, activityType } = lesson;
+    grade_scope, activity, weekday, importError, needsClarification, clarificationReason, unresolved, review_required, subject, audience_snapshot, activityType } = lesson;
   // Preview needs only the legacy audience rule from canonical metadata. Sending
   // the full imported assignment/source blob made every preview request needlessly large.
   const audienceRule = lesson.canonical?.assignment?.metadata?.audience_rule;
   const canonical = audienceRule ? { assignment: { metadata: { audience_rule: audienceRule } } } : undefined;
   return { id, day, period, start, end, kind, canonicalRole, specialMark, informational,
     audience, audienceMode, groupId, groupIds, classId, classIds, excludedGroupIds,
-    canonical, grade_scope, activity, weekday, importError, subject, audience_snapshot, activityType };
+    canonical, grade_scope, activity, weekday, importError, needsClarification, clarificationReason, unresolved, review_required, subject, audience_snapshot, activityType };
 }
 function audiencePreviewPayload(payload: Payload) {
   return { reference_date: payload.reference_date, week_start: payload.week_start, slots: payload.slots,
@@ -512,24 +514,24 @@ function readableIssueReason(value: string | null | undefined, fallback: string)
   return value;
 }
 
-function legacyGroupLinkUnconfirmed(lesson: Lesson) {
-  return Boolean(lesson.needsClarification && !lesson.importError && lesson.clarificationReason?.split(';')
+function legacyGroupLinkWarning(lesson: Lesson) {
+  return Boolean(lesson.needsClarification && !lesson.importError && !lesson.unresolved && !lesson.review_required && lesson.clarificationReason?.split(';')
     .some(clause => clause.trim().replace(/\.$/u, '').toLocaleLowerCase('ru') === 'прежняя математическая группа удалена'));
 }
 const unconfirmedGroupLinkText = 'Связь с группой из старой записи не подтверждена. Проверьте состав; если он подходит, оставьте эту группу.';
 
-function hasRelevantImportReview(lesson: Lesson, groups: Group[]) {
-  return Boolean(lesson.importError || lesson.needsClarification && relevantImportReason(lesson, groups) !== '');
+function hasRelevantImportReview(lesson: Lesson, groups: Group[], evidence?: AudiencePreview) {
+  return Boolean(lesson.importError || lesson.needsClarification && relevantImportReason(lesson, groups, evidence) !== '');
 }
 
-function relevantImportReason(lesson: Lesson, groups: Group[]) {
+function relevantImportReason(lesson: Lesson, groups: Group[], evidence?: AudiencePreview) {
   let reason = displayedClarificationReason(lesson, groups);
-  if (reason && legacyGroupLinkUnconfirmed(lesson)) {
+  if (reason && legacyGroupLinkWarning(lesson)) {
     const others = reason.split(';').map(part => part.trim()).filter(part => {
       const normal = part.replace(/\.$/u, '').toLocaleLowerCase('ru');
       return normal !== 'прежняя математическая группа удалена' && normal !== 'для этого предмета не подтверждена учебная группа';
     });
-    reason = [unconfirmedGroupLinkText, ...others].join('; ');
+    reason = (evidence?.verified_saved_group ? others : [unconfirmedGroupLinkText, ...others]).join('; ');
   }
   return !lesson.importError && reason && isTypedScheduleClub(lesson)
     ? effectiveClubReviewNote(reason) : reason;
@@ -574,7 +576,7 @@ function issuesFor(
     if (!isSpecialMark(lesson) && !lesson.subject.trim()) add(lesson.id, 'error', lesson.kind === 'event' ? 'Не указано название события.' : 'Не указан предмет.');
     if (!isSpecialMark(lesson) && lessonNeedsPhysicalRoom(payload, lesson, groups) && !String(lesson.room || '').trim())
       add(lesson.id, 'warning', 'Для очного занятия не указан кабинет.');
-    if (!isTypedScheduleClub(lesson) && lesson.activityType !== 'elective' && audience && audience.status !== 'ok' && !lesson.informational && !lesson.needsClarification && !lesson.importError) {
+    if (!isTypedScheduleClub(lesson) && lesson.activityType !== 'elective' && audience && audience.status !== 'ok' && !lesson.informational && !hasRelevantImportReview(lesson, groups, audience) && !lesson.importError) {
       result.push({ lessonId: lesson.id, severity: audience.status === 'error' ? 'error' : 'warning', type: 'audience', category: lesson.importError ? 'import' : 'incomplete', message: readableIssueReason(audience.reason, 'Не удалось определить участников. Проверьте выбранную группу и состав на дату занятия.') });
     }
     if (!isSpecialMark(lesson) && shouldWarnMissingTeacher(lesson, independentPractice.has(lesson.id) || isSdepIndependentLesson(payload, lesson, groups)))
@@ -612,14 +614,14 @@ function issuesFor(
         pair(`Учеников назначено одновременно: ${overlappingStudents.length} (${sample.join(', ')}${remainder})`, overlappingStudents);
       }
     }
-  return result.concat(payload.lessons.filter((lesson) => hasRelevantImportReview(lesson, groups)).map((lesson) => {
+  return result.concat(payload.lessons.filter((lesson) => hasRelevantImportReview(lesson, groups, previews[lesson.id])).map((lesson) => {
     return {
       lessonId: lesson.id,
-      ...(legacyGroupLinkUnconfirmed(lesson) ? { code: 'stale_group_subject_mismatch' } : {}),
+      ...(legacyGroupLinkWarning(lesson) && !previews[lesson.id]?.verified_saved_group ? { code: 'stale_group_subject_mismatch' } : {}),
       type: 'data' as const,
       category: 'import' as const,
       severity: lesson.importError ? 'error' as const : 'warning' as const,
-      message: readableIssueReason(relevantImportReason(lesson, groups), 'Уточните, какие ученики посещают это занятие.'),
+      message: readableIssueReason(relevantImportReason(lesson, groups, previews[lesson.id]), 'Уточните, какие ученики посещают это занятие.'),
     };
   }));
 }
@@ -1786,7 +1788,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const unplaced =
     payload?.lessons.filter(
       (item) =>
-      hasRelevantImportReview(item, groups) || !payload.days.includes(item.day) || !payload.slots[item.period],
+      hasRelevantImportReview(item, groups, audiencePreviews[item.id]) || !payload.days.includes(item.day) || !payload.slots[item.period],
     ) || [];
   const unlinkedElectives = payload?.lessons.filter((lesson) => editorActivityType(lesson) === 'elective' && !lesson.blockId) || [];
   const selectedBulkElectives = unlinkedElectives.filter((lesson) => bulkElectiveSelection.includes(lesson.id));
@@ -2961,7 +2963,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
             teachers: teacherIds.map(id => teachers.find(teacher => teacher.id === id)?.name || 'Требует уточнения'),
             groups: linkedInstructionalGroups(lesson, groups).map(group => group.name),
             kind: isLunch(lesson) ? 'lunch' : editorActivityType(lesson) || 'lesson',
-            warning: hasRelevantImportReview(lesson, groups) ? relevantImportReason(lesson, groups) || 'Требует уточнения' : '',
+            warning: hasRelevantImportReview(lesson, groups, audiencePreviews[lesson.id]) ? relevantImportReason(lesson, groups, audiencePreviews[lesson.id]) || 'Требует уточнения' : '',
             label: [lesson.subject, ...classes, room].filter(Boolean).join(' · '),
           };
         })}
@@ -3443,7 +3445,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               <div className="constructor-source-week-scroll"><table><thead><tr><th>День и время</th><th>Тип и занятие</th><th>Классы</th><th>Учебные группы</th><th>Преподаватель</th><th>Кабинет / место</th><th>Статус и проекция Campus</th><th></th></tr></thead><tbody>{payload.lessons.map(lesson=>{
                 const rowIssues=issues.filter(issue=>issue.lessonId===lesson.id||issue.related===lesson.id);
                 const audience=audiencePreviews[lesson.id];
-                const blocker = lesson.specialMark === 'lunch' ? '' : lesson.importError ? lesson.clarificationReason || 'Импорт требует проверки' : hasRelevantImportReview(lesson, groups) ? relevantImportReason(lesson, groups) || 'Требуется подтверждение' : !isTypedScheduleClub(lesson) && audience && audience.status !== 'ok' ? audience.reason || 'Аудитория не подтверждена' : rowIssues.some(issue=>issue.category==='conflict') ? 'Есть содержательный конфликт; Campus-проекция отложена' : '';
+                const blocker = lesson.specialMark === 'lunch' ? '' : lesson.importError ? lesson.clarificationReason || 'Импорт требует проверки' : hasRelevantImportReview(lesson, groups, audiencePreviews[lesson.id]) ? relevantImportReason(lesson, groups, audiencePreviews[lesson.id]) || 'Требуется подтверждение' : !isTypedScheduleClub(lesson) && audience && audience.status !== 'ok' ? audience.reason || 'Аудитория не подтверждена' : rowIssues.some(issue=>issue.category==='conflict') ? 'Есть содержательный конфликт; Campus-проекция отложена' : '';
                 const status=rowIssues.some(issue=>issue.category==='critical'||issue.category==='conflict')?'Конфликт':rowIssues.some(issue=>issue.category==='review'||issue.category==='import')?'Требует подтверждения':rowIssues.length?'Замечание':lesson.specialMark==='lunch'?'Информационная отметка':'Подтверждено';
                 const teacherIds=[...new Set([...(lesson.teacherIds||[]),lesson.teacherId].filter(Boolean))];
                 const lessonGroups=linkedInstructionalGroups(lesson,groups);
@@ -3517,7 +3519,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               <summary><strong>Требуют уточнения · {unplaced.length}</strong></summary>
               <p>Исходные занятия сохранены. Уточните состав, преподавателя или охват отметки; сами по себе эти вопросы не являются конфликтами расписания.</p>
               {unplaced.map((item) => <details key={item.id}>
-                <summary>{DAYS[item.day] || 'День не определён'} {payload.slots[item.period]?.start || '—'} · {item.subject || 'Без предмета'} · {relevantImportReason(item, groups) || (!payload.days.includes(item.day) || !payload.slots[item.period] ? 'В исходном блоке отсутствует день или время.' : '')}</summary>
+                <summary>{DAYS[item.day] || 'День не определён'} {payload.slots[item.period]?.start || '—'} · {item.subject || 'Без предмета'} · {relevantImportReason(item, groups, audiencePreviews[item.id]) || (!payload.days.includes(item.day) || !payload.slots[item.period] ? 'В исходном блоке отсутствует день или время.' : '')}</summary>
                 <p>{(item as Raw).source?.raw_text || item.raw || 'Исходный текст не указан'}</p>
                 <button onClick={() => { openReviewLesson(item.id); setConflictsOpen(false); }}>Показать и исправить</button>
               </details>)}
@@ -4074,7 +4076,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                             <option key={group.id} value={group.id}>{group.name}</option>)}
                         </select></label><p>Поимённый список для кружка не нужен.</p></> : null}
                       {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} recalculationLabel={schoolReview ? 'Открыть проверку сохранённого черновика' : undefined} onConfirmRecalculation={schoolReview && dirty ? undefined : () => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => selectEditorAudience(selected, audience)} />
-                        {workspace === 'school' && legacyGroupLinkUnconfirmed(selected) && audienceOf(selected, groups).kind === 'groups' &&
+                        {workspace === 'school' && legacyGroupLinkWarning(selected) && !audiencePreviews[selected.id]?.verified_saved_group && audienceOf(selected, groups).kind === 'groups' &&
                           audiencePreviews[selected.id]?.status === 'ok' && audiencePreviews[selected.id]?.proposed_student_ids != null &&
                           previewRequest.status === 'complete' && <button type="button"
                             onClick={() => selectEditorAudience(selected, audienceOf(selected, groups), true)}>Оставить эту группу</button>}

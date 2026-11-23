@@ -1,4 +1,5 @@
 """Evidence-backed cleanup of known legacy notes during an ordinary editor save."""
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from backend.services.schedule_subjects import subject_label
@@ -44,6 +45,35 @@ def scope_verified(kind, ids, directory):
     if kind == "classes":
         return all(row and row["group_type"] == "class" for row in rows)
     return kind == "groups" and all(row and row["group_type"] != "class" for row in rows)
+
+
+def saved_group_is_current(lesson, rule, result):
+    """Evidence of a saved exact rule and roster, never a matching label or a preview-only guess."""
+    raw = lesson.get("audience")
+    if not isinstance(raw, Mapping) or raw.get("kind") != "groups" or rule.get("kind") != "groups":
+        return False
+    group_ids = raw.get("group_ids") or raw.get("groupIds")
+    if not isinstance(group_ids, list) or not group_ids:
+        return False
+    if sorted(set(map(str, group_ids))) != rule.get("group_ids"):
+        return False
+    snapshot = result.get("audience_snapshot")
+    return (result.get("status") == "ok"
+        and isinstance(snapshot, Mapping)
+        and bool(snapshot.get("resolved_at"))
+        and bool(snapshot.get("fingerprint"))
+        and result.get("fingerprint_changed") is False
+        and bool(snapshot.get("student_ids"))
+        and snapshot["student_ids"] == result.get("proposed_student_ids"))
+
+
+def is_legacy_group_link_note(lesson):
+    return (not any(lesson.get(flag) for flag in ("importError", "unresolved", "review_required"))
+            and STALE_MATH in {normalized_note(clause) for clause in notes(lesson.get("clarificationReason"))})
+
+
+def without_legacy_group_notes(reason):
+    return "; ".join(clause for clause in notes(reason) if normalized_note(clause) not in GROUP_LINK_NOTES)
 
 
 def audit_resolved_notes(lesson, previous, remove, evidence, *, actor_user_id):
