@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Sequence
 
 from backend.database import Database
-from backend.services.journal_group_labels import math_header_label
+from backend.services.journal_group_labels import explicit_header_label
 
 
 SUMMARY_TYPES = {
@@ -226,10 +226,23 @@ def parse_journal_values(
     summaries: list[dict[str, Any]] = []
 
     explicit_labels = [
-        math_header_label(_cell(values[min(block.values())], 1), grade=grade, subject=subject)
-        if "category" in block and len(blocks) > 1 else None
+        explicit_header_label(_cell(values[min(block.values())], 1), grade=grade, subject=subject)
+        if len(blocks) > 1 else None
         for block in blocks
     ]
+    # The older importer stores explicit numeric names directly as the roster
+    # key. Repeating such a header would collapse both sections into one key.
+    numeric_header = re.compile(r"(?:I{1,3}\s*триместр\s*·\s*)?(группа\s+\d+)", re.IGNORECASE)
+    numeric_markers = set()
+    for block in blocks:
+        if "category" not in block:
+            continue
+        match = numeric_header.fullmatch(str(_cell(values[min(block.values())], 1) or "").strip())
+        if match:
+            canonical = _normalized(match[1])
+            if canonical in numeric_markers:
+                raise ValueError("У нескольких разделов журнала одно название группы. Уточните заголовки. Прежние оценки и связи сохранены.")
+            numeric_markers.add(canonical)
     for block_index, block in enumerate(blocks):
         group_label = explicit_labels[block_index]
         if group_label and explicit_labels.count(group_label) != 1:
@@ -237,7 +250,7 @@ def parse_journal_values(
         block_start = min(block.values())
         previous_end = max(blocks[block_index - 1].values()) + 1 if block_index else 0
         marker = "all"
-        header_group = re.fullmatch(r"(?:I{1,3}\s*триместр\s*·\s*)?(группа\s+\d+)", str(_cell(values[block_start], 1) or "").strip(), re.IGNORECASE)
+        header_group = numeric_header.fullmatch(str(_cell(values[block_start], 1) or "").strip())
         if "category" in block and header_group:
             marker = header_group[1]
         elif "category" in block and len(blocks) > 1:
@@ -361,7 +374,7 @@ def parse_journal_values(
                                "weight": _cell(metadata_rows.get("weight", []), column), "max_score": _cell(metadata_rows.get("max_score", []), column),
                                "header_rows": {key: index + 1 for key, index in block.items()}, "group_marker": marker,
                                "column_identity": column_identity, "score_vector": score_vector,
-                               **({"source_group_label": group_label} if group_label else {})},
+                               **({"source_group_label": group_label} if group_label and marker.startswith("block ") else {})},
             }
             assessments.append(assessment)
             for result in pending:

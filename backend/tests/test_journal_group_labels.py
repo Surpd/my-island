@@ -47,6 +47,20 @@ class JournalGroupLabelTests(unittest.TestCase):
         self.assertFalse(journal_group_labels(wrong["assessments"]))
         self.assertEqual(wrong["assessments"][0]["group_marker"], "Группа 1")
 
+    def test_explicit_numbered_groups_and_english_across_other_grades(self):
+        numeric = parse(("II триместр · Группа 1", "II триместр · Группа 2", "II триместр · Группа 3"),
+                        grade=5, subject="Русский язык")
+        self.assertEqual([row["group_marker"] for row in numeric["students"]], ["Группа 1", "Группа 2", "Группа 3"])
+        english = parse(("II триместр · Английский 3  · Пример", "II триместр · Английский 1", "II триместр · ПРЕПОДАВАТЕЛЬ"),
+                        grade=8, subject="Английский язык")
+        self.assertEqual(journal_group_labels(english["assessments"]), {"block 1": "Английский 3", "block 2": "Английский 1"})
+        self.assertNotIn("Пример", str(english["assessments"]))
+        self.assertFalse(journal_group_labels(parse(("Итог", "", "Итог"), grade=7, subject="Математика/Физика")["assessments"]))
+        self.assertFalse(journal_group_labels(parse(("II триместр · Английский 3  · Пример", "", ""),
+                                                   grade=8, subject="Химия")["assessments"]))
+        with self.assertRaisesRegex(ValueError, "одно название группы"):
+            parse(("II триместр · Группа 1", "II триместр · группа 1", "Итог"), grade=6, subject="Математика")
+
     def test_duplicate_labels_never_leak_into_display(self):
         parsed = parse((HEADERS[0], "II триместр · 9А", HEADERS[2]))
         self.assertEqual(journal_group_labels(parsed["assessments"]), {"block 3": "9C"})

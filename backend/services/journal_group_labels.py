@@ -6,15 +6,33 @@ import re
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
-MATH_HEADER = re.compile(r"II\s+триместр\s*·\s*9\s*[-–]?\s*([ABCАВС])", re.IGNORECASE)
+TERM_PREFIX = re.compile(r"I{1,3}\s+триместр\s*·\s*(.+)", re.IGNORECASE)
+MATH_LABEL = re.compile(r"9\s*[-–]?\s*([ABCАВС])", re.IGNORECASE)
+GROUP_LABEL = re.compile(r"группа\s+(?:№\s*)?([1-9][0-9]?|[A-ZА-ЯЁ])", re.IGNORECASE)
+ENGLISH_SUBGROUP = re.compile(
+    r"английский(?:\s+язык)?\s+([1-9][0-9]?)(?:\s*·\s*[А-ЯЁ][А-ЯЁ-]*(?:\s+[А-ЯЁ][А-ЯЁ-]*)?)?", re.IGNORECASE)
+STORED_LABEL = re.compile(r"9[ABC]|(?:Группа (?:[1-9][0-9]?|[A-ZА-ЯЁ]))|Английский [1-9][0-9]?")
 CYRILLIC_LOOKALIKES = str.maketrans("АВС", "ABC")
 
 
-def math_header_label(value: object, *, grade: int, subject: str) -> str | None:
-    if grade != 9 or subject.strip().casefold() not in {"математика", "math"}:
+def explicit_header_label(value: object, *, grade: int, subject: str) -> str | None:
+    """Read only explicit short labels from the gradebook's header cell."""
+    text = str(value or "").strip()
+    term = TERM_PREFIX.fullmatch(text)
+    label = term[1].strip() if term else text
+    named = GROUP_LABEL.fullmatch(label)
+    if named:
+        return "Группа " + named[1].upper()
+    normalized_subject = " ".join(subject.casefold().split())
+    if normalized_subject in {"английский", "английский язык", "english"}:
+        english = ENGLISH_SUBGROUP.fullmatch(label)
+        if english:
+            # Ignore an optional teacher suffix; it is not the subgroup name.
+            return "Английский " + english[1]
+    if not term or grade != 9 or normalized_subject not in {"математика", "math"}:
         return None
-    match = MATH_HEADER.fullmatch(str(value or "").strip())
-    return "9" + match[1].upper().translate(CYRILLIC_LOOKALIKES) if match else None
+    maths = MATH_LABEL.fullmatch(label)
+    return "9" + maths[1].upper().translate(CYRILLIC_LOOKALIKES) if maths else None
 
 
 def journal_group_labels(assessment_rows: Iterable[Mapping[str, Any]]) -> dict[str, str]:
@@ -27,7 +45,7 @@ def journal_group_labels(assessment_rows: Iterable[Mapping[str, Any]]) -> dict[s
             except ValueError:
                 raw = None
         label = raw.get("source_group_label") if isinstance(raw, dict) else None
-        evidence[str(row["group_marker"])].add(label if label in ("9A", "9B", "9C") else None)
+        evidence[str(row["group_marker"])].add(label if isinstance(label, str) and STORED_LABEL.fullmatch(label) else None)
     labels = {key: next(iter(values)) for key, values in evidence.items() if len(values) == 1 and None not in values}
     return {key: label for key, label in labels.items() if list(labels.values()).count(label) == 1}
 
@@ -46,7 +64,7 @@ def verify_group_labels(
             result[str(row["group_marker"])].add(str(row["student_key"]).rsplit("|", 1)[0])
         return result
 
-    error = ("Не удалось подтвердить, что группы 9A, 9B и 9C соответствуют сохранённым группам журнала. "
+    error = ("Не удалось подтвердить, что названия групп соответствуют сохранённым группам журнала. "
              "Сверьте заголовки и составы групп. Прежние оценки и связи сохранены.")
     if any(incoming_labels.get(marker) != label for marker, label in previous_labels.items()):
         raise ValueError(error)
