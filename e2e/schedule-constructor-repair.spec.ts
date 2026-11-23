@@ -111,6 +111,7 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Русский язык');
+  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('каб. 8');
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
 
@@ -239,6 +240,7 @@ test('constructor edit preserves horizontal grid position', async ({ page }) => 
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Геометрия прокрутки');
+  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('8');
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
   const lesson = page.locator('.constructor-card').filter({ hasText: 'Геометрия прокрутки' });
@@ -270,14 +272,17 @@ test('constructor electives: parallel courses use class availability without stu
   await page.locator('.constructor-drawer-tab').click();
   await expect(inspector).toHaveAttribute('aria-hidden', 'false');
 
+  await inspector.getByRole('button', { name: 'Другие типы…', exact: true }).click();
+  await inspector.getByRole('button', { name: 'Курс по выбору', exact: true }).click();
   const createCourse = async (name: string) => {
-    await page.getByRole('button', { name: 'Курс по выбору', exact: true }).click();
+    await expect(inspector.getByRole('button', { name: 'Другие типы… · Курс по выбору', exact: true })).toBeVisible();
     await page.getByRole('combobox', { name: 'Название активности' }).fill(name);
     const availability = page.locator('.constructor-elective-choice').nth(0);
     const placement = page.locator('.constructor-elective-choice').nth(1);
     await availability.getByRole('checkbox', { name: '5 класс' }).check();
     await availability.getByRole('checkbox', { name: '6 класс' }).check();
     await placement.getByRole('checkbox', { name: `6-А elective ${suffix}` }).check();
+    await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
     await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill(`E-${name.slice(-1)}`);
     await expect(page.getByText('Именной состав курсов по выбору не ведётся')).toBeVisible();
     await expect(inspector.getByRole('region', { name: 'Участники занятия' })).toHaveCount(0);
@@ -311,6 +316,7 @@ test('constructor repair: lunch for a selected group remains editable through in
   await page.locator('[data-cell="0:0"]').click();
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
+  await page.getByRole('button', { name: /Другие типы…/ }).click();
   await page.getByRole('button', { name: 'Обед', exact: true }).click();
   const lunchPicker = page.getByRole('region', { name: 'Участники занятия' });
   await lunchPicker.getByRole('button', { name: /Учебные группы/ }).click();
@@ -382,9 +388,11 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await expect(page.locator('.constructor-inspector')).toHaveAttribute('aria-hidden', 'false');
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
+  await page.getByRole('button', { name: /Другие типы…/ }).click();
   await page.getByRole('button', { name: 'Кружок', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Айкидо без каталога');
   await expect(page.getByRole('combobox', { name: 'Преподаватель нового занятия' })).toHaveValue('');
+  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('Зал');
   await expect(page.getByRole('combobox', { name: 'Запись каталога' })).toHaveValue('');
   await page.setViewportSize({ width: 1600, height: 1100 });
@@ -496,6 +504,7 @@ test('constructor repair: grade nine all-others audience displays a live class s
   await page.locator('[data-cell="0:0"]').click();
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
+  await page.getByRole('button', { name: /Другие типы…/ }).click();
   await page.getByRole('button', { name: 'Обед', exact: true }).click();
   const picker = page.getByRole('region', { name: 'Участники занятия' });
   await picker.getByRole('button', { name: 'Все остальные' }).click();
@@ -515,15 +524,15 @@ test('вид занятия и онлайн сохраняются через о
   await page.locator('[data-cell="0:0"]').click();
   await openScheduleInspector(page);
   await page.getByRole('button', {name: 'Форма', exact: true}).click();
-  const kind = page.getByLabel('Вид занятия', {exact: true});
+  const kind = page.getByRole('group', {name: 'Тип занятия', exact: true});
   await expect(kind.getByRole('button', {name:'Урок', exact:true})).toHaveAttribute('aria-pressed','true');
   await kind.getByRole('button', {name:'Консультация'}).click();
   await page.getByLabel('Название активности').fill('Самостоятельное чтение');
-  await page.getByRole('button', {name: 'Добавить занятие', exact: true}).click();
+  await page.getByRole('button', {name: 'Добавить консультацию', exact: true}).click();
   await expect(page.getByRole('alert').filter({hasText: 'Выберите преподавателя консультации'})).toBeVisible();
   await kind.getByRole('button', {name:'Практикум'}).click();
+  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
   await page.getByLabel('Кабинет нового занятия').fill('Кабинет 15');
-  await page.getByText('Формат занятия',{exact:true}).click();
   const online = page.getByRole('checkbox', {name:'Этот урок проводится онлайн'});
   const expectCompactOnline = async (mode: string) => {
     const size = await online.boundingBox();
@@ -541,17 +550,256 @@ test('вид занятия и онлайн сохраняются через о
   await expect(page.getByLabel('Кабинет нового занятия')).toHaveValue(/15/);
   await online.check();
   await expect(page.getByLabel('Кабинет нового занятия')).toBeDisabled();
-  await page.getByText('Подключение', {exact: true}).click();
+  await page.getByRole('button', {name: 'Настроить подключение', exact: true}).click();
   await page.getByLabel('Ссылка или сведения для подключения').fill('Школьная видеокомната');
-  await page.getByRole('button', {name: 'Добавить занятие', exact: true}).click();
+  await page.getByRole('button', {name: 'Добавить практикум', exact: true}).click();
   const card = page.locator('.constructor-card').filter({hasText: 'Самостоятельное чтение'});
   await expect(card).toContainText('Практикум');
   await expect(card).toContainText('Онлайн');
   await expect(card).not.toContainText('каб. 15');
   await card.dblclick();
-  await page.getByText('Формат занятия',{exact:true}).click();
   await expect(online).toBeChecked();
   await expectCompactOnline('edit');
-  await page.getByText('Подключение', {exact: true}).click();
+  await page.getByRole('button', {name: 'Настроить подключение', exact: true}).click();
   await expect(page.getByLabel('Ссылка или сведения для подключения')).toHaveValue('Школьная видеокомната');
+});
+
+for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+  test(`Issue 21 editor creates and reopens every common kind at ${viewport.width}px`, async ({ page }) => {
+    test.setTimeout(75_000);
+    page.setDefaultTimeout(15_000);
+    await page.setViewportSize(viewport);
+    const createdResponse = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/admin/schedule/experiments');
+    await openEmptyWeek(page);
+    const created = await (await createdResponse).json();
+    const directory = await page.request.get(`${API}/api/admin/groups`, { headers: ADMIN });
+    expect(directory.ok()).toBeTruthy();
+    const demoClass = (await directory.json()).items.find((group: { name: string; group_type: string }) =>
+      group.name === '5' && group.group_type === 'class');
+    expect(demoClass).toBeTruthy();
+    const classId = String(demoClass.id);
+    await filterClass(page, classId);
+    const teacherResponse = await page.request.get(`${API}/api/admin/people?kind=teacher`, { headers: ADMIN });
+    expect(teacherResponse.ok()).toBeTruthy();
+    const teacher = (await teacherResponse.json()).items[0];
+    const inspector = page.locator('.constructor-inspector');
+    const kind = inspector.getByRole('group', { name: 'Тип занятия', exact: true });
+    const online = inspector.getByRole('checkbox', { name: 'Этот урок проводится онлайн' });
+    const cases = [
+      { title: 'История', label: 'Урок', type: 'lesson' },
+      { title: 'География', label: 'Практикум', type: 'practice' },
+      { title: 'Литература', label: 'Консультация', type: 'consultation' },
+      { title: 'Шахматы', label: 'Кружок', type: 'club' },
+    ] as const;
+    const capture = async (name: string, action: string) => {
+      await inspector.evaluate(element => { element.scrollTop = 0; });
+      await expect(kind).toBeInViewport({ ratio: 1 });
+      await expect(online).toBeInViewport({ ratio: 1 });
+      await expect(inspector.getByRole('button', { name: action, exact: true })).toBeInViewport({ ratio: 1 });
+      expect(await inspector.evaluate(element => element.scrollWidth)).toBeLessThanOrEqual(
+        (await inspector.evaluate(element => element.clientWidth)) + 1,
+      );
+      const folder = path.join(projectRoot, 'artifacts', 'issue-21');
+      await mkdir(folder, { recursive: true });
+      await inspector.screenshot({ path: path.join(folder, `${viewport.width}-${name}.png`), animations: 'disabled' });
+    };
+
+    for (const [period, item] of cases.entries()) {
+      if (await inspector.getAttribute('aria-hidden') === 'false') {
+        await inspector.getByRole('button', { name: 'Закрыть панель' }).click();
+      }
+      await page.locator(`[data-cell="${period}:0"]`).click({ position: { x: 5, y: 5 } });
+      await openScheduleInspector(page);
+      await expect(kind).toHaveCount(1);
+      await expect(online).toBeChecked();
+      if (item.type === 'lesson') {
+        await inspector.getByRole('button', { name: 'Форма', exact: true }).click();
+      } else if (item.type === 'club') {
+        const other = kind.getByRole('button', { name: 'Другие типы…', exact: true });
+        await other.press('Enter');
+        await expect(other).toHaveAttribute('aria-expanded', 'true');
+        await kind.getByRole('button', { name: item.label, exact: true }).press('Space');
+        await expect(kind.getByRole('button', { name: /Другие типы/ })).toHaveAttribute('aria-expanded', 'false');
+        await expect(kind.getByRole('button', { name: /Другие типы/ })).toBeFocused();
+      } else {
+        await kind.getByRole('button', { name: item.label, exact: true }).click();
+      }
+      await expect(online).toBeChecked();
+      await inspector.getByLabel('Название активности').fill(item.title);
+      if (item.type !== 'practice') await inspector.getByLabel('Преподаватель нового занятия').fill(teacher.display_name);
+      if (item.type === 'lesson') {
+        await online.uncheck();
+        await inspector.getByLabel('Кабинет нового занятия').fill('17');
+        await online.check();
+        await online.uncheck();
+        await expect(inspector.getByLabel('Кабинет нового занятия')).toHaveValue('17');
+      }
+      const action = { lesson: 'Добавить занятие', practice: 'Добавить практикум',
+        consultation: 'Добавить консультацию', club: 'Добавить кружок' }[item.type];
+      await capture(`create-${item.type}`, action);
+      await inspector.getByRole('button', { name: action, exact: true }).click();
+      await expect(inspector.getByRole('heading', { name: item.title })).toBeVisible();
+    }
+    const savedResponse = page.waitForResponse(response => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/admin/schedule/experiments/${created.id}`);
+    await inspector.getByRole('button', { name: 'Сохранить правку' }).click();
+    const saved = await savedResponse;
+    expect(saved.ok()).toBeTruthy();
+    const { payload } = await saved.json();
+    expect(payload.lessons.map((lesson: { activityType: string; format: string }) =>
+      [lesson.activityType, lesson.format])).toEqual([
+      ['lesson', 'offline'], ['practice', 'online'], ['consultation', 'online'], ['club', 'online'],
+    ]);
+
+    await page.reload();
+    await page.getByRole('button', { name: /Мои черновики ·/ }).click();
+    await page.locator('.constructor-draft-open').filter({ hasText: created.id }).click();
+    await filterClass(page, classId);
+    for (const item of cases) {
+      const savedLesson = payload.lessons.find((lesson: { activityType: string }) => lesson.activityType === item.type);
+      if (await inspector.getAttribute('aria-hidden') === 'false') {
+        await inspector.getByRole('button', { name: 'Закрыть панель' }).click();
+      }
+      await page.locator(`[data-lesson-id="${savedLesson.id}"].constructor-card`).first().click();
+      await openScheduleInspector(page);
+      await expect(inspector.getByRole('heading', { name: item.title })).toBeVisible();
+      if (item.type === 'club') {
+        await expect(kind.getByRole('button', { name: 'Другие типы… · Кружок' })).toBeVisible();
+      } else {
+        await expect(kind.getByRole('button', { name: item.label, exact: true })).toHaveAttribute('aria-pressed', 'true');
+      }
+      if (item.type === 'lesson') {
+        await expect(online).not.toBeChecked();
+        await online.check();
+        await online.uncheck();
+        await expect(inspector.getByLabel('Кабинет', { exact: true })).toHaveValue('17');
+      } else {
+        await expect(online).toBeChecked();
+      }
+      await capture(`edit-${item.type}`, 'Сохранить правку');
+    }
+    if (viewport.width === 1366) {
+      await inspector.getByRole('button', { name: 'Закрыть панель' }).click();
+      await page.getByRole('button', { name: /5 класс, Понедельник: Обычный/ }).click();
+      await page.getByRole('group', { name: 'Выбор режима 5 класс · Понедельник' })
+        .getByRole('button', { name: 'Онлайн', exact: true }).click();
+      await page.locator('[data-cell="4:0"]').click({ position: { x: 5, y: 5 } });
+      await openScheduleInspector(page);
+      await inspector.getByRole('button', { name: 'Форма', exact: true }).click();
+      await expect(inspector.getByText('Онлайн по режиму дня', { exact: true })).toBeVisible();
+      await expect(online).toHaveCount(0);
+      await expect(inspector.getByLabel('Кабинет нового занятия')).toBeDisabled();
+      await inspector.getByRole('button', { name: 'Закрыть панель' }).click();
+      await page.locator('[data-cell="0:0"] .constructor-card').first().click();
+      await openScheduleInspector(page);
+      await expect(inspector.getByText('Онлайн по режиму дня', { exact: true })).toBeVisible();
+      await expect(online).toHaveCount(0);
+      await expect(inspector.getByLabel('Кабинет', { exact: true })).toBeDisabled();
+    }
+  });
+}
+
+test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue links', async ({ page, registerExperiment }) => {
+  test.setTimeout(75_000);
+  page.setDefaultTimeout(15_000);
+  const suffix = Date.now().toString(36);
+  const label = `9-А E2E editor ${suffix}`;
+  const classId = await createClass(page, label);
+  const groupId = await createGroup(page, 'E2E Английский · A', label);
+  const studentId = await addStudentToClass(page, classId, label, `Ученик редактора ${suffix}`);
+  await addMembership(page, groupId, studentId);
+  const teacherResponse = await page.request.get(`${API}/api/admin/people?kind=teacher`, { headers: ADMIN });
+  const teacherId = String((await teacherResponse.json()).items[0].id);
+  const catalog = await page.request.post(`${API}/api/admin/schedule/activities`, {
+    headers: ADMIN, data: { name: 'Тестовый курс', type: 'elective' },
+  });
+  expect(catalog.ok()).toBeTruthy();
+  const catalogId = (await catalog.json()).id;
+  const response = await page.request.post(`${API}/api/admin/schedule/experiments`, {
+    headers: ADMIN,
+    data: { name: 'E2E редактор · смена типа', source: 'empty', payload: {
+      draft_kind: 'test', days: [0], slots: [{ start: '09:00', end: '09:45' }, { start: '10:00', end: '10:45' }],
+      classes: [classId], lessons: [
+        { id: 'group-lesson', day: 0, period: 0, kind: 'lesson', activityType: 'lesson', subject: 'Английский язык',
+          teacherId, teacherIds: [teacherId], classId, classIds: [classId], groupId, groupIds: [groupId], room: 'каб. 17',
+          audience: { kind: 'groups', group_ids: [groupId] } },
+        { id: 'catalog-course', day: 0, period: 1, kind: 'lesson', activityType: 'elective', subject: 'Тестовый курс',
+          classId, classIds: [classId], eligibleGrades: [9],
+          audience: { kind: 'students', student_ids: [] }, activityCatalogId: catalogId, activityNameSnapshot: 'Тестовый курс' },
+      ],
+    } },
+  });
+  expect(response.ok()).toBeTruthy();
+  const draft = await response.json();
+  registerExperiment(draft.id);
+  const withException = await page.request.put(`${API}/api/admin/schedule/experiments/${draft.id}`, {
+    headers: ADMIN, data: { expected_revision: draft.revision, payload: { ...draft.payload,
+      lessons: draft.payload.lessons.map((lesson: { id: string; audience: object }) => lesson.id === 'group-lesson'
+        ? { ...lesson, audience: { ...lesson.audience, exclude_student_ids: [studentId] }, attendance_reason: 'Индивидуальное расписание' }
+        : lesson),
+    } },
+  });
+  expect(withException.ok()).toBeTruthy();
+
+  await page.goto('/admin/schedule/constructor?role=admin');
+  await page.getByRole('button', { name: /Тестовые ·/ }).click();
+  await page.locator('.constructor-draft-open').filter({ hasText: draft.id }).click();
+  await page.locator('.constructor-card[data-lesson-id="catalog-course"]').dblclick();
+  const editor = page.locator('.constructor-inspector');
+  const kind = editor.getByRole('group', { name: 'Тип занятия', exact: true });
+  await expect(editor.getByRole('heading', { name: 'Тестовый курс' })).toBeVisible();
+  await kind.getByRole('button', { name: 'Урок', exact: true }).click();
+  await expect(editor.getByText(/Привязка к каталогу будет снята/)).toBeVisible();
+  await editor.getByRole('button', { name: 'Отмена', exact: true }).click();
+  await expect(editor.getByRole('combobox', { name: 'Каталог', exact: true })).toHaveValue(catalogId);
+
+  await editor.getByRole('button', { name: 'Закрыть панель' }).click();
+  await page.locator('.constructor-card[data-lesson-id="group-lesson"]').dblclick();
+  await expect(editor.getByRole('heading', { name: 'Английский язык' })).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
+  const exceptions = editor.getByRole('button', { name: 'Изменить исключения · 1' });
+  await exceptions.press('Enter');
+  await expect(exceptions).toHaveAttribute('aria-expanded', 'true');
+  await expect(editor.getByText(/Индивидуальное расписание/)).toBeVisible();
+  await expect(editor.getByLabel('Не посещают это занятие')).toHaveValues([studentId]);
+  await exceptions.press('Space');
+  await expect(exceptions).toHaveAttribute('aria-expanded', 'false');
+  const availability = editor.getByRole('button', { name: 'Посмотреть занятость' });
+  await availability.press('Enter');
+  await expect(editor.getByText(/Занятые кабинеты/)).toBeVisible();
+  await availability.press('Space');
+  await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
+
+  await kind.getByRole('button', { name: 'Практикум', exact: true }).click();
+  await expect(editor.getByText('Преподаватель присутствует на практикуме?')).toBeVisible();
+  await editor.getByRole('button', { name: 'Только отвечает за задание' }).click();
+  await expect(editor.getByLabel('Ответственные за задание (без присутствия)')).toHaveValues([teacherId]);
+  await expect(editor.getByRole('combobox', { name: 'Преподаватель', exact: true })).toHaveValue('');
+  await kind.getByRole('button', { name: 'Консультация', exact: true }).click();
+  await expect(editor.getByRole('alert')).toHaveText('Выберите преподавателя консультации.');
+  await kind.getByRole('button', { name: 'Урок', exact: true }).click();
+  await editor.getByRole('combobox', { name: 'Преподаватель', exact: true }).selectOption(teacherId);
+  await kind.getByRole('button', { name: 'Другие типы…' }).click();
+  await kind.getByRole('button', { name: 'Кружок', exact: true }).click();
+  await expect(editor.getByText(/отмечены персональные исключения/)).toBeVisible();
+  await expect(editor.getByRole('button', { name: 'Продолжить', exact: true })).not.toBeVisible();
+  await editor.getByRole('button', { name: 'Отмена', exact: true }).click();
+  // A visible edit ensures the test exercises a persistence round trip.
+  await editor.getByRole('combobox', { name: 'Кабинет', exact: true }).fill('18');
+  const savedResponse = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname === `/api/admin/schedule/experiments/${draft.id}`);
+  await editor.getByRole('button', { name: 'Сохранить правку' }).click();
+  const saved = await savedResponse;
+  expect(saved.ok()).toBeTruthy();
+  const { payload } = await saved.json();
+  expect(payload.lessons).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'group-lesson', activityType: 'lesson', groupId,
+      audience: expect.objectContaining({ group_ids: [groupId], exclude_student_ids: [studentId] }),
+      attendance_history: [expect.objectContaining({ reason: 'Индивидуальное расписание' })],
+    }),
+    expect.objectContaining({ id: 'catalog-course', activityType: 'elective', activityCatalogId: catalogId, eligibleGrades: [9] }),
+  ]));
+  await page.keyboard.press('Escape');
+  await expect(editor).toHaveAttribute('aria-hidden', 'true');
 });
