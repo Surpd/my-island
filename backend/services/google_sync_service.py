@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from collections import Counter
 
 from backend.config import Settings
 from backend.database import Database
@@ -246,7 +247,8 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
         raise
     except (GoogleLiveError, ValueError, RuntimeError) as error:
         diagnostic = _journal_error_diagnostic(error)
-        database.record_journal_failure(spreadsheet_id, subject, diagnostic["message"], code=diagnostic["code"], details=diagnostic["details"], sheet_id=sheet_id)
+        if diagnostic["code"] != "period_conflict":
+            database.record_journal_failure(spreadsheet_id, subject, diagnostic["message"], code=diagnostic["code"], details=diagnostic["details"], sheet_id=sheet_id)
         database.record_audit_event("journal_sync.failed", "journal_sync", {"grade": grade, "subject": subject, "error_code": diagnostic["code"]})
         raise
     database.record_audit_event("journal_sync.success", "journal_sync", {"grade": grade, "spreadsheet_id": spreadsheet_id, "subject": sheet_title, **counts})
@@ -276,12 +278,28 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
         raise GoogleLiveError(f"В источнике {title} нет вкладок")
     outcomes = []
     valid_tabs = [tab for tab in tabs if str(tab.get("title", "")).strip() and tab.get("sheetId") is not None]
-    if term_number is not None:
-        valid_tabs = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] == term_number]
-        if not any(not classify_journal_values([], sheet_title=tab["title"]) for tab in valid_tabs):
-            raise ValueError("Предметных вкладок выбранного триместра нет. Проверьте источник.")
+    if term_number is not None and trigger_kind != "scheduled":
+        return _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs,
+                                       term_number=term_number, dry_run=dry_run, run_id=run_id)
+    scheduled_ids = None
+    if trigger_kind == "scheduled":
+        scope = database.journal_import_scope(target_id, grade)
+        current_term = scope["current_term"]
+        by_id = {str(row["sheet_id"]): row for row in scope["sources"] if row["sheet_id"] is not None}
+        # An hourly job cannot approve a recognized prefix by itself. Both the
+        # book's current-term setting and this existing tab's opt-in must agree.
+        scheduled_ids = {str(tab["sheetId"]) for tab in valid_tabs if (
+            (row := by_id.get(str(tab["sheetId"]))) and row["grade"] == grade and
+            row["academic_year"] == "2026/27" and row["term_number"] == current_term and
+            row.get("period_status") != "unassigned" and
+            subject_period_from_title(tab["title"])[1] in (None, current_term)
+        )}
     source_settings = load_source_settings(database, target_id)
     sync_tabs, skipped_count, excluded_count = select_sync_tabs(valid_tabs, source_settings, trigger_kind=trigger_kind)
+    if scheduled_ids is not None:
+        approved = [tab for tab in sync_tabs if str(tab["sheetId"]) in scheduled_ids]
+        skipped_count += len(sync_tabs) - len(approved)
+        sync_tabs = approved
     total_tabs = len(valid_tabs)
     sync_tab_ids = {str(tab.get("sheetId")) for tab in sync_tabs}
     for tab in valid_tabs:
@@ -332,7 +350,7 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             diagnostic = _journal_error_diagnostic(error)
             logging.getLogger(__name__).error("Journal tab import failed grade=%s error_type=%s category=%s", grade, type(error).__name__, diagnostic["code"])
             try:
-                if not dry_run:
+                if not dry_run and diagnostic["code"] != "period_conflict":
                     database.record_journal_failure(target_id, sheet_title.strip(), diagnostic["message"],
                         code=diagnostic["code"], details=diagnostic["details"],
                         grade=grade, spreadsheet_title=title, sheet_title=sheet_title, sheet_id=sheet_id)
@@ -359,6 +377,107 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             "skipped_tabs": skipped_count, "excluded_tabs": excluded_count, "tabs": outcomes}
 
 
+def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs, *, term_number, dry_run, run_id):
+    """Plan selected tabs with one Google read each, then write only if all pass."""
+    year = "2026/27"
+    scope = database.journal_import_scope(target_id, grade, year)
+    sources = scope["sources"]
+    selected = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] == term_number]
+    registered_grade = next((number for number, book in CURRENT_JOURNAL_SPREADSHEETS.items() if book == target_id), grade)
+    if registered_grade != grade or any(row["grade"] != grade for row in sources):
+        raise ValueError("Выбранный класс не соответствует этому источнику журнала.")
+
+    def subject_key(value):
+        return " ".join(str(value or "").casefold().replace("ё", "е").split())
+
+    occupied = {}
+    for row in sources:
+        if row["academic_year"] == year and row["term_number"] == term_number and not row["classification"]:
+            occupied.setdefault(subject_key(row["subject"]), []).append(row)
+    incoming = {}
+    metadata_ids = Counter(str(tab["sheetId"]) for tab in valid_tabs)
+    for tab in selected:
+        if not classify_journal_values([], sheet_title=tab["title"]):
+            label, _ = subject_period_from_title(tab["title"])
+            key = subject_key(label)
+            incoming[key] = incoming.get(key, 0) + 1
+
+    rows, prepared = [], []
+    for tab in selected:
+        sheet_id, sheet_title = str(tab["sheetId"]), str(tab["title"])
+        row = {"sheet_id": sheet_id, "subject": sheet_title}
+        rows.append(row)
+        if metadata_ids[sheet_id] > 1:
+            row.update(status="error", error_code="sheet_identity_conflict", error="ID вкладки встречается в книге больше одного раза.")
+            continue
+        stable = [prior for prior in sources if str(prior["sheet_id"]) == sheet_id or prior["sheet_title"] == sheet_title]
+        if any(prior["term_number"] not in (None, term_number) or prior["academic_year"] not in (None, year)
+               or (prior["term_number"] is None and prior["last_synced_at"] is not None) for prior in stable):
+            row.update(status="error", error_code="period_conflict", error="ID или название вкладки уже привязано к другому периоду.")
+            continue
+        if any(prior["sheet_id"] is not None and str(prior["sheet_id"]) != sheet_id for prior in stable):
+            row.update(status="error", error_code="sheet_identity_conflict", error="Название уже связано с другим ID вкладки.")
+            continue
+        auxiliary = classify_journal_values([], sheet_title=sheet_title)
+        if auxiliary:
+            row.update(status="skipped", classification=auxiliary["kind"], reason=auxiliary["reason"])
+            continue
+        label, _ = subject_period_from_title(sheet_title)
+        key = subject_key(label)
+        matches = occupied.get(key, [])
+        if incoming[key] > 1 or any(
+            str(prior["sheet_id"]) != sheet_id and (prior["sheet_id"] is not None or prior["sheet_title"] != sheet_title)
+            for prior in matches):
+            row.update(status="error", error_code="duplicate_subject_period", error="Другой ID вкладки уже связан с этим предметом и периодом.")
+            continue
+        if any(prior["excluded_from_journals"] for prior in stable):
+            row.update(status="error", error_code="excluded_subject", error="Вкладка исключена из журналов. Проверьте настройки источника.")
+            continue
+        try:
+            escaped_title = sheet_title.replace("'", "''")
+            values = client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
+            auxiliary = classify_journal_values(values, sheet_title=sheet_title)
+            if auxiliary:
+                row.update(status="skipped", classification=auxiliary["kind"], reason=auxiliary["reason"])
+                continue
+            parsed = parse_journal_values(values, grade=grade, subject=label, sheet_title=sheet_title, sheet_id=sheet_id)
+            row.update(status="success", counts={name: len(parsed[name]) for name in ("assessments", "students", "results", "summaries")})
+            prepared.append((row, label, parsed))
+        except Exception as error:
+            diagnostic = _journal_error_diagnostic(error)
+            row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"])
+
+    blocked = not prepared or any(row["status"] == "error" for row in rows)
+    if not dry_run and not blocked:
+        for index, (row, label, parsed) in enumerate(prepared, start=1):
+            try:
+                saved_source = {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade,
+                                "subject": label, "sheet_title": row["subject"], "sheet_id": row["sheet_id"],
+                                "academic_year": year, "term_number": term_number, "expected_term": term_number,
+                                "source_hash": parsed["source_hash"]}
+                row["counts"] = database.save_journal_snapshot(
+                    saved_source, parsed["assessments"], parsed["results"], parsed["students"], parsed["summaries"])
+            except Exception as error:
+                diagnostic = _journal_error_diagnostic(error)
+                row.pop("counts", None)
+                row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"])
+            if run_id is not None:
+                database.update_journal_sync_progress(run_id, {
+                    "completed_tabs": len(rows) - len(prepared) + index, "total_tabs": len(rows),
+                })
+    succeeded = sum(row["status"] == "success" for row in rows) if dry_run or not blocked else 0
+    failures = sum(row["status"] == "error" for row in rows)
+    skipped = sum(row["status"] == "skipped" for row in rows)
+    if not dry_run and blocked:
+        for row in rows:
+            if row["status"] == "success":
+                row.update(status="not_imported", reason="Импорт остановлен: не все вкладки прошли проверку.")
+    return {"spreadsheet_id": target_id, "spreadsheet_title": title, "grade": grade,
+            "status": "blocked" if blocked else "failed" if not succeeded else "partial" if failures else "success",
+            "successful_tabs": succeeded, "failed_tabs": failures, "skipped_tabs": skipped,
+            "excluded_tabs": 0, "tabs": rows}
+
+
 def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
     """Return admin-safe diagnostics; never copy request URLs, tokens, or roster rows to logs."""
     from backend.services.google_live import GoogleApiError
@@ -366,6 +485,10 @@ def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
         detail = str(error)[:700]
         if any(token in detail.casefold() for token in ("конфликт сопоставления", "невозможно однозначно сопоставить", "неоднозначное сопоставление")):
             return {"code": "assessment_mapping_conflict", "message": "Несколько работ совпадают. Проверьте даты и названия работ перед повтором.", "details": "Предыдущие оценки сохранены."}
+        if "класс или учебный год вкладки" in detail.casefold():
+            return {"code": "source_scope_conflict", "message": "Вкладка уже относится к другому классу или учебному году.", "details": "Предыдущие оценки сохранены."}
+        if "другой id вкладки" in detail.casefold():
+            return {"code": "duplicate_subject_period", "message": "Другой ID вкладки уже связан с этим предметом и периодом.", "details": "Предыдущие оценки сохранены."}
         if "период вкладки отличается" in detail.casefold():
             return {"code": "period_conflict", "message": "ID вкладки уже относится к другому триместру. Проверьте источник.", "details": "Предыдущие оценки сохранены."}
         if "не найден блок" in detail.casefold() or "неполный блок журнала" in detail.casefold():

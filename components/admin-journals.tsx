@@ -17,6 +17,8 @@ type JournalSource = {
   unmapped_count?: number; markers?: string[]; refreshing?: boolean;
   active_run_id?: string | number | null;
 };
+type JournalPreflightTab = { sheet_id?: string; label?: string; status: string; reason?: string };
+type JournalImportTab = { sheet_id?: string; subject?: string; status: string; error?: string };
 type KnownJournalSource = { grade: number; spreadsheet_id: string; connected: boolean };
 type GradeResult = { numeric_score: number | null; status: string | boolean | null } | null;
 type JournalStudent = { id: string | number; display_name: string; group_marker: string; identity_id?: string | number | null; class_name?: string | null; canonical_classes?: string[]; match_status: string; entry_kind?: 'individual' | 'team'; members?: Array<{ identity_id: string | number; display_name: string; class_name?: string | null }>; summaries: Array<{ label: string; summary_type?: string; numeric_value: number | null; text_value: string | null }>; results: Record<string, GradeResult> };
@@ -107,7 +109,7 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
   const [busy, setBusy] = useState('');
   const [actionError, setActionError] = useState('');
   const [connectionUrl, setConnectionUrl] = useState('');
-  const [previewMessage, setPreviewMessage] = useState('');
+  const [preflight, setPreflight] = useState<{ key: string; status: string; tabs: JournalPreflightTab[] } | null>(null);
   const [connectionGrade, setConnectionGrade] = useState(5);
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [progress, setProgress] = useState<Record<string, { completed: number; total: number }>>({});
@@ -279,53 +281,65 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
     return summary.text_value || '—';
   }
 
+  const preflightKey = JSON.stringify([connectionGrade, connectionUrl.trim(), 2]);
+  const checked = preflight?.key === preflightKey ? preflight : null;
+  const verifiedSubjects = checked?.tabs.filter(tab => tab.status === 'success').length || 0;
+  const hasPreflight = checked?.status === 'success' && verifiedSubjects > 0
+    && !checked.tabs.some(tab => tab.status === 'error' || tab.status === 'excluded');
+
   async function previewConnection() {
-    setBusy('preview'); setActionError(''); setPreviewMessage('');
+    const key = preflightKey;
+    setBusy('preview'); setActionError(''); setPreflight(null);
     try {
-      const result = await api<{ tabs: Array<{ status: string }> }>('/api/admin/journals/connect', {
+      const result = await api<{ status: string; tabs: JournalPreflightTab[] }>('/api/admin/journals/connect', {
         method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, term_number: 2, dry_run: true, auto_sync_enabled: false }),
       });
-      const subjects = result.tabs.filter(tab => tab.status !== 'skipped' && tab.status !== 'excluded');
-      const ready = subjects.filter(tab => tab.status === 'success').length;
-      setPreviewMessage(`Проверено без сохранения. Готово к импорту: ${ready} из ${subjects.length} предметных вкладок.`);
+      setPreflight({ key, status: result.status, tabs: result.tabs });
     } catch (error) { setActionError(errorText(error)); }
     finally { setBusy(''); }
   }
 
   async function connect(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!hasPreflight || busy) return;
     setBusy('connect'); setActionError('');
     try {
-      const result = await api<{ status: string; spreadsheet_id: string; auto_sync_enabled: boolean; scheduler_configured?: boolean; tabs?: Array<{ subject: string; status: string }> }>('/api/admin/journals/connect', {
+      const result = await api<{ status: string; spreadsheet_id: string; tabs?: JournalImportTab[] }>('/api/admin/journals/connect', {
         method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, auto_sync_enabled: false, term_number: 2 }),
       });
+      setPreflight(null);
+      if (result.status === 'blocked') {
+        setPreflight({ key: preflightKey, status: 'blocked', tabs: (result.tabs || []).map(tab => ({
+          sheet_id: tab.sheet_id, label: tab.subject, status: tab.status, reason: tab.error,
+        })) });
+        setActionError('Таблица не прошла повторную проверку. Ничего не импортировано.');
+        return;
+      }
       setConnectionOpen(false); setConnectionUrl('');
       const next = await loadSources();
-      const source = next.find((item) => item.spreadsheet_id === result.spreadsheet_id && item.term_number === 2);
+      const source = next.find((item) => item.spreadsheet_id === result.spreadsheet_id && item.term_number === 2 && item.grade === connectionGrade);
       if (source) await loadDetail(source.id);
-      if (result.status === 'partial') setActionError('Часть вкладок не обновилась. Проверьте сообщения в списке журналов.');
-    } catch (error) { setActionError(errorText(error)); }
+      if (result.status === 'partial' || result.status === 'failed') {
+        const tabs = result.tabs || [];
+        const failures = tabs.filter(tab => tab.status === 'error');
+        setActionError(`Импортировано вкладок: ${tabs.filter(tab => tab.status === 'success').length}. Не обновилось: ${failures.length}. ${failures.map(tab => [tab.subject, tab.error].filter(Boolean).join(': ')).join(' ')}`);
+      }
+    } catch (error) { setPreflight(null); setActionError(errorText(error)); }
     finally { setBusy(''); }
   }
 
-  async function connectKnownSource(source: KnownJournalSource) {
-    setBusy(`connect:${source.grade}`); setActionError('');
-    try {
-      const result = await api<{ status: string; spreadsheet_id: string; auto_sync_enabled: boolean; scheduler_configured?: boolean }>('/api/admin/journals/connect', {
-        method: 'POST', body: JSON.stringify({ grade: source.grade, spreadsheet_url: source.spreadsheet_id, auto_sync_enabled: false, term_number: 2 }),
-      });
-      const next = await loadSources();
-      const connected = next.find((item) => item.spreadsheet_id === result.spreadsheet_id && item.term_number === 2);
-      if (connected) await loadDetail(connected.id);
-      if (result.status === 'partial') setActionError('Часть вкладок не обновилась. Проверьте сообщения в списке журналов.');
-    } catch (error) { setActionError(errorText(error)); }
-    finally { setBusy(''); }
+  function connectKnownSource(source: KnownJournalSource) {
+    setConnectionGrade(source.grade);
+    setConnectionUrl(source.spreadsheet_id);
+    setPreflight(null);
+    setActionError('');
+    setConnectionOpen(true);
   }
 
   async function refreshBook(spreadsheetId: string, grade: number) {
     setBusy(`refresh:${spreadsheetId}`); setActionError('');
     try {
-      const query = new URLSearchParams({ grade: String(grade), spreadsheet_id: spreadsheetId, term_number: String(selectedTerm ?? 2) });
+      const query = new URLSearchParams({ grade: String(grade), spreadsheet_id: spreadsheetId, term_number: '2' });
       const result = await api<{ status: string; run_id?: string }>(`/api/admin/journals/refresh-grade?${query}`, { method: 'POST' });
       await loadSources();
       if (result.status === 'running') return;
@@ -554,7 +568,13 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
     {!detail ? <>
       <div className="journal-grade-tabs" role="tablist" aria-label="Класс">{gradeList.map((grade) => { const connected = knownSources.find((item) => item.grade === grade)?.connected ?? books.some((book) => book.grade === grade); const count = books.filter((book) => book.grade === grade).length; return <button key={grade} role="tab" aria-selected={selectedGrade === grade} className={selectedGrade === grade ? 'is-active' : ''} onClick={() => { setSelectedGrade(grade); setActionError(''); }}>{grade} класс<span>{count ? `${count} журналов` : connected ? 'нет активных вкладок' : 'не подключён'}</span></button>; })}</div>
       <div className="admin-page-actions journal-intro"><p>Выберите предмет, чтобы открыть оценки.{!schedulerConfigured ? <><br /><span className="admin-help-text">Журналы обновляются вручную.</span></> : null}</p><div className="admin-button-row"><button className={`admin-button ${matchingOpen ? 'admin-button--primary' : 'admin-button--quiet'}`} aria-pressed={matchingOpen} onClick={() => { const next = !matchingOpen; setMatchingOpen(next); if (next) { setActionError(''); void loadAllMatching(); } }}><Search size={15} /> Сопоставление учеников</button><button className="admin-button admin-button--primary" onClick={() => { setActionError(''); setConnectionOpen((value) => !value); }}><BookOpen size={15} /> Подключить Google Таблицу</button></div></div>
-      {connectionOpen ? <section className="admin-panel journal-connect-panel"><div><h2>Подключить Google Таблицу</h2><p className="admin-help-text">Выберите класс и проверьте предметные вкладки II триместра перед импортом.</p></div><form onSubmit={(event) => void connect(event)}><label htmlFor="journal-grade-select">Класс</label><select id="journal-grade-select" value={connectionGrade} onChange={(event) => { setConnectionGrade(Number(event.target.value)); setPreviewMessage(''); }}>{gradeList.map((grade) => <option value={grade} key={grade}>{grade} класс</option>)}</select><label htmlFor="journal-source-url">Ссылка на таблицу</label><input id="journal-source-url" value={connectionUrl} onChange={(event) => { setConnectionUrl(event.target.value); setPreviewMessage(''); }} placeholder="https://docs.google.com/spreadsheets/d/…" required />{previewMessage && <output>{previewMessage}</output>}<div className="admin-button-row"><button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || !connectionUrl.trim()} onClick={() => void previewConnection()}>Проверить без сохранения</button><button className="admin-button admin-button--primary" disabled={Boolean(busy)}>{busy === 'connect' ? <LoaderCircle size={15} className="admin-spin" /> : null} Подключить и импортировать</button><button type="button" className="admin-button admin-button--quiet" onClick={() => setConnectionOpen(false)}>Отмена</button></div></form></section> : null}
+      {connectionOpen ? <section className="admin-panel journal-connect-panel"><div><h2>Подключить Google Таблицу</h2><p className="admin-help-text">Выберите класс и проверьте предметные вкладки II триместра перед импортом.</p></div><form onSubmit={(event) => void connect(event)}><label htmlFor="journal-grade-select">Класс</label><select id="journal-grade-select" value={connectionGrade} onChange={(event) => { setConnectionGrade(Number(event.target.value)); setPreflight(null); }}>{gradeList.map((grade) => <option value={grade} key={grade}>{grade} класс</option>)}</select><label htmlFor="journal-source-url">Ссылка на таблицу</label><input id="journal-source-url" value={connectionUrl} onChange={(event) => { setConnectionUrl(event.target.value); setPreflight(null); }} placeholder="https://docs.google.com/spreadsheets/d/…" required />{checked && <div>
+      <output>{hasPreflight ? `Проверено без сохранения: ${verifiedSubjects} предметных вкладок. Можно импортировать.`
+        : verifiedSubjects ? `Проверено без сохранения: ${verifiedSubjects} вкладок прошли проверку. Импорт остановлен.`
+        : 'Предметные вкладки не прошли проверку. Импорт недоступен.'}</output>
+      <ul>{checked.tabs.map((tab, index) => <li key={`${tab.sheet_id || "tab"}:${index}`}><strong>{tab.label || 'Вкладка'}</strong>
+        {' · '}{tab.status === 'success' ? 'Проверена' : tab.reason || (tab.status === 'skipped' ? 'Не предметная' : 'Не импортируется')}</li>)}</ul>
+      </div>}<div className="admin-button-row"><button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || !connectionUrl.trim()} onClick={() => void previewConnection()}>Проверить без сохранения</button><button className="admin-button admin-button--primary" disabled={Boolean(busy) || !hasPreflight}>{busy === 'connect' ? <LoaderCircle size={15} className="admin-spin" /> : null} Подключить и импортировать</button><button type="button" className="admin-button admin-button--quiet" onClick={() => { setConnectionOpen(false); setPreflight(null); }}>Отмена</button></div></form></section> : null}
       {matchingOpen ? <section className="admin-panel journal-central-matching"><div className="journal-central-matching-heading"><div><p className="admin-eyebrow">ЖУРНАЛЫ</p><h2>Сопоставление учеников и команд</h2><p className="admin-help-text">Записи сгруппированы по имени внутри каждой таблицы и охватывают все её предметы. Данные таблиц загружаются при открытии этого раздела.</p>{Object.keys(matchingByBook).length ? <p className="admin-help-text">Загружено таблиц: {Object.keys(matchingByBook).length} · ожидают: {Object.values(matchingByBook).reduce((sum, data) => sum + data.individuals.length, 0)} имён · {Object.values(matchingByBook).reduce((sum, data) => sum + data.teams.length, 0)} команд</p> : null}</div><button className="admin-button admin-button--quiet" onClick={() => { setMatchingOpen(false); setMatching(null); setMatchingBook(''); }}>Закрыть</button></div>{busy === 'matching-all' ? <div className="admin-loading"><LoaderCircle size={16} className="admin-spin" /> Загружаем сопоставления по таблицам…</div> : null}<div className="journal-matching-books">{books.map((book) => { const data = matchingByBook[book.spreadsheetId]; return <button key={book.spreadsheetId} disabled={busy === 'matching-all'} className={`journal-matching-book ${matchingBook === book.spreadsheetId ? 'is-active' : ''}`} onClick={() => { setSelectedGrade(book.grade); void openMatching(book.spreadsheetId); }}><strong>{book.grade} класс · {book.title}</strong><span>{data ? `${data.individuals.length} имён ожидают · ${data.teams.length} команд` : matchingErrors[book.spreadsheetId] ? 'Ошибка загрузки' : 'Загрузка…'}</span></button>; })}</div>
         {matchingBook && !matching && busy === 'matching' ? <div className="admin-loading"><LoaderCircle size={16} className="admin-spin" /> Загружаем сопоставления…</div> : null}
         {matchingBook && matchingErrors[matchingBook] && !matching ? <div className="journal-source-error" role="alert"><AlertTriangle size={14} /><span>{matchingErrors[matchingBook]}</span><button className="admin-link" onClick={() => void openMatching(matchingBook)}>Повторить</button></div> : null}
@@ -583,7 +603,7 @@ export function AdminJournals({ api, apiOrigin }: { api: ApiRequest; apiOrigin: 
           <h3>Команды</h3>{!matching.teams.length ? <p className="admin-help-text">Командных записей нет.</p> : matching.teams.map((team) => { const selected = teamChoices[String(team.id)] || team.members.map((member) => String(member.identity_id)); return <div className="journal-mapping-row" key={`${matchingBook}:${team.id}`}><div><strong>{team.display_name}</strong><small>{team.subject} · группа {team.group_marker} · {team.result_count} результатов</small><small>Участники: {team.members.map((member) => member.display_name).join(', ') || 'не указаны'}</small></div><div className="journal-map-controls"><label>Найти участников<input value={matchSearch[`team:${team.id}`] || ''} onChange={(event) => void searchMatchPeople(`team:${team.id}`, event.target.value)} placeholder="Введите имя" /></label><label>Участники<select multiple aria-label={`Участники команды ${team.display_name}`} value={selected} onChange={(event) => setTeamChoices((current) => ({ ...current, [String(team.id)]: Array.from(event.target.selectedOptions, (option) => option.value) }))}>{[...team.members.map((member) => ({ id: member.identity_id, display_name: member.display_name, class_name: member.class_name })), ...(matchOptions[`team:${team.id}`] || [])].filter((person, index, all) => all.findIndex((candidate) => String(candidate.id) === String(person.id)) === index).map((person) => <option key={person.id} value={String(person.id)}>{person.display_name} · {person.class_name || 'класс не указан'}</option>)}</select></label><button className="admin-button admin-button--quiet" onClick={() => void saveTeamMembers(team.id)} disabled={Boolean(busy)}>Сохранить состав</button></div></div>; })}
         </div> : null}
       </section> : null}
-      {!gradeBooks.length ? <section className="admin-panel journal-empty"><div className="journal-empty-mark"><BookOpen size={23} /></div><h2>{selectedGrade} класс</h2><p>{gradeJournalSources.length && !activeGradeSources.length ? 'Все вкладки этого класса исключены из списка журналов. Их можно включить в настройках источников ниже.' : knownSources.find((source) => source.grade === selectedGrade)?.connected ? 'Таблица подключена, но импортированные предметы пока не появились.' : 'Для этого класса журнал ещё не подключён.'}</p>{gradeJournalSources.length && !activeGradeSources.length ? null : knownSources.find((source) => source.grade === selectedGrade) ? <button className="admin-button admin-button--primary" disabled={Boolean(busy)} onClick={() => void connectKnownSource(knownSources.find((source) => source.grade === selectedGrade)!)}>{busy === `connect:${selectedGrade}` ? <LoaderCircle size={15} className="admin-spin" /> : null}{knownSources.find((source) => source.grade === selectedGrade)?.connected ? 'Повторить подключение' : `Подключить журнал ${selectedGrade} класса`}</button> : <button className="admin-button admin-button--primary" onClick={() => { setConnectionGrade(selectedGrade); setConnectionOpen(true); }}>Подключить таблицу</button>}</section> : gradeBooks.map((book) => <section className="admin-panel journal-book" key={book.spreadsheetId}>
+      {!gradeBooks.length ? <section className="admin-panel journal-empty"><div className="journal-empty-mark"><BookOpen size={23} /></div><h2>{selectedGrade} класс</h2><p>{gradeJournalSources.length && !activeGradeSources.length ? 'Все вкладки этого класса исключены из списка журналов. Их можно включить в настройках источников ниже.' : knownSources.find((source) => source.grade === selectedGrade)?.connected ? 'Таблица подключена, но импортированные предметы пока не появились.' : 'Для этого класса журнал ещё не подключён.'}</p>{gradeJournalSources.length && !activeGradeSources.length ? null : knownSources.find((source) => source.grade === selectedGrade) ? <button className="admin-button admin-button--primary" disabled={Boolean(busy)} onClick={() => connectKnownSource(knownSources.find((source) => source.grade === selectedGrade)!)}>{busy === `connect:${selectedGrade}` ? <LoaderCircle size={15} className="admin-spin" /> : null}{knownSources.find((source) => source.grade === selectedGrade)?.connected ? 'Повторить подключение' : `Подключить журнал ${selectedGrade} класса`}</button> : <button className="admin-button admin-button--primary" onClick={() => { setConnectionGrade(selectedGrade); setConnectionOpen(true); }}>Подключить таблицу</button>}</section> : gradeBooks.map((book) => <section className="admin-panel journal-book" key={book.spreadsheetId}>
         <div className="journal-book-heading"><div><p className="admin-eyebrow">УЧЕБНЫЙ ГОД 2026/27</p><h2>{book.grade} класс</h2><p>{book.title} <a href={`https://docs.google.com/spreadsheets/d/${encodeURIComponent(book.spreadsheetId)}/edit`} target="_blank" rel="noreferrer" aria-label="Открыть оригинальную таблицу"><ExternalLink size={13} /></a></p></div><div className="journal-book-actions"><span className={`journal-sync-status ${book.refreshing ? 'is-running' : book.error ? 'is-error' : 'is-ready'}`}><i />{book.refreshing ? (progress[book.spreadsheetId]?.total ? `Обновляется ${progress[book.spreadsheetId].completed} из ${progress[book.spreadsheetId].total}` : 'Обновляется') : book.error ? 'Есть ошибка' : `Обновлено ${dateText(book.syncedAt)}`}</span><button className="admin-button admin-button--quiet" disabled={Boolean(busy) || book.refreshing} onClick={() => void refreshBook(book.spreadsheetId, book.grade)}><RefreshCw size={15} className={busy.startsWith('refresh:') ? 'admin-spin' : ''} /> {busy === `refresh:${book.spreadsheetId}` ? 'Обновляем…' : 'Обновить сейчас'}</button><label className="journal-toggle"><input type="checkbox" checked={book.auto} disabled={Boolean(busy) || !schedulerConfigured} onChange={(event) => void setAutomation(book.spreadsheetId, event.target.checked)} /><span>{schedulerConfigured ? 'Автоматически каждый час' : 'Расписание не настроено'}</span></label></div></div>
         {book.error && <details className="admin-panel"><summary>Ошибки обновления</summary>{book.subjects.filter((source) => sourceMode(source, sourceModes) !== 'excluded' && source.last_error).map((source) => <div className="journal-source-error" key={`error:${source.id}`}><AlertTriangle size={14} /><span>Вкладка «{source.sheet_title}»: {source.last_error || book.error || 'Не удалось обновить. Предыдущие данные сохранены.'}</span><button type="button" className="admin-link" disabled={Boolean(busy) || book.refreshing} onClick={() => void refreshSource(source)}>Повторить обновление вкладки</button></div>)}</details>}
         <div className="journal-subject-heading"><strong>Предметы</strong><span>{journalSubjectGroups(book.subjects).length}</span></div><div className="journal-subject-grid">{journalSubjectGroups(book.subjects).map(({ subject, periods }) => { const source = periods.find((item) => item.term_number === 2) || periods[0]; const terms = periods.filter((item) => item.term_number).map((item) => ['I', 'II', 'III'][Number(item.term_number) - 1]).join(' · '); const mode = sourceMode(source, sourceModes); const hasError = Boolean(source.last_error || source.status === 'error'); return <button key={subject} className="journal-subject-card" onClick={() => { setActionError(''); void loadDetail(source.id, '', 2); }}><span className="journal-subject-icon"><BookOpen size={15} /></span><span className="journal-subject-copy"><strong>{subject}</strong><small>{terms ? `${terms} триместр${periods.some((item) => item.term_number === 2) ? ' · открыт II' : ' · II пока отсутствует'} · ` : ''}{source.assessment_count || 0} работ · {source.roster_student_count || 0} учеников{source.team_count ? ` · ${source.team_count} команд` : ''}{mode === 'manual' ? ' · обновление вручную' : ''}</small></span><span className={`journal-subject-state ${hasError ? 'is-error' : ''}`} title={mode === 'manual' ? 'Синхронизация по расписанию пропускает эту вкладку; её можно обновить вручную.' : source.status === 'empty' ? 'Вкладка без оценок' : hasError ? 'Не удалось обновить вкладку. Предыдущие данные сохранены.' : 'Обновлено'}>{hasError ? <AlertTriangle size={15} /> : mode === 'manual' ? <RefreshCw size={15} /> : <CheckCircle2 size={15} />}</span></button>; })}</div>

@@ -225,3 +225,36 @@ test('other routes retain their sidebar mode', async ({ page }) => {
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(188);
   expect((await page.locator('.admin-console-main').boundingBox())!.x).toBeGreaterThanOrEqual(187);
 });
+
+test('II import is gated on fresh preflight of the exact class and book', async ({ page }) => {
+  let previewCalls = 0;
+  await page.route('**/api/admin/journals/connect', async (route) => {
+    const input = route.request().postDataJSON();
+    expect(input).toMatchObject({ grade: 5, term_number: 2, dry_run: true, auto_sync_enabled: false });
+    previewCalls++;
+    await route.fulfill({ json: previewCalls === 1 ? {
+      status: 'success', tabs: [{ sheet_id: '2', label: 'II · История', status: 'success' }],
+    } : {
+      status: 'blocked', tabs: [{ sheet_id: '2', label: 'II · История', status: 'error',
+        reason: 'ID или название вкладки уже привязано к другому периоду.' }],
+    } });
+  });
+  await page.getByRole('button', { name: 'Все журналы' }).click();
+  await page.getByRole('tab', { name: /^5 класс/ }).click();
+  await page.getByRole('button', { name: 'Подключить таблицу', exact: true }).click();
+  const editor = page.locator('.journal-connect-panel');
+  const source = editor.getByLabel('Ссылка на таблицу');
+  const commit = editor.getByRole('button', { name: 'Подключить и импортировать' });
+  const preview = editor.getByRole('button', { name: 'Проверить без сохранения' });
+  await source.fill('synthetic-journal-workbook-a');
+  await expect(commit).toBeDisabled();
+  await preview.click();
+  await expect(editor.getByText('II · История')).toBeVisible();
+  await expect(commit).toBeEnabled();
+  await source.fill('synthetic-journal-workbook-b');
+  await expect(commit).toBeDisabled();
+  await preview.click();
+  await expect(editor.getByText(/привязано к другому периоду/)).toBeVisible();
+  await expect(commit).toBeDisabled();
+  expect(previewCalls).toBe(2);
+});

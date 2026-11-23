@@ -441,8 +441,8 @@ def _refresh_grade_journal_background(database: Database, settings: Any, grade: 
         tabs = result.get("tabs", [])
         success_count = sum(item.get("status") == "success" for item in tabs)
         failed_count = sum(item.get("status") == "error" for item in tabs)
-        run_status = "success" if result.get("status") == "success" else "partial"
-        database.finish_journal_sync(run_id, status=run_status, counts={"completed_tabs": len(tabs), "total_tabs": len(tabs), "succeeded": success_count, "failed": failed_count, "skipped": sum(tab.get("status") == "skipped" for tab in tabs), "excluded": sum(tab.get("status") == "excluded" for tab in tabs)})
+        run_status = {"success": "success", "blocked": "error", "failed": "error"}.get(result.get("status"), "partial")
+        database.finish_journal_sync(run_id, status=run_status, counts={"completed_tabs": len(tabs), "total_tabs": len(tabs), "succeeded": success_count, "failed": failed_count, "skipped": sum(tab.get("status") == "skipped" for tab in tabs), "excluded": sum(tab.get("status") == "excluded" for tab in tabs), **({"not_imported": sum(tab.get("status") == "not_imported" for tab in tabs)} if term_number is not None else {})})
         if trigger_kind == "manual" and actor_id is not None:
             try:
                 database.record_audit_event("journal_sync.completed", "journal_sync", {"spreadsheet_id": spreadsheet_id, "grade": grade, "status": run_status}, actor_id)
@@ -1167,7 +1167,9 @@ def create_router(database: Database) -> APIRouter:
             except (GoogleLiveError, ValueError, RuntimeError) as error:
                 raise HTTPException(status_code=502, detail="Не удалось проверить вкладки. Проверьте доступ и выбранный период.") from error
             return {"dry_run": True, "status": preview["status"], "tabs": [
-                {"status": tab["status"], "counts": tab.get("counts", {}), "error_code": tab.get("error_code")}
+                {"sheet_id": tab.get("sheet_id"), "label": " ".join(str(tab.get("subject") or "").split())[:160],
+                 "status": tab["status"], "counts": tab.get("counts", {}), "error_code": tab.get("error_code"),
+                 "reason": tab.get("error") or tab.get("reason")}
                 for tab in preview["tabs"]]}
         already_connected = any(item["spreadsheet_id"] == spreadsheet_id for item in database.journal_status())
         run_id = database.start_journal_sync(spreadsheet_id, payload.grade, None, "manual")
@@ -1177,11 +1179,16 @@ def create_router(database: Database) -> APIRouter:
             result = refresh_grade_journal(database, get_settings(), payload.grade, spreadsheet_id=spreadsheet_id, term_number=payload.term_number)
             success = result.get("status") == "success"
             scheduler_configured = database.journal_scheduler_configured()
-            automation_enabled = success and payload.auto_sync_enabled and scheduler_configured
+            # A term-specific manual import does not opt any source into the cron.
+            automation_enabled = payload.term_number is None and success and payload.auto_sync_enabled and scheduler_configured
             if automation_enabled and not already_connected:
                 database.set_journal_auto_sync(spreadsheet_id, True)
-            database.finish_journal_sync(run_id, status="success" if success else "partial", counts={"tabs": len(result.get("tabs", []))})
-            database.record_audit_event("journal_source.connected", "journal_source", {"spreadsheet_id": spreadsheet_id, "grade": payload.grade, "auto_sync_enabled": automation_enabled}, actor["id"])
+            tabs = result.get("tabs", [])
+            database.finish_journal_sync(run_id, status="success" if success else "error" if result.get("status") in ("blocked", "failed") else "partial",
+                counts={"tabs": len(tabs), "succeeded": sum(tab["status"] == "success" for tab in tabs),
+                        "failed": sum(tab["status"] == "error" for tab in tabs), "not_imported": sum(tab["status"] == "not_imported" for tab in tabs)})
+            if result.get("status") not in ("blocked", "failed"):
+                database.record_audit_event("journal_source.connected", "journal_source", {"spreadsheet_id": spreadsheet_id, "grade": payload.grade, "auto_sync_enabled": automation_enabled}, actor["id"])
             return {**result, "auto_sync_enabled": automation_enabled, "scheduler_configured": scheduler_configured}
         except (GoogleLiveError, ValueError, RuntimeError) as error:
             database.finish_journal_sync(run_id, status="error", error=str(error))

@@ -4061,13 +4061,23 @@ class Database:
                 lock_key = f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}"
                 self.execute(connection, "SELECT pg_advisory_xact_lock(hashtext(?))", (lock_key,))
             if source.get("sheet_id") is not None:
-                source_row = self.execute(connection, "SELECT id, academic_year, term_number, period_status FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
+                source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
                 if not source_row:
                     # Upgrade pre-stable-ID sources in place, retaining their
                     # student mappings, assessment IDs and grade history.
-                    source_row = self.execute(connection, "SELECT id, academic_year, term_number, period_status FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
+                    source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
             else:
-                source_row = self.execute(connection, "SELECT id, academic_year, term_number, period_status FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
+                source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
+            expected_term = source.get("expected_term")
+            if expected_term is not None:
+                if source.get("term_number") != expected_term:
+                    raise ValueError("Период вкладки отличается от выбранного.")
+                if source_row and (source_row["grade"] != source["grade"] or
+                        (source_row["academic_year"] and source_row["academic_year"] != source["academic_year"])):
+                    raise ValueError("Класс или учебный год вкладки отличается от сохранённого.")
+                if source_row and ((source_row["term_number"] and int(source_row["term_number"]) != expected_term)
+                                   or (not source_row["term_number"] and source_row["last_synced_at"] is not None)):
+                    raise ValueError("Период вкладки отличается от сохранённого.")
             settings = self.execute(connection, "SELECT current_term FROM journal_term_settings WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ?", (source["spreadsheet_id"], source["grade"], source.get("academic_year", "2026/27"))).fetchone()
             current_term = int(settings["current_term"]) if settings else 1
             source["academic_year"] = source.get("academic_year") or "2026/27"
@@ -4089,6 +4099,8 @@ class Database:
                 occupied_by_other = self.execute(connection, "SELECT id FROM journal_sources WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ? AND subject = ? AND term_number = ?" + exclusion + " LIMIT 1", parameters).fetchone()
             else:
                 occupied_by_other = None
+            if expected_term is not None and occupied_by_other:
+                raise ValueError("Другой ID вкладки уже связан с этим предметом и периодом.")
             if occupied_by_other and (not source_row or not source_row["term_number"] or source_row["period_status"] == "unassigned"):
                 term_number = None
             period_status = "unassigned" if term_number is None or occupied_by_other else ("current" if term_number == current_term else "archived")
@@ -4941,6 +4953,16 @@ class Database:
         with self.connection() as connection:
             cursor = self.execute(connection, "UPDATE journal_sources SET auto_sync_enabled = ? WHERE spreadsheet_id = ?", (bool(enabled), spreadsheet_id))
             return int(cursor.rowcount or 0)
+
+    def journal_import_scope(self, spreadsheet_id: str, grade: int, academic_year: str = "2026/27") -> dict[str, Any]:
+        """Read only source identity/period and established workbook approval."""
+        with self.connection() as connection:
+            sources = self.execute(connection, """SELECT id,grade,academic_year,term_number,period_status,
+                subject,sheet_title,sheet_id,classification,auto_sync_enabled,excluded_from_journals,last_synced_at
+                FROM journal_sources WHERE spreadsheet_id=?""", (spreadsheet_id,)).fetchall()
+            period = self.execute(connection, """SELECT current_term FROM journal_term_settings
+                WHERE spreadsheet_id=? AND grade=? AND academic_year=?""", (spreadsheet_id, grade, academic_year)).fetchone()
+            return {"sources": [dict(row) for row in sources], "current_term": int(period["current_term"]) if period else 1}
 
     def journal_source_sync_settings(self, spreadsheet_id: str) -> list[dict[str, Any]]:
         with self.connection() as connection:

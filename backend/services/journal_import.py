@@ -430,7 +430,7 @@ def classify_journal_values(values: Sequence[Sequence[object]], *, sheet_title: 
 def sync_journal_values(
     database: Database, values: Sequence[Sequence[object]], *, spreadsheet_id: str,
     spreadsheet_title: str, grade: int, subject: str, sheet_title: str,
-    sheet_id: int | str | None = None,
+    sheet_id: int | str | None = None, expected_term: int | None = None,
 ) -> dict[str, int]:
     canonical_subject, explicit_term = subject_period_from_title(sheet_title)
     parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title, sheet_id=sheet_id)
@@ -438,6 +438,6 @@ def sync_journal_values(
     school_year = f"{school_year_start}/{str(school_year_start + 1)[-2:]}"
     source = {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "grade": grade,
               "subject": canonical_subject, "sheet_title": sheet_title, "sheet_id": sheet_id,
-              "academic_year": school_year, "term_number": explicit_term,
+              "academic_year": school_year, "term_number": explicit_term, "expected_term": expected_term,
               "source_hash": parsed["source_hash"]}
     return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"], parsed["students"], parsed["summaries"])
