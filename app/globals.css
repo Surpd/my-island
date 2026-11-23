@@ -3715,8 +3715,8 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-card.multislot { border-left-width: 4px; border-left-color: #6c71ae; }
 .constructor-card.event-continues { border-bottom-color: #6c71ae; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 .constructor-card.event-continuation { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
-.constructor-inspector label.constructor-informational, .constructor-create-form label.constructor-informational { display: flex; align-items: center; gap: 7px; }
-.constructor-inspector label.constructor-informational input[type="checkbox"], .constructor-create-form label.constructor-informational input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; }
+.constructor-inspector label:is(.constructor-informational, .constructor-online-format), .constructor-create-form label:is(.constructor-informational, .constructor-online-format) { display: flex; align-items: center; gap: 7px; }
+.constructor-inspector label:is(.constructor-informational, .constructor-online-format) input[type="checkbox"], .constructor-create-form label:is(.constructor-informational, .constructor-online-format) input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; }
 .constructor-head { flex-direction: column; justify-content: center; gap: 2px; padding: 4px 4px 3px; }
 .constructor-column-resizer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; width: 10px; cursor: col-resize; touch-action: none; }
 .constructor-column-resizer::after { content: ''; position: absolute; top: 5px; bottom: 5px; left: 4px; width: 2px; border-radius: 2px; background: transparent; }
