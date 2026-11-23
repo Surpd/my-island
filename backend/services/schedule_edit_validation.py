@@ -18,6 +18,22 @@ def normalized_note(value):
     return " ".join(str(value or "").strip(" .").casefold().split())
 
 
+# Exact legacy field/overlap reasons only. Never clear arbitrary words or an
+# import error just because a day has a mode.
+_ROOM_ONLY_NOTES = {
+    "кабинет не указан", "не указан кабинет", "для очного занятия не указан кабинет",
+}
+_SDEP_ONLY_NOTES = _ROOM_ONLY_NOTES | {
+    TEACHER_IDENTITY_NOTE, TEACHER_ASSIGNMENT_NOTE, "преподаватель пока не назначен",
+    "преподаватель занятия не подтверждён", "преподаватель не указан", "не указан преподаватель",
+}
+
+
+def day_mode_review_reason(value, *, sdep_display=False, online=False):
+    waived = _SDEP_ONLY_NOTES if sdep_display else _ROOM_ONLY_NOTES if online else ()
+    return "; ".join(clause for clause in notes(value) if normalized_note(clause) not in waived)
+
+
 def subject_key(value):
     return subject_label(value).casefold()
 

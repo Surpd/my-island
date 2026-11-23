@@ -62,6 +62,22 @@ class ScheduleNormalizationTests(unittest.TestCase):
         self.assertEqual(second["automatic_count"], 0)
         self.assertEqual(second["manual_count"], 2)
 
+    def test_day_mode_retained_warnings_are_projection_only(self):
+        room = "Кабинет не указан"
+        staff = "Не подтверждён преподаватель"
+        common = {"needsClarification": True, "day": 4, "subject": "Synthetic"}
+        lessons = [
+            {**common, "id": "zd", "classIds": ["class-10"], "clarificationReason": f"{room}; {staff}"},
+            {**common, "id": "mixed", "classIds": ["class-10", "unknown-class"], "clarificationReason": room},
+            {**common, "id": "remote", "classIds": ["class-9"], "format": "online",
+             "clarificationReason": f"{room}; {staff}"},
+            {**common, "id": "import", "classIds": ["class-10"], "clarificationReason": room, "importError": True},
+        ]
+        draft = {"id": "modes", "payload": {"grade_modes": {"10": {"4": "sdep"}}, "lessons": lessons}}
+        preview = normalization_preview(draft, verified_classes={"class-9": "9", "class-10": "10"})
+        self.assertEqual({item["reason"]: item["count"] for item in preview["retained_warnings"]}, {room: 2, staff: 1})
+        self.assertEqual(normalized_copy_payload(draft, preview)["lessons"], lessons)
+
     def test_realistic_357_row_preview_preserves_unclassified_rows(self):
         lessons = [{"id": f"ordinary-{i}", "subject": "Синтетический урок"} for i in range(345)]
         lessons.extend({"id": f"legacy-{block}-{i}", "blockId": f"source:{block}:electives",

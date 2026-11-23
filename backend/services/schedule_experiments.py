@@ -403,22 +403,35 @@ def _time_minutes(value: Any) -> int | None:
     return hour * 60 + minute if 0 <= hour < 24 and 0 <= minute < 60 else None
 
 
-def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any], class_grades: Mapping[str, str]) -> set[str]:
+def _lesson_day_modes(payload: Mapping[str, Any], lesson: Mapping[str, Any],
+                      class_grades: Mapping[str, str], *, audience_grades: set[str] | None = None) -> set[str]:
     rule = _lesson_audience(lesson)
-    class_ids = {str(value) for value in (lesson.get("classIds") or []) if value}
-    class_ids.update(str(value) for value in (rule.get("class_ids") or rule.get("group_ids") or []) if value)
-    class_ids.update(str(value) for value in (lesson.get("groupIds") or []) if value)
-    class_ids.update(str(value) for value in (lesson.get("classId"), lesson.get("groupId")) if value)
+    classes = {str(value) for value in [*(lesson.get("classIds") or []), *(rule.get("class_ids") or []),
+                                       lesson.get("classId")] if value}
+    # Instructional group IDs need not encode a grade. Explicit administrative
+    # class IDs, on the other hand, must never disappear from the scope.
+    group_ids = {str(value) for value in [*(rule.get("group_ids") or []), *(lesson.get("groupIds") or []),
+                                         lesson.get("groupId")] if value}
     try:
         weekday = int(lesson.get("day", lesson.get("weekday", -1)))
     except (TypeError, ValueError):
         return set()
-    grades = {class_grades.get(str(class_id), "") for class_id in class_ids}
+    grades = {class_grades.get(key, "") for key in classes}
+    grades.update(grade for key in group_ids if (grade := class_grades.get(key)))
     if rule.get("grade"):
         grades.add(str(rule["grade"]))
-    grades.discard("")
-    modes = {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] for grade in grades}
-    return {str(mode) for mode in modes if mode is not None}
+    def modes_for(values):
+        return {resolve_payload_day_mode(payload, grade, weekday, class_grades)[0] or "unresolved"
+                if grade else "unresolved" for grade in values}
+
+    modes = modes_for(grades)
+    if audience_grades and modes in ({"sdep"}, {"online"}):
+        modes.update(modes_for(audience_grades))
+    return modes
+
+
+def lesson_is_sdep_display(lesson: Mapping[str, Any], modes: set[str]) -> bool:
+    return _lesson_activity_type(lesson) != "consultation" and modes == {"sdep"}
 
 
 def lesson_is_online(lesson: Mapping[str, Any], modes: set[str]) -> bool:
@@ -430,7 +443,7 @@ def lesson_is_online(lesson: Mapping[str, Any], modes: set[str]) -> bool:
 def physical_room_key(lesson, payload, grades):
     from backend.services.schedule_rooms import room_key
     modes = _lesson_day_modes(payload, lesson, grades)
-    if lesson_is_online(lesson, modes) or modes == {"sdep"}:
+    if lesson_is_online(lesson, modes) or lesson_is_sdep_display(lesson, modes):
         return ""
     key = room_key(lesson.get("room"))
     return "" if key in {"онлайн", "online"} else key

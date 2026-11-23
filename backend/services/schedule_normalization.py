@@ -163,7 +163,8 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
                           verified_teacher_assignments: set[tuple[str, str, str]] | None = None,
                           verified_classes: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Plan only evidence-backed legacy type updates; all other rows are preserved."""
-    from backend.services.schedule_experiments import _lesson_activity_type
+    from backend.services.schedule_edit_validation import day_mode_review_reason
+    from backend.services.schedule_experiments import _lesson_activity_type, _lesson_day_modes, lesson_is_online, lesson_is_sdep_display
 
     payload = draft.get("payload") if isinstance(draft.get("payload"), Mapping) else {}
     lessons = payload.get("lessons") if isinstance(payload.get("lessons"), list) else []
@@ -263,6 +264,13 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             reason = without_scope_clauses(reason, scope_evidence[lesson_id][1])
             if not reason:
                 continue
+        if not row.get("importError"):
+            modes = _lesson_day_modes(payload, row, verified_classes or {})
+            if lesson_is_sdep_display(row, modes) or lesson_is_online(row, modes):
+                reason = day_mode_review_reason(reason, sdep_display=lesson_is_sdep_display(row, modes),
+                                                online=lesson_is_online(row, modes))
+                if not reason:
+                    continue
         retained_warning_counts[reason] += 1
         if len(retained_warning_examples[reason]) < 5:
             retained_warning_examples[reason].append({"lesson_id": lesson_id, "subject": str(row.get("subject") or "Занятие")})

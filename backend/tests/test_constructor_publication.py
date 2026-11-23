@@ -606,15 +606,16 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.database.create_membership(class11["id"], student11["id"], "student", "synthetic")
         sdep10 = self.lesson(id="sdep-10", classId=str(class10["id"]), classIds=[str(class10["id"])],
             audience={"kind": "classes", "class_ids": [str(class10["id"])]}, subject="English", room="101",
-            teacherId=str(self.teacher["id"]), sdepIndependent=False)
+            teacherId=str(self.teacher["id"]), day=4, sdepIndependent=False)
         sdep11 = self.lesson(id="sdep-11", classId=str(class11["id"]), classIds=[str(class11["id"])],
             audience={"kind": "classes", "class_ids": [str(class11["id"])]}, subject="Math", room="101",
-            teacherId=str(self.teacher["id"]), sdepIndependent=False)
-        normal9 = self.lesson(id="normal-9", subject="History", room="101", teacherId=str(self.teacher["id"]))
+            teacherId=str(self.teacher["id"]), day=4, sdepIndependent=False)
+        normal9 = self.lesson(id="normal-9", subject="History", room="101", teacherId=str(self.teacher["id"]), day=4)
         draft = self.draft([sdep10, sdep11, normal9])
         payload = copy.deepcopy(draft["payload"])
         payload["classes"] = [str(self.group["id"]), str(class10["id"]), str(class11["id"])]
-        payload["grade_modes"] = {"10": {"0": "sdep"}, "11": {"0": "sdep"}}
+        payload["days"] = [0, 4]
+        payload["grade_modes"] = {"10": {"4": "sdep"}, "11": {"4": "sdep"}}
         draft = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=payload)
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
         codes = [item["code"] for item in preview["diagnostics"]]
@@ -628,6 +629,7 @@ class ConstructorPublicationTests(unittest.TestCase):
             projection = canonical.project_student(self.database, student["id"], "2026-10-19")
             plan = next(item for item in projection["items"] if item.get("day_mode") == "sdep")
             self.assertEqual(plan["activity"], expected)
+            self.assertEqual(projection["day_modes"], [{"date": "2026-10-23", "mode": "sdep"}])
             self.assertNotIn("teacher_ids", plan)
             self.assertNotIn("room", plan)
         teacher_items = canonical.project_teacher(self.database, self.teacher["id"], "2026-10-19")["items"]
@@ -641,8 +643,8 @@ class ConstructorPublicationTests(unittest.TestCase):
         stale_payload["grade_modes"] = {"10": {"0": "sdep"}}
         stale_draft = save_experiment(self.database, stale_draft["id"], expected_revision=stale_draft["revision"], payload=stale_payload)
         stale_preview = preview_publication(self.database, stale_draft["id"], scope_kind="template", expected_revision=stale_draft["revision"])
-        stale_issue = next(item for item in stale_preview["diagnostics"] if item["code"] == "unknown_teacher")
-        self.assertEqual(stale_issue["severity"], "info")
+        stale_codes = {item["code"] for item in stale_preview["diagnostics"]}
+        self.assertFalse({"unknown_teacher", "missing_room", "missing_teacher"} & stale_codes)
         self.assertEqual(stale_preview["summary"]["deferred_lessons"], 0)
 
     def test_online_stale_room_does_not_create_physical_room_collision(self):
@@ -673,6 +675,45 @@ class ConstructorPublicationTests(unittest.TestCase):
         competing_codes = [item["code"] for item in competing_preview["diagnostics"]]
         self.assertTrue({"teacher_overlap", "joint_activity_unconfirmed"} & set(competing_codes))
         self.assertNotIn("room_overlap", competing_codes)
+
+    def test_explicit_sped_friday_waives_only_exact_field_advisories(self):
+        class10 = self.database.create_group("10A", "class", base_class_name="10")
+        student10 = self.database.create_identity("student", "Synthetic Student 10", "10A")
+        self.database.create_membership(class10["id"], student10["id"], "student", "synthetic")
+        id10 = str(class10["id"])
+        id9 = str(self.group["id"])
+        base = dict(classId=id10, classIds=[id10], groupId=id10, groupIds=[id10], day=4,
+                    audience={"kind": "classes", "class_ids": [id10]}, teacherId="",
+                    room="", needsClarification=True)
+        irrelevant = "Не подтверждён преподаватель; Для очного занятия не указан кабинет"
+        def trial(*, configured=True, **kwargs):
+            draft = self.draft([self.lesson(id="friday-entry", **(base | kwargs))])
+            payload = copy.deepcopy(draft["payload"])
+            payload.update(classes=[id9, id10], days=[0, 4], grade_modes={"10": {"4": "sdep"}} if configured else {})
+            draft = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=payload)
+            return preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        def codes(preview):
+            return {x["code"] for x in preview["diagnostics"] if x.get("lesson_id") == "friday-entry"}
+        self.assertFalse(codes(trial(clarificationReason=irrelevant)) & {"review_required", "missing_room", "missing_teacher"})
+        self.assertIn("review_required", codes(trial(clarificationReason=irrelevant + "; Проверить исходную аудиторию")))
+        self.assertIn("mixed_day_modes_unsupported", codes(trial(classIds=[id9, id10], clarificationReason=irrelevant)))
+        for ordinary in (trial(day=0, clarificationReason=irrelevant), trial(configured=False, clarificationReason=irrelevant)):
+            self.assertTrue({"missing_teacher", "missing_room"} <= codes(ordinary))
+        self.assertIn("review_required", codes(trial(importError=True, clarificationReason=irrelevant)))
+
+    def test_explicit_online_keeps_student_and_teacher_collisions(self):
+        lessons = [
+            self.lesson(id="remote-a", format="online", subject="Math", room="101", needsClarification=True,
+                        clarificationReason="Кабинет не указан"),
+            self.lesson(id="remote-b", format="online", subject="History", room="101"),
+        ]
+        draft = self.draft(lessons)
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        codes = {x["code"] for x in preview["diagnostics"]}
+        self.assertNotIn("room_overlap", codes)
+        self.assertNotIn("review_required", codes)
+        self.assertIn("teacher_overlap", codes)
+        self.assertIn("student_overlap", codes)
 
     def test_explicit_lunch_publishes_without_routine_scope_advisory(self):
         lunch = self.lesson(subject="Обед", specialMark="lunch", teacherId="", needsClarification=True,

@@ -26,10 +26,11 @@ from backend.services import canonical_schedule as canonical
 from backend.services.schedule_experiments import (
     get_experiment, experiment_week_audience_preview, _is_lunch_lesson, _lesson_activity_type, _lesson_audience,
     _lesson_interval, _lesson_weekday, _canonical_time,
-    _lesson_day_modes, lesson_is_online, payload_day_mode_conflicts,
+    _lesson_day_modes, lesson_is_online, lesson_is_sdep_display, payload_day_mode_conflicts,
 )
 from backend.services.constructor_resolution import validated_exceptions
 from backend.services.schedule_rooms import room_key
+from backend.services.schedule_edit_validation import day_mode_review_reason
 
 
 PUBLICATION_SCHEMA = (
@@ -422,7 +423,8 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         audience_output.update(audience)
     teachers, groups = directory.teachers, directory.groups
     students = {student_id: str(row["class_name"] or "") for student_id, row in directory.students.items()}
-    class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()}
+    class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()
+                    if not group.get("archived_at")}
     elective_cohorts: dict[tuple[str, int, str], set[str]] = {}
     elective_block_names: dict[str, set[str]] = {}
     for lesson in lessons:
@@ -528,12 +530,20 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         stale_math_groups = [groups[str(group_id)] for group_id in rule_groups if str(group_id) in groups
             and str(groups[str(group_id)].get("subject") or "").strip().casefold() == "математика"
             and str(lesson.get("subject") or "").strip().casefold() != "математика"]
-        class_modes = _lesson_day_modes(payload, lesson, class_grades)
+        class_modes = _lesson_day_modes(payload, lesson, class_grades, audience_grades={
+            canonical._grade(students.get(str(student_id), "")) for student_id in result.get("student_ids") or []
+        })
         online_only = lesson_is_online(lesson, class_modes)
-        sdep_independent = activity_type != "consultation" and class_modes == {"sdep"}
+        sdep_independent = lesson_is_sdep_display(lesson, class_modes)
+        if not lesson.get("importError") and (sdep_independent or online_only):
+            review_reason = day_mode_review_reason(review_reason, sdep_display=sdep_independent, online=online_only)
+        if sdep_independent:
+            teacher_ids, responsible_teacher_ids, teacher_evidence = [], [], set()
         if len(class_modes) > 1 and (lesson.get("format") not in {"offline", "online"} or "sdep" in class_modes):
             block("mixed_day_modes_unsupported", "Занятие охватывает классы с разными режимами дня; разделите аудитории или режимы")
-        if stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
+        if lesson.get("importError") and (sdep_independent or online_only):
+            block("review_required", review_reason)
+        elif stale_math_groups and "прежняя математическая группа" in review_reason.casefold():
             class_labels = [str(groups[str(group_id)].get("display_name") or groups[str(group_id)].get("name") or group_id)
                             for group_id in display_classes if str(group_id) in groups]
             blockers.append({"code": "stale_group_subject_mismatch", "lesson_id": lesson_id, "severity": "info",
@@ -562,10 +572,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             else:
                 block("review_required", reason_without_active_teacher_note)
         if teacher_evidence - teachers.keys():
-            if sdep_independent:
-                blockers.append({"code": "unknown_teacher", "severity": "info", "lesson_id": lesson_id,
-                                 "message": "В исходных данных указан отсутствующий или неактивный преподаватель; в SDEP-день он не назначается для Campus"})
-            elif is_optional:
+            if is_optional:
                 blockers.append({"code": "unknown_teacher", "severity": "info", "lesson_id": lesson_id,
                                  "message": "У направления указан отсутствующий или неактивный преподаватель. Общее занятие остаётся в расписании учеников; неподтверждённое назначение преподавателя не публикуется."})
                 teacher_ids = [teacher_id for teacher_id in teacher_ids if teacher_id in teachers]
@@ -585,7 +592,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
         elective_student_ids: set[str] = set()
         if elective_block_id:
             elective_student_ids = elective_students.get((elective_block_id, day, f"{interval[0]}:{interval[1]}"), set())
-        if not is_lunch and special != "no_lesson" and not informational_unassigned_event:
+        if not is_lunch and special != "no_lesson" and not informational_unassigned_event and not sdep_independent:
             occupancy.append({"id": lesson_id, "day": day, "interval": interval,
                               "teachers": set() if sdep_independent or practice else set(teacher_ids),
                               "students": (set(result.get("student_ids") or []) | elective_student_ids
