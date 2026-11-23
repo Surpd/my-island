@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from hashlib import sha256
 import hmac
+import logging
 import os
 import re
 from secrets import token_urlsafe
@@ -24,26 +26,46 @@ def _hash(value: str) -> str:
     return sha256(value.encode()).hexdigest()
 
 
-def _configured_verifier() -> str | None:
+class DiagnosticReadiness(StrEnum):
+    ENABLED = "enabled"
+    FLAG_OFF = "flag_off"
+    NO_KEY_CONFIGURED = "no_key_configured"
+    RAW_REJECTED = "raw_rejected"
+    DIGEST_MALFORMED = "digest_malformed"
+    VERIFIERS_MISMATCH = "verifiers_mismatch"
+
+
+def _verifier_and_readiness() -> tuple[str | None, DiagnosticReadiness]:
     if os.getenv("MY_ISLAND_CODEX_DIAGNOSTICS") != "1":
-        return None
+        return None, DiagnosticReadiness.FLAG_OFF
     provided = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY_SHA256", "")
     if provided and not _DIGEST_FORMAT.fullmatch(provided):
-        return None
+        return None, DiagnosticReadiness.DIGEST_MALFORMED
     raw = os.getenv("MY_ISLAND_CODEX_DIAGNOSTIC_KEY")
     if raw is None:
-        return provided or None
+        return (provided, DiagnosticReadiness.ENABLED) if provided else (None, DiagnosticReadiness.NO_KEY_CONFIGURED)
     # Use generated random text, not a memorable password. Format, diversity
     # and repetition checks catch accidental blanks and obvious placeholders;
     # they are not a substitute for cryptographic random generation.
     if not _KEY_FORMAT.fullmatch(raw) or len(set(raw)) < 20:
-        return None
+        return None, DiagnosticReadiness.RAW_REJECTED
     if any(raw[index:] == raw[:-index] for index in range(1, len(raw) // 2 + 1)):
-        return None
+        return None, DiagnosticReadiness.RAW_REJECTED
     derived = _hash(raw)
     if provided and not hmac.compare_digest(derived, provided):
-        return None
-    return derived
+        return None, DiagnosticReadiness.VERIFIERS_MISMATCH
+    return derived, DiagnosticReadiness.ENABLED
+
+
+def _configured_verifier() -> str | None:
+    return _verifier_and_readiness()[0]
+
+
+def log_startup_readiness(logger: logging.Logger) -> None:
+    # The enum is the only dynamic value written here. Never log config,
+    # verifier, request values, or any derived details.
+    _, readiness = _verifier_and_readiness()
+    logger.info("Codex diagnostic startup: %s", readiness.value)
 
 
 def configured_epoch() -> str | None:
