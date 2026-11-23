@@ -237,6 +237,16 @@ def reviewed_scope_proposals(payload: Mapping[str, Any], classes: Mapping[str, s
     return proposals
 
 
+CURRENT_NOTE_FIELDS = frozenset({"teacher_identity_warning", "teacher_assignment_warning", "elective_scope_warning"})
+
+
+
+def _can_apply_current_note(row: Mapping[str, Any] | None, field: str) -> bool:
+    return bool(row and field in CURRENT_NOTE_FIELDS
+                and not any(row.get(key) for key in ("importError", "unresolved", "review_required"))
+                and (field != "elective_scope_warning" or row.get("activityType") == "elective" and row.get("blockId")))
+
+
 def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers: set[str] | None = None,
                           verified_teacher_assignments: set[tuple[str, str, str]] | None = None,
                           verified_classes: Mapping[str, str] | None = None,
@@ -358,6 +368,15 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
         retained_warning_counts[reason] += 1
         if len(retained_warning_examples[reason]) < 5:
             retained_warning_examples[reason].append({"lesson_id": lesson_id, "subject": str(row.get("subject") or "Занятие")})
+    rows_by_id: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in lessons:
+        if isinstance(row, Mapping):
+            rows_by_id[str(row.get("id") or "")].append(row)
+    for change in changes:
+        matching = rows_by_id[change["lesson_id"]]
+        change["current_note_eligible"] = (
+            len(matching) == 1 and _can_apply_current_note(matching[0], change["field"])
+        )
     source_hash = payload_hash(payload)
     plan = {"changes": changes, "source_hash": source_hash, "source_revision": int(draft.get("revision") or 0),
             "source_id": str(draft.get("id") or "")}
@@ -418,3 +437,60 @@ def normalized_copy_payload(draft: Mapping[str, Any], preview: Mapping[str, Any]
                         for row in changes]}
     payload["school_source"] = source
     return payload
+
+
+def apply_selected_schedule_notes(database: Any, source_database: Any, draft_id: str, *, expected_revision: int,
+                                  expected_source_hash: str, expected_plan_hash: str, selected: list[dict[str, str]],
+                                  actor_user_id: Any = None) -> dict[str, Any]:
+    """Recompute proof and save only selected warning fields in the original draft."""
+    from backend.services.schedule_experiments import ExperimentConflict, get_experiment, _write_experiment_revision
+
+    draft = get_experiment(database, draft_id)
+    if draft["revision"] != expected_revision:
+        raise ExperimentConflict(draft)
+    source = draft["payload"]
+    if source.get("week_start") or source.get("draft_archive") or source.get("draft_kind") not in {"school", "user"}:
+        raise ValueError("Действие доступно только для открытого школьного шаблона.")
+    teachers, assignments = verified_teacher_directory_evidence(database, draft)
+    plan = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
+                                 verified_classes=verified_administrative_classes(database),
+                                 verified_group_links=verified_saved_group_warning_ids(source_database, draft))
+    if plan["source_hash"] != expected_source_hash or plan["plan_hash"] != expected_plan_hash:
+        raise ExperimentConflict(draft)
+    keys = [(entry["lesson_id"], entry["field"]) for entry in selected]
+    if not keys or len(keys) != len(set(keys)):
+        raise ValueError("Выберите конкретные замечания без повторов.")
+    candidates = {(str(item["lesson_id"]), str(item["field"])): item for item in plan["changes"]
+                  if item["current_note_eligible"]}
+    payload = copy.deepcopy(source)
+    rows = payload.get("lessons") or []
+    for lesson_id, field in keys:
+        proposed = candidates.get((lesson_id, field))
+        matching = [row for row in rows if str(row.get("id") or "") == lesson_id]
+        if not proposed or len(matching) != 1:
+            raise ValueError("Одно из выбранных замечаний больше не подтверждено. Проверьте расписание повторно.")
+        row = matching[0]
+        if row.get("importError") or row.get("unresolved") or row.get("review_required"):
+            raise ValueError("У выбранного занятия осталась самостоятельная ошибка. Проверьте её отдельно.")
+        original = str(row.get("clarificationReason") or "").strip()
+        if row.get("needsClarification") is not True or original != proposed["before"]:
+            raise ExperimentConflict(draft)
+        if field == "elective_scope_warning":
+            if row.get("activityType") != "elective" or not row.get("blockId"):
+                raise ValueError("Не подтверждён ранее сохранённый общий блок курса.")
+            remaining = without_scope_clauses(original, frozenset(proposed["clauses"]))
+        else:
+            # Existing plan requires explicitly saved teacher IDs and matching
+            # active directory evidence; never set or replace any teacher here.
+            expected = {"teacher_identity_warning": "Не подтверждён преподаватель",
+                        "teacher_assignment_warning": "Нет подтверждённого назначения преподавателя группе"}[field]
+            if original != expected:
+                raise ExperimentConflict(draft)
+            remaining = ""
+        if remaining:
+            row["clarificationReason"] = remaining
+        else:
+            row.pop("clarificationReason", None)
+            row.pop("needsClarification", None)
+    saved = _write_experiment_revision(database, draft_id, expected_revision, payload, actor_user_id=actor_user_id, require_working_copy=True)
+    return {"draft": saved, "cleared_count": len(keys)}

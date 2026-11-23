@@ -10,7 +10,7 @@ import './constructor-publication-panel.css';
 import { anonymousReviewReport } from './constructor-anonymous-report';
 import {
   ConstructorLegacyReview, ConstructorRosterReview, ReviewDisclosure,
-  type NormalizationCopy, type NormalizationPreview, type RosterPreview, type RosterScope,
+  type NormalizationCopy, type NormalizationPreview, type RosterPreview, type RosterScope, type SelectedNote,
 } from './constructor-review-fixes';
 
 type Api = <T>(path:string, init?:RequestInit)=>Promise<T>;
@@ -640,6 +640,30 @@ export function ConstructorPublicationPanel({
       setBusy(false);
     }
   };
+  const applyNotes = async (selected: SelectedNote[]) => {
+    if (dirty || readOnly || controlsBusy || !selected.length || !currentLegacy) return false;
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await api<{draft: unknown; cleared_count: number}>(`${legacyPrefix}/normalization-apply`, {
+        method: 'POST',
+        body: JSON.stringify({expected_revision: revision, expected_source_hash: currentLegacy.source_hash,
+          expected_plan_hash: currentLegacy.plan_hash, selected}),
+      });
+      setLegacy(null);
+      setPreview(null);
+      setConfirmed(false);
+      onRostersUpdated(result.draft);
+      setMessage(`Снято старых пометок: ${result.cleared_count}. Черновик не опубликован.`);
+      return true;
+    } catch (error) {
+      setLegacy(null);
+      showError(error);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
   const copyNormalized = async () => {
     if (dirty || readOnly || busy || !legacy?.automatic_count || legacy.source_revision !== revision) return;
     setBusy(true);
@@ -908,7 +932,7 @@ export function ConstructorPublicationPanel({
               lessonImpact={lessonImpact} checkingScope={checkingRosters} readOnly={readOnly} scope={rosterScope} classLabel={classLabel} lessonLabels={lessonLabels}
               onScopeChange={target => void checkRosterScope(target)} onApply={() => void applyRosters()} onOpenLesson={openLesson} /> : null}
             {canCheckLegacy ? <ConstructorLegacyReview preview={currentLegacy} error={legacyError} busy={controlsBusy}
-              lessonImpact={lessonImpact} readOnly={readOnly} lessonLabels={lessonLabels} onCopy={() => void copyNormalized()} onOpenLesson={openLesson} /> : null}
+              lessonImpact={lessonImpact} readOnly={readOnly} lessonLabels={lessonLabels} onCopy={() => void copyNormalized()} onApplyNotes={applyNotes} onOpenLesson={openLesson} /> : null}
           </>}
         </div> : null}
         {!historyOnly && section === 'publication' && !dirty && !published ? <section aria-label="Проверка публикации" className="constructor-review-results">

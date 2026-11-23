@@ -1743,12 +1743,22 @@ def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolv
 
 def _write_experiment_revision(database: Database, experiment_id: str, expected_revision: int,
                                payload: Mapping[str, Any], *, normalized_name: str | None = None,
-                               actor_user_id: Any = None) -> dict[str, Any]:
+                               actor_user_id: Any = None, require_working_copy: bool = False) -> dict[str, Any]:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     now = datetime.now(timezone.utc).isoformat()
     archived = "payload->'draft_archive' IS NULL" if database.database_url else "json_extract(payload, '$.draft_archive') IS NULL"
     with database.connection() as connection:
+        if require_working_copy:
+            if database.database_url:
+                database.execute(connection, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                                 ("my-island:school-template-selection",))
+            else:
+                database.execute(connection, "BEGIN IMMEDIATE")
+            primary = database.execute(connection,
+                "SELECT 1 FROM school_template_selection WHERE scope='school' AND draft_id=?", (experiment_id,)).fetchone()
+            if primary:
+                raise ValueError("Это основной шаблон. Снять пометки этим действием можно только в рабочем черновике.")
         row = database.execute(connection, f"""UPDATE schedule_experiment_drafts
             SET payload={encoded_sql},name=COALESCE(?,name),revision=revision+1,updated_by=?,updated_at=?
             WHERE id=? AND revision=? AND {archived} RETURNING *""",

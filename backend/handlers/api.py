@@ -48,7 +48,7 @@ from backend.services.schedule_experiments import (
     duplicate_experiment, experiment_audience_preview, experiment_week_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
 from backend.services.schedule_edit_validation import is_legacy_group_link_note
-from backend.services.schedule_normalization import normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence, verified_saved_group_warning_ids
+from backend.services.schedule_normalization import apply_selected_schedule_notes, normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence, verified_saved_group_warning_ids
 from backend.services.schedule_term_comparison import (
     apply_term_comparison_choice, preview_term_comparison_choices, record_term_comparison_decision,
 )
@@ -404,6 +404,15 @@ class SchoolTemplateNormalizePayload(BaseModel):
     expected_revision: int = Field(ge=1)
     expected_source_hash: str
     expected_plan_hash: str
+
+
+class SelectedScheduleWarning(BaseModel):
+    lesson_id: str = Field(min_length=1, max_length=180)
+    field: Literal["teacher_identity_warning", "teacher_assignment_warning", "elective_scope_warning"]
+
+
+class SelectedScheduleWarningsPayload(SchoolTemplateNormalizePayload):
+    selected: list[SelectedScheduleWarning] = Field(min_length=1, max_length=200)
 
 
 class ScheduleTermComparisonPosition(BaseModel):
@@ -1748,6 +1757,23 @@ def create_router(database: Database) -> APIRouter:
                                          verified_group_links=verified_saved_group_warning_ids(source, draft))
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @router.post("/admin/schedule/experiments/school/{experiment_id}/normalization-apply")
+    def admin_school_apply_selected_notes(experiment_id: str, payload: SelectedScheduleWarningsPayload,
+            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+            x_school_admin_session: str | None = Header(default=None)):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, actor)
+        source, store = school_stores()
+        try:
+            return apply_selected_schedule_notes(store, source, experiment_id, actor_user_id=actor["id"], **payload.model_dump())
+        except ExperimentNotFound as error:
+            raise HTTPException(404, "Черновик не найден.") from error
+        except ExperimentConflict as error:
+            raise HTTPException(409, "Черновик или подтверждённые данные изменились. Запустите проверку повторно.") from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
 
     @router.post("/admin/schedule/experiments/school/{experiment_id}/normalization-copy")
     def admin_school_normalize_copy(experiment_id: str, payload: SchoolTemplateNormalizePayload,

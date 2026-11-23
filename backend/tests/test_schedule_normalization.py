@@ -347,6 +347,89 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
                         {"id": "forged-history", "subject": "Not trusted", "resolution_history": old_decision}]}})
                 self.assertEqual(imported.status_code, 200, imported.text)
                 self.assertNotIn("resolution_history", imported.json()["payload"]["lessons"][0])
+                path = f"/api/admin/schedule/experiments/school/{source['id']}/normalization-apply"
+                selected = {"lesson_id": "teacher-assignment-warning", "field": "teacher_assignment_warning"}
+                mixed = {"lesson_id": "digital", "field": "elective_scope_warning"}
+                before = get_experiment(database, source["id"])
+                denied = client.post(path, json={**valid_body, "selected": [selected]})
+                self.assertIn(denied.status_code, {401, 403})
+                unsafe = client.post(path, headers=headers, json={**valid_body, "selected": [selected, mixed]})
+                self.assertEqual(unsafe.status_code, 422, unsafe.text)
+                self.assertEqual(get_experiment(database, source["id"]), before)
+                stale = client.post(path, headers=headers, json={**valid_body, "expected_plan_hash": "replaced", "selected": [selected]})
+                self.assertEqual(stale.status_code, 409, stale.text)
+                self.assertEqual(get_experiment(database, source["id"]), before)
+                safe = client.post(path, headers=headers, json={**valid_body, "selected": [selected]})
+                self.assertEqual(safe.status_code, 200, safe.text)
+                persisted = get_experiment(database, source["id"])
+                self.assertEqual(persisted["revision"], before["revision"] + 1)
+                expected = deepcopy(before["payload"])
+                teacher_row = next(row for row in expected["lessons"] if row["id"] == selected["lesson_id"])
+                teacher_row.pop("clarificationReason")
+                teacher_row.pop("needsClarification")
+                self.assertEqual(persisted["payload"], expected)
+                self.assertEqual(publication_state(), publication_before)
+                repeated = client.post(path, headers=headers, json={**valid_body, "selected": [selected]})
+                self.assertEqual(repeated.status_code, 409, repeated.text)
+                self.assertEqual(get_experiment(database, source["id"]), persisted)
+
+
+
+    def test_apply_notes_round_trip_refuses_unknown_and_preserves_all_other_fields(self):
+        from backend.services.schedule_normalization import apply_selected_schedule_notes
+        from backend.services.schedule_experiments import ExperimentConflict
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "notes.db")
+            database.initialize()
+            group = database.create_group("7A", "class")
+            with database.connection() as connection:
+                database.execute(connection, "UPDATE groups SET canonical=1,base_class_name='7A' WHERE id=?", (group["id"],))
+            teacher = database.create_identity("teacher", "Synthetic")
+            mark = "Состав направления курса по выбору не подтверждён"
+            rows = [
+                {"id": "elective", "subject": "Course", "activityType": "elective", "blockId": "known-block",
+                 "day": 2, "period": 0, "classIds": [str(group["id"])], "eligibleGrades": [7],
+                 "confirmedParticipantIds": ["fixture"], "needsClarification": True,
+                 "clarificationReason": mark + "; Нет соответствующего звонка"},
+                {"id": "teacher", "subject": "History", "teacherId": str(teacher["id"]),
+                 "needsClarification": True, "clarificationReason": "Не подтверждён преподаватель"},
+                {"id": "unknown", "subject": "History", "teacherId": "missing",
+                 "needsClarification": True, "clarificationReason": "Не подтверждён преподаватель"},
+            ]
+            draft = create_experiment(database, name="Synthetic working copy", source="import",
+                payload={"draft_kind": "school", "classes": [str(group["id"])], "lessons": rows,
+                         "days": [2], "slots": [{"start": "14:35", "end": "15:20"}]})
+            draft = get_experiment(database, draft["id"])
+            active, assignments = verified_teacher_directory_evidence(database, draft)
+            plan = normalization_preview(draft, verified_active_teachers=active, verified_teacher_assignments=assignments,
+                                         verified_classes=verified_administrative_classes(database))
+            guard = {"expected_revision": 1, "expected_source_hash": plan["source_hash"], "expected_plan_hash": plan["plan_hash"]}
+            selected = {"lesson_id": "elective", "field": "elective_scope_warning"}
+            invalid = {"lesson_id": "unknown", "field": "teacher_identity_warning"}
+            with self.assertRaises(ValueError):
+                apply_selected_schedule_notes(database, database, draft["id"], selected=[selected, invalid], **guard)
+            self.assertEqual(get_experiment(database, draft["id"]), draft)
+            result = apply_selected_schedule_notes(database, database, draft["id"], selected=[selected], **guard)
+            expected = deepcopy(draft["payload"])
+            expected["lessons"][0]["clarificationReason"] = "Нет соответствующего звонка"
+            self.assertEqual(result["draft"]["payload"], expected)
+            self.assertEqual(result["draft"]["id"], draft["id"])
+            self.assertEqual(result["draft"]["revision"], 2)
+            self.assertEqual(result["cleared_count"], 1)
+            with self.assertRaises(ExperimentConflict):
+                apply_selected_schedule_notes(database, database, draft["id"], selected=[selected], **guard)
+            current = result["draft"]
+            plan = normalization_preview(current, verified_active_teachers=active, verified_teacher_assignments=assignments,
+                                         verified_classes=verified_administrative_classes(database))
+            with database.connection() as connection:
+                database.execute(connection, """INSERT INTO school_template_selection
+                    (scope, draft_id, source_draft_id, source_revision, source_payload_sha256) VALUES ('school', ?, ?, ?, ?)""",
+                    (current["id"], current["id"], current["revision"], plan["source_hash"]))
+            with self.assertRaisesRegex(ValueError, "основной шаблон"):
+                apply_selected_schedule_notes(database, database, draft["id"], expected_revision=current["revision"],
+                    expected_source_hash=plan["source_hash"], expected_plan_hash=plan["plan_hash"],
+                    selected=[{"lesson_id": "teacher", "field": "teacher_identity_warning"}])
+            self.assertEqual(get_experiment(database, draft["id"]), current)
 
 
 if __name__ == "__main__":
