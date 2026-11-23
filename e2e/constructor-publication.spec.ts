@@ -7,6 +7,7 @@ const VERSION_ID = 'constructor-template-ui-e2e-version';
 const PUBLISHED_ID = 'published-ui-e2e-week';
 
 type PreviewPayload = {
+  published_source: {records: {lesson_id:string; status:string}[]};
   preview_token: string;
   can_publish: boolean;
   publication_available: boolean;
@@ -48,6 +49,7 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   ];
   if (critical) diagnostics.push({ severity: 'critical', code: 'review_required', message: 'Не подтверждена аудитория занятия.', lesson_id: 'lesson-critical', context });
   return {
+    published_source: { records: [{lesson_id: 'lesson-info', status: 'resolved_with_remarks'}] },
     preview_token: token,
     can_publish: !critical,
     publication_available: !options.readOnly,
@@ -285,6 +287,10 @@ test('legacy warning rows name both classes and return to the same review withou
   const { dialog, getReviewRequests } = await openPublicationPanel(page, { legacyReview: true });
   const fixesTab = dialog.getByRole('button', { name: 'Составы и старые записи', exact: true });
   await fixesTab.click();
+  const held = dialog.locator('details[data-review-fix="delivery-deferred"]');
+  await held.locator('summary').click();
+  await expect(held.getByText('Сохранится прежнее занятие из опубликованной версии.')).toBeVisible();
+  await expect(held.getByText('Занятие не войдёт в эту публикацию.')).toBeVisible();
   const retained = dialog.locator('details[data-review-fix="legacy-retained"]');
   const category = retained.locator(':scope > summary');
   await expect(category).toHaveAttribute('aria-expanded', 'false');
@@ -297,6 +303,8 @@ test('legacy warning rows name both classes and return to the same review withou
   const target = retained.locator('.constructor-review-warning').filter({ hasText: 'Нужно уточнить данные занятия' })
     .getByRole('button', { name: /Показать в расписании/ });
   await expect(target.locator('..')).toContainText(/7А\s*\/\s*7Б/);
+  await expect(target.locator('..')).toContainText('по подтверждённым назначениям');
+  await expect(category).toContainText('Замечания, которые сохранятся в копии');
   await target.focus();
   const checks = getReviewRequests();
   expect(checks).toEqual({ previewCount: 1, normalizationCount: 1 });
@@ -307,4 +315,27 @@ test('legacy warning rows name both classes and return to the same review withou
   await expect(category).toHaveAttribute('aria-expanded', 'true');
   await expect(target).toBeFocused();
   expect(getReviewRequests()).toEqual(checks);
+});
+
+test('checking the whole draft shows roster changes without saving them', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  const writes: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'PUT' || request.url().endsWith('/audiences/apply')) writes.push(request.url());
+  });
+  await page.route('**/audiences/preview', route => {
+    expect(route.request().postDataJSON().scope).toBe('template');
+    return route.fulfill({ json: { revision: 1, preview_token: 'synthetic',
+      summary: { selected_count: 1, changed_count: 1, safe_count: 1, unresolved_count: 0, added_count: 0, removed_count: 9 },
+      lessons: [{ id: 'lesson-excluded', subject: 'Математика', changed: true, safe: true, old_count: 25, proposed_count: 16 }] } });
+  });
+  await dialog.getByRole('button', { name: 'Составы и старые записи' }).click();
+  await dialog.locator('[data-review-fix="roster-scope"] > summary').click();
+  await dialog.getByLabel('Проверять при выборе').selectOption('template');
+  await expect(dialog.getByText(/Проверено занятий: 1/)).toBeVisible();
+  const rosters = dialog.locator('[data-review-fix="roster-lessons"]');
+  await rosters.locator('summary').click();
+  await expect(rosters).toContainText('В черновике — 25, в текущем составе — 16.');
+  await expect(rosters).toContainText('Занятие не войдёт в эту публикацию.');
+  expect(writes).toEqual([]);
 });

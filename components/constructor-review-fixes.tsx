@@ -80,13 +80,15 @@ function ReasonDetails({ reason }: { reason?: string }) {
   return <ReviewDisclosure title="Сведения для поддержки" secondary><p>{reason}</p></ReviewDisclosure>;
 }
 
-export function ConstructorRosterReview({ preview, error, busy, readOnly, classLabel, lessonLabels, scope, onScopeChange, onApply, onOpenLesson }: {
+export function ConstructorRosterReview({ preview, error, busy, readOnly, classLabel, lessonLabels, lessonImpact, checkingScope, scope, onScopeChange, onApply, onOpenLesson }: {
   preview: RosterPreview | null;
   error: string;
   busy: boolean;
   readOnly: boolean;
   classLabel?: string;
+  checkingScope: boolean;
   lessonLabels: Record<string, string>;
+  lessonImpact: (id: string) => string;
   scope: RosterScope;
   onScopeChange: (scope: RosterScope) => void;
   onApply: () => void;
@@ -112,6 +114,7 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
             <small>{lessonLabels[lesson.id] || [lesson.day != null ? rosterDays[lesson.day] : '', formatLessonTimeRange(lesson.start, lesson.end)].filter(Boolean).join(' · ')}</small>
             {lesson.safe ? <p>В черновике — {lesson.old_count}, в текущем составе — {lesson.proposed_count}.</p> :
               <p><b>{legacyReviewReason(lesson.reason).title}.</b> {legacyReviewReason(lesson.reason).action}</p>}
+            <p>{lessonImpact(lesson.id)}</p>
             {!lesson.safe ? <ReasonDetails reason={lesson.reason} /> : null}
           </div>
           <LessonButton id={lesson.id} label={lesson.subject || 'занятие'} action="Проверить состав"
@@ -124,22 +127,24 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
       </> : null}
     </> : null}
     <ReviewDisclosure title="Проверить другой день, класс или весь черновик" groupKey="roster-scope" secondary>
-      <label>Область проверки<select value={scope} disabled={busy} onChange={event => onScopeChange(event.target.value as RosterScope)}>
+      <label>Проверять при выборе<select value={scope} disabled={busy} onChange={event => onScopeChange(event.target.value as RosterScope)}>
         <option value="stale">Составы, требующие внимания</option>
         <option value="template">Весь черновик</option>
         <option value="day">Выбранный день в сетке</option>
         <option value="class" disabled={!classLabel}>{classLabel || 'Выбранный класс или группа'}</option>
       </select></label>
+      <output aria-live="polite">{checkingScope ? 'Проверяем составы…' : preview ? `Проверено занятий: ${preview.summary.selected_count}. Изменения сохраняются только после подтверждения.` : ''}</output>
     </ReviewDisclosure>
   </section>;
 }
 
-export function ConstructorLegacyReview({ preview, error, busy, readOnly, lessonLabels, onCopy, onOpenLesson }: {
+export function ConstructorLegacyReview({ preview, error, busy, readOnly, lessonLabels, lessonImpact, onCopy, onOpenLesson }: {
   preview: NormalizationPreview | null;
   error: string;
   busy: boolean;
   readOnly: boolean;
   lessonLabels: Record<string, string>;
+  lessonImpact: (id: string) => string;
   onCopy: () => void;
   onOpenLesson: (id: string) => void;
 }) {
@@ -178,13 +183,14 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
           {lessonButton(item.lesson_id, lessonLabels[item.lesson_id] || 'занятие')}
         </li>)}</ul>
       </ReviewDisclosure> : null}
-      {preview.retained_warning_count ? <ReviewDisclosure title="Останутся без изменений" count={preview.retained_warning_count} groupKey="legacy-retained">
+      {preview.retained_warning_count ? <ReviewDisclosure title="Замечания, которые сохранятся в копии" count={preview.retained_warning_count} groupKey="legacy-retained">
+        <p>Это число записей со старой пометкой, для которой нет автоматического исправления. У каждого примера указан результат проверки публикации.</p>
         {preview.retained_warnings.map(warning => <div className="constructor-review-warning" key={warning.reason}>
           <strong>{legacyReviewReason(warning.reason).title}</strong>
           <p>{legacyReviewReason(warning.reason).action}</p>
           <p>Записей — {warning.count}{warning.count > warning.examples.length ? `. Показаны первые ${warning.examples.length}` : ''}.</p>
           <ul className="constructor-review-list">{warning.examples.map(example => <li key={example.lesson_id}>
-            <span>{lessonLabels[example.lesson_id] || example.subject}</span>{lessonButton(example.lesson_id, example.subject)}
+            <span>{lessonLabels[example.lesson_id] || example.subject}</span><p>{lessonImpact(example.lesson_id)}</p>{lessonButton(example.lesson_id, example.subject)}
           </li>)}</ul>
           {legacyReviewReason(warning.reason).title !== warning.reason ? <ReasonDetails reason={warning.reason} /> : null}
         </div>)}
