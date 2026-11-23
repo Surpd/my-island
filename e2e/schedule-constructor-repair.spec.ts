@@ -111,7 +111,7 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Русский язык');
-  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('каб. 8');
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
 
@@ -240,7 +240,7 @@ test('constructor edit preserves horizontal grid position', async ({ page }) => 
   await openScheduleInspector(page);
   await page.getByRole('button', { name: 'Форма', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Геометрия прокрутки');
-  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('8');
   await page.getByRole('button', { name: 'Добавить занятие', exact: true }).click();
   const lesson = page.locator('.constructor-card').filter({ hasText: 'Геометрия прокрутки' });
@@ -282,7 +282,7 @@ test('constructor electives: parallel courses use class availability without stu
     await availability.getByRole('checkbox', { name: '5 класс' }).check();
     await availability.getByRole('checkbox', { name: '6 класс' }).check();
     await placement.getByRole('checkbox', { name: `6-А elective ${suffix}` }).check();
-    await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+    await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
     await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill(`E-${name.slice(-1)}`);
     await expect(page.getByText('Именной состав курсов по выбору не ведётся')).toBeVisible();
     await expect(inspector.getByRole('region', { name: 'Участники занятия' })).toHaveCount(0);
@@ -392,7 +392,7 @@ test('constructor repair: empty club participants survive clipboard paste into a
   await page.getByRole('button', { name: 'Кружок', exact: true }).click();
   await page.getByRole('combobox', { name: 'Название активности' }).fill('Айкидо без каталога');
   await expect(page.getByRole('combobox', { name: 'Преподаватель нового занятия' })).toHaveValue('');
-  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
   await page.getByRole('combobox', { name: 'Кабинет нового занятия' }).fill('Зал');
   await expect(page.getByRole('combobox', { name: 'Запись каталога' })).toHaveValue('');
   await page.setViewportSize({ width: 1600, height: 1100 });
@@ -531,9 +531,9 @@ test('вид занятия и онлайн сохраняются через о
   await page.getByRole('button', {name: 'Добавить консультацию', exact: true}).click();
   await expect(page.getByRole('alert').filter({hasText: 'Выберите преподавателя консультации'})).toBeVisible();
   await kind.getByRole('button', {name:'Практикум'}).click();
-  await page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }).uncheck();
   await page.getByLabel('Кабинет нового занятия').fill('Кабинет 15');
-  const online = page.getByRole('checkbox', {name:'Этот урок проводится онлайн'});
+  const online = page.getByRole('checkbox', {name:'Это занятие проводится онлайн'});
   const expectCompactOnline = async (mode: string) => {
     const size = await online.boundingBox();
     expect(size).not.toBeNull();
@@ -585,7 +585,7 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
     const teacher = (await teacherResponse.json()).items[0];
     const inspector = page.locator('.constructor-inspector');
     const kind = inspector.getByRole('group', { name: 'Тип занятия', exact: true });
-    const online = inspector.getByRole('checkbox', { name: 'Этот урок проводится онлайн' });
+    const online = inspector.getByRole('checkbox', { name: 'Это занятие проводится онлайн' });
     const cases = [
       { title: 'История', label: 'Урок', type: 'lesson' },
       { title: 'География', label: 'Практикум', type: 'practice' },

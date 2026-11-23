@@ -650,7 +650,7 @@ function LessonKindPicker({ value, onChange }: { value: EditorKind; onChange?: (
 function OnlineFormat({ byDay, checked, onChange }: { byDay: boolean; checked: boolean; onChange: (checked: boolean) => void }) {
   return byDay ? <p className="constructor-day-format"><Monitor size={16} aria-hidden="true" /> Онлайн по режиму дня</p>
     : <label className="constructor-online-format"><input type="checkbox" checked={checked}
-      onChange={event => onChange(event.target.checked)} /> Этот урок проводится онлайн</label>;
+      onChange={event => onChange(event.target.checked)} /> Это занятие проводится онлайн</label>;
 }
 
 export function ScheduleConstructor({ api }: { api: Api }) {

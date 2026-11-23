@@ -245,14 +245,14 @@ try {
   const before = await room.inputValue();
   await inspector.getByText('Формат занятия', { exact: true }).click();
   const online = inspector.getByRole('checkbox', {
-    name: 'Этот урок проводится онлайн',
+    name: 'Это занятие проводится онлайн',
   });
   await online.check();
   assert.equal(await room.isDisabled(), true);
   await inspector
     .locator('details')
     .filter({
-      has: page.getByRole('checkbox', { name: 'Этот урок проводится онлайн' }),
+      has: page.getByRole('checkbox', { name: 'Это занятие проводится онлайн' }),
     })
     .screenshot({ path: out + '/online-format.png' });
   await online.uncheck();
@@ -300,7 +300,7 @@ try {
   await automatic.waitFor();
   assert.equal(
     await inspector
-      .getByRole('checkbox', { name: 'Этот урок проводится онлайн' })
+      .getByRole('checkbox', { name: 'Это занятие проводится онлайн' })
       .count(),
     0,
   );
