@@ -1240,7 +1240,7 @@ class Database:
             self.execute(connection, "INSERT INTO admin_browser_sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)", (self._token_hash(session_token), row["actor_user_id"], session_expires))
             return session_token, row["actor_user_id"]
 
-    def get_admin_browser_session(self, token: str) -> Any | None:
+    def get_admin_browser_session(self, token: str, *, touch: bool = True) -> Any | None:
         now = datetime.now(timezone.utc)
         with self.connection() as connection:
             row = self.execute(connection, "SELECT s.*, u.telegram_user_id, u.role, u.identity_id FROM admin_browser_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL", (self._token_hash(token),)).fetchone()
@@ -1251,7 +1251,8 @@ class Database:
                     return None
             except ValueError:
                 return None
-            self.execute(connection, "UPDATE admin_browser_sessions SET last_seen_at = ? WHERE id = ?", (now.isoformat(), row["id"]))
+            if touch:
+                self.execute(connection, "UPDATE admin_browser_sessions SET last_seen_at = ? WHERE id = ?", (now.isoformat(), row["id"]))
             return row
 
     def revoke_admin_browser_session(self, token: str) -> None:

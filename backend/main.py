@@ -17,7 +17,9 @@ from backend.services.codex_diagnostics import bearer_token as diagnostic_bearer
 from backend.services.codex_diagnostics import log_startup_readiness
 from backend.handlers.school_directory_api import create_school_directory_router
 from backend.services.auth import is_loopback_dev_auth_request
-from backend.services.consolidated_workspace import isolated_consolidation_enabled, require_consolidated_admin
+from backend.services.consolidated_workspace import (
+    isolated_consolidation_enabled, require_consolidated_admin, require_consolidated_preview_admin,
+)
 from backend.handlers.constructor_publication_api import create_constructor_publication_router
 from backend.handlers.teacher_ui_colors_api import create_school_teacher_ui_colors_router
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
@@ -114,7 +116,9 @@ app.include_router(create_codex_diagnostic_router(database))
 app.include_router(create_router(database))
 app.include_router(create_school_directory_router(database))
 app.include_router(create_constructor_publication_router(
-    lambda: (database, database), lambda token: require_consolidated_admin(database, token)))
+    lambda: (database, database),
+    lambda token: require_consolidated_admin(database, token),
+    lambda token, request: require_consolidated_preview_admin(database, token, request)))
 app.include_router(create_school_teacher_ui_colors_router(
     lambda: database, lambda token: require_consolidated_admin(database, token)))
 
