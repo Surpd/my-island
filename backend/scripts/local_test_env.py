@@ -417,7 +417,7 @@ def seed_database() -> None:
         ):
             source_id = database.execute(connection, """INSERT INTO journal_sources(
                 spreadsheet_id,spreadsheet_title,grade,subject,sheet_title,academic_year,term_number,period_status,status,source_hash)
-                VALUES (?,'Local E2E journal',7,'Математика','Local E2E','2026/27',?,'current','ready','local-e2e-journal-v1')
+                VALUES (?,'Local E2E journal',7,'География','Local E2E','2026/27',?,'current','ready','local-e2e-journal-v1')
                 ON CONFLICT(spreadsheet_id,sheet_title) DO UPDATE SET spreadsheet_title=excluded.spreadsheet_title,
                     grade=excluded.grade,subject=excluded.subject,term_number=excluded.term_number,
                     status=excluded.status,source_hash=excluded.source_hash

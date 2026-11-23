@@ -5,6 +5,7 @@ import { ADMIN_HEADERS, endPreview, expectNoHorizontalOverflow, openPreviewFromA
 
 const FIXTURE_MONDAY = '2026-09-21';
 const FIXTURE_SUNDAY = '2026-09-27';
+const FIXTURE_JOURNAL_SUBJECT = 'География';
 
 async function personNamed(page: Page, role: 'student' | 'teacher', name: string) {
   const person = (await previewPeople(page.request, role)).find((item) => item.display_name === name);
@@ -52,10 +53,10 @@ async function scoresForTerm(page: Page, previewId: string, term: 1 | 2) {
   });
   expect(response.ok()).toBeTruthy();
   const journals = (await response.json()).items as Array<{
-    source: { academic_year: string; term_number: number | null };
+    source: { academic_year: string; term_number: number | null; subject: string };
     results: Array<{ numeric_score: number | null }>;
   }>;
-  return journals.filter(({ source }) => source.academic_year === '2026/27' && source.term_number === term).flatMap((journal) => journal.results.map((result) => result.numeric_score).filter((score): score is number => score !== null));
+  return journals.filter(({ source }) => source.academic_year === '2026/27' && source.term_number === term && source.subject === FIXTURE_JOURNAL_SUBJECT).flatMap((journal) => journal.results.map((result) => result.numeric_score).filter((score): score is number => score !== null));
 }
 
 async function expandSchedule(frame: Frame, alreadySelected = false) {
@@ -102,7 +103,7 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     const grades = frame.getByRole('region', { name: 'Оценки' });
     await expect(grades).toBeVisible();
     const period = grades.getByRole('combobox', { name: 'Период' });
-    const subjectRows = grades.locator('.student-subject-row');
+    const subjectRows = grades.getByRole('button', { name: `Открыть журнал: ${FIXTURE_JOURNAL_SUBJECT}`, exact: true });
     await expect(period).toHaveValue('current');
     await expect(period.locator('option:checked')).toHaveText('II триместр · 2026/27');
     await expect.poll(() => scoresForTerm(page, peerPreview, 2)).toEqual([4]);
