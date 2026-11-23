@@ -546,3 +546,21 @@ export function parseQuick(text: string, contextClassId: string, groups: Schedul
     unknown: words.filter((_, index) => !used.has(index)),
   };
 }
+
+export function isTypedScheduleClub(lesson: {
+  activityType?: string;
+  canonical?: { assignment?: { metadata?: { activity_type?: string } } };
+}) {
+  return (lesson.activityType || lesson.canonical?.assignment?.metadata?.activity_type) === 'club';
+}
+
+const clubLessonOnlyNotes = new Set([
+  'для этого предмета не подтверждена учебная группа',
+  'не определена учебная группа для урока английского',
+  'выберите группу и проверьте её состав',
+]);
+export function effectiveClubReviewNote(reason: string) {
+  return reason.split(';').map(clause => clause.trim()).filter(clause => !clubLessonOnlyNotes.has(
+    clause.replace(/[ .]+$/g, '').toLocaleLowerCase('ru').replace(/\s+/g, ' '),
+  )).join('; ');
+}

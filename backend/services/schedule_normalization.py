@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
+from backend.services.schedule_edit_validation import CLUB_LESSON_ONLY_NOTES, normalized_note, notes
+
 
 def payload_hash(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
@@ -43,6 +45,8 @@ def verified_teacher_assignment_pairs(database: Any, draft: Mapping[str, Any]) -
 def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers: set[str] | None = None,
                           verified_teacher_assignments: set[tuple[str, str, str]] | None = None) -> dict[str, Any]:
     """Plan only evidence-backed legacy type updates; all other rows are preserved."""
+    from backend.services.schedule_experiments import _lesson_activity_type
+
     payload = draft.get("payload") if isinstance(draft.get("payload"), Mapping) else {}
     lessons = payload.get("lessons") if isinstance(payload.get("lessons"), list) else []
     blocks: Counter[str] = Counter(str(row.get("blockId") or "") for row in lessons if isinstance(row, Mapping))
@@ -121,6 +125,11 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
         if lesson_id in cleared_warning_ids:
             continue
         reason = str(row.get("clarificationReason") or "Причина не сохранена")
+        if _lesson_activity_type(row) == "club" and not row.get("importError"):
+            remaining = [clause for clause in notes(reason) if normalized_note(clause) not in CLUB_LESSON_ONLY_NOTES]
+            if not remaining:
+                continue
+            reason = "; ".join(remaining)
         retained_warning_counts[reason] += 1
         if len(retained_warning_examples[reason]) < 5:
             retained_warning_examples[reason].append({"lesson_id": lesson_id, "subject": str(row.get("subject") or "Занятие")})

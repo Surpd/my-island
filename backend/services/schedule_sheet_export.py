@@ -73,7 +73,7 @@ def _frozen_snapshot(source: Mapping[str, Any]) -> dict[str, Any]:
                 "audience_snapshot", "resolution_history", "term2_preparation", "normalization_copy",
                 "laboratory_blueprints", "laboratory_meetings", "laboratory_history", "laboratory_blueprint_history",
                 "draft_archive", "draft_lifecycle_history",
-                "attendance_history", "attendance_week_baseline", "attendance_reason", "import_review", "raw_text", "raw_text_by_cell"}}
+                "attendance_history", "edit_validation_history", "attendance_week_baseline", "attendance_reason", "import_review", "raw_text", "raw_text_by_cell"}}
             participants = value.get("confirmedParticipantIds", value.get("confirmed_participant_ids"))
             if participants:
                 result["confirmed_participants_fingerprint"] = _hash(sorted(set(map(str, participants))))

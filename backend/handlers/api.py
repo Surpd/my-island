@@ -312,6 +312,7 @@ class ScheduleExperimentSavePayload(BaseModel):
     payload: dict
     name: str | None = None
     term_comparison_key: str | None = Field(default=None, min_length=1, max_length=360)
+    editor_audience_changes: list[str] | None = Field(default=None, max_length=365)
 
 
 class DraftRevisionRequest(BaseModel):
@@ -2062,7 +2063,8 @@ def create_router(database: Database) -> APIRouter:
             source, store = school_stores()
             return save_experiment(store, experiment_id, expected_revision=payload.expected_revision,
                                    payload=payload.payload, name=payload.name, actor_user_id=actor["id"],
-                                   audience_database=source, term_comparison_key=payload.term_comparison_key)
+                                   audience_database=source, term_comparison_key=payload.term_comparison_key,
+                                   editor_audience_changes=payload.editor_audience_changes)
         except ExperimentConflict as error:
             raise HTTPException(status_code=409, detail=jsonable_encoder({"message": str(error), "current": error.current})) from error
         except ExperimentNotFound as error:
