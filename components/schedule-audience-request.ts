@@ -3,7 +3,29 @@ export type AudienceRequestState =
   | { status: 'unavailable'; reason: 'timeout' | 'request' };
 
 export function scopedAudienceKey(workspace: string, draftId: string | undefined, inputs: string): string {
-  return inputs && draftId ? JSON.stringify([workspace, draftId]) + ":" + inputs : '';
+  return inputs && draftId ? JSON.stringify([workspace, draftId, inputs]) : '';
+}
+
+type RosterPreviewInput = { lessons: Array<{ id: string; audience_snapshot?: unknown; audience?: Record<string, unknown> }> };
+
+export function exclusionRosterContext(key: string, lessonId: string): string | undefined {
+  if (!key) return;
+  try {
+    const [workspace, draftId, body] = JSON.parse(key);
+    if (typeof workspace !== 'string' || typeof draftId !== 'string' || typeof body !== 'string') return;
+    const payload = JSON.parse(body) as RosterPreviewInput;
+    if (!Array.isArray(payload?.lessons)) return;
+    return scopedAudienceKey(workspace, draftId, JSON.stringify({ ...payload, lessons: payload.lessons.map(lesson =>
+      lesson.id !== lessonId ? lesson : { ...lesson, audience_snapshot: undefined,
+        audience: lesson.audience ? { ...lesson.audience, exclude_student_ids: undefined } : undefined }) }));
+  } catch {
+    return;
+  }
+}
+
+export function sameExclusionRosterContext(previous: string, current: string, lessonId: string): boolean {
+  const oldContext = exclusionRosterContext(previous, lessonId);
+  return oldContext !== undefined && oldContext === exclusionRosterContext(current, lessonId);
 }
 
 export function audienceRequestState(

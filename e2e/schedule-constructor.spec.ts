@@ -294,12 +294,13 @@ test('constructor: parallel and week views keep lessons, shortcuts, conflicts, t
   await page.locator('.constructor-issue-count').click();
   await expect(page.locator('.constructor-conflict-panel')).toContainText('Центр решений расписания');
   await page.getByRole('combobox', { name: 'Тип проблемы' }).selectOption('student');
-  const studentConflict = page.locator('.constructor-issue-reason').filter({
-    has: page.locator('summary').filter({ hasText: 'назначено одновременно' }),
+  const studentConflict = page.locator('.constructor-conflict-panel [data-conflict-pair]').filter({
+    has: page.locator('[data-conflict-cause="audience"]').filter({ hasText: 'назначено одновременно' }),
   }).first();
   await expect(studentConflict).toBeVisible();
-  await studentConflict.locator('summary').click();
-  await studentConflict.getByRole('button', { name: 'Показать в расписании' }).first().click();
+  const targets = studentConflict.getByRole('button', { name: /^Показать в расписании/ });
+  await expect(targets).toHaveCount(2);
+  await targets.first().click();
   await expect(page.getByRole('button', { name: 'День' })).toHaveClass(/active/);
   await expect(page.locator('.constructor-card.active[data-issue-target="current"]')).toHaveCount(1);
   await expect(page.locator('[data-issue-route]')).toBeVisible();
@@ -347,7 +348,7 @@ test('constructor: empty source and experimental draft management preserve canon
   const before = await beforeResponse.json();
   await page.goto('/admin/schedule/constructor?role=admin');
   await page.getByRole('button', { name: /На основе действующего расписания/ }).click();
-  await expect(page.locator('.constructor-status')).toContainText('Копия создана: перенесено');
+  await expect(page.locator('output.constructor-status')).toContainText('Копия создана: перенесено');
   await expect(page.locator('.constructor-card').first()).toBeVisible();
   await expect(page.locator('.constructor-issue-count')).toContainText('Проверка');
   await page.locator('.constructor-draft-menu summary').click();

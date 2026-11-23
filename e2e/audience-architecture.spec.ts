@@ -9,7 +9,9 @@ test('grade navigation and grade-wide teacher assignment use canonical groups', 
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/admin/people?role=admin');
   await page.getByRole('combobox', { name: 'Класс или параллель' }).selectOption('parallel:7');
-  await expect(page.locator('.school-class-shelf > summary')).toContainText('Административные классы');
+  const schoolClasses = page.locator('.school-class-shelf');
+  await expect(schoolClasses.locator(':scope > summary')).toContainText('Классы школы');
+  await expect(schoolClasses).toContainText('Учебные группы по предметам показаны ниже.');
   for (const name of ['7-А', '7-Б']) await expect(page.locator('.school-class-compact').filter({ hasText: name })).toBeVisible();
   for (const name of ['Математика · 7-1', 'Математика · 7-2']) await expect(page.locator('.school-group-card-main').filter({ hasText: name }).first()).toBeVisible();
   await page.screenshot({ path: resolve(shots, 'grade-7-1920x1080.png'), fullPage: true });

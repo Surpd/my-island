@@ -55,7 +55,7 @@ import { TeacherColorPanel } from './teacher-color-panel';
 import { minutes, addMinutes, lessonTimes, relocatedTimes, schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedClassLunchMarker, displayedClarificationReason, effectiveClubReviewNote, isTypedScheduleClub, type ScheduleMergeConflict } from './schedule-constructor-logic';
 import { LaboratoryPanel, type LaboratoryBlueprint, type LaboratoryPreview } from './schedule-laboratory-panel';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
-import { audienceRequestMessage, audienceRequestState, prepareAudienceRequest, scopedAudienceKey } from './schedule-audience-request';
+import { audienceRequestMessage, audienceRequestState, prepareAudienceRequest, sameExclusionRosterContext, scopedAudienceKey } from './schedule-audience-request';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
 
@@ -646,16 +646,6 @@ function EditorDisclosure({ label, children, resetKey = '' }: { label: string; c
   </div>;
 }
 
-// A stale preview may still supply candidates when the only change was this
-// lesson's exclusion toggles. Never reuse a roster after another schedule change.
-function exclusionRosterContext(key: string, lessonId: string) {
-  if (!key) return '';
-  const payload = JSON.parse(key) as ReturnType<typeof audiencePreviewPayload>;
-  return JSON.stringify({ ...payload, lessons: payload.lessons.map(lesson =>
-    lesson.id !== lessonId ? lesson : { ...lesson, audience_snapshot: undefined,
-      audience: lesson.audience ? { ...lesson.audience, exclude_student_ids: undefined } : undefined }) });
-}
-
 function AttendanceExceptions({ lesson, students, previewKey, snapshot, initialReason, onReason, onChange }: {
   lesson: Lesson;
   students: { id: string; name: string }[];
@@ -669,7 +659,7 @@ function AttendanceExceptions({ lesson, students, previewKey, snapshot, initialR
   const [reason, setReason] = useState(initialReason);
   const past = snapshot?.lessons[lesson.id];
   const eligible = useMemo(() => past?.status === 'ok' && snapshot
-    && (snapshot.key === previewKey || exclusionRosterContext(snapshot.key, lesson.id) === exclusionRosterContext(previewKey, lesson.id))
+    && (snapshot.key === previewKey || sameExclusionRosterContext(snapshot.key, previewKey, lesson.id))
     ? past.proposed_student_ids ?? past.student_ids ?? [] : [], [past, snapshot, previewKey, lesson.id]);
   const selected = lesson.audience?.exclude_student_ids || [];
   const candidates = new Set([...selected, ...eligible]);
@@ -3935,7 +3925,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                   ) : null}
                   {selected ? (
                     <>
-                      {selectedKind && <LessonKindPicker key={selected.id} value={selectedKind}
+                      {selectedKind && <LessonKindPicker key={`kind:${selected.id}`} value={selectedKind}
                         onChange={selectedKind === 'laboratory' || selectedKind === 'no_lesson' ||
                           selectedKind === 'lunch' && (selected.specialMark !== 'lunch' || Boolean(selected.canonical))
                           ? undefined : kind => requestTypeChange(selected, selectedKind, kind)} />}
@@ -3945,7 +3935,7 @@ export function ScheduleConstructor({ api }: { api: Api }) {
                         onChange={event => updateLesson(selected.id, { format: event.target.value })}>
                         <option value="">Не указан</option><option value="offline">Очно</option><option value="online">Онлайн</option><option value="offsite">Вне школы</option>
                       </select></label>}
-                      {selectedOnline && !isSpecialMark(selected) && <OnlineConnection key={selected.id}
+                      {selectedOnline && !isSpecialMark(selected) && <OnlineConnection key={`connection:${selected.id}`}
                         value={selected.connectionInfo} onChange={connectionInfo => updateLesson(selected.id, { connectionInfo })} />}
                       {selectedKind && pendingType && <div className="constructor-type-confirm">
                         <p>{pendingTeacherChoice ? 'Преподаватель присутствует на практикуме?' : `Выбрать «${editorKinds[pendingType]}»?`}</p>

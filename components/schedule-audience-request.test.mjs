@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { audienceRequestState, prepareAudienceRequest, scopedAudienceKey } from './schedule-audience-request.ts';
+import { audienceRequestState, prepareAudienceRequest, sameExclusionRosterContext, scopedAudienceKey } from './schedule-audience-request.ts';
 
 function deferred() {
   let resolve;
@@ -82,4 +82,18 @@ test('ordinary request rejection is distinct from timeout', async () => {
     complete: () => failure.resolve('unexpected success'), fail: failure.resolve,
   });
   try { assert.equal(await failure.promise, 'request'); } finally { cancel(); }
+});
+
+test('consecutive exclusions preserve their roster only inside the same lesson, draft and workspace', () => {
+  const key = (ids, { workspace = 'school', draft = 'test:draft', otherRoom = '18' } = {}) => scopedAudienceKey(workspace, draft, JSON.stringify({ lessons: [
+    { id: 'x', audience: { kind: 'class', exclude_student_ids: ids }, audience_snapshot: { student_ids: ids } },
+    { id: 'y', room: otherRoom },
+  ] }));
+  assert.ok(sameExclusionRosterContext(key([]), key(['one']), 'x'));
+  assert.ok(sameExclusionRosterContext(key([]), key(['one', 'two', 'three']), 'x'));
+  assert.ok(!sameExclusionRosterContext(key([]), key(['one']), 'y'));
+  assert.ok(!sameExclusionRosterContext(key([]), key(['one'], { workspace: 'demo' }), 'x'));
+  assert.ok(!sameExclusionRosterContext(key([]), key(['one'], { draft: 'other' }), 'x'));
+  assert.ok(!sameExclusionRosterContext(key([]), key(['one'], { otherRoom: '19' }), 'x'));
+  assert.ok(!sameExclusionRosterContext('{}:{"lessons":[]}', '{}:{"lessons":[]}', 'x'));
 });

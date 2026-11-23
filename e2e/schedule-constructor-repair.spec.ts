@@ -673,7 +673,9 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
       if (item.type === 'club') {
         await expect(kind.getByRole('button', { name: 'Другие типы… · Кружок' })).toBeVisible();
       } else {
-        await expect(kind.getByRole('button', { name: item.label, exact: true })).toHaveAttribute('aria-pressed', 'true');
+        const typeButton = kind.getByRole('button', { name: item.label, exact: true });
+        await expect(typeButton).toHaveCount(1);
+        await expect(typeButton).toHaveAttribute('aria-pressed', 'true');
       }
       if (item.type === 'lesson') {
         await expect(online).not.toBeChecked();
@@ -797,6 +799,10 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await availability.press('Space');
   await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
 
+  await page.route('**/api/admin/schedule/experiments/audience-preview', async route => {
+    await new Promise(resolve => setTimeout(resolve, 1_200));
+    await route.continue();
+  });
   await exceptions.click();
   for (const name of extraNames) await editor.getByRole('checkbox', { name, exact: true }).check();
   await expect(editor.getByRole('button', { name: 'Кто не идёт на это занятие? · 3' })).toBeVisible();

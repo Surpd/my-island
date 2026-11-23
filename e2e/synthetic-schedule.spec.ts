@@ -90,7 +90,7 @@ test('filled synthetic week supports grades, weekday events, gaps and substituti
   const teacherControl = page.getByRole('combobox', { name: 'Преподаватель', exact: true });
   const teacher = (await teacherControl.locator('option:checked').innerText()).split(' · ')[0];
   await page.getByRole('button', { name: 'Закрыть панель', exact: true }).click();
-  await page.getByRole('button', { name: 'Преподаватели', exact: true }).click();
+  await page.getByTitle('Поиск и цвета преподавателей', { exact: true }).click();
   await page.getByLabel(`Цвет: ${teacher}`, { exact: true }).fill('#bbddff');
   await expect(english).toHaveCSS('background-color', 'rgb(187, 221, 255)');
   await page.getByRole('button', { name: 'Закрыть цвета преподавателей', exact: true }).click();
