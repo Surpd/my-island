@@ -8,6 +8,7 @@ import { formatLessonTimeRange } from './lesson-time';
 import { readableReviewNote } from './constructor-review-language';
 import './constructor-publication-panel.css';
 import { anonymousReviewReport } from './constructor-anonymous-report';
+import { draftStudentDelivery, type DeliveryRecord } from './constructor-delivery-preview';
 import {
   ConstructorLegacyReview, ConstructorRosterReview, ReviewDisclosure,
   type NormalizationCopy, type NormalizationPreview, type RosterPreview, type RosterScope, type SelectedNote,
@@ -42,7 +43,7 @@ type Diagnostic = {
 };
 type Deferred = {lesson_id:string;reason:string;block_key?:string;exclusion_scope?:'direct'|'cascade';cause_codes?:string[];cause_lesson_ids?:string[];action:'excluded'|'preserved_base'|'unknown'|'retained_unresolved';context?:LessonContext};
 type Summary = {source_lessons?:number;resolved_lessons?:number;unresolved_lessons?:number;acknowledged_exceptions?:number;campus_lessons?:number;main_campus_cards?:number;elective_blocks?:number;elective_lanes?:number;clubs_hidden?:number;unresolved_personal_assignments?:number;non_blocking_warnings?:number;admin_only_lessons?:number;with_remarks_lessons?:number;diagnostic_events?:number;conflict_lessons?:number;affected_students?:number;day_mode_issues?:number;direct_exclusions?:number;cascade_exclusions?:number;ready_lessons:number;deferred_lessons:number;deferred_blocks:number;unchanged_lessons:number;replaced_lessons:number;info_count:number;conflict_count:number;critical_count:number};
-type Preview = {published_source?:{records?:{lesson_id:string;status:string;conflict_student_ids?:string[]}[]};preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
+type Preview = {published_source?:{records?:DeliveryRecord[]};preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
 type Publication = {id:string;scope_kind:string;scope_key:string;created_at:string;published_id:string;version_id?:string;runtime_readback:{verified:boolean;block_count:number};restored_from?:string;summary?:Partial<Summary>;diagnostics?:Diagnostic[];deferred?:Deferred[];preview?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};preview_metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]}};
 type History = {items:Publication[];heads?:Record<string,{revision:number}>};
 
@@ -312,6 +313,7 @@ export function ConstructorPublicationPanel({
   const rosterRequest = useRef<AbortController | null>(null);
   const automaticRevision = useRef<number | null>(null);
   const [message,setMessage] = useState('');
+  const [deliveryStudentId, setDeliveryStudentId] = useState('');
   const [sessionExpired,setSessionExpired] = useState(false);
   const [published,setPublished] = useState(false);
   const [filter,setFilter] = useState<ConstructorReviewFilter>(initialFilter || initialView?.filter || 'all');
@@ -395,6 +397,19 @@ export function ConstructorPublicationPanel({
     ? 'Публикация остановлена. Сначала исправьте блокирующие ошибки.'
     : impact.get(id) || 'Выдача ещё не подтверждена. Откройте «Публикация» и проверьте выбранную неделю или шаблон.';
   const summary = {...emptySummary,...activePreview?.summary};
+  const deliveryStudents = Object.entries(studentNames).sort((left, right) => left[1].localeCompare(right[1], 'ru'));
+  const studentDelivery = activePreview && deliveryStudentId
+    ? draftStudentDelivery(activePreview.published_source?.records || [], deliveryStudentId)
+    : null;
+  const deliveryConflictIds = new Set(studentDelivery?.conflictLessonIds || []);
+  const deliveryLessons = (studentDelivery?.selected || []).map(record => ({
+    record,
+    details: lessonDetails[record.lesson_id],
+  })).sort((left, right) =>
+    (left.details?.day ?? 99) - (right.details?.day ?? 99)
+      || (left.details?.start || '').localeCompare(right.details?.start || '')
+      || (left.details?.subject || '').localeCompare(right.details?.subject || '', 'ru'),
+  );
   const rawDiagnostics = activePreview?.diagnostics || [];
   const observedDiagnostics = activePreview ? [
     ...rawDiagnostics,
@@ -926,6 +941,24 @@ export function ConstructorPublicationPanel({
             {activePreview && <section aria-label="Выдача ученикам">
               <h3>Выдача ученикам</h3>
               <p>{sourceLabel(activePreview.source_kind)}{scope === 'week' && week ? ` · ${week}` : ''}</p>
+              <label>Проверить личную выдачу
+                <select aria-label="Проверить личную выдачу" value={deliveryStudentId} onChange={event => setDeliveryStudentId(event.target.value)}>
+                  <option value="">Выберите ученика</option>
+                  {deliveryStudents.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                </select>
+              </label>
+              {studentDelivery ? <div className="constructor-student-delivery" aria-live="polite">
+                <p><strong>Подтверждённая выдача из этого черновика: {deliveryLessons.length} занятий.</strong></p>
+                {deliveryLessons.length ? <ul className="constructor-review-list">{deliveryLessons.map(({ record, details }) => <li key={record.lesson_id}>
+                  <div>
+                    <strong>{details?.subject || lessonLabels[record.lesson_id] || 'Занятие'}</strong>
+                    <small>{details ? [dayNames[details.day], formatLessonTimeRange(details.start, details.end), details.classes.join(' / ')].filter(Boolean).join(' · ') : lessonLabels[record.lesson_id]}</small>
+                    {deliveryConflictIds.has(record.lesson_id) ? <p>Есть пересечение для выбранного ученика. Занятие требует решения.</p> : null}
+                  </div>
+                  {lessonLabels[record.lesson_id] ? <button type="button" disabled={controlsBusy} onClick={() => openLesson(record.lesson_id)}>Проверить занятие</button> : null}
+                </li>)}</ul> : <p>Среди надёжно рассчитанных назначений занятий для выбранного ученика нет.</p>}
+                {studentDelivery.incompleteCount ? <p>Для {studentDelivery.incompleteCount} отложенных занятий индивидуальная выдача ещё не определена. Они не включены в число выше.</p> : null}
+              </div> : null}
               {activePreview.blockers.length ? <p>Публикация остановлена. Блокирующие ошибки перечислены в разделе «Проблемы».</p>
                 : activePreview.deferred.length ? <ReviewDisclosure title="Занятия, ожидающие решения" count={activePreview.deferred.length} groupKey="delivery-deferred">
                   <ul className="constructor-review-list">{activePreview.deferred.map(row => <li key={row.lesson_id}>
