@@ -461,6 +461,57 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
             self.assertEqual(int(selection["source_revision"]), guard["expected_revision"])
             self.assertEqual(str(selection["source_payload_sha256"]), guard["expected_source_hash"])
 
+    def test_apply_verified_lunch_note_removes_only_exact_clause_and_refuses_risky_or_ambiguous_rows(self):
+        from backend.services.schedule_normalization import (LUNCH_SCOPE_CLAUSE, apply_selected_schedule_notes,
+                                                             normalization_preview)
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "lunch-notes.db")
+            database.initialize()
+            group = database.create_group("8A", "class")
+            with database.connection() as connection:
+                database.execute(connection, "UPDATE groups SET canonical=1,base_class_name='8A' WHERE id=?", (group["id"],))
+            class_id = str(group["id"])
+            other = "Нет соответствующего звонка"
+            lessons = [
+                {"id": "safe", "subject": "Обед", "specialMark": "lunch", "day": 3, "period": 0,
+                 "classId": class_id, "classIds": [class_id],
+                 "audience": {"kind": "classes", "class_ids": [class_id]},
+                 "needsClarification": True, "clarificationReason": f"{LUNCH_SCOPE_CLAUSE}; {other}"},
+                {"id": "risky", "subject": "Обед", "specialMark": "lunch", "day": 3, "period": 0,
+                 "classId": class_id, "classIds": [class_id], "review_required": True,
+                 "audience": {"kind": "classes", "class_ids": [class_id]},
+                 "needsClarification": True, "clarificationReason": LUNCH_SCOPE_CLAUSE},
+                {"id": "duplicate", "subject": "Обед", "specialMark": "lunch", "day": 3, "period": 0,
+                 "classId": class_id, "classIds": [class_id],
+                 "audience": {"kind": "classes", "class_ids": [class_id]},
+                 "needsClarification": True, "clarificationReason": LUNCH_SCOPE_CLAUSE},
+                {"id": "duplicate", "subject": "Обед", "specialMark": "lunch", "day": 3, "period": 0,
+                 "classId": class_id, "classIds": [class_id],
+                 "audience": {"kind": "classes", "class_ids": [class_id]},
+                 "needsClarification": True, "clarificationReason": LUNCH_SCOPE_CLAUSE},
+            ]
+            draft = create_experiment(database, name="Lunch notes", source="import", payload={
+                "draft_kind": "school", "classes": [class_id], "days": [3],
+                "slots": [{"start": "11:50", "end": "12:35"}], "lessons": lessons})
+            draft = get_experiment(database, draft["id"])
+            plan = normalization_preview(draft, verified_classes=verified_administrative_classes(database))
+            proposals = {item["lesson_id"]: item for item in plan["scope_proposals"]}
+            self.assertTrue(proposals["safe"]["current_note_eligible"])
+            self.assertFalse(proposals["risky"]["current_note_eligible"])
+            self.assertFalse(proposals["duplicate"]["current_note_eligible"])
+            guard = {"expected_revision": draft["revision"], "expected_source_hash": plan["source_hash"],
+                     "expected_plan_hash": plan["plan_hash"]}
+            with self.assertRaises(ValueError):
+                apply_selected_schedule_notes(database, database, draft["id"],
+                    selected=[{"lesson_id": "risky", "field": "lunch_scope_warning"}], **guard)
+            self.assertEqual(get_experiment(database, draft["id"]), draft)
+            result = apply_selected_schedule_notes(database, database, draft["id"],
+                selected=[{"lesson_id": "safe", "field": "lunch_scope_warning"}], **guard)
+            saved = next(row for row in result["draft"]["payload"]["lessons"] if row["id"] == "safe")
+            self.assertEqual(saved["clarificationReason"], other)
+            self.assertTrue(saved["needsClarification"])
+            self.assertEqual(result["cleared_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

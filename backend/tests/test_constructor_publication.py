@@ -811,7 +811,11 @@ class ConstructorPublicationTests(unittest.TestCase):
                 clarificationReason="Уточните охват обеда: класс или отдельная группа")],
         }
         review = normalization_preview({"revision": 1, "payload": source}, verified_classes={class_id: "8"})
-        self.assertEqual(review["scope_proposals"], [{"lesson_id": "grade8-thursday-lunch", "kind": "lunch_verified"}])
+        self.assertEqual(len(review["scope_proposals"]), 1)
+        lunch_proposal = review["scope_proposals"][0]
+        self.assertEqual((lunch_proposal["lesson_id"], lunch_proposal["kind"], lunch_proposal["field"]),
+                         ("grade8-thursday-lunch", "lunch_verified", "lunch_scope_warning"))
+        self.assertTrue(lunch_proposal["current_note_eligible"])
 
         draft = create_experiment(self.database, name="Verified lunch scope", source="import", payload=source)
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)

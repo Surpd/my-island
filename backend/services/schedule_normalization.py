@@ -182,12 +182,19 @@ def reviewed_scope_proposals(payload: Mapping[str, Any], classes: Mapping[str, s
     from backend.services.schedule_experiments import _lesson_activity_type, _lesson_interval, _lesson_weekday
 
     rows = [row for row in (payload.get("lessons") or []) if isinstance(row, Mapping)]
+    row_ids = Counter(str(row.get("id") or "") for row in rows)
     slots = payload.get("slots") or []
     proposals = []
     for row in rows:
         lesson_id = str(row.get("id") or "")
         if evidence.get(lesson_id, (None,))[0] == "lunch_scope_warning":
-            proposals.append({"lesson_id": lesson_id, "kind": "lunch_verified"})
+            clauses = evidence[lesson_id][1]
+            proposals.append({"lesson_id": lesson_id, "kind": "lunch_verified",
+                              "field": "lunch_scope_warning",
+                              "before": str(row.get("clarificationReason") or "").strip(),
+                              "clauses": sorted(clauses),
+                              "current_note_eligible": row_ids[lesson_id] == 1
+                              and _can_apply_current_note(row, "lunch_scope_warning")})
 
     def is_named(row: Mapping[str, Any]) -> bool:
         subject = " ".join(str(row.get("subject") or "").casefold().split())
@@ -237,7 +244,8 @@ def reviewed_scope_proposals(payload: Mapping[str, Any], classes: Mapping[str, s
     return proposals
 
 
-CURRENT_NOTE_FIELDS = frozenset({"teacher_identity_warning", "teacher_assignment_warning", "elective_scope_warning"})
+CURRENT_NOTE_FIELDS = frozenset({"teacher_identity_warning", "teacher_assignment_warning", "elective_scope_warning",
+                                 "lunch_scope_warning"})
 
 
 
@@ -377,7 +385,8 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             len(matching) == 1 and _can_apply_current_note(matching[0], change["field"])
         )
     source_hash = payload_hash(payload)
-    plan = {"changes": changes, "source_hash": source_hash, "source_revision": int(draft.get("revision") or 0),
+    plan = {"changes": changes, "scope_proposals": scope_proposals, "source_hash": source_hash,
+            "source_revision": int(draft.get("revision") or 0),
             "source_id": str(draft.get("id") or "")}
     type_change_count = sum(item.get("field") == "activity_type" for item in changes)
     teacher_warning_clear_count = sum(item.get("field") in {"teacher_assignment_warning", "teacher_identity_warning"} for item in changes)
@@ -459,8 +468,9 @@ def apply_selected_schedule_notes(database: Any, source_database: Any, draft_id:
     keys = [(entry["lesson_id"], entry["field"]) for entry in selected]
     if not keys or len(keys) != len(set(keys)):
         raise ValueError("Выберите конкретные замечания без повторов.")
-    candidates = {(str(item["lesson_id"]), str(item["field"])): item for item in plan["changes"]
-                  if item["current_note_eligible"]}
+    candidates = {(str(item["lesson_id"]), str(item["field"])): item
+                  for item in [*plan["changes"], *plan.get("scope_proposals", [])]
+                  if item.get("field") and item.get("current_note_eligible")}
     payload = copy.deepcopy(source)
     rows = payload.get("lessons") or []
     for lesson_id, field in keys:
@@ -478,6 +488,14 @@ def apply_selected_schedule_notes(database: Any, source_database: Any, draft_id:
             if row.get("activityType") != "elective" or not row.get("blockId"):
                 raise ValueError("Не подтверждён ранее сохранённый общий блок курса.")
             remaining = without_scope_clauses(original, frozenset(proposed["clauses"]))
+        elif field == "lunch_scope_warning":
+            # The proposal is regenerated from the current draft, active class
+            # directory and exact day/slot evidence. Remove only that proven
+            # historical clause; every independent warning remains intact.
+            clauses = frozenset(proposed.get("clauses") or ())
+            if clauses != frozenset({LUNCH_SCOPE_CLAUSE}) or LUNCH_SCOPE_CLAUSE not in original.split("; "):
+                raise ValueError("Старая пометка об охвате обеда больше не подтверждена.")
+            remaining = without_scope_clauses(original, clauses)
         else:
             # Existing plan requires explicitly saved teacher IDs and matching
             # active directory evidence; never set or replace any teacher here.

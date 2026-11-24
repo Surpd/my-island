@@ -38,7 +38,8 @@ export type NormalizationPreview = {
   teacher_warning_clear_count: number;
   changes: { lesson_id: string; field?: string; before: string; after: string; reason: string; current_note_eligible?: boolean }[];
   manual: { lesson_id: string; reason: string }[];
-  scope_proposals?: { lesson_id: string; kind: 'lunch_verified' | 'elective_availability'; problem?: string }[];
+  scope_proposals?: { lesson_id: string; kind: 'lunch_verified' | 'elective_availability'; field?: string;
+    current_note_eligible?: boolean; problem?: string }[];
   retained_warning_count: number;
   retained_warnings: { reason: string; count: number; examples: { lesson_id: string; subject: string }[] }[];
 };
@@ -172,7 +173,8 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
   const confirmed = confirmedPlan !== null && confirmedPlan === preview?.plan_hash;
   const [noteSelection, setNoteSelection] = useState<{plan: string; items: SelectedNote[]} | null>(null);
   const selected = noteSelection?.plan === preview?.plan_hash ? noteSelection?.items || [] : [];
-  const selectable = preview?.changes.some(item => item.current_note_eligible === true) ?? false;
+  const selectable = (preview?.changes.some(item => item.current_note_eligible === true)
+    || preview?.scope_proposals?.some(item => item.current_note_eligible === true)) ?? false;
   const setChecked = (item: SelectedNote, checked: boolean) => {
     if (!preview) return;
     const rest = selected.filter(value => value.lesson_id !== item.lesson_id || value.field !== item.field);
@@ -215,6 +217,12 @@ export function ConstructorLegacyReview({ preview, error, busy, readOnly, lesson
             {item.kind === 'lunch_verified' ? <p>Классы и время обеда подтверждены. Старый вопрос об охвате не требует решения; остальные замечания остаются в проверке.</p> :
               <><p>Предлагаем открыть курс для всех классов 5–6. Это доступность курса, а не зачисление учеников.</p>
                 {item.problem ? <p>{item.problem}</p> : <p>Преподавателя, время и существующий состав менять не нужно.</p>}</>}
+            {!readOnly && item.field && item.current_note_eligible ? <label className="constructor-publication-confirm">
+              <input type="checkbox" disabled={busy}
+                checked={selected.some(value => value.lesson_id === item.lesson_id && value.field === item.field)}
+                onChange={event => setChecked({lesson_id: item.lesson_id, field: item.field!}, event.target.checked)} />
+              Снять только старую пометку об охвате обеда
+            </label> : null}
           </div>
           {lessonButton(item.lesson_id, lessonLabels[item.lesson_id] || 'занятие')}
         </li>)}</ul>
