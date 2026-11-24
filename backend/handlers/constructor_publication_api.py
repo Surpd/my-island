@@ -53,6 +53,7 @@ class AudienceBulkPreviewBody(BaseModel):
     scope: str
     day: int | None = None
     class_id: str | None = None
+    lesson_id: str | None = None
 
 
 class AudienceBulkApplyBody(AudienceBulkPreviewBody):
@@ -116,9 +117,12 @@ def create_constructor_publication_router(
         database, draft_database = admin(x_school_admin_session, preview_only=True, request=request)
         return call(preview_publication, database, draft_id, draft_database=draft_database, **body.model_dump())
 
-    def resolution_stores(token):
-        admin(token, preview_only=True)
-        actor=require_school_admin(token)
+    def resolution_stores(token, request: Request | None = None):
+        if os.getenv("MY_ISLAND_CONSOLIDATED_SCHEDULE") != "1":
+            raise HTTPException(404, "Constructor publication is disabled")
+        actor = (require_school_preview_admin(token, request)
+                 if request is not None and require_school_preview_admin is not None
+                 else require_school_admin(token))
         if isinstance(actor,tuple):actor=actor[1] if len(actor)>1 else actor[0]
         if isinstance(actor,dict):actor=actor.get('id') or actor.get('user_id')
         source,drafts=resolve_stores()
@@ -126,15 +130,15 @@ def create_constructor_publication_router(
         return source,drafts,actor
 
     @router.post('/{draft_id}/resolution/preview')
-    def resolution_preview_route(draft_id: str,body:ResolutionBody,x_school_admin_session: str|None=Header(default=None)):
+    def resolution_preview_route(draft_id: str,body:ResolutionBody,request:Request,x_school_admin_session: str|None=Header(default=None)):
         from backend.services.constructor_resolution import resolution_preview
-        source,drafts,_=resolution_stores(x_school_admin_session)
+        source,drafts,_=resolution_stores(x_school_admin_session,request)
         return call(resolution_preview,drafts,draft_id,audience_database=source,**body.model_dump())
 
     @router.post('/{draft_id}/resolution/apply')
-    def resolution_apply_route(draft_id: str,body:ResolutionApplyBody,x_school_admin_session: str|None=Header(default=None)):
+    def resolution_apply_route(draft_id: str,body:ResolutionApplyBody,request:Request,x_school_admin_session: str|None=Header(default=None)):
         from backend.services.constructor_resolution import apply_resolution
-        source,drafts,actor=resolution_stores(x_school_admin_session)
+        source,drafts,actor=resolution_stores(x_school_admin_session,request)
         return call(apply_resolution,drafts,draft_id,audience_database=source,actor_user_id=actor,**body.model_dump())
 
     @router.post('/{draft_id}/audiences/preview')
@@ -147,9 +151,11 @@ def create_constructor_publication_router(
         return call(bulk_audience_preview,drafts,draft_id,audience_database=source,**body.model_dump())
 
     @router.post('/{draft_id}/audiences/apply')
-    def bulk_audience_apply_route(draft_id: str, body: AudienceBulkApplyBody, x_school_admin_session: str | None = Header(default=None)):
+    def bulk_audience_apply_route(draft_id: str, body: AudienceBulkApplyBody, request: Request, x_school_admin_session: str | None = Header(default=None)):
         from backend.services.constructor_resolution import apply_bulk_audience
-        source,drafts,actor=resolution_stores(x_school_admin_session)
+        # A normal signed-in school admin may confirm the one lesson they just
+        # reviewed. Existing bulk scopes keep their stronger school-token gate.
+        source,drafts,actor=resolution_stores(x_school_admin_session, request if body.scope == 'lesson' else None)
         return call(apply_bulk_audience,drafts,draft_id,audience_database=source,actor_user_id=actor,**body.model_dump())
 
     @router.get('/publication/{publication_id}/source')

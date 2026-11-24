@@ -124,6 +124,71 @@ class ConstructorResolutionTests(unittest.TestCase):
             preview_token=repeated['preview_token'], reason='No changes', actor_user_id='synthetic-admin')
         self.assertEqual(unchanged['revision'], updated['revision'])
 
+    def test_single_lesson_audience_scope_previews_names_and_applies_only_reviewed_roster(self):
+        from backend.services.schedule_experiments import save_experiment
+        lessons = [self.lesson(id='geography', subject='География'),
+                   self.lesson(id='history', subject='История', day=1)]
+        draft = self.draft(lessons)
+        draft = save_experiment(self.database, draft['id'], expected_revision=1, payload=draft['payload'])
+        added = self.database.create_identity('student', 'Single lesson addition', '9A')
+        self.database.create_membership(self.group['id'], added['id'], 'student', 'synthetic')
+
+        preview = bulk_audience_preview(self.database, draft['id'], expected_revision=draft['revision'],
+                                         scope='lesson', lesson_id='geography')
+        self.assertEqual([row['id'] for row in preview['lessons']], ['geography'])
+        self.assertEqual(preview['summary']['safe_count'], 1)
+        self.assertEqual(preview['lessons'][0]['added_student_ids'], [str(added['id'])])
+
+        updated = apply_bulk_audience(self.database, draft['id'], expected_revision=draft['revision'],
+                                      scope='lesson', lesson_id='geography',
+                                      preview_token=preview['preview_token'], reason='Confirm Geography roster',
+                                      actor_user_id='synthetic-admin')
+        by_id = {lesson['id']: lesson for lesson in updated['payload']['lessons']}
+        self.assertIn(str(added['id']), by_id['geography']['audience_snapshot']['student_ids'])
+        self.assertNotIn(str(added['id']), by_id['history']['audience_snapshot']['student_ids'])
+        self.assertEqual(by_id['geography']['resolution_history'][-1]['lesson_ids'], ['geography'])
+
+        ordinary = bulk_audience_preview(self.database, updated['id'], expected_revision=updated['revision'], scope='template')
+        ignored = bulk_audience_preview(self.database, updated['id'], expected_revision=updated['revision'],
+                                        scope='template', lesson_id='ignored-outside-lesson-scope')
+        self.assertEqual(ordinary['preview_token'], ignored['preview_token'])
+        self.assertEqual(ignored['lesson_id'], '')
+        self.assertNotIn('added_student_ids', ordinary['lessons'][0])
+
+    def test_single_geography_remainder_excludes_parallel_society_members_by_source_roster(self):
+        from backend.services.schedule_experiments import save_experiment
+        grade10 = self.database.create_group('10-А', 'class')
+        grade11 = self.database.create_group('11-А', 'class')
+        society = self.database.create_group('Обществознание ЕГЭ', 'subject_group',
+                                             subject='Обществознание', base_class_name='10-11')
+        existing_geography = self.database.create_identity('student', 'Existing Geography pupil')
+        existing_society = self.database.create_identity('student', 'Existing Society pupil')
+        second_society = self.database.create_identity('student', 'Second Society pupil')
+        self.database.create_membership(grade10['id'], existing_geography['id'], 'student', 'synthetic')
+        self.database.create_membership(grade11['id'], existing_society['id'], 'student', 'synthetic')
+        self.database.create_membership(society['id'], existing_society['id'], 'student', 'synthetic')
+        self.database.create_membership(grade11['id'], second_society['id'], 'student', 'synthetic')
+        self.database.create_membership(society['id'], second_society['id'], 'student', 'synthetic')
+        geography = self.lesson(id='geography', subject='География',
+                                classId=str(grade10['id']), classIds=[str(grade10['id']), str(grade11['id'])],
+                                audience={'kind': 'available_slot', 'class_ids': [str(grade10['id']), str(grade11['id'])]})
+        social_studies = self.lesson(id='society', subject='Обществознание',
+                                     groupId=str(society['id']), groupIds=[str(society['id'])],
+                                     classId=str(grade11['id']), classIds=[str(grade11['id'])],
+                                     audience={'kind': 'groups', 'group_ids': [str(society['id'])]})
+        draft = self.draft([geography, social_studies])
+        draft = save_experiment(self.database, draft['id'], expected_revision=1, payload=draft['payload'])
+        new_geography = self.database.create_identity('student', 'New Geography pupil')
+        self.database.create_membership(grade10['id'], new_geography['id'], 'student', 'synthetic')
+
+        preview = bulk_audience_preview(self.database, draft['id'], expected_revision=draft['revision'],
+                                         scope='lesson', lesson_id='geography')
+        row = preview['lessons'][0]
+        self.assertIn(str(new_geography['id']), row['proposed_student_ids'])
+        self.assertNotIn(str(existing_society['id']), row['proposed_student_ids'])
+        self.assertNotIn(str(second_society['id']), row['proposed_student_ids'])
+        self.assertEqual(row['added_student_ids'], [str(new_geography['id'])])
+
     def test_bulk_recalculation_confirms_twenty_six_records_in_one_draft_revision(self):
         grade6 = self.database.create_group('6-А', 'class')
         lessons = [self.lesson(id=f'grade6-{index}', classId=str(grade6['id']), classIds=[str(grade6['id'])],

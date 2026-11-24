@@ -366,8 +366,7 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
                 if not reason:
                     continue
         retained_warning_counts[reason] += 1
-        if len(retained_warning_examples[reason]) < 5:
-            retained_warning_examples[reason].append({"lesson_id": lesson_id, "subject": str(row.get("subject") or "Занятие")})
+        retained_warning_examples[reason].append({"lesson_id": lesson_id, "subject": str(row.get("subject") or "Занятие")})
     rows_by_id: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in lessons:
         if isinstance(row, Mapping):
@@ -492,5 +491,5 @@ def apply_selected_schedule_notes(database: Any, source_database: Any, draft_id:
         else:
             row.pop("clarificationReason", None)
             row.pop("needsClarification", None)
-    saved = _write_experiment_revision(database, draft_id, expected_revision, payload, actor_user_id=actor_user_id, require_working_copy=True)
+    saved = _write_experiment_revision(database, draft_id, expected_revision, payload, actor_user_id=actor_user_id)
     return {"draft": saved, "cleared_count": len(keys)}

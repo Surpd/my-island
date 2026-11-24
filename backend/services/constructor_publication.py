@@ -34,6 +34,7 @@ from backend.services.schedule_edit_validation import (
     TEACHER_ASSIGNMENT_NOTE, TEACHER_IDENTITY_NOTE, day_mode_review_reason,
     is_legacy_group_link_note, normalized_note, notes, without_legacy_group_notes,
 )
+from backend.services.schedule_normalization import LUNCH_SCOPE_CLAUSE, scope_warning_evidence, without_scope_clauses
 
 
 PUBLICATION_SCHEMA = (
@@ -428,6 +429,10 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
     students = {student_id: str(row["class_name"] or "") for student_id, row in directory.students.items()}
     class_grades = {group_id: canonical.canonical_group_grade(group) for group_id, group in groups.items()
                     if not group.get("archived_at")}
+    verified_lunch_scopes = scope_warning_evidence(payload, {
+        group_id: class_grades[group_id] for group_id, group in groups.items()
+        if group.get("group_type") == "class"
+    })
     elective_cohorts: dict[tuple[str, int, str], set[str]] = {}
     elective_block_names: dict[str, set[str]] = {}
     for lesson in lessons:
@@ -508,6 +513,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             (result.get("status") == "ok" and not result.get("needs_recalculation") and bool(rule.get("kind")))
             if lunch_has_configured_audience else known_lunch_classes
         )
+        legacy_lunch_scope_verified = verified_lunch_scopes.get(lesson_id, (None,))[0] == "lunch_scope_warning"
         if lunch_has_configured_audience and not lunch_scope_confirmed and result.get("status") == "ok" and not result.get("needs_recalculation"):
             block("audience_unresolved", "Уточните, каким классам, группам или ученикам назначен обед.")
         if not lunch_scope_confirmed and not is_optional and (result.get("status") != "ok" or result.get("needs_recalculation")):
@@ -589,8 +595,7 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
                 elif ("нет подтверждённого назначения преподавателя группе" in review_reason.casefold()
                       and teacher_evidence and not teacher_evidence - teachers.keys()):
                     reason_without_active_teacher_note = re.sub(r"нет подтверждённого назначения преподавателя группе", "", review_reason, flags=re.IGNORECASE).strip(" .,:;-и")
-            if is_lunch and lunch_scope_confirmed:
-                from backend.services.schedule_normalization import LUNCH_SCOPE_CLAUSE, without_scope_clauses
+            if is_lunch and (lunch_scope_confirmed or legacy_lunch_scope_verified):
                 reason_without_active_teacher_note = without_scope_clauses(
                     reason_without_active_teacher_note, frozenset({LUNCH_SCOPE_CLAUSE}))
                 if lesson.get("importError"):
@@ -685,9 +690,42 @@ def _compile(database: Any, payload: Mapping[str, Any], base: Mapping[str, Any] 
             if len(class_ids) == 1:
                 audience_rule["class_group_id"] = class_ids[0]
             elif len(class_ids) > 1:
-                matching = {g for g, r in groups.items() if r["group_type"] == "class" and _class_grade(r) == grade}
-                if set(class_ids) != matching:
+                selected_by_grade: dict[str, set[str]] = defaultdict(set)
+                unknown_classes = []
+                for class_id in {str(value) for value in class_ids}:
+                    group = groups.get(class_id)
+                    class_grade = _class_grade(group) if group and group.get("group_type") == "class" else None
+                    if not class_grade:
+                        unknown_classes.append(class_id)
+                    else:
+                        selected_by_grade[class_grade].add(class_id)
+                declared_grades = {value for value in grade.split(",") if value}
+                full_parallel_scope = bool(selected_by_grade) and all(
+                    selected == {group_id for group_id, group in groups.items()
+                                 if group["group_type"] == "class" and _class_grade(group) == class_grade}
+                    for class_grade, selected in selected_by_grade.items()
+                )
+                if (unknown_classes or declared_grades != set(selected_by_grade)
+                        or not full_parallel_scope):
                     block("unsupported_partial_cohort", "Remaining audience spans only part of a parallel; confirm an explicit participant list")
+                elif kind == "available_slot" and len(selected_by_grade) > 1:
+                    # Canonical available-slot rules have one grade/class
+                    # context. Freeze the already reviewed multi-grade result
+                    # instead of widening one grade into another at runtime.
+                    saved_snapshot = lesson.get("audience_snapshot")
+                    saved_ids = (saved_snapshot.get("student_ids")
+                                 if isinstance(saved_snapshot, Mapping) else None)
+                    resolved_ids = result.get("proposed_student_ids")
+                    if (result.get("status") == "ok" and not result.get("needs_recalculation")
+                            and isinstance(saved_ids, list) and isinstance(resolved_ids, list)
+                            and {str(value) for value in saved_ids} == {str(value) for value in resolved_ids}):
+                        audience_rule = {"kind": "students", "include_student_ids": sorted({
+                            str(value) for value in saved_ids
+                        })}
+                    else:
+                        block("unsupported_partial_cohort", "Multi-grade remaining audience requires a reviewed participant list")
+                elif len(selected_by_grade) > 1:
+                    block("unsupported_partial_cohort", "Legacy multi-grade remaining audience requires an explicit reviewed participant list")
         elif kind == "students":
             audience_rule = {"kind": "students", "include_student_ids": rule.get("student_ids") or []}
         elif informational_unassigned_event:

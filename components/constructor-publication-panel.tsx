@@ -249,6 +249,7 @@ function storedDeferred(item:Publication) { return item.deferred||item.preview?.
 
 export function ConstructorPublicationPanel({
   api, draftId, revision, draftName, weekStart, dirty, readOnly, publicationEnabled, mode, suspended = false, day, classId, classLabel,
+  rosterLessonId, rosterLessonLabel,
   onClose, onSave, onRostersUpdated, onNormalizedCopy, onPublished, onOpenLesson,
   teacherNames, groupNames, studentNames = {}, lessonLabels, lessonDetails = {}, localIssues = [],
   onOpenComparison, onOpenGridDecisions, onResolveIssue, initialFilter,
@@ -266,6 +267,8 @@ export function ConstructorPublicationPanel({
   day: number;
   classId?: string;
   classLabel?: string;
+  rosterLessonId?: string;
+  rosterLessonLabel?: string;
   onClose: () => void;
   onSave: () => Promise<boolean>;
   onRostersUpdated: (value: unknown) => void;
@@ -296,7 +299,8 @@ export function ConstructorPublicationPanel({
   const [busy,setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [rosterScope, setRosterScope] = useState<RosterScope>(() =>
-    initialView?.rosterScope === 'class' && !classId ? 'stale' : initialView?.rosterScope || 'stale',
+    rosterLessonId ? 'lesson' : initialView?.rosterScope === 'lesson' || (initialView?.rosterScope === 'class' && !classId)
+      ? 'stale' : initialView?.rosterScope || 'stale',
   );
   const [rosters, setRosters] = useState<RosterPreview | null>(null);
   const [rosterError, setRosterError] = useState('');
@@ -498,6 +502,7 @@ export function ConstructorPublicationPanel({
     expected_revision: revision, scope: target,
     ...(target === 'day' ? { day } : {}),
     ...(target === 'class' ? { class_id: classId } : {}),
+    ...(target === 'lesson' ? { lesson_id: rosterLessonId } : {}),
   });
   const requestRosters = (target: RosterScope, signal: AbortSignal) => api<RosterPreview>(`${prefix}/audiences/preview`, {
     method: 'POST', body: JSON.stringify(rosterBody(target)), signal,
@@ -929,7 +934,8 @@ export function ConstructorPublicationPanel({
                 </ReviewDisclosure> : <p>Отложенных занятий в выбранной публикации нет.</p>}
             </section>}
             {canCheckRosters ? <ConstructorRosterReview preview={currentRosters} error={rosterError} busy={controlsBusy}
-              lessonImpact={lessonImpact} checkingScope={checkingRosters} readOnly={readOnly} scope={rosterScope} classLabel={classLabel} lessonLabels={lessonLabels}
+              lessonImpact={lessonImpact} checkingScope={checkingRosters} readOnly={readOnly} scope={rosterScope} classLabel={classLabel}
+              lessonId={rosterLessonId} lessonLabel={rosterLessonLabel} lessonLabels={lessonLabels} studentNames={studentNames}
               onScopeChange={target => void checkRosterScope(target)} onApply={() => void applyRosters()} onOpenLesson={openLesson} /> : null}
             {canCheckLegacy ? <ConstructorLegacyReview preview={currentLegacy} error={legacyError} busy={controlsBusy}
               lessonImpact={lessonImpact} readOnly={readOnly} lessonLabels={lessonLabels} onCopy={() => void copyNormalized()} onApplyNotes={applyNotes} onOpenLesson={openLesson} /> : null}

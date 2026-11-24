@@ -54,6 +54,7 @@ class ConstructorPreviewHumanAuthTests(TestCase):
         prefix = f"/api/admin/schedule/constructor/{record['id']}"
         self.publication = (f"{prefix}/publication/preview", {"expected_revision": 1, "scope_kind": "template"})
         self.audience = (f"{prefix}/audiences/preview", {"expected_revision": 1, "scope": "template"})
+        self.resolution = (f"{prefix}/resolution/preview", {"expected_revision": 1, "lesson_ids": ["l1"]})
         self.prefix = prefix
 
     def telegram(self, external_user_id, *, age=0, secret=None):
@@ -66,7 +67,7 @@ class ConstructorPreviewHumanAuthTests(TestCase):
 
     def statuses(self, headers):
         return [self.client.post(url, json=body, headers=headers).status_code
-                for url, body in (self.publication, self.audience)]
+                for url, body in (self.publication, self.audience, self.resolution)]
 
     def test_read_only_preview_supports_both_validated_human_transports(self):
         self.arrange()
@@ -79,7 +80,7 @@ class ConstructorPreviewHumanAuthTests(TestCase):
             {**self.telegram(760000), "X-School-Admin-Session": self.stale_token},
         ]
         for headers in methods:
-            self.assertEqual(self.statuses(headers), [200, 200])
+            self.assertEqual(self.statuses(headers), [200, 200, 200])
         with self.database.connection() as connection:
             self.assertEqual(tuple(connection.iterdump()), before)
 
@@ -96,7 +97,67 @@ class ConstructorPreviewHumanAuthTests(TestCase):
             ({**self.telegram(760000), "X-Preview-Id": "synthetic-preview"}, 403),
             ({**self.telegram(760000), "X-Student-Preview-Id": "synthetic-preview"}, 403),
         ]:
-            self.assertEqual(self.statuses(headers), [status, status])
+            self.assertEqual(self.statuses(headers), [status, status, status])
+
+    def test_resolution_apply_accepts_only_authenticated_admin_and_keeps_no_teacher_practice_explicit(self):
+        self.arrange()
+        admin = self.database.find_user(760000)
+        for headers in (self.telegram(760000), {"X-Dev-Auth": f"browser:{self.token}"}):
+            record = self.draft([self.lesson(id="practice-no-teacher", teacherId="", teacherIds=[])])
+            base = f"/api/admin/schedule/constructor/{record['id']}/resolution/"
+            body = {"expected_revision": record["revision"], "lesson_ids": ["practice-no-teacher"]}
+            preview = self.client.post(base + "preview", json=body, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            applied = self.client.post(base + "apply", headers=headers, json={
+                **body, "preview_token": preview.json()["preview_token"],
+                "action": "independent_practice", "reason": "Проверено администратором",
+            })
+            self.assertEqual(applied.status_code, 200, applied.text)
+            lesson = applied.json()["payload"]["lessons"][0]
+            self.assertFalse(lesson["teacherId"])
+            self.assertEqual(lesson["resolution_history"][0]["type"], "independent_practice")
+            self.assertEqual(lesson["resolution_history"][0]["actor_id"], str(admin["id"]))
+
+        rejected = self.draft([self.lesson(id="rejected", teacherId="", teacherIds=[])])
+        base = f"/api/admin/schedule/constructor/{rejected['id']}/resolution/"
+        body = {"expected_revision": rejected["revision"], "lesson_ids": ["rejected"]}
+        apply_body = {**body, "preview_token": "not-authorized", "action": "independent_practice", "reason": "Нет доступа"}
+        for headers, status in [({}, 401), (self.telegram(760001), 403), (self.telegram(760002), 403)]:
+            self.assertEqual(self.client.post(base + "preview", json=body, headers=headers).status_code, status)
+            self.assertEqual(self.client.post(base + "apply", json=apply_body, headers=headers).status_code, status)
+
+    def test_single_lesson_roster_apply_accepts_human_admin_without_enabling_bulk_apply(self):
+        self.arrange()
+        admin = self.database.find_user(760000)
+        for headers in (self.telegram(760000), {"X-Dev-Auth": f"browser:{self.token}"}):
+            record = self.draft()
+            base = f"/api/admin/schedule/constructor/{record['id']}/audiences/"
+            body = {"expected_revision": record["revision"], "scope": "lesson", "lesson_id": "l1"}
+            preview = self.client.post(base + "preview", json=body, headers=headers)
+            self.assertEqual(preview.status_code, 200, preview.text)
+            applied = self.client.post(base + "apply", headers=headers, json={
+                **body, "preview_token": preview.json()["preview_token"],
+                "reason": "Проверен состав одного занятия",
+            })
+            self.assertEqual(applied.status_code, 200, applied.text)
+            history = applied.json()["payload"]["lessons"][0]["resolution_history"]
+            self.assertEqual(history[-1]["actor_id"], str(admin["id"]))
+
+            bulk = self.client.post(base + "apply", headers=headers, json={
+                "expected_revision": applied.json()["revision"], "scope": "template",
+                "preview_token": "not-authorized", "reason": "Не должно пройти",
+            })
+            self.assertEqual(bulk.status_code, 401, bulk.text)
+
+        rejected = self.draft()
+        base = f"/api/admin/schedule/constructor/{rejected['id']}/audiences/"
+        body = {"expected_revision": rejected["revision"], "scope": "lesson", "lesson_id": "l1"}
+        preview = self.client.post(base + "preview", json=body)
+        self.assertEqual(preview.status_code, 401, preview.text)
+        apply = self.client.post(base + "apply", json={
+            **body, "preview_token": "not-authorized", "reason": "Нет доступа",
+        })
+        self.assertEqual(apply.status_code, 401, apply.text)
 
     def test_ordinary_credentials_do_not_enable_mutation_routes(self):
         self.arrange()

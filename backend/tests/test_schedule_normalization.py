@@ -78,6 +78,23 @@ class ScheduleNormalizationTests(unittest.TestCase):
         self.assertEqual({item["reason"]: item["count"] for item in preview["retained_warnings"]}, {room: 2, staff: 1})
         self.assertEqual(normalized_copy_payload(draft, preview)["lessons"], lessons)
 
+    def test_retained_warning_preview_includes_every_row_for_normal_review(self):
+        reasons = [f"Старая пометка {index}" for index in range(4)]
+        lessons = [
+            {"id": f"legacy-{index}", "subject": f"Занятие {index}", "needsClarification": True,
+             "clarificationReason": reasons[index % len(reasons)]}
+            for index in range(51)
+        ]
+        preview = normalization_preview({"id": "legacy-review", "revision": 1, "payload": {"lessons": lessons}})
+
+        self.assertEqual(preview["retained_warning_count"], 51)
+        self.assertEqual(sum(len(group["examples"]) for group in preview["retained_warnings"]), 51)
+        self.assertTrue(all(group["count"] == len(group["examples"]) for group in preview["retained_warnings"]))
+        self.assertEqual(
+            {example["lesson_id"] for group in preview["retained_warnings"] for example in group["examples"]},
+            {lesson["id"] for lesson in lessons},
+        )
+
     def test_realistic_357_row_preview_preserves_unclassified_rows(self):
         lessons = [{"id": f"ordinary-{i}", "subject": "Синтетический урок"} for i in range(345)]
         lessons.extend({"id": f"legacy-{block}-{i}", "blockId": f"source:{block}:electives",
@@ -297,6 +314,11 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
                 active_teachers, verified_assignments = verified_teacher_directory_evidence(database, current)
                 current_preview = normalization_preview(current, verified_active_teachers=active_teachers, verified_teacher_assignments=verified_assignments)
                 valid_body = {"expected_revision": current_preview["source_revision"], "expected_source_hash": current_preview["source_hash"], "expected_plan_hash": current_preview["plan_hash"]}
+                with database.connection() as connection:
+                    database.execute(connection, """INSERT INTO school_template_selection
+                        (scope, draft_id, source_draft_id, source_revision, source_payload_sha256)
+                        VALUES ('school', ?, ?, ?, ?)""",
+                        (source["id"], source["id"], preview["source_revision"], preview["source_hash"]))
                 def publication_state():
                     snapshot = {}
                     with database.connection() as connection:
@@ -424,12 +446,20 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
             with database.connection() as connection:
                 database.execute(connection, """INSERT INTO school_template_selection
                     (scope, draft_id, source_draft_id, source_revision, source_payload_sha256) VALUES ('school', ?, ?, ?, ?)""",
-                    (current["id"], current["id"], current["revision"], plan["source_hash"]))
-            with self.assertRaisesRegex(ValueError, "основной шаблон"):
-                apply_selected_schedule_notes(database, database, draft["id"], expected_revision=current["revision"],
-                    expected_source_hash=plan["source_hash"], expected_plan_hash=plan["plan_hash"],
-                    selected=[{"lesson_id": "teacher", "field": "teacher_identity_warning"}])
-            self.assertEqual(get_experiment(database, draft["id"]), current)
+                    (current["id"], current["id"], guard["expected_revision"], guard["expected_source_hash"]))
+            result = apply_selected_schedule_notes(database, database, draft["id"], expected_revision=current["revision"],
+                expected_source_hash=plan["source_hash"], expected_plan_hash=plan["plan_hash"],
+                selected=[{"lesson_id": "teacher", "field": "teacher_identity_warning"}])
+            expected = deepcopy(current["payload"])
+            expected["lessons"][1].pop("clarificationReason")
+            expected["lessons"][1].pop("needsClarification")
+            self.assertEqual(result["draft"]["payload"], expected)
+            self.assertEqual(result["draft"]["revision"], current["revision"] + 1)
+            with database.connection() as connection:
+                selection = database.execute(connection, """SELECT source_revision,source_payload_sha256
+                    FROM school_template_selection WHERE scope='school'""").fetchone()
+            self.assertEqual(int(selection["source_revision"]), guard["expected_revision"])
+            self.assertEqual(str(selection["source_payload_sha256"]), guard["expected_source_hash"])
 
 
 if __name__ == "__main__":

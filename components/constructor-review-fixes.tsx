@@ -5,7 +5,7 @@ import { ArrowRight, ChevronDown } from 'lucide-react';
 import { formatLessonTimeRange } from './lesson-time';
 import { legacyReviewReason } from './constructor-review-language';
 
-export type RosterScope = 'stale' | 'template' | 'day' | 'class';
+export type RosterScope = 'stale' | 'template' | 'day' | 'class' | 'lesson';
 export type RosterPreview = {
   revision: number;
   preview_token: string;
@@ -21,6 +21,10 @@ export type RosterPreview = {
     reason?: string;
     old_count: number;
     proposed_count: number | null;
+    old_student_ids?: string[];
+    proposed_student_ids?: string[] | null;
+    added_student_ids?: string[];
+    removed_student_ids?: string[];
   }[];
 };
 export type NormalizationPreview = {
@@ -83,14 +87,17 @@ function ReasonDetails({ reason }: { reason?: string }) {
   return <ReviewDisclosure title="Сведения для поддержки" secondary><p>{reason}</p></ReviewDisclosure>;
 }
 
-export function ConstructorRosterReview({ preview, error, busy, readOnly, classLabel, lessonLabels, lessonImpact, checkingScope, scope, onScopeChange, onApply, onOpenLesson }: {
+export function ConstructorRosterReview({ preview, error, busy, readOnly, classLabel, lessonId, lessonLabel, lessonLabels, studentNames, lessonImpact, checkingScope, scope, onScopeChange, onApply, onOpenLesson }: {
   preview: RosterPreview | null;
   error: string;
   busy: boolean;
   readOnly: boolean;
   classLabel?: string;
+  lessonId?: string;
+  lessonLabel?: string;
   checkingScope: boolean;
   lessonLabels: Record<string, string>;
+  studentNames: Record<string, string>;
   lessonImpact: (id: string) => string;
   scope: RosterScope;
   onScopeChange: (scope: RosterScope) => void;
@@ -117,6 +124,11 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
             <small>{lessonLabels[lesson.id] || [lesson.day != null ? rosterDays[lesson.day] : '', formatLessonTimeRange(lesson.start, lesson.end)].filter(Boolean).join(' · ')}</small>
             {lesson.safe ? <p>В черновике — {lesson.old_count}, в текущем составе — {lesson.proposed_count}.</p> :
               <p><b>{legacyReviewReason(lesson.reason).title}.</b> {legacyReviewReason(lesson.reason).action}</p>}
+            {!readOnly && lesson.safe && lesson.changed && (lesson.added_student_ids?.length || lesson.removed_student_ids?.length) ? <details>
+              <summary>Показать изменения по ученикам</summary>
+              {lesson.added_student_ids?.length ? <p>Добавятся: {lesson.added_student_ids.map(id => studentNames[id] || 'Ученик недоступен').join(', ')}.</p> : null}
+              {lesson.removed_student_ids?.length ? <p>Исключатся: {lesson.removed_student_ids.map(id => studentNames[id] || 'Ученик недоступен').join(', ')}.</p> : null}
+            </details> : null}
             <p>{lessonImpact(lesson.id)}</p>
             {!lesson.safe ? <ReasonDetails reason={lesson.reason} /> : null}
           </div>
@@ -131,6 +143,7 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
     </> : null}
     <ReviewDisclosure title="Проверить другой день, класс или весь черновик" groupKey="roster-scope" secondary>
       <label>Проверять при выборе<select value={scope} disabled={busy} onChange={event => onScopeChange(event.target.value as RosterScope)}>
+        {lessonId ? <option value="lesson">Только занятие{lessonLabel ? ` · ${lessonLabel}` : ''}</option> : null}
         <option value="stale">Составы, требующие внимания</option>
         <option value="template">Весь черновик</option>
         <option value="day">Выбранный день в сетке</option>

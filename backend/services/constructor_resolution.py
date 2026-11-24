@@ -148,13 +148,15 @@ def apply_resolution(database,draft_id,*,expected_revision,preview_token,lesson_
     return save_experiment(database,draft_id,expected_revision=expected_revision,payload=payload,actor_user_id=actor_user_id,audience_database=audience_database,_trusted_resolution_history=True)
 
 
-def _bulk_audience_scope(draft, scope, day=None, class_id=None):
-    if scope not in {'template', 'day', 'class', 'stale'}:
+def _bulk_audience_scope(draft, scope, day=None, class_id=None, lesson_id=None):
+    if scope not in {'template', 'day', 'class', 'lesson', 'stale'}:
         raise ValueError('Выберите область пересчёта аудиторий.')
     if scope == 'day' and day is None:
         raise ValueError('Для пересчёта текущего дня выберите день.')
     if scope == 'class' and not str(class_id or '').strip():
         raise ValueError('Для пересчёта класса или группы выберите аудиторию.')
+    if scope == 'lesson' and not str(lesson_id or '').strip():
+        raise ValueError('Для пересчёта одного занятия выберите занятие.')
     lessons = draft['payload'].get('lessons') or []
     chosen = []
     for lesson in lessons:
@@ -173,7 +175,11 @@ def _bulk_audience_scope(draft, scope, day=None, class_id=None):
                 ids.add(str(lesson['classId']))
             if str(class_id) not in ids:
                 continue
+        if scope == 'lesson' and str(lesson.get('id') or '') != str(lesson_id):
+            continue
         chosen.append(lesson)
+    if scope == 'lesson' and not chosen:
+        raise ValueError('Выбранное занятие не найдено или не имеет правила аудитории.')
     return chosen
 
 
@@ -185,13 +191,14 @@ def _bulk_audience_resolution(database, payload):
 
 
 def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=None,
-                          class_id=None, audience_database=None, _resolved=None,
+                          class_id=None, lesson_id=None, audience_database=None, _resolved=None,
                           _directory_fingerprint=None):
     """Preview safe roster updates over a selected draft scope, without writes."""
     draft = get_experiment(database, draft_id)
     if int(draft['revision']) != expected_revision:
         raise ExperimentConflict(draft)
-    selected = _bulk_audience_scope(draft, scope, day=day, class_id=class_id)
+    target_lesson_id = str(lesson_id or '') if scope == 'lesson' else ''
+    selected = _bulk_audience_scope(draft, scope, day=day, class_id=class_id, lesson_id=target_lesson_id)
     if isinstance(_resolved, Mapping):
         resolved = _resolved
         directory_fingerprint = str(_directory_fingerprint or '')
@@ -202,8 +209,8 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
     rows = []
     safe_count = unresolved_count = changed_count = added_count = removed_count = 0
     for lesson in selected:
-        lesson_id = str(lesson.get('id') or '')
-        result = resolved.get(lesson_id, {})
+        selected_lesson_id = str(lesson.get('id') or '')
+        result = resolved.get(selected_lesson_id, {})
         old = sorted(set(str(value) for value in ((lesson.get('audience_snapshot') or {}).get('student_ids') or [])))
         proposed_value = result.get('proposed_student_ids')
         safe = result.get('status') == 'ok' and isinstance(proposed_value, list)
@@ -220,7 +227,7 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
         unresolved_count += int(not safe)
         interval = _lesson_interval(lesson, draft['payload'].get('slots') or [])
         rows.append({
-            'id': lesson_id,
+            'id': selected_lesson_id,
             'subject': lesson.get('subject') or lesson.get('activity') or ('Обед' if lesson.get('specialMark') == 'lunch' else ''),
             'day': lesson.get('day', lesson.get('weekday')),
             'start': f'{interval[0]//60:02d}:{interval[0]%60:02d}' if interval else None,
@@ -229,6 +236,9 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
             'reason': result.get('reason'),
             'old_count': len(old),
             'proposed_count': len(proposed) if proposed is not None else None,
+            **({'old_student_ids': old, 'proposed_student_ids': proposed,
+                'added_student_ids': added, 'removed_student_ids': removed}
+               if scope == 'lesson' else {}),
             'added_count': len(added),
             'removed_count': len(removed),
             'needs_recalculation': bool(result.get('needs_recalculation')),
@@ -242,11 +252,12 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
         # This captures the current directory resolution, including membership
         # changes and unresolved blockers, for a stale-preview guard.
         'audiences': resolved, 'directory_fingerprint': directory_fingerprint,
+        **({'lesson_id': target_lesson_id} if scope == 'lesson' else {}),
     }
     token = hashlib.sha256(json.dumps(meaningful, sort_keys=True, default=str).encode()).hexdigest()
     return {
         'draft_id': draft_id, 'revision': expected_revision, 'scope': scope,
-        'day': day, 'class_id': class_id, 'preview_token': token,
+        'day': day, 'class_id': class_id, 'lesson_id': target_lesson_id, 'preview_token': token,
         'summary': {'selected_count': len(rows), 'changed_count': changed_count,
                     'added_count': added_count, 'removed_count': removed_count,
                     'safe_count': safe_count, 'unresolved_count': unresolved_count},
@@ -255,7 +266,7 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
 
 
 def apply_bulk_audience(database, draft_id, *, expected_revision, scope, preview_token,
-                        reason, actor_user_id, day=None, class_id=None, audience_database=None):
+                        reason, actor_user_id, day=None, class_id=None, lesson_id=None, audience_database=None):
     """Confirm only known proposed rosters from a fresh scope preview in one CAS."""
     if actor_user_id is None:
         raise ValueError('Требуется действующий вход администратора.')
@@ -270,7 +281,7 @@ def apply_bulk_audience(database, draft_id, *, expected_revision, scope, preview
     audience_result = _bulk_audience_resolution(audience_database or database, current['payload'])
     resolved = audience_result['lessons']
     preview = bulk_audience_preview(database, draft_id, expected_revision=expected_revision,
-                                    scope=scope, day=day, class_id=class_id,
+                                    scope=scope, day=day, class_id=class_id, lesson_id=lesson_id,
                                     audience_database=audience_database, _resolved=resolved,
                                     _directory_fingerprint=audience_result.get('directory_fingerprint'))
     if preview['preview_token'] != preview_token:

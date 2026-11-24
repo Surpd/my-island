@@ -193,7 +193,7 @@ export function ParticipantsPicker({
 
       {audience.kind === 'available_slot' ? <div className={styles.source} aria-live="polite">
         <strong>{audienceCaption}</strong>
-        {!audience.grade && !contextGrade ? <p>Не удалось определить параллель по колонке расписания.</p> : null}
+        {!selectedClassIds.length && !audience.grade && !contextGrade ? <p>Не удалось определить параллель по колонке расписания.</p> : null}
       </div> : null}
 
       {audience.kind === 'classes' || audience.kind === 'available_slot' ? (

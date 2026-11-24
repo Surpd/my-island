@@ -147,7 +147,7 @@ test('pasting remaps class audiences but preserves explicit groups, students, an
 });
 
 test('partial lesson intervals survive copy and period changes without losing a laboratory continuation', async () => {
-  const { lessonTimes, relocatedTimes } = await import('./schedule-constructor-logic.ts');
+  const { focusedAudienceLessonIds, lessonTimes, relocatedTimes } = await import('./schedule-constructor-logic.ts');
   const slots = [{start:'09:00',end:'09:45'},{start:'09:55',end:'10:40'},{start:'10:50',end:'11:25'}];
   const lab = {period:0,end:'10:40'};
   assert.deepEqual(lessonTimes(lab,slots),{start:'09:00',end:'10:40'});
@@ -155,4 +155,13 @@ test('partial lesson intervals survive copy and period changes without losing a 
   assert.deepEqual(lessonTimes(moved,slots),{start:'09:55',end:'11:35'});
   assert.deepEqual(relocatedTimes({period:0,start:'09:10',end:'09:45'},slots,2),{start:'11:00',end:'11:25'});
   assert.deepEqual(relocatedTimes({period:0},slots,2),{});
+  const lessons = [
+    {id:'geography',day:0,period:0,end:'10:10'},
+    {id:'parallel-society',day:0,period:1},
+    {id:'later',day:0,period:2},
+    {id:'other-day',day:1,period:0},
+  ];
+  assert.deepEqual(focusedAudienceLessonIds(lessons,'geography',slots), ['geography','parallel-society']);
+  assert.deepEqual(focusedAudienceLessonIds(lessons,'missing',slots), []);
+  assert.deepEqual(focusedAudienceLessonIds([{id:'invalid',day:0,period:9}], 'invalid', slots), []);
 });

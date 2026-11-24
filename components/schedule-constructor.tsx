@@ -53,7 +53,7 @@ import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
 import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
 import { TeacherColorPanel } from './teacher-color-panel';
-import { minutes, addMinutes, lessonTimes, relocatedTimes, schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedClassLunchMarker, displayedClarificationReason, effectiveClubReviewNote, isTypedScheduleClub, type ScheduleMergeConflict, canonicalGradeOfGroup, dayModeForGrade, allLessonClassesHaveMode, isSdepIndependentLesson, lessonOnline, lessonNeedsPhysicalRoom, displayedDayModeWarning, type DayModeState } from './schedule-constructor-logic';
+import { minutes, addMinutes, lessonTimes, focusedAudienceLessonIds, relocatedTimes, schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedClassLunchMarker, displayedClarificationReason, effectiveClubReviewNote, isTypedScheduleClub, type ScheduleMergeConflict, canonicalGradeOfGroup, dayModeForGrade, allLessonClassesHaveMode, isSdepIndependentLesson, lessonOnline, lessonNeedsPhysicalRoom, displayedDayModeWarning, type DayModeState } from './schedule-constructor-logic';
 import { LaboratoryPanel, type LaboratoryBlueprint, type LaboratoryPreview } from './schedule-laboratory-panel';
 import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './participants-picker';
 import { audienceRequestMessage, audienceRequestState, prepareAudienceRequest, sameExclusionRosterContext, scopedAudienceKey } from './schedule-audience-request';
@@ -707,6 +707,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const [consolidatedSchedule, setConsolidatedSchedule] = useState(false);
   const [reviewFilter,setReviewFilter] = useState<'all'|'conflict'>();
   const [reviewMode, setReviewMode] = useState<'review' | 'history' | null>(null);
+  const [reviewRosterLessonId, setReviewRosterLessonId] = useState('');
   const [resolutionFromReview, setResolutionFromReview] = useState(false);
   const [resolutionIssue, setResolutionIssue] = useState<Issue|null>(null);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
@@ -743,10 +744,13 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const activityPath = () => `/api/admin/schedule/activities?${workspace === 'school' ? 'workspace=school&' : ''}include_archived=true`;
   const directoryByWorkspace = useRef<{ demo: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] }; school: { groups: Group[]; teachers: Teacher[]; students: Student[]; rooms: string[] } }>({ demo: { groups: [], teachers: [], students: [], rooms: [] }, school: { groups: [], teachers: [], students: [], rooms: [] } });
   const [audienceSnapshot, setAudienceSnapshot] = useState<{ key: string; attempt: number; lessons: Record<string, AudiencePreview> } | null>(null);
+  const [focusedAudienceSnapshot, setFocusedAudienceSnapshot] = useState<{ key: string; attempt: number; lessons: Record<string, AudiencePreview> } | null>(null);
   const [newAudienceSnapshot, setNewAudienceSnapshot] = useState<{ key: string; attempt: number; preview: AudiencePreview } | null>(null);
   const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [focusedPreviewAttempt, setFocusedPreviewAttempt] = useState(0);
   const [newPreviewAttempt, setNewPreviewAttempt] = useState(0);
   const [previewFailure, setPreviewFailure] = useState<{ key: string; attempt: number; reason: 'timeout' | 'request' } | null>(null);
+  const [focusedPreviewFailure, setFocusedPreviewFailure] = useState<{ key: string; attempt: number; reason: 'timeout' | 'request' } | null>(null);
   const [newPreviewFailure, setNewPreviewFailure] = useState<{ key: string; attempt: number; reason: 'timeout' | 'request' } | null>(null);
   const [day, setDay] = useState(0);
   const [viewMode, setViewMode] = useState<'day' | 'week'>('day');
@@ -1774,6 +1778,35 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   }, [payload, groups, students, audiencePreviews, dirty, draft?.revision, resolutionRevision, resolutionStates]);
   const selected = payload?.lessons.find((item) => item.id === selectedId);
   const selectedActivityType = selected ? editorActivityType(selected) : undefined;
+  const focusedLessonIds = selected && payload
+    ? focusedAudienceLessonIds(payload.lessons, selected.id, payload.slots) : [];
+  const focusedPreviewBody = previewPayload && selected && focusedLessonIds.length
+    && !selected.informational && !['club', 'elective'].includes(selectedActivityType || '')
+    ? JSON.stringify({ payload: { ...previewPayload,
+      lessons: previewPayload.lessons.filter(lesson => focusedLessonIds.includes(lesson.id)) } }) : '';
+  const focusedPreviewKey = scopedAudienceKey(workspace, draft?.id, focusedPreviewBody);
+  const focusedPreviewRequest = audienceRequestState(focusedPreviewKey, focusedPreviewAttempt,
+    focusedAudienceSnapshot, focusedPreviewFailure, Boolean(focusedPreviewKey));
+  const focusedAudiencePreviews = focusedAudienceSnapshot?.key === focusedPreviewKey
+    ? focusedAudienceSnapshot.lessons : EMPTY_AUDIENCE_PREVIEWS;
+  const selectedAudiencePreview = selected
+    ? focusedAudiencePreviews[selected.id] || audiencePreviews[selected.id] : undefined;
+  const selectedAudienceRequest = focusedPreviewKey ? focusedPreviewRequest : previewRequest;
+  useEffect(() => {
+    if (saving || focusedPreviewRequest.status !== 'pending') return;
+    return prepareAudienceRequest({
+      delayMs: 120,
+      enqueue: queuePreview,
+      isPaused: () => savingRef.current,
+      load: (signal) => api<{ lessons: Record<string, AudiencePreview> }>(schedulePath('/audience-preview'), {
+        method: 'POST', body: focusedPreviewBody, signal,
+      }),
+      complete: (value) => setFocusedAudienceSnapshot({ key: focusedPreviewKey,
+        attempt: focusedPreviewAttempt, lessons: value.lessons || {} }),
+      fail: (reason) => setFocusedPreviewFailure({ key: focusedPreviewKey,
+        attempt: focusedPreviewAttempt, reason }),
+    });
+  }, [api, focusedPreviewBody, focusedPreviewKey, focusedPreviewAttempt, focusedPreviewRequest.status, saving]);
   const selectedKind = selected && (isLunch(selected) ? 'lunch' : isNoLesson(selected) ? 'no_lesson' : selectedActivityType || 'lesson');
   const pendingType = selected && typeChange?.id === selected.id && typeChange.from === selectedKind ? typeChange.to : null;
   const pendingTeacherChoice = pendingType === 'practice' && Boolean(selected?.teacherId || selected?.teacherIds?.length);
@@ -2212,6 +2245,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     setReviewMode(null);
   };
   const openReviewCenter = (filter: 'all' | 'conflict') => {
+    setReviewRosterLessonId('');
     setIssueRoute(null);
     setComparisonOpen(false);
     setConflictsOpen(false);
@@ -2977,9 +3011,10 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
         }} />}
       {resolutionIssue && draft ? <ConstructorResolutionPanel api={api} draftId={draft.id} revision={draft.revision} lessons={draft.payload.lessons} slots={draft.payload.slots} issue={resolutionIssue} teacherNames={Object.fromEntries(teachers.map(t=>[t.id,t.name]))} groupNames={Object.fromEntries(groups.map(g=>[g.id,g.name]))} studentNames={Object.fromEntries(students.map(s=>[s.id,s.name]))} dirty={dirty} onClose={()=>{setResolutionIssue(null);if(resolutionFromReview){setReviewFilter(undefined);setReviewMode('review');}setResolutionFromReview(false);}} onNavigate={id=>{showIssueLesson(id,resolutionFromReview?'review':'grid',resolutionIssue.message,[resolutionIssue.lessonId,...(resolutionIssue.related?[resolutionIssue.related]:[])]);setResolutionIssue(null);setResolutionFromReview(false);}} onUpdated={async(value)=>{const updated=value as Draft|undefined;if(updated?.payload){setHistory(items=>[...items.slice(-49),draft.payload]);setFuture([]);revision.current=updated.revision;baseDraftRef.current=updated;setDraft(updated);setDirty(false);changeVersion.current++;}else{await open(draft.id);}await refreshDrafts();}} /> : null}
       {(reviewMode || route?.origin === 'review') && draft && schoolReview ? <ConstructorPublicationPanel
-        key={`${draft.id}:${reviewMode || 'review'}`} api={api} mode={reviewMode || 'review'} suspended={!reviewMode} draftId={draft.id} draftName={draft.name}
+        key={`${draft.id}:${reviewMode || 'review'}:${reviewRosterLessonId}`} api={api} mode={reviewMode || 'review'} suspended={!reviewMode} draftId={draft.id} draftName={draft.name}
         revision={draft.revision} weekStart={draft.payload.week_start} dirty={dirty} readOnly={readOnlySchoolWorkspace} publicationEnabled={consolidatedSchedule}
         day={day} classId={rosterClassId} classLabel={rosterClassLabel}
+        rosterLessonId={reviewRosterLessonId || undefined} rosterLessonLabel={reviewRosterLessonId ? draft.payload.lessons.find(lesson => lesson.id === reviewRosterLessonId)?.subject : undefined}
         teacherNames={Object.fromEntries(teachers.map(item => [item.id, item.name]))}
         groupNames={Object.fromEntries(groups.map(item => [item.id, item.name]))}
         studentNames={Object.fromEntries(students.map(item => [item.id, item.name]))}
@@ -2993,7 +3028,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
           const kind = isLunch(lesson) ? 'lunch' : isNoLesson(lesson) ? 'no_lesson' : editorActivityType(lesson) || 'lesson';
           return [lesson.id, [lesson.subject || 'Занятие', editorKinds[kind], DAYS[lesson.day], formatLessonTimeRange(start, end) || 'Время не указано', audience].filter(Boolean).join(' · ')];
         }))}
-        onClose={() => setReviewMode(null)}
+        onClose={() => { setReviewMode(null); setReviewRosterLessonId(''); }}
         onSave={save}
         onRostersUpdated={applyRosterDraft}
         onOpenGridDecisions={() => {setReviewMode(null);setConflictsOpen(true);requestAnimationFrame(()=>document.querySelector<HTMLElement>('.constructor-conflict-panel')?.focus());}}
@@ -4055,10 +4090,10 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                           {groups.filter(group => group.group_type === 'class' && payload.classes.includes(group.id)).map(group =>
                             <option key={group.id} value={group.id}>{group.name}</option>)}
                         </select></label><p>Поимённый список для кружка не нужен.</p></> : null}
-                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={audiencePreviews[selected.id]} requestState={previewRequest} onRetryPreview={() => setPreviewAttempt((value) => value + 1)} recalculationLabel={schoolReview ? 'Открыть проверку сохранённого черновика' : undefined} onConfirmRecalculation={schoolReview && dirty ? undefined : () => schoolReview ? setReviewMode('review') : setRecalculationOpen(true)} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => selectEditorAudience(selected, audience)} />
-                        {workspace === 'school' && legacyGroupLinkWarning(selected) && !audiencePreviews[selected.id]?.verified_saved_group && audienceOf(selected, groups).kind === 'groups' &&
-                          audiencePreviews[selected.id]?.status === 'ok' && audiencePreviews[selected.id]?.proposed_student_ids != null &&
-                          previewRequest.status === 'complete' && <button type="button"
+                      {selectedActivityType === 'elective' ? <p>Участники поимённо не назначаются. Доступность курса и его размещение в классах указаны отдельно.</p> : !selected.informational && selectedActivityType !== 'club' ? <><ParticipantsPicker groups={groups} students={students} audience={audienceOf(selected, groups)} subject={selected.subject} contextClassIds={lessonClasses(selected)} preview={selectedAudiencePreview} requestState={selectedAudienceRequest} onRetryPreview={() => focusedPreviewKey ? setFocusedPreviewAttempt((value) => value + 1) : setPreviewAttempt((value) => value + 1)} recalculationLabel={schoolReview ? 'Проверить и подтвердить только это занятие' : undefined} onConfirmRecalculation={schoolReview && dirty ? undefined : () => { if (schoolReview) { setReviewRosterLessonId(selected.id); setReviewMode('review'); } else setRecalculationOpen(true); }} onOpenBlockingLesson={(id) => { const lesson = payload.lessons.find((item) => item.id === id); if (lesson) openReviewLesson(lesson.id); }} legacyNotice={selected.audienceMode === 'remainder' && !selected.audience ? 'Сохранено исходное правило остатка из canonical. Его можно заменить динамическим расчётом по времени.' : undefined} onChange={(audience) => selectEditorAudience(selected, audience)} />
+                        {workspace === 'school' && legacyGroupLinkWarning(selected) && !selectedAudiencePreview?.verified_saved_group && audienceOf(selected, groups).kind === 'groups' &&
+                          selectedAudiencePreview?.status === 'ok' && selectedAudiencePreview?.proposed_student_ids != null &&
+                          selectedAudienceRequest.status === 'complete' && <button type="button"
                             onClick={() => selectEditorAudience(selected, audienceOf(selected, groups), true)}>Оставить эту группу</button>}
                         {selected.audienceMode === 'remainder' && !selected.audience ? <button onClick={() => updateLesson(selected.id, audiencePatch(audienceOf(selected, groups), groups, students, lessonClasses(selected)))}>Включить динамический расчёт остатка</button> : null}</> : null}
                       <div className="constructor-field-row">
@@ -4093,7 +4128,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                       </fieldset> : null}
                       {selected.audience && !['club', 'elective'].includes(selectedActivityType || '') ? <EditorDisclosure key={`exceptions-${draft.id}-${selected.id}`} label={selected.audience.exclude_student_ids?.length
                         ? `Кто не идёт на это занятие? · ${selected.audience.exclude_student_ids.length}` : 'Кто не идёт на это занятие?'}>
-                        <AttendanceExceptions key={draft.revision} lesson={selected} students={students} previewKey={previewKey} snapshot={audienceSnapshot}
+                        <AttendanceExceptions key={draft.revision} lesson={selected} students={students} previewKey={focusedPreviewKey || previewKey} snapshot={focusedPreviewKey ? focusedAudienceSnapshot : audienceSnapshot}
                           initialReason={attendanceReasons.current.get(JSON.stringify([draft.id, selected.id])) || ''}
                           onReason={reason => attendanceReasons.current.set(JSON.stringify([draft.id, selected.id]), reason)}
                           onChange={ids => updateLesson(selected.id, { audience: { ...selected.audience!, exclude_student_ids: ids }, audience_snapshot: null })} />

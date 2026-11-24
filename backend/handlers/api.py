@@ -352,6 +352,7 @@ class ScheduleExperimentAudienceBulkPreviewPayload(BaseModel):
     scope: str
     day: int | None = None
     class_id: str | None = None
+    lesson_id: str | None = None
 
 
 class ScheduleExperimentAudienceBulkApplyPayload(ScheduleExperimentAudienceBulkPreviewPayload):

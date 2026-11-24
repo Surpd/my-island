@@ -145,6 +145,28 @@ export function lessonTimes(lesson:LessonPeriod, slots:Bell[]) {
   return {start:lesson.start || slot?.start || '', end:lesson.end || slot?.end || ''};
 }
 
+type FocusedAudienceLesson = LessonPeriod & { id: string; day: number };
+
+/**
+ * Keep the selected lesson and every concurrent lesson that can reserve
+ * students from an available-slot audience. An empty result means the
+ * selected interval is not valid enough for an isolated preview.
+ */
+export function focusedAudienceLessonIds(lessons: FocusedAudienceLesson[], selectedId: string, slots: Bell[]): string[] {
+  const selected = lessons.find(lesson => lesson.id === selectedId);
+  if (!selected) return [];
+  const selectedTime = lessonTimes(selected, slots);
+  if (!selectedTime.start || !selectedTime.end || minutes(selectedTime.start) >= minutes(selectedTime.end)) return [];
+  return lessons.filter(lesson => {
+    if (lesson.id === selected.id) return true;
+    if (lesson.day !== selected.day) return false;
+    const time = lessonTimes(lesson, slots);
+    return Boolean(time.start && time.end
+      && minutes(time.start) < minutes(selectedTime.end)
+      && minutes(selectedTime.start) < minutes(time.end));
+  }).map(lesson => lesson.id);
+}
+
 // Keep implicit endpoints on the destination bell. Shift explicit offsets
 // from the old bell, including an end-only multi-period laboratory.
 export function relocatedTimes(lesson:LessonPeriod, slots:Bell[], period:number) {

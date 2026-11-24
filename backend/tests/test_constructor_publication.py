@@ -797,6 +797,46 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertNotIn("Уточните охват", issue["message"])
         self.assertEqual(preview["summary"]["ready_lessons"], 0)
 
+    def test_verified_lunch_class_and_time_waive_only_legacy_scope_not_unknown_roster(self):
+        from backend.services.schedule_normalization import normalization_preview
+
+        empty_class = self.database.create_group("8A", "class", base_class_name="8A")
+        class_id = str(empty_class["id"])
+        source = {
+            "reference_date": "2026-10-19", "days": [3], "classes": [class_id],
+            "slots": [{"start": "11:50", "end": "12:35"}],
+            "lessons": [self.lesson(id="grade8-thursday-lunch", day=3, period=0, classId=class_id,
+                classIds=[class_id], subject="Обед", specialMark="lunch", teacherId="", teacherIds=[], room="",
+                audience={"kind": "classes", "class_ids": [class_id]}, needsClarification=True,
+                clarificationReason="Уточните охват обеда: класс или отдельная группа")],
+        }
+        review = normalization_preview({"revision": 1, "payload": source}, verified_classes={class_id: "8"})
+        self.assertEqual(review["scope_proposals"], [{"lesson_id": "grade8-thursday-lunch", "kind": "lunch_verified"}])
+
+        draft = create_experiment(self.database, name="Verified lunch scope", source="import", payload=source)
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+        codes = [item["code"] for item in preview["diagnostics"]]
+        self.assertIn("audience_unresolved", codes)
+        self.assertNotIn("review_required", codes)
+        self.assertEqual(preview["summary"]["deferred_lessons"], 1)
+        self.assertEqual(preview["deferred"][0]["cause_codes"], ["audience_unresolved"])
+
+        empty_group = self.database.create_group("8A lunch subgroup", "subject_group", base_class_name="8A")
+        guarded_rules = {
+            "explicit-group": {"kind": "groups", "group_ids": [str(empty_group["id"])]},
+            "remainder": {"kind": "remaining", "class_ids": [class_id], "partition_group_ids": []},
+            "exclusion": {"kind": "classes", "class_ids": [class_id],
+                          "exclude_student_ids": [str(self.student["id"])]},
+        }
+        for case, audience in guarded_rules.items():
+            with self.subTest(case=case):
+                guarded = copy.deepcopy(source)
+                guarded["lessons"][0]["id"] = f"guarded-{case}"
+                guarded["lessons"][0]["audience"] = audience
+                draft = create_experiment(self.database, name=f"Guarded lunch {case}", source="import", payload=guarded)
+                preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+                self.assertIn("review_required", [item["code"] for item in preview["diagnostics"]])
+
     def test_unverified_import_reference_is_deferred_without_subject_restrictions(self):
         stale_math = self.database.create_group("Synthetic math split", "subject_group", subject="Математика",
             subject_subgroup="1", base_class_name="9A")
@@ -1313,6 +1353,76 @@ class ConstructorPublicationTests(unittest.TestCase):
         second = canonical.project_student(self.database, self.other_student["id"], "2026-10-19")
         self.assertEqual(first["items"][0]["activity"], "Math")
         self.assertEqual(second["items"][0]["activity"], "Other")
+
+    def test_reviewed_multi_grade_available_slot_freezes_exact_remaining_students(self):
+        from backend.services.schedule_experiments import save_experiment
+
+        class10 = self.database.create_group("10-А", "class", base_class_name="10")
+        class11 = self.database.create_group("11-А", "class", base_class_name="11")
+        society = self.database.create_group("Обществознание 11", "subject_group",
+            subject="Обществознание", base_class_name="11")
+
+        def student(name, class_name, class_group):
+            identity = self.database.create_identity("student", name, class_name)
+            self.database.create_membership(class_group["id"], identity["id"], "student", "synthetic")
+            return identity
+
+        ten_first = student("Synthetic 10 first", "10-А", class10)
+        ten_second = student("Synthetic 10 second", "10-А", class10)
+        eleven_society = student("Synthetic 11 society", "11-А", class11)
+        eleven_remaining = student("Synthetic 11 remaining", "11-А", class11)
+        eleven_excluded = student("Synthetic 11 excluded", "11-А", class11)
+        self.database.create_membership(society["id"], eleven_society["id"], "student", "synthetic")
+
+        society_lesson = self.lesson(id="society", subject="Обществознание", room="1101",
+            classId=str(class11["id"]), classIds=[str(class11["id"])],
+            audience={"kind": "groups", "group_ids": [str(society["id"])]})
+        geography = self.lesson(id="geography", subject="География", teacherId=str(self.other_teacher["id"]), room="1001",
+            classId=str(class10["id"]), classIds=[str(class10["id"]), str(class11["id"])],
+            audience={"kind": "available_slot", "grade": "10,11",
+                      "class_ids": [str(class10["id"]), str(class11["id"])],
+                      "exclude_student_ids": [str(eleven_excluded["id"])]},
+            audience_snapshot={"student_ids": [str(ten_first["id"]), str(ten_second["id"]),
+                                                str(eleven_remaining["id"])]})
+        draft = self.draft([society_lesson, geography])
+        payload = copy.deepcopy(draft["payload"])
+        payload["classes"] = [str(class10["id"]), str(class11["id"])]
+        draft = save_experiment(self.database, draft["id"], expected_revision=draft["revision"], payload=payload)
+
+        preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=draft["revision"])
+        self.assertEqual(preview["summary"]["ready_lessons"], 2, preview["diagnostics"])
+        self.assertNotIn("unsupported_partial_cohort", {item["code"] for item in preview["diagnostics"]})
+        self.publish(draft)
+        self.publish(draft, "week", week_start="2026-10-19")
+        later_ten = student("Synthetic 10 after publication", "10-А", class10)
+
+        def activities(identity):
+            return [item.get("activity") for item in canonical.project_student(
+                self.database, identity["id"], "2026-10-19")["items"] if item.get("state") == "ACTIVITY"]
+
+        self.assertEqual(activities(ten_first), ["География"])
+        self.assertEqual(activities(ten_second), ["География"])
+        self.assertEqual(activities(eleven_society), ["Обществознание"])
+        self.assertEqual(activities(eleven_remaining), ["География"])
+        self.assertEqual(activities(eleven_excluded), [])
+        self.assertEqual(activities(later_ten), [])
+
+    def test_multi_grade_available_slot_rejects_partial_unknown_and_missing_snapshot_scopes(self):
+        class10 = self.database.create_group("10-А", "class", base_class_name="10")
+        class11a = self.database.create_group("11-А", "class", base_class_name="11")
+        class11b = self.database.create_group("11-Б", "class", base_class_name="11")
+        for lesson_id, class_ids in (
+            ("partial", [str(class10["id"]), str(class11a["id"])]),
+            ("unknown", [str(class10["id"]), "unknown-class-id"]),
+            ("missing-snapshot", [str(class10["id"]), str(class11a["id"]), str(class11b["id"])]),
+        ):
+            lesson = self.lesson(id=lesson_id, subject="География",
+                classId=class_ids[0], classIds=class_ids,
+                audience={"kind": "available_slot", "grade": "10,11", "class_ids": class_ids})
+            draft = self.draft([lesson])
+            preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
+            self.assertEqual(preview["summary"]["ready_lessons"], 0)
+            self.assertIn("unsupported_partial_cohort", {item["code"] for item in preview["diagnostics"]})
 
     def test_information_only_does_not_defer_and_is_audited(self):
         draft = self.draft([self.lesson(room="")])
