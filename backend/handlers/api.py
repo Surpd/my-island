@@ -48,7 +48,7 @@ from backend.services.schedule_experiments import (
     duplicate_experiment, experiment_audience_preview, experiment_week_audience_preview, get_experiment, list_experiments, save_experiment, create_effective_week_experiment,
 )
 from backend.services.schedule_edit_validation import is_legacy_group_link_note
-from backend.services.schedule_normalization import apply_selected_schedule_notes, normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence, verified_saved_group_warning_ids
+from backend.services.schedule_normalization import apply_selected_schedule_notes, normalization_preview, normalized_copy_payload, verified_administrative_classes, verified_teacher_directory_evidence, verified_saved_group_warning_ids, verified_lunch_remainder_warning_ids
 from backend.services.schedule_term_comparison import (
     apply_term_comparison_choice, preview_term_comparison_choices, record_term_comparison_decision,
 )
@@ -1756,7 +1756,9 @@ def create_router(database: Database) -> APIRouter:
             teachers, assignments = verified_teacher_directory_evidence(store, draft)
             return normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
                                          verified_classes=verified_administrative_classes(store),
-                                         verified_group_links=verified_saved_group_warning_ids(source, draft))
+                                         verified_group_links=verified_saved_group_warning_ids(source, draft),
+                                         verified_lunch_remainders=verified_lunch_remainder_warning_ids(
+                                             source, draft, draft_database=store))
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -1792,7 +1794,9 @@ def create_router(database: Database) -> APIRouter:
             teachers, assignments = verified_teacher_directory_evidence(store, draft)
             preview = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
                                          verified_classes=verified_administrative_classes(store),
-                                         verified_group_links=verified_saved_group_warning_ids(source, draft))
+                                         verified_group_links=verified_saved_group_warning_ids(source, draft),
+                                         verified_lunch_remainders=verified_lunch_remainder_warning_ids(
+                                             source, draft, draft_database=store))
             if draft["revision"] != payload.expected_revision or preview["source_hash"] != payload.expected_source_hash or preview["plan_hash"] != payload.expected_plan_hash:
                 raise HTTPException(status_code=409, detail="Шаблон изменился после предпросмотра. Повторите анализ.")
             if not preview["automatic_count"]:

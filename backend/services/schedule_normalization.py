@@ -5,7 +5,7 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from backend.services.schedule_edit_validation import CLUB_LESSON_ONLY_NOTES, is_legacy_group_link_note, normalized_note, notes, without_legacy_group_notes
@@ -176,6 +176,143 @@ def verified_saved_group_warning_ids(database: Any, draft: Mapping[str, Any]) ->
     return {lesson_id for lesson_id in ids if resolved.get(lesson_id, {}).get("verified_saved_group")}
 
 
+def verified_lunch_remainder_warning_ids(database: Any, draft: Mapping[str, Any], *, draft_database: Any = None) -> set[str]:
+    """Prove a legacy lunch note obsolete without changing its audience rule.
+
+    The publication preview is the delivery path used by Campus.  It must
+    equal a separately reconstructed class remainder from active memberships
+    minus every resolved overlapping lesson.  Historical copied student IDs
+    are deliberately not evidence for a dynamic rule.
+    """
+    from backend.services.constructor_publication import preview_publication
+    from backend.services.schedule_experiments import (_grade_number, _is_lunch_lesson, _lesson_activity_type, _lesson_audience,
+        _lesson_interval, _lesson_weekday, _load_experiment_audience_snapshot, experiment_week_audience_preview)
+
+    payload = draft.get("payload") if isinstance(draft.get("payload"), Mapping) else {}
+    slots = payload.get("slots") or []
+    rows = [row for row in (payload.get("lessons") or []) if isinstance(row, Mapping)]
+    counts = Counter(str(row.get("id") or "") for row in rows)
+    candidates: dict[str, Mapping[str, Any]] = {}
+    for row in rows:
+        lesson_id = str(row.get("id") or "")
+        rule = _lesson_audience(row)
+        if (counts[lesson_id] != 1 or row.get("needsClarification") is not True
+                or row.get("importError") or row.get("unresolved") or row.get("review_required")
+                or LUNCH_SCOPE_CLAUSE not in str(row.get("clarificationReason") or "").split("; ")
+                or not _is_lunch_lesson(row) or rule.get("kind") not in {"available_slot", "legacy_remaining"}
+                or _lesson_weekday(row) is None or not _lesson_interval(row, slots)
+                or not (rule.get("class_ids") or _grade_number(rule.get("grade")))):
+            continue
+        candidates[lesson_id] = row
+    if not candidates:
+        return set()
+    reference = date.fromisoformat(str(payload.get("week_start") or payload.get("reference_date")
+                                        or date.today().isoformat())[:10])
+    resolved = experiment_week_audience_preview(database, payload, reference)["lessons"]
+    try:
+        delivery_preview = preview_publication(database, str(draft.get("id") or ""), scope_kind="template",
+            expected_revision=int(draft.get("revision") or 0), draft_database=draft_database or database)
+    except Exception:
+        return set()
+    delivery = {str(row.get("lesson_id") or ""): row
+                for row in ((delivery_preview.get("published_source") or {}).get("records") or [])}
+    verified = set()
+    monday = reference - timedelta(days=reference.weekday())
+    directory_by_date: dict[str, Mapping[str, Any]] = {}
+    for lesson_id, lesson in candidates.items():
+        preview = resolved.get(lesson_id) or {}
+        record = delivery.get(lesson_id) or {}
+        delivered = record.get("known_student_ids")
+        if (preview.get("status") != "ok" or preview.get("blockers")
+                or record.get("status") != "resolved" or record.get("conflict_student_ids")
+                or "student_overlap" in (record.get("diagnostic_codes") or [])
+                or not isinstance(delivered, list) or not delivered):
+            continue
+        day = _lesson_weekday(lesson)
+        interval = _lesson_interval(lesson, slots)
+        day_text = (monday + timedelta(days=day)).isoformat()
+        if day_text not in directory_by_date:
+            directory_by_date[day_text] = _load_experiment_audience_snapshot(database, day_text, day_text)
+        directory = directory_by_date[day_text]
+        students = {str(row["id"]) for row in directory["students"]}
+        groups = {str(row["id"]): dict(row) for row in directory["groups"]}
+        lesson_rule = _lesson_audience(lesson)
+        class_ids = [str(value) for value in lesson_rule.get("class_ids") or []]
+        grade = _grade_number(lesson_rule.get("grade"))
+        if not class_ids and grade:
+            allowed = {str(value) for value in payload.get("classes") or []}
+            class_ids = [group_id for group_id, group in groups.items()
+                         if group_id in allowed and group.get("group_type") == "class"
+                         and _grade_number(group.get("base_class_name") or group.get("display_name")
+                                           or group.get("raw_name") or group.get("name")) == grade]
+        if not class_ids or any(value not in groups or groups[value].get("group_type") != "class" for value in class_ids):
+            continue
+        class_grades = {_grade_number(groups[value].get("base_class_name") or groups[value].get("display_name")
+                                      or groups[value].get("raw_name") or groups[value].get("name"))
+                        for value in class_ids}
+        class_grades.discard(None)
+        grade = grade or (next(iter(class_grades)) if len(class_grades) == 1 else None)
+        excluded = {(str(row["identity_id"]), str(row["group_id"])) for row in directory["membership_overrides"]
+                    if row["action"] == "exclude"}
+        included = {(str(row["identity_id"]), str(row["group_id"])) for row in directory["membership_overrides"]
+                    if row["action"] == "include"}
+        by_group: dict[str, set[str]] = {}
+        for row in directory["memberships"]:
+            pair = (str(row["identity_id"]), str(row["group_id"]))
+            if pair[0] in students and pair not in excluded:
+                by_group.setdefault(pair[1], set()).add(pair[0])
+        for student_id, group_id in included:
+            if student_id in students and group_id in groups and (student_id, group_id) not in excluded:
+                by_group.setdefault(group_id, set()).add(student_id)
+        base = set().union(*(by_group.get(class_id, set()) for class_id in class_ids))
+        if lesson_rule.get("kind") == "legacy_remaining":
+            partition_ids = set(map(str, lesson_rule.get("partition_group_ids") or []))
+            dimension = str(lesson_rule.get("partition_dimension") or "")
+            if dimension:
+                partition_ids.update(group_id for group_id, group in groups.items()
+                                     if str(group.get("semantic_dimension") or "") == dimension)
+            if not partition_ids or any(group_id not in groups or not by_group.get(group_id)
+                                        for group_id in partition_ids):
+                continue
+            base.difference_update(set().union(*(by_group[group_id] for group_id in partition_ids)))
+        occupied, unsafe = set(), False
+        for other in rows:
+            other_id = str(other.get("id") or "")
+            other_interval = _lesson_interval(other, slots)
+            if (other_id == lesson_id or _lesson_weekday(other) != day or not other_interval
+                    or not (interval[0] < other_interval[1] and other_interval[0] < interval[1])
+                    or _is_lunch_lesson(other) or str(other.get("specialMark") or "") == "no_lesson"
+                    or other.get("kind") == "event" and other.get("informational") is True):
+                continue
+            other_preview = resolved.get(other_id) or {}
+            other_rule = _lesson_audience(other)
+            other_students = other_preview.get("proposed_student_ids")
+            known_overlap = isinstance(other_students, list) and bool(base & set(map(str, other_students)))
+            other_classes = set(map(str, other_rule.get("class_ids") or other.get("classIds") or []))
+            other_groups = set(map(str, other_rule.get("group_ids") or []))
+            scoped_overlap = bool(set(class_ids) & other_classes
+                                  or base & set().union(*(by_group.get(group_id, set()) for group_id in other_groups)))
+            other_grade = _grade_number(other_rule.get("grade"))
+            if not known_overlap and not scoped_overlap and (not other_grade or other_grade != grade):
+                continue  # An unrelated card cannot affect this candidate cohort.
+            if other_preview.get("status") != "ok" or other_preview.get("blockers"):
+                unsafe = True
+                break
+            # Elective directions share one card and cannot be reconstructed
+            # as independent personal occupancies here; fail closed.
+            if _lesson_activity_type(other) == "elective":
+                unsafe = True
+                break
+            if not isinstance(other_students, list):
+                unsafe = True
+                break
+            occupied.update(map(str, other_students))
+        expected = base - occupied
+        if not unsafe and expected and set(map(str, delivered)) == expected:
+            verified.add(lesson_id)
+    return verified
+
+
 def reviewed_scope_proposals(payload: Mapping[str, Any], classes: Mapping[str, str],
                              evidence: Mapping[str, tuple[str, frozenset[str]]]) -> list[dict[str, Any]]:
     """Display evidence and authorized eligibility; do not edit the draft or its copy."""
@@ -258,7 +395,8 @@ def _can_apply_current_note(row: Mapping[str, Any] | None, field: str) -> bool:
 def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers: set[str] | None = None,
                           verified_teacher_assignments: set[tuple[str, str, str]] | None = None,
                           verified_classes: Mapping[str, str] | None = None,
-                          verified_group_links: set[str] | None = None) -> dict[str, Any]:
+                          verified_group_links: set[str] | None = None,
+                          verified_lunch_remainders: set[str] | None = None) -> dict[str, Any]:
     """Plan only evidence-backed legacy type updates; all other rows are preserved."""
     from backend.services.schedule_edit_validation import day_mode_review_reason
     from backend.services.schedule_experiments import _lesson_activity_type, _lesson_day_modes, lesson_is_online, lesson_is_sdep_display
@@ -272,6 +410,8 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             block_types.setdefault(str(row["blockId"]), set()).add(str(row.get("activityType") or ""))
     unresolved_electives: dict[str, str] = {}
     scope_evidence = scope_warning_evidence(payload, verified_classes or {}, unresolved_electives=unresolved_electives)
+    for lesson_id in verified_lunch_remainders or ():
+        scope_evidence[str(lesson_id)] = ("lunch_scope_warning", frozenset({LUNCH_SCOPE_CLAUSE}))
     scope_proposals = reviewed_scope_proposals(payload, verified_classes or {}, scope_evidence)
     changes: list[dict[str, Any]] = []
     manual: list[dict[str, Any]] = []
@@ -463,7 +603,9 @@ def apply_selected_schedule_notes(database: Any, source_database: Any, draft_id:
     teachers, assignments = verified_teacher_directory_evidence(database, draft)
     plan = normalization_preview(draft, verified_active_teachers=teachers, verified_teacher_assignments=assignments,
                                  verified_classes=verified_administrative_classes(database),
-                                 verified_group_links=verified_saved_group_warning_ids(source_database, draft))
+                                 verified_group_links=verified_saved_group_warning_ids(source_database, draft),
+                                 verified_lunch_remainders=verified_lunch_remainder_warning_ids(
+                                     source_database, draft, draft_database=database))
     if plan["source_hash"] != expected_source_hash or plan["plan_hash"] != expected_plan_hash:
         raise ExperimentConflict(draft)
     keys = [(entry["lesson_id"], entry["field"]) for entry in selected]

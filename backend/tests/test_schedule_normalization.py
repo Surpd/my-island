@@ -525,6 +525,95 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
             self.assertTrue(saved["needsClarification"])
             self.assertEqual(result["cleared_count"], 1)
 
+    def test_verified_available_slot_lunch_note_requires_exact_canonical_delivery(self):
+        from backend.services.schedule_normalization import (LUNCH_SCOPE_CLAUSE, apply_selected_schedule_notes,
+                                                             verified_lunch_remainder_warning_ids)
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "lunch-remainder.db")
+            database.initialize()
+            school_class = database.create_group("9A", "class")
+            subgroup = database.create_group("9A English", "subject_group", base_class_name="9A")
+            with database.connection() as connection:
+                database.execute(connection, "UPDATE groups SET canonical=1,base_class_name='9A' WHERE id=?",
+                                 (school_class["id"],))
+            claimed = database.create_identity("student", "Claimed pupil", "9A")
+            free = database.create_identity("student", "Free pupil", "9A")
+            for student in (claimed, free):
+                database.create_membership(school_class["id"], student["id"], "student", "test")
+            database.create_membership(subgroup["id"], claimed["id"], "student", "test")
+            class_id, subgroup_id, free_id = map(str, (school_class["id"], subgroup["id"], free["id"]))
+            lunch = {"id": "lunch-rest", "subject": "Обед", "specialMark": "lunch", "day": 0, "period": 0,
+                "classId": class_id, "classIds": [class_id],
+                "audience": {"kind": "available_slot", "class_ids": [class_id]},
+                "needsClarification": True, "clarificationReason": LUNCH_SCOPE_CLAUSE}
+            fixed = {"id": "english", "subject": "English", "day": 0, "period": 0,
+                     "audience": {"kind": "groups", "group_ids": [subgroup_id]}}
+            payload = {"draft_kind": "school", "reference_date": "2026-11-23", "classes": [class_id],
+                       "slots": [{"start": "11:50", "end": "12:35"}], "lessons": [fixed, lunch]}
+            draft = create_experiment(database, name="Lunch remainder", source="import", payload=payload)
+            draft = get_experiment(database, draft["id"])
+            evidence = verified_lunch_remainder_warning_ids(database, draft)
+            self.assertEqual(evidence, {"lunch-rest"})
+            plan = normalization_preview(draft, verified_classes=verified_administrative_classes(database),
+                                         verified_lunch_remainders=evidence)
+            proposal = next(item for item in plan["scope_proposals"] if item["lesson_id"] == "lunch-rest")
+            self.assertTrue(proposal["current_note_eligible"])
+            result = apply_selected_schedule_notes(database, database, draft["id"],
+                expected_revision=draft["revision"], expected_source_hash=plan["source_hash"],
+                expected_plan_hash=plan["plan_hash"],
+                selected=[{"lesson_id": "lunch-rest", "field": "lunch_scope_warning"}])
+            saved = next(row for row in result["draft"]["payload"]["lessons"] if row["id"] == "lunch-rest")
+            self.assertNotIn("clarificationReason", saved)
+            self.assertNotIn("needsClarification", saved)
+            self.assertNotIn("canonical", saved)
+            self.assertEqual(saved["audience"], lunch["audience"])
+
+            invalid_scope = deepcopy(draft)
+            invalid_scope["payload"]["lessons"][1]["audience"]["class_ids"] = ["missing-class"]
+            invalid_scope["payload"]["lessons"][1]["classIds"] = ["missing-class"]
+            invalid_scope["payload"]["lessons"][1]["classId"] = "missing-class"
+            self.assertEqual(verified_lunch_remainder_warning_ids(database, invalid_scope), set())
+            ambiguous = deepcopy(draft)
+            ambiguous["payload"]["lessons"].append({"id": "second-rest", "subject": "Практика", "day": 0,
+                "period": 0, "audience": {"kind": "available_slot", "class_ids": [class_id]}})
+            self.assertEqual(verified_lunch_remainder_warning_ids(database, ambiguous), set())
+
+            compound = deepcopy(draft)
+            compound["payload"]["lessons"][1]["clarificationReason"] += "; Отдельная проверка остаётся"
+            self.assertEqual(verified_lunch_remainder_warning_ids(database, compound), set())
+
+            legacy_lunch = deepcopy(lunch)
+            legacy_lunch.pop("audience")
+            legacy_lunch["id"] = "legacy-lunch-rest"
+            legacy_lunch["audienceMode"] = "remainder"
+            legacy_lunch["canonical"] = {"assignment": {"metadata": {"audience_rule": {
+                "kind": "remaining", "class_group_id": class_id, "partition_group_ids": [subgroup_id]}}}}
+            legacy_payload = {**payload, "lessons": [fixed, legacy_lunch]}
+            legacy_draft = create_experiment(database, name="Legacy lunch remainder", source="import",
+                                             payload=legacy_payload)
+            self.assertEqual(verified_lunch_remainder_warning_ids(database, legacy_draft), {"legacy-lunch-rest"})
+
+            other_class = database.create_group("8A", "class")
+            with database.connection() as connection:
+                database.execute(connection, "UPDATE groups SET canonical=1,base_class_name='8A' WHERE id=?",
+                                 (other_class["id"],))
+            outsider = database.create_identity("student", "Other cohort", "8A")
+            database.create_membership(other_class["id"], outsider["id"], "student", "test")
+            other_class_id = str(other_class["id"])
+            grade_lunch = {**deepcopy(lunch), "id": "grade-lunch",
+                           "audience": {"kind": "available_slot", "grade": "9"}}
+            unrelated = {"id": "unrelated-unknown", "subject": "Unknown", "day": 0, "period": 0,
+                         "classIds": [other_class_id],
+                         "audience": {"kind": "groups", "group_ids": ["missing-other-group"]}}
+            unrelated_elective = {"id": "unrelated-elective", "subject": "Choice", "activityType": "elective",
+                "blockId": "other-block", "day": 0, "period": 0, "classIds": [other_class_id],
+                "audience": {"kind": "classes", "class_ids": [other_class_id]}}
+            grade_payload = {**payload, "classes": [class_id, other_class_id],
+                             "lessons": [fixed, unrelated, unrelated_elective, grade_lunch]}
+            grade_draft = create_experiment(database, name="Grade lunch remainder", source="import",
+                                            payload=grade_payload)
+            self.assertEqual(verified_lunch_remainder_warning_ids(database, grade_draft), {"grade-lunch"})
+
 
 if __name__ == "__main__":
     unittest.main()
