@@ -15,6 +15,16 @@ from backend.services.schedule_normalization import normalization_preview, norma
 
 
 class ScheduleNormalizationTests(unittest.TestCase):
+    def test_normalization_apply_contract_accepts_lunch_scope_and_rejects_unknown_field(self):
+        from pydantic import ValidationError
+        from backend.handlers.api import SelectedScheduleWarning
+
+        accepted = SelectedScheduleWarning.model_validate({
+            "lesson_id": "lunch", "field": "lunch_scope_warning"})
+        self.assertEqual(accepted.field, "lunch_scope_warning")
+        with self.assertRaises(ValidationError):
+            SelectedScheduleWarning.model_validate({"lesson_id": "lunch", "field": "unknown_warning"})
+
     def setUp(self):
         self.lessons = []
         for block, count in (("source:B29:electives", 4), ("source:F32:electives", 4)):

@@ -409,7 +409,8 @@ class SchoolTemplateNormalizePayload(BaseModel):
 
 class SelectedScheduleWarning(BaseModel):
     lesson_id: str = Field(min_length=1, max_length=180)
-    field: Literal["teacher_identity_warning", "teacher_assignment_warning", "elective_scope_warning"]
+    field: Literal["teacher_identity_warning", "teacher_assignment_warning", "elective_scope_warning",
+                   "lunch_scope_warning"]
 
 
 class SelectedScheduleWarningsPayload(SchoolTemplateNormalizePayload):
