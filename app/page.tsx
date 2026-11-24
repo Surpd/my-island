@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { campusLessons, campusStudentDays } from '../components/campus-schedule';
+import { shortWeekdayForDate } from '../components/schedule-weekdays';
 import { formatLessonTime, formatLessonTimeRange } from '../components/lesson-time';
 import { normalizeRoomDisplay } from '../components/schedule-rooms';
 import { CampusRoleSwitch, CampusPeriod, dateISO, periodFor, useCampusScreen, useTelegramBack, type CampusRole } from '../components/campus-controls';
@@ -544,9 +545,7 @@ function StudentSchedulePanel({ projection, initialDay, navigationLevel = 'expan
             onClick={() => setSelectedDay(day)}
           >
             <small>
-              {new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(
-                new Date(`${day}T12:00:00`),
-              )}
+              {shortWeekdayForDate(day)}
             </small>
             <strong>{day.slice(8)}</strong>
             <em>{lessonCount ? lessonCount : '—'}</em>
@@ -575,7 +574,7 @@ function SchedulePanel({ schedule, dayBlocks = [], dayModes = [], initialDay }: 
   const days = Array.from({ length: 7 }, (_, index) => isoDate(addDays(monday, index)));
   const entries = schedule.filter((lesson) => lesson.lesson_date === selectedDay).sort((a, b) => a.start_time.localeCompare(b.start_time));
   const modes = [...new Map(dayModes.filter((item) => item.date === selectedDay).map((item) => [`${item.mode}:${item.class_name || ''}`, item])).values()];
-  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(new Date(`${day}T12:00:00`))}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{modes.map((item) => <div key={`${item.mode}:${item.class_name || ''}`} className={`campus-day-mode ${item.mode}`}><strong>{item.mode === 'sdep' ? 'SDEP' : 'Онлайн'}</strong><span>{item.mode === 'sdep' ? 'Самостоятельная работа по расписанию' : 'Занятия проходят дистанционно'}{item.class_name ? ` · ${item.class_name}` : ''}</span></div>)}{dayBlocks.some((block) => block.lesson_date === selectedDay) && !modes.some((item) => item.mode === 'sdep') ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : null}{entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : !modes.length && !dayBlocks.some((block) => block.lesson_date === selectedDay) ? <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." /> : null}</div>;
+  return <div className="section-panel"><div className="panel-intro"><span className="panel-icon"><CalendarDays size={21} /></span><div><p className="eyebrow">Неделя</p><h2>Расписание</h2><p>Занятия ваших групп.</p></div></div><div className="day-picker">{days.map((day) => <button key={day} className={day === selectedDay ? 'is-active' : ''} onClick={() => setSelectedDay(day)}><small>{shortWeekdayForDate(day)}</small><strong>{day.slice(8)}</strong></button>)}</div><div className="panel-date"><strong>{formatDate(selectedDay, true)}</strong><span>{entries.length} занятий</span></div>{modes.map((item) => <div key={`${item.mode}:${item.class_name || ''}`} className={`campus-day-mode ${item.mode}`}><strong>{item.mode === 'sdep' ? 'SDEP' : 'Онлайн'}</strong><span>{item.mode === 'sdep' ? 'Самостоятельная работа по расписанию' : 'Занятия проходят дистанционно'}{item.class_name ? ` · ${item.class_name}` : ''}</span></div>)}{dayBlocks.some((block) => block.lesson_date === selectedDay) && !modes.some((item) => item.mode === 'sdep') ? <div className="sdep-card"><strong>SDEP</strong><span>Самостоятельная работа весь учебный день.</span></div> : null}{entries.length ? <div className="lesson-stack">{entries.map((lesson) => <LessonRow key={`${lesson.lesson_date}-${lesson.start_time}-${lesson.subject}`} lesson={lesson} />)}</div> : !modes.length && !dayBlocks.some((block) => block.lesson_date === selectedDay) ? <EmptyState icon={CalendarDays} title="Занятий нет" detail="Для этого дня нет записей." /> : null}</div>;
 }
 
 function ScheduleFocusPeek({ projection, referenceDay, scheduleState }: { projection: StudentScheduleProjection; referenceDay?: string; scheduleState?: string }) {

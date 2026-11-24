@@ -1,5 +1,6 @@
 'use client';
 
+import { SHORT_WEEKDAYS as days } from './schedule-weekdays.ts';
 import { normalizeRoomDisplay } from './schedule-rooms';
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
@@ -87,7 +88,7 @@ const kindLabels: Record<TermComparisonItem['kind'], string> = {
   added: 'Новое занятие',
   removed: 'Исчезло из таблицы',
 };
-const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
 const weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
 const priorityLabels: Partial<Record<number, string>> = {
   1: 'Сначала проверьте',

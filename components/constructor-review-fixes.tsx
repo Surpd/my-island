@@ -1,5 +1,6 @@
 'use client';
 
+import { SHORT_WEEKDAYS as rosterDays } from './schedule-weekdays.ts';
 import { useState, type ReactNode } from 'react';
 import { ArrowRight, ChevronDown } from 'lucide-react';
 import { formatLessonTimeRange } from './lesson-time';
@@ -48,7 +49,7 @@ export type NormalizationCopy = {
   lesson_count: number;
 };
 
-const rosterDays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
 
 export function ReviewDisclosure({ title, count, children, groupKey, secondary = false, initiallyOpen = false }: {
   title: string; count?: number; children: ReactNode; groupKey?: string; secondary?: boolean; initiallyOpen?: boolean;

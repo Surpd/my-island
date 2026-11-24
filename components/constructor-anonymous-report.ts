@@ -1,3 +1,4 @@
+import { SHORT_WEEKDAYS as dayNames } from './schedule-weekdays.ts';
 type Target = {draftId: string; revision: number; scope: string; week: string};
 type Issue = {code: string; lesson_id?: string; related_lesson_ids?: string[]};
 type Outcome = {lesson_id: string; action: string};
@@ -30,7 +31,7 @@ const reasonGroups: Record<string, [string, string]> = {
   review_required: ['Нужно уточнить данные занятия', 'Сверьте занятие с расписанием.'],
 };
 
-const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
 const time = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 function position(slot: Slot | undefined) {
