@@ -623,7 +623,7 @@ export function ConstructorPublicationPanel({
     finally { setBusy(false); }
   };
   const applyRosters = async () => {
-    if (dirty || readOnly || busy || !rosters?.summary.safe_count || rosters.revision !== revision) return;
+    if (dirty || readOnly || busy || !(rosters && rosters.summary.safe_count + (rosters.summary.review_count || 0)) || rosters.revision !== revision) return;
     restoreView.current = saveView();
     setBusy(true);
     setMessage('');
@@ -632,7 +632,9 @@ export function ConstructorPublicationPanel({
         method: 'POST',
         body: JSON.stringify({ ...rosterBody(rosterScope), preview_token: rosters.preview_token, reason: 'Подтверждение проверенных составов в конструкторе' }),
       });
-      setMessage(`Составы обновлены для ${rosters.summary.safe_count} занятий.`);
+      setMessage(rosters.summary.review_count
+        ? 'Проверка занятия подтверждена. Устаревшая пометка об аудитории снята.'
+        : `Составы обновлены для ${rosters.summary.safe_count} занятий.`);
       setPreview(null);
       setConfirmed(false);
       onRostersUpdated(result.draft || result);

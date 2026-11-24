@@ -11,6 +11,23 @@ from backend.services.schedule_rooms import physical_room_options, room_key, roo
 from backend.services.schedule_subjects import subject_label
 
 
+REVIEWED_AUDIENCE_CLAUSE = 'Не подтверждена учебная группа или аудитория курса'
+
+
+def _has_reviewed_audience_clause(lesson):
+    return REVIEWED_AUDIENCE_CLAUSE in str(lesson.get('clarificationReason') or '').strip().split('; ')
+
+
+def _retire_reviewed_audience_clause(lesson):
+    remaining = [part for part in str(lesson.get('clarificationReason') or '').strip().split('; ')
+                 if part and part != REVIEWED_AUDIENCE_CLAUSE]
+    if remaining:
+        lesson['clarificationReason'] = '; '.join(remaining)
+    else:
+        lesson.pop('clarificationReason', None)
+        lesson.pop('needsClarification', None)
+
+
 def fingerprint(lesson, slots=None):
     fields = ('id','day','weekday','period','start','end','subject','teacherId','teacherIds','room','audience','groupId','groupIds','classId','classIds','audience_snapshot','activityType')
     values={k:lesson.get(k) for k in fields}
@@ -207,7 +224,7 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
         resolved = audience_result['lessons']
         directory_fingerprint = str(audience_result.get('directory_fingerprint') or '')
     rows = []
-    safe_count = unresolved_count = changed_count = added_count = removed_count = 0
+    safe_count = unresolved_count = changed_count = added_count = removed_count = review_count = 0
     for lesson in selected:
         selected_lesson_id = str(lesson.get('id') or '')
         result = resolved.get(selected_lesson_id, {})
@@ -224,6 +241,8 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
         added_count += len(added)
         removed_count += len(removed)
         safe_count += int(safe and changed)
+        reviewable = bool(scope == 'lesson' and safe and not changed and _has_reviewed_audience_clause(lesson))
+        review_count += int(reviewable)
         unresolved_count += int(not safe)
         interval = _lesson_interval(lesson, draft['payload'].get('slots') or [])
         rows.append({
@@ -244,6 +263,7 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
             'needs_recalculation': bool(result.get('needs_recalculation')),
             'safe': safe,
             'changed': changed,
+            'reviewable': reviewable,
         })
     meaningful = {
         'draft_id': draft_id, 'revision': expected_revision, 'scope': scope,
@@ -260,7 +280,8 @@ def bulk_audience_preview(database, draft_id, *, expected_revision, scope, day=N
         'day': day, 'class_id': class_id, 'lesson_id': target_lesson_id, 'preview_token': token,
         'summary': {'selected_count': len(rows), 'changed_count': changed_count,
                     'added_count': added_count, 'removed_count': removed_count,
-                    'safe_count': safe_count, 'unresolved_count': unresolved_count},
+                    'safe_count': safe_count, 'review_count': review_count,
+                    'unresolved_count': unresolved_count},
         'lessons': rows,
     }
 
@@ -289,7 +310,7 @@ def apply_bulk_audience(database, draft_id, *, expected_revision, scope, preview
     payload = deepcopy(current['payload'])
     preview_rows = {row['id']: row for row in preview['lessons']}
     changed_ids = [lesson_id for lesson_id, row in preview_rows.items()
-                   if row['safe'] and row['changed']]
+                   if row['safe'] and (row['changed'] or (scope == 'lesson' and row.get('reviewable')))]
     if not changed_ids:
         return current
     now = datetime.now(timezone.utc).isoformat()
@@ -305,6 +326,8 @@ def apply_bulk_audience(database, draft_id, *, expected_revision, scope, preview
         effective = deepcopy(lesson)
         effective['audience_snapshot'] = {'student_ids': proposed}
         lesson['audience_snapshot'] = None
+        if scope == 'lesson' and preview_rows[lesson_id].get('reviewable'):
+            _retire_reviewed_audience_clause(lesson)
         lesson.setdefault('resolution_history', []).append({
             'id': receipt_id, 'type': 'confirm_roster', 'lesson_ids': changed_ids,
             'actor_id': str(actor_user_id), 'confirmed_at': now,

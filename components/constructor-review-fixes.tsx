@@ -9,7 +9,7 @@ export type RosterScope = 'stale' | 'template' | 'day' | 'class' | 'lesson';
 export type RosterPreview = {
   revision: number;
   preview_token: string;
-  summary: { selected_count: number; changed_count: number; added_count: number; removed_count: number; safe_count: number; unresolved_count: number };
+  summary: { selected_count: number; changed_count: number; added_count: number; removed_count: number; safe_count: number; review_count?: number; unresolved_count: number };
   lessons: {
     id: string;
     subject: string;
@@ -18,6 +18,7 @@ export type RosterPreview = {
     end?: string;
     safe: boolean;
     changed?: boolean;
+    reviewable?: boolean;
     reason?: string;
     old_count: number;
     proposed_count: number | null;
@@ -104,7 +105,8 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
   onApply: () => void;
   onOpenLesson: (id: string) => void;
 }) {
-  const needsAttention = preview?.lessons.filter(lesson => lesson.changed || !lesson.safe) || [];
+  const needsAttention = preview?.lessons.filter(lesson => lesson.changed || lesson.reviewable || !lesson.safe) || [];
+  const confirmableCount = preview ? preview.summary.safe_count + (preview.summary.review_count || 0) : 0;
   return <section aria-labelledby="constructor-review-rosters-title">
     <h3 id="constructor-review-rosters-title">Составы групп</h3>
     {error ? <div role="alert">
@@ -129,6 +131,7 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
               {lesson.added_student_ids?.length ? <p>Добавятся: {lesson.added_student_ids.map(id => studentNames[id] || 'Ученик недоступен').join(', ')}.</p> : null}
               {lesson.removed_student_ids?.length ? <p>Исключатся: {lesson.removed_student_ids.map(id => studentNames[id] || 'Ученик недоступен').join(', ')}.</p> : null}
             </details> : null}
+            {lesson.reviewable ? <p>Состав совпадает. Можно подтвердить проверку этой карточки и снять устаревшую пометку об аудитории.</p> : null}
             <p>{lessonImpact(lesson.id)}</p>
             {!lesson.safe ? <ReasonDetails reason={lesson.reason} /> : null}
           </div>
@@ -136,9 +139,9 @@ export function ConstructorRosterReview({ preview, error, busy, readOnly, classL
             onOpen={onOpenLesson} disabled={busy} available={Boolean(lessonLabels[lesson.id])} />
         </li>)}</ul>
       </ReviewDisclosure> : null}
-      {preview.summary.safe_count > 0 && !readOnly ? <>
+      {confirmableCount > 0 && !readOnly ? <>
         <p>Будет добавлено участников — {preview.summary.added_count}, исключено — {preview.summary.removed_count}. Изменения сохранятся в открытом черновике.</p>
-        <button type="button" disabled={busy} onClick={onApply}>Подтвердить проверенные составы</button>
+        <button type="button" disabled={busy} onClick={onApply}>{preview.summary.review_count ? 'Подтвердить проверку этого занятия' : 'Подтвердить проверенные составы'}</button>
       </> : null}
     </> : null}
     <ReviewDisclosure title="Проверить другой день, класс или весь черновик" groupKey="roster-scope" secondary>

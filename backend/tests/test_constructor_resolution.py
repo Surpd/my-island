@@ -155,6 +155,57 @@ class ConstructorResolutionTests(unittest.TestCase):
         self.assertEqual(ignored['lesson_id'], '')
         self.assertNotIn('added_student_ids', ordinary['lessons'][0])
 
+    def test_single_lesson_review_retires_only_exact_stale_audience_clause_without_roster_diff(self):
+        from backend.services.schedule_experiments import save_experiment
+        stale = 'Не подтверждена учебная группа или аудитория курса'
+        other = 'Ручная проверка кабинета'
+        cases = [
+            ('classes', {'kind': 'classes', 'class_ids': [str(self.group['id'])]},
+             {'classId': str(self.group['id']), 'classIds': [str(self.group['id'])]}),
+            ('available', {'kind': 'available_slot', 'class_ids': [str(self.group['id'])]},
+             {'classId': str(self.group['id']), 'classIds': [str(self.group['id'])]}),
+            ('group', {'kind': 'groups', 'group_ids': [str(self.math['id'])]},
+             {'groupId': str(self.math['id']), 'groupIds': [str(self.math['id'])]}),
+        ]
+        for lesson_id, audience, links in cases:
+            with self.subTest(lesson_id=lesson_id):
+                lesson = self.lesson(id=lesson_id, audience=audience, needsClarification=True,
+                                     clarificationReason=f'{stale}; {other}', **links)
+                draft = self.draft([lesson])
+                draft = save_experiment(self.database, draft['id'], expected_revision=1,
+                                        payload=draft['payload'])
+                preview = bulk_audience_preview(self.database, draft['id'], expected_revision=draft['revision'],
+                                                scope='lesson', lesson_id=lesson_id)
+                row = preview['lessons'][0]
+                self.assertTrue(row['safe'])
+                self.assertFalse(row['changed'])
+                self.assertTrue(row['reviewable'])
+                self.assertEqual(preview['summary']['review_count'], 1)
+                before = row['old_student_ids']
+                updated = apply_bulk_audience(self.database, draft['id'], expected_revision=draft['revision'],
+                                              scope='lesson', lesson_id=lesson_id,
+                                              preview_token=preview['preview_token'], reason='Reviewed exact lesson roster',
+                                              actor_user_id='synthetic-admin')
+                saved = updated['payload']['lessons'][0]
+                self.assertEqual(saved['audience_snapshot']['student_ids'], before)
+                self.assertEqual(saved['clarificationReason'], other)
+                self.assertTrue(saved['needsClarification'])
+                self.assertEqual(saved['resolution_history'][-1]['lesson_ids'], [lesson_id])
+
+    def test_unchanged_roster_cannot_clear_stale_clause_outside_single_lesson_scope(self):
+        from backend.services.schedule_experiments import save_experiment
+        stale = 'Не подтверждена учебная группа или аудитория курса'
+        lesson = self.lesson(needsClarification=True, clarificationReason=stale)
+        draft = self.draft([lesson])
+        draft = save_experiment(self.database, draft['id'], expected_revision=1, payload=draft['payload'])
+        preview = bulk_audience_preview(self.database, draft['id'], expected_revision=draft['revision'], scope='template')
+        self.assertEqual(preview['summary']['review_count'], 0)
+        unchanged = apply_bulk_audience(self.database, draft['id'], expected_revision=draft['revision'], scope='template',
+                                        preview_token=preview['preview_token'], reason='No mass acknowledgement',
+                                        actor_user_id='synthetic-admin')
+        self.assertEqual(unchanged['revision'], draft['revision'])
+        self.assertEqual(unchanged['payload']['lessons'][0]['clarificationReason'], stale)
+
     def test_single_geography_remainder_excludes_parallel_society_members_by_source_roster(self):
         from backend.services.schedule_experiments import save_experiment
         grade10 = self.database.create_group('10-А', 'class')
