@@ -682,3 +682,12 @@ export function effectiveClubReviewNote(reason: string) {
     clause.replace(/[ .]+$/g, '').toLocaleLowerCase('ru').replace(/\s+/g, ' '),
   )).join('; ');
 }
+
+export function needsSingleLessonAudienceReview(lesson: {
+  needsClarification?: boolean;
+  clarificationReason?: string;
+}) {
+  return lesson.needsClarification === true && String(lesson.clarificationReason || '')
+    .split(';').map(clause => clause.trim())
+    .includes('Не подтверждена учебная группа или аудитория курса');
+}

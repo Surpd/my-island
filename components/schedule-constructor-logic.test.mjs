@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isWholeClassAudience, linkedInstructionalGroupsForColumn, mergeScheduleDrafts, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds, shouldWarnMissingTeacher } from './schedule-constructor-logic.ts';
+import { isWholeClassAudience, linkedInstructionalGroupsForColumn, mergeScheduleDrafts, needsSingleLessonAudienceReview, parseQuick, remapPastedLessonAudience, schedulePlacementClassIds, shouldWarnMissingTeacher } from './schedule-constructor-logic.ts';
 
 const classes = [
   { id: 'class-7b', name: '7-Б', group_type: 'class' },
@@ -16,6 +16,17 @@ const teachers = [
   { id: 'teacher-vadim', name: 'Вадим Иванов', assignments: [{ group_id: 'class-7b', subject: 'Пластика', active: true }] },
 ];
 const students = [{ id: 'student-1', groups: ['math-7-1', 'english:7'], classes: ['class-7b'] }];
+
+test('unchanged lesson exposes review only for the exact stale audience clause', () => {
+  assert.equal(needsSingleLessonAudienceReview({ needsClarification: true,
+    clarificationReason: 'Не подтверждена учебная группа или аудитория курса' }), true);
+  assert.equal(needsSingleLessonAudienceReview({ needsClarification: true,
+    clarificationReason: 'Не подтверждена учебная группа или аудитория курса; Ручная проверка кабинета' }), true);
+  assert.equal(needsSingleLessonAudienceReview({ needsClarification: true,
+    clarificationReason: 'Ручная проверка кабинета' }), false);
+  assert.equal(needsSingleLessonAudienceReview({ needsClarification: false,
+    clarificationReason: 'Не подтверждена учебная группа или аудитория курса' }), false);
+});
 
 test('quick entry recognizes a canonical 7-1 group, teacher initials, and a room number', () => {
   const parsed = parseQuick('Мат 7-1 ДФ 17', 'class-7b', groups, teachers, students, ['Математика']);
