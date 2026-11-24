@@ -117,17 +117,16 @@ class ScheduleNormalizationTests(unittest.TestCase):
         self.assertEqual(preview["unclassified_count"], 345)
         self.assertEqual(preview["manual_count"], 4)
 
-    def test_teacher_warning_is_cleared_only_with_exact_active_assignment_evidence(self):
+    def test_teacher_assignment_advisory_is_cleared_for_explicit_active_teacher(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "teacher-evidence.db")
             database.initialize()
             teacher = database.create_identity("teacher", "Synthetic Teacher")
             group = database.create_group("7A", "class")
             actor = database.get_or_create_user(991771, "admin")
-            database.set_teacher_assignment(teacher["id"], group["id"], "История", True, actor["id"], base_class_name="7")
             row = {"id": "verified", "subject": "История", "teacherId": str(teacher["id"]),
                    "classId": str(group["id"]), "needsClarification": True,
-                   "clarificationReason": "Нет подтверждённого назначения преподавателя группе"}
+                   "clarificationReason": "Нет подтверждённого назначения преподавателя группе; Нет соответствующего звонка"}
             identity_row = {"id": "identity-only", "subject": "Литература", "teacherId": str(teacher["id"]),
                 "needsClarification": True, "clarificationReason": "Не подтверждён преподаватель"}
             unresolved_row = {"id": "unresolved-teacher", "subject": "Физика", "teacherId": "missing-teacher",
@@ -140,12 +139,17 @@ class ScheduleNormalizationTests(unittest.TestCase):
             self.assertEqual(preview["retained_warnings"][0]["count"], 1)
             self.assertEqual({item["field"] for item in preview["changes"]}, {"teacher_assignment_warning", "teacher_identity_warning"})
             copied = normalized_copy_payload(draft, preview)["lessons"]
-            self.assertNotIn("needsClarification", copied[0])
+            self.assertTrue(copied[0]["needsClarification"])
+            self.assertEqual(copied[0]["clarificationReason"], "Нет соответствующего звонка")
             self.assertEqual(copied[0]["normalization_resolution"]["code"], "teacher_assignment_verified")
+            self.assertEqual(copied[0]["normalization_resolution"]["source"], "identity_directory")
             self.assertNotIn("needsClarification", copied[1])
             self.assertEqual(copied[1]["normalization_resolution"]["code"], "teacher_identity_verified")
             self.assertTrue(row["needsClarification"])
-            rejected = normalization_preview(draft, verified_teacher_assignments=set())
+            without_workload = normalization_preview(draft, verified_active_teachers=active_teachers,
+                                                     verified_teacher_assignments=set())
+            self.assertEqual(without_workload["automatic_count"], 2)
+            rejected = normalization_preview(draft, verified_active_teachers=set(), verified_teacher_assignments=evidence)
             self.assertEqual(rejected["automatic_count"], 0)
 
 
@@ -258,7 +262,6 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
             token = token[0] if isinstance(token, tuple) else token
             teacher = database.create_identity("teacher", "Evidence-backed Teacher")
             group = database.create_group("7A", "class")
-            database.set_teacher_assignment(teacher["id"], group["id"], "История", True, actor["id"], base_class_name="7")
             old_decision = [{"id": "decision-1", "actor_id": "admin-42", "confirmed_at": "2026-10-01T10:00:00Z",
                              "reason": "Ранее подтверждено", "scope": "template"}]
             snapshot = {"student_ids": ["student-1", "student-2"], "fingerprint": "audience-fingerprint",
@@ -362,7 +365,7 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
                         expected.pop("clarificationReason", None)
                         expected["normalization_resolution"] = {
                             "code": "teacher_assignment_verified" if change["field"] == "teacher_assignment_warning" else "teacher_identity_verified",
-                            "source": "teacher_assignments" if change["field"] == "teacher_assignment_warning" else "identity_directory"}
+                            "source": "identity_directory"}
                     self.assertEqual(copied_lessons[lesson_id], expected, f"unexpected fields changed for {lesson_id}")
                 self.assertEqual(copied["payload"]["school_source"]["source_ref"], "verified-template")
                 self.assertEqual(copied["payload"]["school_source"]["normalization_copy"]["change_plan"], [

@@ -1008,6 +1008,56 @@ def _published_source(payload: Mapping[str, Any], diagnostics: list, deferred: l
             "payload": deepcopy(dict(payload)), "records": records}
 
 
+def _elective_delivery_records(database: Any, blocks: Mapping[str, Any], directory: _PublicationDirectory,
+                               reference: date) -> list[dict[str, Any]]:
+    """Project shared elective cards without inventing direction enrolments."""
+    if not blocks:
+        return []
+    candidates = {key: {**block, "block_key": key, "start_time": block["slot"]["start"],
+                        "end_time": block["slot"]["end"], "patch": {"assignments": block["assignments"]}}
+                  for key, block in blocks.items()}
+    context = canonical.StudentProjectionContext({}, directory.students, directory.groups,
+                                                 directory.memberships, directory.overrides,
+                                                 list(candidates.values()))
+    records = []
+    for key, candidate in candidates.items():
+        assignments = candidate.get("patch", {}).get("assignments") or []
+        elective = []
+        for assignment in assignments:
+            metadata = canonical._assignment_metadata(assignment.get("metadata") or {})
+            details = metadata.get("constructor_details") if isinstance(metadata.get("constructor_details"), Mapping) else {}
+            if (metadata.get("activity_type") or details.get("activityType")) == "elective":
+                elective.append((assignment, details))
+        if not elective:
+            continue
+        grades = {value for value in str(candidate.get("grade_scope") or "").split(",") if value}
+        day = (reference + timedelta(days=int(candidate["weekday"]))).isoformat()
+        student_ids = []
+        unresolved_student_ids = []
+        label = ""
+        for student_id, student in directory.students.items():
+            if student.get("status") != "active" or canonical._projection_grade(context, student) not in grades:
+                continue
+            projected, _ = canonical._project_student_block(database, context, student, candidate, day)
+            if projected.get("state") == "ACTIVITY" and projected.get("activity_type") == "elective":
+                student_ids.append(str(student_id))
+                label = label or str(projected.get("activity") or "Курс по выбору")
+            elif projected.get("state") == "UNRESOLVED":
+                unresolved_student_ids.append(str(student_id))
+        source_ids = [str((assignment.get("metadata") or {}).get("constructor_lesson_id") or "")
+                      for assignment, _ in elective]
+        source_ids = [value for value in source_ids if value]
+        if not source_ids:
+            continue
+        records.append({"delivery_id": f"elective:{key}", "lesson_id": source_ids[0],
+                        "source_lesson_ids": source_ids, "status": "resolved",
+                        "known_student_ids": sorted(student_ids),
+                        "unresolved_student_ids": sorted(unresolved_student_ids),
+                        "display_label": label or next((str(details.get("blockName") or "") for _, details in elective
+                                                        if details.get("blockName")), "Курс по выбору")})
+    return records
+
+
 def preview_publication(database: Any, draft_id: str, *, scope_kind: str,
                         expected_revision: int, week_start: str | None = None,
                         draft_database: Any = None) -> dict[str, Any]:
@@ -1106,6 +1156,11 @@ def _build_publication_preview(database: Any, draft_id: str, scope_kind: str, ex
     published_source = _published_source(draft["payload"], diagnostics, deferred,
                                          week_start if scope_kind=="week" else None,
                                          audience_snapshot, set(directory.teachers))
+    reference = date.fromisoformat(str(week_start or draft["payload"].get("reference_date")
+                                         or draft["payload"].get("week_start") or date.today())[:10])
+    reference -= timedelta(days=reference.weekday())
+    published_source["elective_delivery_records"] = _elective_delivery_records(
+        database, blocks, directory, reference)
     elective_lane_count = 0
     elective_card_keys: set[tuple[str, str]] = set()
     ordinary_campus_cards = 0

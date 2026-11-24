@@ -64,6 +64,23 @@ class SchoolTemplateBuilderTests(unittest.TestCase):
         self.assertEqual(lessons[0]["audience"]["kind"], "")
         self.assertTrue(any("цифровому треку" in issue["reason"] for issue in issues))
 
+    def test_explicit_active_teacher_needs_no_group_assignment_and_inactive_history_is_not_reused(self):
+        cell = self.cell("B4", "Мат A")
+        semantics = [{"source_cell": "B4", "subject": "Математика",
+                      "resolved_identity_ids": ["teacher"], "room": "17"}]
+        lessons, issues = project_source_lessons([cell], semantics, groups=self.groups,
+            teachers=[{"id": "teacher"}], teacher_pairs=set(), group_classes=self.classes,
+            old_source_text={}, old_lessons=[], slots=[{"start": "09:00", "end": "09:45"}], sheet_id="approved")
+        self.assertEqual(lessons[0]["teacherIds"], ["teacher"])
+        self.assertFalse(any("назначения преподавателя" in issue["reason"] for issue in issues))
+
+        old = [{"teacherIds": ["inactive"], "canonical": {"assignment": {"source_cells": ["B4"]}}}]
+        lessons, issues = project_source_lessons([cell], [], groups=self.groups, teachers=[], teacher_pairs=set(),
+            group_classes=self.classes, old_source_text={"B4": "Мат A"}, old_lessons=old,
+            slots=[{"start": "09:00", "end": "09:45"}], sheet_id="approved")
+        self.assertEqual(lessons[0]["teacherIds"], [])
+        self.assertTrue(any("Не подтверждён преподаватель" in issue["reason"] for issue in issues))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,7 +43,7 @@ type Diagnostic = {
 };
 type Deferred = {lesson_id:string;reason:string;block_key?:string;exclusion_scope?:'direct'|'cascade';cause_codes?:string[];cause_lesson_ids?:string[];action:'excluded'|'preserved_base'|'unknown'|'retained_unresolved';context?:LessonContext};
 type Summary = {source_lessons?:number;resolved_lessons?:number;unresolved_lessons?:number;acknowledged_exceptions?:number;campus_lessons?:number;main_campus_cards?:number;elective_blocks?:number;elective_lanes?:number;clubs_hidden?:number;unresolved_personal_assignments?:number;non_blocking_warnings?:number;admin_only_lessons?:number;with_remarks_lessons?:number;diagnostic_events?:number;conflict_lessons?:number;affected_students?:number;day_mode_issues?:number;direct_exclusions?:number;cascade_exclusions?:number;ready_lessons:number;deferred_lessons:number;deferred_blocks:number;unchanged_lessons:number;replaced_lessons:number;info_count:number;conflict_count:number;critical_count:number};
-type Preview = {published_source?:{records?:DeliveryRecord[]};preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
+type Preview = {published_source?:{records?:DeliveryRecord[];elective_delivery_records?:DeliveryRecord[]};preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
 type Publication = {id:string;scope_kind:string;scope_key:string;created_at:string;published_id:string;version_id?:string;runtime_readback:{verified:boolean;block_count:number};restored_from?:string;summary?:Partial<Summary>;diagnostics?:Diagnostic[];deferred?:Deferred[];preview?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};preview_metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]}};
 type History = {items:Publication[];heads?:Record<string,{revision:number}>};
 
@@ -399,7 +399,8 @@ export function ConstructorPublicationPanel({
   const summary = {...emptySummary,...activePreview?.summary};
   const deliveryStudents = Object.entries(studentNames).sort((left, right) => left[1].localeCompare(right[1], 'ru'));
   const studentDelivery = activePreview && deliveryStudentId
-    ? draftStudentDelivery(activePreview.published_source?.records || [], deliveryStudentId)
+    ? draftStudentDelivery(activePreview.published_source?.records || [], deliveryStudentId,
+        activePreview.published_source?.elective_delivery_records || [])
     : null;
   const deliveryConflictIds = new Set(studentDelivery?.conflictLessonIds || []);
   const deliveryLessons = (studentDelivery?.selected || []).map(record => ({
@@ -949,9 +950,9 @@ export function ConstructorPublicationPanel({
               </label>
               {studentDelivery ? <div className="constructor-student-delivery" aria-live="polite">
                 <p><strong>Подтверждённая выдача из этого черновика: {deliveryLessons.length} занятий.</strong></p>
-                {deliveryLessons.length ? <ul className="constructor-review-list">{deliveryLessons.map(({ record, details }) => <li key={record.lesson_id}>
+                {deliveryLessons.length ? <ul className="constructor-review-list">{deliveryLessons.map(({ record, details }) => <li key={record.delivery_id || record.lesson_id}>
                   <div>
-                    <strong>{details?.subject || lessonLabels[record.lesson_id] || 'Занятие'}</strong>
+                    <strong>{record.display_label || details?.subject || lessonLabels[record.lesson_id] || 'Занятие'}</strong>
                     <small>{details ? [dayNames[details.day], formatLessonTimeRange(details.start, details.end), details.classes.join(' / ')].filter(Boolean).join(' · ') : lessonLabels[record.lesson_id]}</small>
                     {deliveryConflictIds.has(record.lesson_id) ? <p>Есть пересечение для выбранного ученика. Занятие требует решения.</p> : null}
                   </div>

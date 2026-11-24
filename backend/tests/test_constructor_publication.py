@@ -1270,10 +1270,15 @@ class ConstructorPublicationTests(unittest.TestCase):
             blockId="shared-elective-block", blockName="Цифровой трек",
             audience={"kind": "students", "student_ids": []}, eligibleGrades=[9], confirmedParticipantIds=[str(self.student["id"])],
             teacherId="", teacherIds=[], room="")
+        second_elective = self.lesson(id="shared-elective-2", subject="Медиалаборатория", activityType="elective",
+            activityNameSnapshot="Медиалаборатория", classId=str(self.group["id"]), classIds=[str(self.group["id"])],
+            blockId="shared-elective-block", blockName="Цифровой трек",
+            audience={"kind": "students", "student_ids": []}, eligibleGrades=[9], confirmedParticipantIds=[],
+            teacherId="", teacherIds=[], room="")
         club = self.lesson(id="shared-club", day=1, subject="Творческая мастерская", activityType="club",
             activityNameSnapshot="Творческая мастерская", classId="", classIds=[], displayClassIds=[],
             audience={"kind": "students", "student_ids": []}, eligibleGrades=[9], teacherId="", teacherIds=[], room="")
-        draft = self.draft([elective, club])
+        draft = self.draft([elective, second_elective, club])
         preview = preview_publication(self.database, draft["id"], scope_kind="template", expected_revision=1)
         self.assertTrue(preview["can_publish"], preview["blockers"])
         codes = [item["code"] for item in preview["diagnostics"]]
@@ -1281,6 +1286,23 @@ class ConstructorPublicationTests(unittest.TestCase):
         self.assertIn("missing_teacher", codes)
         self.assertTrue(all(item["severity"] == "info" for item in preview["diagnostics"] if item["code"] == "missing_teacher"))
         self.assertNotIn("missing_room", codes)
+        delivery = preview["published_source"]["elective_delivery_records"]
+        self.assertEqual(len(delivery), 1)
+        self.assertEqual(delivery[0]["display_label"], "Цифровой трек")
+        self.assertEqual(set(delivery[0]["source_lesson_ids"]), {"shared-elective", "shared-elective-2"})
+        self.assertEqual(set(delivery[0]["known_student_ids"]),
+                         {str(self.student["id"]), str(self.other_student["id"])})
+        source_records = {row["lesson_id"]: row for row in preview["published_source"]["records"]}
+        self.assertEqual(source_records["shared-elective"]["known_student_ids"], [])
+        self.assertEqual(source_records["shared-elective-2"]["known_student_ids"], [])
+        generic_lanes = [{**copy.deepcopy(item), "id": f"generic-{index}", "blockId": "generic-block",
+                          "blockName": "", "confirmedParticipantIds": []}
+                         for index, item in enumerate((elective, second_elective), 1)]
+        generic_draft = self.draft(generic_lanes)
+        generic_preview = preview_publication(self.database, generic_draft["id"], scope_kind="template",
+                                              expected_revision=1)
+        self.assertEqual(generic_preview["published_source"]["elective_delivery_records"][0]["display_label"],
+                         "Курс по выбору")
         self.publish(draft)
         self.publish(draft, "week", week_start="2026-10-19")
         projection = canonical.project_student(self.database, self.student["id"], "2026-10-19")

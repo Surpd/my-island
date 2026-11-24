@@ -108,7 +108,9 @@ def project_source_lessons(
         if not parsed_teacher_ids and same_text:
             old_teacher_sets = {tuple(sorted(str(value) for value in item.get("teacherIds") or [])) for item in previous}
             if len(old_teacher_sets) == 1:
-                parsed_teacher_ids = list(next(iter(old_teacher_sets)))
+                # A source-preserved identity is still usable only while it is
+                # an active teacher in the canonical directory.
+                parsed_teacher_ids = [value for value in next(iter(old_teacher_sets)) if value in teacher_ids]
         teacher_id = parsed_teacher_ids[0] if len(set(parsed_teacher_ids)) == 1 else ""
         room = "" if special else str(semantic.get("room") or "").strip()
         if not room and same_text and len(previous) == 1:
@@ -123,8 +125,6 @@ def project_source_lessons(
                 reasons.append("У группы нет подтверждённого состава по классам")
             if not teacher_id:
                 reasons.append("Не подтверждён преподаватель")
-            elif proposed_group and (teacher_id, proposed_group) not in teacher_pairs:
-                reasons.append("Нет подтверждённого назначения преподавателя группе")
         if (start, end) not in slot_index:
             reasons.append("Нет соответствующего звонка")
         if special == "lunch":

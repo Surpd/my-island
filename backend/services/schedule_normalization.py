@@ -328,22 +328,17 @@ def normalization_preview(draft: Mapping[str, Any], *, verified_active_teachers:
             if teacher_ids and teacher_ids <= verified_active_teachers:
                 changes.append({"lesson_id": str(row.get("id") or ""), "field": "teacher_identity_warning",
                     "before": warning_reason, "after": "(снято)", "reason": "Явно указанный преподаватель найден в активном справочнике"})
-        elif row.get("needsClarification") is True and warning_reason == "Нет подтверждённого назначения преподавателя группе":
+        elif (row.get("needsClarification") is True
+              and "Нет подтверждённого назначения преподавателя группе" in warning_reason.split("; ")):
             teacher_ids = {str(value) for value in (row.get("teacherIds") or []) if str(value)}
             if row.get("teacherId"):
                 teacher_ids.add(str(row["teacherId"]))
-            group_ids = {str(value) for value in (row.get("groupIds") or []) if str(value)}
-            class_ids = {str(value) for value in (row.get("classIds") or []) if str(value)}
-            if row.get("groupId"):
-                group_ids.add(str(row["groupId"]))
-            if row.get("classId"):
-                class_ids.add(str(row["classId"]))
-            group_ids |= class_ids
-            subject = " ".join(str(row.get("subject") or "").casefold().split())
-            if teacher_ids and group_ids and all(any((teacher, group, subject) in verified_teacher_assignments
-                                                     for group in group_ids) for teacher in teacher_ids):
+            if teacher_ids and teacher_ids <= verified_active_teachers:
+                clauses = frozenset({"Нет подтверждённого назначения преподавателя группе"})
                 changes.append({"lesson_id": str(row.get("id") or ""), "field": "teacher_assignment_warning",
-                    "before": warning_reason, "after": "(снято)", "reason": "Активный преподаватель и действующее назначение совпадают по группе и предмету"})
+                    "before": warning_reason, "after": without_scope_clauses(warning_reason, clauses) or "(снято)",
+                    "clauses": sorted(clauses),
+                    "reason": "Явно указанный преподаватель найден в активном справочнике; отдельное назначение на группу не требуется"})
     cleared_warning_ids = {str(item["lesson_id"]) for item in changes
                            if item.get("field") in {"teacher_assignment_warning", "teacher_identity_warning"}}
     for row in lessons:
@@ -419,11 +414,17 @@ def normalized_copy_payload(draft: Mapping[str, Any], preview: Mapping[str, Any]
             lesson_changes = [row for row in changes if str(row.get("lesson_id") or "") == str(lesson.get("id") or "")]
             for change in lesson_changes:
                 if change.get("field") in {"teacher_assignment_warning", "teacher_identity_warning"}:
-                    lesson.pop("needsClarification", None)
-                    lesson.pop("clarificationReason", None)
+                    remaining = (without_scope_clauses(lesson.get("clarificationReason"),
+                                                       frozenset(change.get("clauses") or ()))
+                                 if change.get("field") == "teacher_assignment_warning" else "")
+                    if remaining:
+                        lesson["clarificationReason"] = remaining
+                    else:
+                        lesson.pop("needsClarification", None)
+                        lesson.pop("clarificationReason", None)
                     lesson["normalization_resolution"] = {
                         "code": "teacher_assignment_verified" if change.get("field") == "teacher_assignment_warning" else "teacher_identity_verified",
-                        "source": "teacher_assignments" if change.get("field") == "teacher_assignment_warning" else "identity_directory"}
+                        "source": "identity_directory"}
                 elif change.get("field") == "elective_scope_warning":
                     apply_scope_warning_retirement(lesson, change["field"], frozenset(change["clauses"]))
                 elif change.get("field") == "activity_type":
@@ -501,9 +502,15 @@ def apply_selected_schedule_notes(database: Any, source_database: Any, draft_id:
             # active directory evidence; never set or replace any teacher here.
             expected = {"teacher_identity_warning": "Не подтверждён преподаватель",
                         "teacher_assignment_warning": "Нет подтверждённого назначения преподавателя группе"}[field]
-            if original != expected:
+            if field == "teacher_identity_warning" and original != expected:
                 raise ExperimentConflict(draft)
-            remaining = ""
+            if field == "teacher_assignment_warning":
+                clauses = frozenset(proposed.get("clauses") or ())
+                if clauses != frozenset({expected}) or expected not in original.split("; "):
+                    raise ExperimentConflict(draft)
+                remaining = without_scope_clauses(original, clauses)
+            else:
+                remaining = ""
         if remaining:
             row["clarificationReason"] = remaining
         else:
