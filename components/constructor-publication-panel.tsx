@@ -1,5 +1,6 @@
 'use client';
 
+import { SHORT_WEEKDAYS as dayNames } from './schedule-weekdays.ts';
 import {useEffect, useEffectEvent, useLayoutEffect, useRef, useState} from 'react';
 import { ArrowRight, ChevronDown, X } from 'lucide-react';
 import Link from 'next/link';
@@ -127,7 +128,7 @@ type ReviewView = {
 };
 
 const savedReviewViews = new Map<string, ReviewView>();
-const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
 const fullDayNames = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
 const overlapCodes = new Set(['teacher_overlap', 'room_overlap', 'student_overlap', 'joint_activity_unconfirmed']);
 const audienceCodes = new Set(['audience_unresolved', 'roster_review', 'stale_group_subject_mismatch', 'missing_runtime_grade']);

@@ -2,6 +2,7 @@
 'use client';
 
 import { useLiveRevision } from './use-live-revision';
+import { SHORT_WEEKDAYS } from './schedule-weekdays';
 import {
   Fragment,
   useEffect,
@@ -3330,7 +3331,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               <div className="constructor-day-tabs">
                 {payload.days.map((value) => (
                   <button key={value} aria-label={DAYS[value]} title={DAYS[value]} className={day === value ? 'active' : ''} onClick={() => { setDay(value); setAnchor(null); setFocus(null); setSelectedId(''); }}>
-                    {DAYS[value].slice(0, 2)}
+                    {SHORT_WEEKDAYS[value]}
                   </button>
                 ))}
               </div>
@@ -3349,7 +3350,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               {dayModesOpen ? <section id="constructor-day-modes-matrix" className="constructor-day-modes-matrix" role="dialog" aria-label="Режимы дней по параллелям">
                 <header><div><strong>Режимы дней</strong><small>Одна настройка для всей параллели</small></div><button type="button" aria-label="Закрыть матрицу режимов" onClick={() => { setDayModesOpen(false); setDayModeEditor(null); }}><X size={15} /></button></header>
                 <div className="constructor-day-modes-table-wrap"><table>
-                  <thead><tr><th scope="col">Класс</th>{[0, 1, 2, 3, 4].map((weekday) => <th key={weekday} scope="col">{['Пн', 'Вт', 'Ср', 'Чт', 'Пт'][weekday]}</th>)}</tr></thead>
+                  <thead><tr><th scope="col">Класс</th>{[0, 1, 2, 3, 4].map((weekday) => <th key={weekday} scope="col">{SHORT_WEEKDAYS[weekday]}</th>)}</tr></thead>
                   <tbody>{['5', '6', '7', '8', '9', '10', '11'].map((grade) => <tr key={grade}>
                     <th scope="row">{grade} класс</th>
                     {[0, 1, 2, 3, 4].map((weekday) => {
@@ -3543,7 +3544,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                         setQuery('');
                       }}
                     >
-                      {DAYS[item.day]?.slice(0, 2)} · {item.subject} ·{' '}
+                      {SHORT_WEEKDAYS[item.day]} · {item.subject} ·{' '}
                       {groups.find((g) => g.id === item.classId)?.name}
                     </button>
                   ))
