@@ -18,19 +18,20 @@ export function useLiveRevision({ enabled, path, api, refresh, revoke, missing, 
   useEffect(() => { handlers.current = { refresh, revoke, missing, unavailable }; }, [refresh, revoke, missing, unavailable]);
   useEffect(() => {
     if (!enabled) return;
-    const controller = new AbortController();
+    let stopped = false;
+    let current: AbortController | undefined;
     let lastVersion: string | number | undefined;
     let actor: string | undefined;
-    let busy = false;
     let initialFailure = false;
     const tick = async () => {
-      if (busy || controller.signal.aborted || document.hidden || !navigator.onLine) return;
-      busy = true;
+      if (current || stopped || document.hidden || !navigator.onLine) return;
+      const controller = new AbortController();
+      current = controller;
       try {
         const marker = await api<Marker>(path, { signal: controller.signal });
         if (controller.signal.aborted) return;
         if (actor !== undefined && actor !== marker.actor) {
-          controller.abort(); handlers.current.revoke(); return;
+          stopped = true; controller.abort(); handlers.current.revoke(); return;
         }
         actor = marker.actor;
         const version = marker.version ?? marker.revision;
@@ -40,25 +41,35 @@ export function useLiveRevision({ enabled, path, api, refresh, revoke, missing, 
         }
       } catch (cause) {
         if (!controller.signal.aborted && (cause as { status?: number })?.status === 404 && handlers.current.missing) {
-          controller.abort(); handlers.current.missing(); return;
+          stopped = true; controller.abort(); handlers.current.missing(); return;
         }
         if (!controller.signal.aborted && [401, 403].includes((cause as { status?: number })?.status ?? 0)) {
-          controller.abort(); handlers.current.revoke();
+          stopped = true; controller.abort(); handlers.current.revoke();
         } else if (!initialFailure && lastVersion === undefined && !controller.signal.aborted) {
           initialFailure = true;
           handlers.current.unavailable?.();
         }
-      } finally { busy = false; }
+      } finally { if (current === controller) current = undefined; }
+    };
+    const onEnvironmentChange = () => {
+      current?.abort();
+      current = undefined;
+      void tick();
     };
     void tick();
     const interval = window.setInterval(tick, 15000);
-    window.addEventListener('focus', tick);
-    window.addEventListener('online', tick);
-    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', onEnvironmentChange);
+    window.addEventListener('online', onEnvironmentChange);
+    window.addEventListener('offline', onEnvironmentChange);
+    document.addEventListener('visibilitychange', onEnvironmentChange);
     return () => {
-      controller.abort(); window.clearInterval(interval);
-      window.removeEventListener('focus', tick); window.removeEventListener('online', tick);
-      document.removeEventListener('visibilitychange', tick);
+      stopped = true;
+      current?.abort();
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onEnvironmentChange);
+      window.removeEventListener('online', onEnvironmentChange);
+      window.removeEventListener('offline', onEnvironmentChange);
+      document.removeEventListener('visibilitychange', onEnvironmentChange);
     };
   }, [enabled, path, api]);
 }

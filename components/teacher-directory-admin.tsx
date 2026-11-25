@@ -84,17 +84,18 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, live = true, co
         ]);
         next = { groups: groups.items || [], teachers: teachers.items || [], students: [], write_ready: system.health?.environment === 'local_sqlite' || system.settings?.database_configured === false };
       }
-      if (!signal?.aborted && sequence === readSequence.current) setDirectory(next);
-    } catch (cause) { if (signal) throw cause; setError(cause instanceof Error ? cause.message : 'Не удалось загрузить преподавателей.'); }
+      if (signal?.aborted || sequence !== readSequence.current) return false as const;
+      setDirectory(next);
+    } catch (cause) { if (signal?.aborted || sequence !== readSequence.current) return false as const; if (signal) throw cause; setError(cause instanceof Error ? cause.message : 'Не удалось загрузить преподавателей.'); }
     finally { if (!signal?.aborted && sequence === readSequence.current) setLoading(false); }
   }, [api, schoolMode]);
 
   useLiveRevision({
     enabled: live && schoolSession && !accessLost,
     api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
-    refresh: async (_marker, signal) => { await load(signal); },
+    refresh: (_marker, signal) => load(signal),
     unavailable: () => { void load(); },
-    revoke: () => setAccessLost(true),
+    revoke: () => { readSequence.current++; setAccessLost(true); },
   });
   useEffect(() => {
     if (!schoolMode) return;

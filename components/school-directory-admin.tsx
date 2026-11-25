@@ -95,7 +95,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
     try {
       if (schoolMode) {
         const directory = await api<Directory>('/api/admin/school/directory', { signal });
-        if (signal?.aborted || sequence !== readSequence.current) return;
+        if (signal?.aborted || sequence !== readSequence.current) return false as const;
         setConnectionLost(false);
         teachersRef.current = directory.teachers || [];
         setData(directory);
@@ -117,7 +117,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
         api<{ items: Row[] }>('/api/admin/people?kind=teacher&include_inactive=true', { signal }),
         api<Row>('/api/admin/system', { signal }).catch(() => ({} as Row)),
       ]);
-      if (signal?.aborted || sequence !== readSequence.current) return;
+      if (signal?.aborted || sequence !== readSequence.current) return false as const;
       teachersRef.current = teachers.items || [];
       setData({ groups: groups.items || [], students: students.items || [], teachers: teachers.items || [] });
       if (initialGroupId && !initialGroupOpened.current) {
@@ -125,15 +125,15 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
         if (group) { initialGroupOpened.current = true; editGroup(group); }
       }
       setSourceMode(system.health?.environment === 'local_sqlite' || system.settings?.database_configured === false ? 'Изолированная локальная база API. Сохранения доступны для ручной проверки, изменения не попадут в школьную базу.' : 'Источник: активная база, подключённая к административному API.');
-    } catch (e) { if (signal) throw e; if (schoolMode) setConnectionLost(true); setError(e instanceof Error ? e.message : 'Не удалось загрузить школьный справочник.'); }
+    } catch (e) { if (signal?.aborted || sequence !== readSequence.current) return false as const; if (signal) throw e; if (schoolMode) setConnectionLost(true); setError(e instanceof Error ? e.message : 'Не удалось загрузить школьный справочник.'); }
     finally { if (!signal?.aborted && sequence === readSequence.current) setLoading(false); }
   }, [api, editGroup, initialGroupId, schoolMode]);
   useLiveRevision({
     enabled: live && schoolSession && !accessLost,
     api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
-    refresh: async (_marker, signal) => { await load(signal); },
+    refresh: (_marker, signal) => load(signal),
     unavailable: () => { void load(); },
-    revoke: () => setAccessLost(true),
+    revoke: () => { readSequence.current++; setAccessLost(true); },
   });
   useEffect(() => { if (schoolSession && !live) void load(); }, [live, load, schoolSession]);
 
