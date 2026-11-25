@@ -10,6 +10,7 @@ import os
 import unittest
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from backend.database import Database
@@ -55,6 +56,10 @@ class JournalImportPostgresTests(unittest.TestCase):
         "users",
         "classroom_courses",
         "memberships",
+        "membership_overrides",
+        "teacher_assignments",
+        "teacher_subjects",
+        "homeroom_assignments",
         "journal_sources",
         "journal_assessments",
         "journal_students",
@@ -122,6 +127,13 @@ class JournalImportPostgresTests(unittest.TestCase):
                         f'ALTER TABLE "{cls.schema}"."{table}" ALTER COLUMN "{column}" '
                         f"SET DEFAULT nextval('{sequence_ref}'::regclass)"
                     )
+            # LIKE does not copy triggers. Run the real revision migration with
+            # its schema-qualified functions, trigger targets and writes scoped
+            # to this disposable schema, independent of public trigger state.
+            revisions = (Path(__file__).resolve().parents[1] / "migrations/054_directory_revisions.sql").read_text(encoding="utf8")
+            revisions = revisions.replace("public.", f'"{cls.schema}".').replace(
+                "pg_catalog, public", f'pg_catalog, "{cls.schema}"')
+            cls.admin_connection.execute(revisions)
             # Matching-specific schema is created only inside this disposable test
             # schema, so tests remain compatible with production until its migration.
             cls.admin_connection.execute(
