@@ -1008,24 +1008,6 @@ def create_router(database: Database) -> APIRouter:
         except (sqlite3.OperationalError, PostgresOperationalError) as error:
             raise HTTPException(status_code=503, detail="Published schedule is temporarily unavailable") from error
 
-    @router.get("/admin/analytics/classes")
-    def admin_class_load(start_day: str, end_day: str | None = None,
-                         group_id: str | None = None, group_type: str | None = None,
-                         trajectory: str | None = None,
-                         init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
-                         x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        require_role(telegram_user, "admin")
-        if not canonical_admin_backend_enabled():
-            raise HTTPException(503, "Published schedule backend is disabled")
-        try:
-            return class_load_analytics(database, start_day, end_day, group_id=group_id,
-                                        group_type=group_type, trajectory=trajectory)
-        except ValueError as error:
-            raise HTTPException(400, "Use valid ISO dates in order, up to 366 days inclusive") from error
-        except (sqlite3.OperationalError, PostgresOperationalError) as error:
-            raise HTTPException(503, "Published class schedule is temporarily unavailable") from error
-
     @router.get("/admin/people/{identity_id}/schedule")
     def admin_person_schedule(identity_id: str, start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -1575,6 +1557,24 @@ def create_router(database: Database) -> APIRouter:
         item = database.map_journal_group(payload.source_id, marker, payload.group_id, actor["id"], **dimensions)
         database.record_audit_event("journal_group_mapping.updated", "journal_group_mapping", {"source_id": payload.source_id, "group_marker": payload.group_marker, "group_id": payload.group_id, **dimensions}, actor["id"])
         return {"id": item["id"]}
+
+    @router.get("/admin/analytics/classes")
+    def admin_class_load(start_day: str, end_day: str | None = None,
+                         group_id: str | None = None, group_type: str | None = None,
+                         trajectory: str | None = None,
+                         init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                         x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        if not canonical_admin_backend_enabled():
+            raise HTTPException(503, "Published schedule backend is disabled")
+        try:
+            return class_load_analytics(database, start_day, end_day, group_id=group_id,
+                                        group_type=group_type, trajectory=trajectory)
+        except ValueError as error:
+            raise HTTPException(400, "Use valid ISO dates in order, up to 366 days inclusive") from error
+        except (sqlite3.OperationalError, PostgresOperationalError) as error:
+            raise HTTPException(503, "Published class schedule is temporarily unavailable") from error
 
     @router.get("/admin/schedule/parses")
     def admin_schedule_parses(audience: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
