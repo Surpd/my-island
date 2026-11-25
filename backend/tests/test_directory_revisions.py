@@ -35,6 +35,20 @@ class RevisionContract:
         self.assertEqual(item["field_values"], {"status": {"before": "active", "after": "inactive"}})
         self.assertNotIn("private fixture note", str(item))
 
+    def test_teacher_import_preserves_manual_assignment_dimensions(self):
+        from backend.services.google_sync_service import _apply_plan, _reconciliation_inputs
+        from backend.services.teacher_directory_reconciliation import ReconciliationAssignment, TeacherReconciliationPlan
+        self.db.set_teacher_assignment(self.teacher, self.group, "Math", True, self.actor, base_class_name="8")
+        desired = ReconciliationAssignment(str(self.teacher), "Fixture", "Math", str(self.group), "Fixture",
+                                           "9", None, None, "fixture-source")
+        revision = self.revision()
+        with self.db.connection() as connection:
+            _, _, rows, _ = _reconciliation_inputs(self.db, connection)
+            current = [row for row in rows if str(row["teacher_id"]) == str(self.teacher)]
+            report = _apply_plan(self.db, connection, TeacherReconciliationPlan(assignments=[desired], current_assignments=current))
+        self.assertFalse(report["UPDATE"])
+        self.assertEqual(self.revision(), revision)
+
     def test_homeroom_relation_invalidates_teacher_and_class(self):
         group = self.db.create_group("C " + self.suffix, "class")
         before = self.revision()
@@ -182,6 +196,22 @@ URL = os.getenv("MY_ISLAND_DIRECTORY_TEST_DATABASE_URL", "")
 
 @unittest.skipUnless(URL, "requires isolated directory PostgreSQL fixture")
 class PostgresDirectoryTests(RevisionContract, unittest.TestCase):
+    def test_import_failure_rolls_back_on_autocommit_connection(self):
+        from unittest.mock import patch
+        from backend.services.google_sync_service import refresh_teacher_directory_reconciliation_apply
+        database = Database(database_url=URL, autocommit=True)
+        revision = self.revision()
+
+        def interrupted(db, connection):
+            db.execute(connection, "UPDATE identities SET status='inactive' WHERE id=?", (self.teacher,))
+            raise RuntimeError("interrupted import")
+
+        with patch("backend.services.google_sync_service._structured_teacher_source", return_value=("book", "test", "sheet", [])), \
+                patch("backend.services.google_sync_service._ensure_literature_11_base", side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, "interrupted import"):
+                refresh_teacher_directory_reconciliation_apply(database, None)
+        self.assertEqual(self.revision(), revision)
+
     @classmethod
     def setUpClass(cls):
         target = urlsplit(URL)
