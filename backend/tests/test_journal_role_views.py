@@ -142,6 +142,30 @@ class JournalRoleViewTests(unittest.TestCase):
                 self.database.execute(connection, """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref)
                     VALUES (?, ?, 'student', 'test_fixture', ?)""", (group_a, student, f"term-{term_number}"))
 
+    def test_admin_snapshot_analytics_respects_period_marker_and_role(self):
+        self._create_user("analytics-admin", "admin", None)
+        headers = {"X-Dev-Auth": "analytics-admin"}
+        source_id = self.source_ids[0]
+        path = f"/api/admin/journals/{source_id}/analytics"
+        for role in ("student-auth", "teacher-auth"):
+            self.assertEqual(self.client.get(path, headers={"X-Dev-Auth": role}).status_code, 403)
+        self.assertEqual(self.client.get(path, headers=headers, params={"group_marker": "missing"}).status_code, 404)
+        self.assertEqual(self.client.get(path, headers=headers, params={"start": "2027-01-01", "end": "2026-01-01"}).status_code, 422)
+        with self.database.connection() as connection:
+            self.database.execute(connection, """UPDATE journal_results SET numeric_score=0
+                WHERE assessment_id IN (SELECT id FROM journal_assessments WHERE source_id=?)""", (source_id,))
+        response = self.client.get(path, headers=headers, params={"group_marker": "A"})
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["source"]["period_status"], "archived")
+        self.assertEqual(data["roster"], {"total_rows": 4, "team_rows": 1, "unlinked_individual_rows": 1})
+        self.assertEqual(data["totals"]["numeric_results"], 4)
+        self.assertEqual(data["totals"]["eligible_cells"], 4)
+        self.assertEqual(data["period_summary_cells"], {"average_grade": 1})
+        empty = self.client.get(path, headers=headers, params={"start": "2027-01-01"}).json()
+        self.assertIsNone(empty["totals"]["numeric_coverage"])
+        self.assertEqual(empty["works"], [])
+
     def test_student_journals_include_only_own_linked_individual_results_and_archived_periods(self):
         response = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"})
         self.assertEqual(response.status_code, 200, response.text)
