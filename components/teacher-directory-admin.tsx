@@ -50,6 +50,7 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [subjectSearch, setSubjectSearch] = useState('');
+  const [assignmentRevision, setAssignmentRevision] = useState<number>();
   const [assignmentOpen, setAssignmentOpen] = useState(false);
   const [editingAssignmentId, setEditingAssignmentId] = useState('');
   const [openAssignmentMenuId, setOpenAssignmentMenuId] = useState('');
@@ -132,22 +133,28 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
     if (!draft?.display_name?.trim()) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      const body = { display_name: draft.display_name.trim(), subjects: draft.subjects || [], status: draft.status || 'active', comment: draft.comment || '', ...(creating ? { kind: 'teacher' } : {}) };
+      const body = { ...(creating ? {} : { expected_revision: draft.revision }), display_name: draft.display_name.trim(), subjects: draft.subjects || [], status: draft.status || 'active', comment: draft.comment || '', ...(creating ? { kind: 'teacher' } : {}) };
       const result = await api<{ id?: string | number }>(creating ? '/api/admin/identities' : `/api/admin/people/${encodeURIComponent(String(selectedId))}`, { method: creating ? 'POST' : 'PATCH', body: JSON.stringify(body) });
       const id = String(result.id ?? selectedId);
       setSelectedId(id); setCreating(false); setEditing(false); setNotice('Данные преподавателя сохранены.');
       await load();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить преподавателя.'); }
+    } catch (cause) {
+      if ((cause as { status?: number })?.status === 409) await load();
+      setError(cause instanceof Error ? cause.message : 'Не удалось сохранить преподавателя.');
+    }
     finally { setBusy(false); }
   };
   const commitAssignment = async (row: Row, active: boolean) => {
     setBusy(true); setError(''); setNotice('');
     try {
-      await api('/api/admin/teacher-assignments', { method: 'POST', body: JSON.stringify({ teacher_identity_id: selectedId, ...(active ? row.id ? { assignment_id: String(row.id), ...(row.grade_level ? { grade_level: row.grade_level } : { group_id: String(row.group_id) }) } : row.grade_level ? { grade_level: row.grade_level } : { group_id: String(row.group_id) } : { assignment_id: String(row.id) }), subject: String(row.subject || ''), exam_track: row.exam_track || null, active }) });
+      await api('/api/admin/teacher-assignments', { method: 'POST', body: JSON.stringify({ teacher_identity_id: selectedId, expected_revision: assignmentOpen ? assignmentRevision : selected?.revision, ...(active ? row.id ? { assignment_id: String(row.id), ...(row.grade_level ? { grade_level: row.grade_level } : { group_id: String(row.group_id) }) } : row.grade_level ? { grade_level: row.grade_level } : { group_id: String(row.group_id) } : { assignment_id: String(row.id) }), subject: String(row.subject || ''), exam_track: row.exam_track || null, active }) });
       setAssignmentOpen(false); setEditingAssignmentId(''); setNotice(active ? row.id ? 'Назначение изменено.' : 'Назначение добавлено.' : 'Назначение снято.');
       window.dispatchEvent(new Event('school-directory-updated'));
       await load();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить назначение.'); }
+    } catch (cause) {
+      if ((cause as { status?: number })?.status === 409) await load();
+      setError(cause instanceof Error ? cause.message : 'Не удалось сохранить назначение.');
+    }
     finally { setBusy(false); }
   };
   const addAssignment = async () => {
@@ -163,6 +170,7 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
     const isClass = String(group?.group_type).toLowerCase() === 'class';
     setEditingAssignmentId(String(item.id));
     setAssignment({ subject: String(item.subject || ''), audience: item.grade_level ? 'parallel' : isClass ? 'class' : 'group', targetId: item.group_id ? String(item.group_id) : '', grade: String(item.grade_level || (group ? audienceGrades(group, directory.students)[0] : '') || ''), course: String(item.exam_track || '') });
+    setAssignmentRevision(selected?.revision);
     setAssignmentOpen(true);
     setError('');
   };
@@ -228,7 +236,7 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
         </div>
         {editing ? <div className="teacher-actions"><button className="admin-button admin-button--primary" disabled={busy || !teacher.display_name?.trim() || (schoolMode && !directory.write_ready)} onClick={() => void saveTeacher()}>{busy ? 'Сохраняем…' : creating ? 'Создать преподавателя' : 'Сохранить'}</button><button className="admin-button admin-button--quiet" onClick={() => { if (creating) { setCreating(false); setDraft(null); } else { setEditing(false); setDraft(selected); } }}>Отмена</button></div> : null}
       </section> : null}
-      {tab === 'assignments' ? <section className="admin-panel teacher-panel"><div className="teacher-section-heading"><div><h3>Группы и назначения</h3><p>Назначение задаёт преподавателя по умолчанию. Уроки в расписании можно назначить другому учителю.</p></div><button className="admin-button admin-button--primary" disabled={!selectedId || (schoolMode && !directory.write_ready)} onClick={() => { setAssignment({ subject: currentTeacherSubjects[0] || '', audience: schoolMode && !directory.grade_assignment_ready ? 'group' : 'parallel', targetId: '', grade: parallels[0] || '', course: '' }); setAssignmentOpen((value) => !value); }}><Plus size={15} /> Добавить назначение</button></div>
+      {tab === 'assignments' ? <section className="admin-panel teacher-panel"><div className="teacher-section-heading"><div><h3>Группы и назначения</h3><p>Назначение задаёт преподавателя по умолчанию. Уроки в расписании можно назначить другому учителю.</p></div><button className="admin-button admin-button--primary" disabled={!selectedId || (schoolMode && !directory.write_ready)} onClick={() => { setAssignment({ subject: currentTeacherSubjects[0] || '', audience: schoolMode && !directory.grade_assignment_ready ? 'group' : 'parallel', targetId: '', grade: parallels[0] || '', course: '' }); setAssignmentRevision(selected?.revision); setAssignmentOpen((value) => !value); }}><Plus size={15} /> Добавить назначение</button></div>
         {assignmentOpen ? <div className="teacher-assignment-form"><label className="school-field">Предмет<select value={assignment.subject} onChange={(event) => setAssignment({ ...assignment, subject: event.target.value })}><option value="">Выберите предмет</option>{[...new Set([...currentTeacherSubjects, ...subjectOptions])].map((value) => <option key={normalize(value)}>{value}</option>)}</select></label><fieldset disabled={Boolean(editingAssignmentId)}><legend>Кому преподаёт?</legend>{([['parallel', 'Вся параллель'], ['class', 'Административный класс'], ['group', 'Учебная группа']] as [string, string][]).map(([value, label]) => <label key={value}><input type="radio" name="teacher-audience" disabled={value === 'parallel' && schoolMode && !directory.grade_assignment_ready} checked={assignment.audience === value} onChange={() => setAssignment({ ...assignment, audience: value, targetId: '' })} />{label}</label>)}</fieldset>
           {schoolMode && !directory.grade_assignment_ready ? <small>Назначение на всю параллель станет доступно после согласования миграции 036. Класс и группу можно назначать сейчас.</small> : null}
           <label className="school-field">Параллель<select value={assignment.grade} onChange={(event) => setAssignment({ ...assignment, grade: event.target.value, targetId: '' })}><option value="">Выберите параллель</option>{parallels.map((value) => <option key={value} value={value}>{value}-й класс</option>)}</select></label>

@@ -63,36 +63,67 @@ def _sqlite_bump(table, predicate, fields):
 
 
 @contextmanager
-def directory_edit(database, table, entity_id, expected_revision, actor_id):
-    if table not in ROOT_FIELDS:
-        raise ValueError("Unknown directory entity")
-    if type(expected_revision) is not int or expected_revision < 1:
-        raise HTTPException(428, "Обновите справочник и откройте форму заново: требуется версия записи.")
+def directory_transaction(database, actor_id):
+    """Existing directory services share one connection and one commit."""
     with database.connection() as connection:
-        if database.database_url:
-            # Some isolated callers configure autocommit. transaction() also
-            # works when the connection is already inside a transaction.
-            transaction = connection.transaction()
-        else:
-            transaction = nullcontext()
+        transaction = connection.transaction() if database.database_url else nullcontext()
+        if not database.database_url:
             connection.execute("BEGIN IMMEDIATE")
         with transaction:
-            lock = " FOR UPDATE" if database.database_url else ""
-            current = database.execute(connection, f"SELECT * FROM {table} WHERE id=?{lock}", (entity_id,)).fetchone()
-            if current is None:
-                raise HTTPException(404, "Запись справочника удалена.")
-            if current["revision"] != expected_revision:
-                raise HTTPException(409, {"code": "directory_revision_conflict", "current": jsonable_encoder(dict(current)),
-                    "message": "Запись уже изменена. Обновите справочник и сравните изменения."})
             if database.database_url:
                 database.execute(connection, "SELECT set_config('my_island.directory_actor', ?, true)", (str(actor_id),))
+                # Opposite edits to a group and a teacher may take their two
+                # parent locks in opposite order. The aborted writer can reload.
             else:
                 connection.execute("INSERT INTO directory_edit_actor VALUES (1,?)", (str(actor_id),))
             bound = copy(database)
             bound.connection = lambda: nullcontext(connection)
-            yield bound
+            try:
+                yield bound
+            except Exception as error:
+                if getattr(error, "sqlstate", None) in {"40P01", "40001"}:
+                    raise HTTPException(409, "Одновременное изменение. Обновите запись и повторите сохранение.") from error
+                raise
             if not database.database_url:
                 connection.execute("DELETE FROM directory_edit_actor WHERE id=1")
+
+
+def check_revision(database, table, entity_id, expected_revision):
+    if table not in ROOT_FIELDS:
+        raise ValueError("Unknown directory entity")
+    if type(expected_revision) is not int or expected_revision < 1:
+        raise HTTPException(428, "Обновите справочник и откройте форму заново: требуется версия записи.")
+    lock = " FOR UPDATE" if database.database_url else ""
+    with database.connection() as connection:
+        current = database.execute(connection, f"SELECT * FROM {table} WHERE id=?{lock}", (entity_id,)).fetchone()
+    if current is None:
+        raise HTTPException(404, "Запись справочника удалена.")
+    if current["revision"] != expected_revision:
+        raise HTTPException(409, {"code": "directory_revision_conflict", "current": jsonable_encoder(dict(current)),
+            "message": "Запись уже изменена. Обновите справочник и сравните изменения."})
+
+
+@contextmanager
+def directory_edit(database, table, entity_id, expected_revision, actor_id):
+    with directory_transaction(database, actor_id) as bound:
+        check_revision(bound, table, entity_id, expected_revision)
+        yield bound
+
+
+def add_group_members(database, group_id, members, actor):
+    if not isinstance(members, list):
+        raise ValueError("add_members must be a list")
+    expected = {}
+    for item in members:
+        if not isinstance(item, dict) or not isinstance(item.get("identity_id"), (str, int)):
+            raise ValueError("Invalid member")
+        identity_id = str(item["identity_id"])
+        if identity_id in expected:
+            raise ValueError("Duplicate member")
+        expected[identity_id] = item.get("expected_revision")
+    for identity_id in sorted(expected):
+        check_revision(database, "identities", identity_id, expected[identity_id])
+        database.update_student_memberships(identity_id, None, group_id, actor, "Added in group editor")
 
 
 def directory_history(database, table, entity_id):

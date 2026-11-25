@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { expect } from '@playwright/test';
 import { test } from './helpers/experiment-test';
 
@@ -121,7 +122,7 @@ test('constructor: create, edit, copy range, cut, undo, conflict, save and reope
     {
       headers: ADMIN,
       data: {
-        teacher_identity_id: teacherId,
+        expected_revision: await personRevision(page, teacherId), teacher_identity_id: teacherId,
         group_id: groupId,
         subject: 'Математика',
       },
@@ -416,7 +417,7 @@ test('constructor: overlapping memberships identify a student conflict', async (
   for (const group_id of [classId, firstId, secondId]) {
     const membership = await page.request.post(`${API}/api/admin/memberships`, {
       headers: ADMIN,
-      data: { group_id, identity_id: studentId },
+      data: { expected_revision: await personRevision(page, studentId), group_id, identity_id: studentId },
     });
     expect(membership.ok()).toBeTruthy();
   }

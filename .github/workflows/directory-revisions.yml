@@ -1,0 +1,70 @@
+name: School directory revisions
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/directory-revisions.yml'
+      - 'backend/database.py'
+      - 'backend/handlers/api.py'
+      - 'backend/handlers/school_directory_api.py'
+      - 'backend/migrations/054_directory_revisions.sql'
+      - 'backend/services/directory_revisions.py'
+      - 'backend/services/school_experiment_workspace.py'
+      - 'backend/tests/test*directory*.py'
+      - 'components/*directory*.tsx'
+      - 'e2e/*directory*'
+
+permissions:
+  contents: read
+
+jobs:
+  directory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: my_island_directory_check
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:55438:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MY_ISLAND_DIRECTORY_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:55438/my_island_directory_check
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx
+      - name: Initialize disposable directory schema
+        shell: bash
+        run: |
+          psql "$MY_ISLAND_DIRECTORY_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon;
+          CREATE ROLE authenticated;
+          CREATE ROLE service_role BYPASSRLS;
+          CREATE SCHEMA extensions;
+          CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
+          SQL
+          for migration in {001..010} 013 020 021 034 035 036 037 054; do
+            psql "$MY_ISLAND_DIRECTORY_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/migrations/"${migration}"_*.sql
+          done
+      - name: Verify SQLite and PostgreSQL transactions and administrative APIs
+        run: >-
+          python -m unittest backend.tests.test_directory_revisions
+          backend.tests.test_admin_console backend.tests.test_school_directory_api
+          backend.tests.test_school_directory_admin_projection -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install tsc --noEmit
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Verify school directory forms in Chromium
+        run: npx --no-install playwright test e2e/directory-editor.spec.ts e2e/teacher-directory.spec.ts

@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { expect } from '@playwright/test';
 import { test } from './helpers/experiment-test';
 
@@ -38,13 +39,13 @@ test('available-slot roster stays factual until recalculation is confirmed, then
   for (const identityId of [firstStudentId, secondStudentId]) {
     const response = await page.request.post(`${API}/api/admin/memberships`, {
       headers: ADMIN,
-      data: { group_id: classId, identity_id: identityId, member_role: 'student' },
+      data: { expected_revision: await personRevision(page, identityId), group_id: classId, identity_id: identityId, member_role: 'student' },
     });
     expect(response.ok()).toBe(true);
   }
   const subgroupMembership = await page.request.post(`${API}/api/admin/memberships`, {
     headers: ADMIN,
-    data: { group_id: subgroupId, identity_id: firstStudentId, member_role: 'student' },
+    data: { expected_revision: await personRevision(page, firstStudentId), group_id: subgroupId, identity_id: firstStudentId, member_role: 'student' },
   });
   expect(subgroupMembership.ok()).toBe(true);
 
