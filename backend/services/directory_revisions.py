@@ -78,6 +78,19 @@ def _sqlite_bump(table, predicate, fields, values):
 
 
 @contextmanager
+def directory_import_connection(database):
+    """Run snapshot comparison and all derived writes in one isolated transaction."""
+    with database.connection() as connection:
+        if database.database_url:
+            with connection.transaction():
+                connection.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                yield connection
+        else:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+
+
+@contextmanager
 def directory_transaction(database, actor_id):
     """Existing directory services share one connection and one commit."""
     with database.connection() as connection:

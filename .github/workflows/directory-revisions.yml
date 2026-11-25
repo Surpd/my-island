@@ -10,6 +10,9 @@ on:
       - 'backend/migrations/054_directory_revisions.sql'
       - 'backend/services/directory_revisions.py'
       - 'backend/services/journal_admin_matching.py'
+      - 'backend/services/google_sync_service.py'
+      - 'backend/services/teacher_directory*.py'
+      - 'backend/services/student_membership_apply.py'
       - 'backend/tests/test_journal_admin_matching.py'
       - 'backend/services/school_experiment_workspace.py'
       - 'backend/tests/test*directory*.py'
@@ -60,7 +63,8 @@ jobs:
         run: >-
           python -m unittest backend.tests.test_directory_revisions
           backend.tests.test_journal_admin_matching backend.tests.test_admin_console backend.tests.test_school_directory_api
-          backend.tests.test_school_directory_admin_projection -v
+          backend.tests.test_school_directory_admin_projection backend.tests.test_teacher_directory
+          backend.tests.test_teacher_directory_reconciliation backend.tests.test_school_group_archive -v
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
