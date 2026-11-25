@@ -2697,6 +2697,7 @@ def create_router(database: Database) -> APIRouter:
         journal_state = journal_data["mapping_state"] if journal_data else "not_applicable"
         schedule_data = {"state": (schedule or {}).get("status", "not_requested"),
                          "lesson_count": len((schedule or {}).get("items", [])),
+                         "publications": (schedule or {}).get("publications", [schedule["publication"]] if schedule and schedule.get("publication") else []),
                          "issues": (schedule or {}).get("issues", [])}
         journal = {"state": journal_state, "count": journal_data["current_result_count"], **journal_data} if journal_data else {"state": "not_applicable", "count": 0}
         settings = get_settings()
@@ -2860,7 +2861,8 @@ def create_router(database: Database) -> APIRouter:
         if not canonical_backend_enabled():
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "items": [], "issues": []}
         projection = project_teacher_range(database, user["identity_id"], start_day, end_day)
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "items": projection.get("items", []), "issues": projection.get("issues", [])}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "items": projection.get("items", []), "issues": projection.get("issues", []),
+                "publications": projection.get("publications", [projection["publication"]] if projection.get("publication") else [])}
 
     @router.api_route("/student/{preview_guard_path:path}", methods=["POST", "PUT", "PATCH", "DELETE"])
     @router.api_route("/teacher/{preview_guard_path:path}", methods=["POST", "PUT", "PATCH", "DELETE"])

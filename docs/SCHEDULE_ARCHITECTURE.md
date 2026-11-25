@@ -60,3 +60,19 @@ English partitions, OGE overlays, explicit residual activities, final
 `NO_LESSON`, moved/cancelled/replaced weekly slots, fail-closed unresolved
 routes, and duplicate student-slot detection. Tests that only compare one
 deprecated semantic engine with another are intentionally removed.
+
+### Контракт опубликованной недели (25 ноября 2026)
+
+`canonical_schedule.resolve_published_week(database, day)` принимает школьную календарную дату и возвращает редакцию для её понедельника. Поле `metadata` безопасно для ролевой выдачи. Внутренние `effective` и `source` предназначены для проекций и содержат служебные данные. В рамках одного вызова занятия читаются по выбранному неизменяемому `effective_week_id`.
+
+| origin | Что получает потребитель |
+|---|---|
+| manual_week | Назначенная недельная публикация. Проверяются неделя, базовая версия, архив и целостность сохранённого авторского источника при его наличии. revision — номер смены head. |
+| approved_materialization | Последняя по дате наблюдения утверждённая материализация для этого понедельника. revision — отпечаток overlay. Новая базовая версия или чужой черновик не скрывают утверждённую неделю. |
+| template_only | Доступен утверждённый шаблон. Недельной выдачи и строк для аналитики нет. |
+| missing | Утверждённая недельная редакция отсутствует. |
+| broken_head | Явное назначение повреждено. Персональная выдача и published preview пусты, status — broken_publication. |
+
+Поле coverage различает complete и partial по записям проверенного авторского источника. Для старых данных возможны with_exceptions и unknown. Поле publication_id относится к явной недельной публикации. Административный published-view возвращает объект publication, ролевые schedule API — массив publications. Авторизация и фильтрация персональных строк действуют до выдачи API. Условия публикации, записи БД и формат существующих полей сохраняются. Миграций нет.
+
+Регрессионные сценарии в `backend/tests/test_constructor_publication.py` проверяют выбор исторической версии, частичную публикацию, обе роли, расхождение с черновиком, обрыв каждой из двух ссылок head, смену шаблона и переход с декабря на январь. Две новые регрессии выполнены на SQLite.
