@@ -7,8 +7,8 @@ from typing import Any
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
-    PUBLISHED_STATUSES, _NO_LESSON, _assignments, _block_rows, _effective_week,
-    _week_start, display_room,
+    PUBLISHED_STATUSES, _NO_LESSON, _assignments, _block_rows,
+    _week_start, display_room, resolve_published_week,
 )
 
 
@@ -72,6 +72,7 @@ def teacher_load_analytics(database: Database, start_day: str, end_day: str | No
             "days": [],
             "activity_minutes": {},
             "items": [],
+            "coverage": projection.get("publications") or [],
         }
         day_values: set[str] = set()
         day_items: dict[str, list[dict[str, Any]]] = {}
@@ -144,7 +145,7 @@ def _batch_teacher_projections(database: Database, teacher_ids: list[str], start
         teacher_rows = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND id IN ({})".format(",".join("?" for _ in teacher_ids)), tuple(teacher_ids)).fetchall() if teacher_ids else []
     groups = {str(row["id"]): str(row["display_name"] or row["name"]) for row in group_rows}
     names = {str(row["id"]): str(row["display_name"]) for row in teacher_rows}
-    result = {teacher_id: {"status": "canonical_not_materialized", "items": []} for teacher_id in teacher_ids}
+    result = {teacher_id: {"status": "canonical_not_materialized", "items": [], "publications": [], "coverage": []} for teacher_id in teacher_ids}
     seen_weeks: set[str] = set()
     cursor = first
     while cursor <= last:
@@ -153,8 +154,11 @@ def _batch_teacher_projections(database: Database, teacher_ids: list[str], start
             cursor += timedelta(days=1)
             continue
         seen_weeks.add(week_start)
-        effective = _effective_week(database, None, week_start)
-        if effective and effective.get("canonical_status") in PUBLISHED_STATUSES:
+        publication = resolve_published_week(database, week_start)
+        for teacher_id in teacher_ids:
+            result[teacher_id]["publications"].append(dict(publication.metadata))
+        effective = publication.effective
+        if effective and publication.status in PUBLISHED_STATUSES:
             blocks = _block_rows(database, effective["effective_week_id"])
             per_teacher: dict[str, list[dict[str, Any]]] = {teacher_id: [] for teacher_id in teacher_ids}
             per_seen: dict[str, set[tuple[Any, ...]]] = {teacher_id: set() for teacher_id in teacher_ids}
@@ -197,7 +201,8 @@ def _batch_teacher_projections(database: Database, teacher_ids: list[str], start
                             per_joint[teacher_id][joint_key] = item
                         per_teacher[teacher_id].append(item)
             for teacher_id in teacher_ids:
-                result[teacher_id]["status"] = effective.get("canonical_status")
+                result[teacher_id]["status"] = publication.status
+                result[teacher_id]["coverage"].append(dict(publication.metadata))
                 result[teacher_id]["items"].extend(per_teacher[teacher_id])
         cursor += timedelta(days=1)
     return result
