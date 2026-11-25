@@ -12,10 +12,23 @@ jobs:
   layout:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: my_island_layout_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MY_ISLAND_LAYOUT_TEST_URL: postgresql://postgres@127.0.0.1:5432/my_island_layout_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
-      - run: python -m unittest backend.tests.test_personal_workspace -v
+      - run: |
+          psql "$MY_ISLAND_LAYOUT_TEST_URL" -v ON_ERROR_STOP=1 -c 'CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role; CREATE TABLE users(id uuid PRIMARY KEY)'
+          psql "$MY_ISLAND_LAYOUT_TEST_URL" -v ON_ERROR_STOP=1 -f backend/migrations/058_admin_widget_layouts.sql
+      - run: python -m unittest backend.tests.test_personal_workspace backend.tests.test_personal_workspace_postgres -v
