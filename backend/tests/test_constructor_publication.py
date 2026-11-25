@@ -1532,6 +1532,21 @@ class ConstructorPublicationTests(unittest.TestCase):
             self.assertTrue(all(r["state"] == "UNRESOLVED" or r["activity"] == "Math" for r in rows))
         self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-26")["items"][0]["activity"], "Math")
 
+    def test_operational_day_keeps_partial_publication_and_dated_deferred_record(self):
+        from datetime import date
+        from backend.services.operational_day import operational_day
+        draft = self.draft([self.lesson(), self.lesson(id="waiting", teacherId="missing", day=1)])
+        self.publish(draft)
+        week = self.publish(draft, "week", week_start="2026-10-26")
+        monday = operational_day(self.database, date(2026, 10, 26), "Europe/Moscow")
+        tuesday = operational_day(self.database, date(2026, 10, 27), "Europe/Moscow")
+        self.assertEqual(monday["publication"]["publication_id"], week["publication_id"])
+        self.assertEqual(tuesday["publication"]["coverage"], "partial")
+        self.assertEqual(monday["scheduled_count"], 1)
+        self.assertEqual(tuesday["scheduled_count"], 0)
+        self.assertEqual(tuesday["alerts"][0]["lesson_id"], "waiting")
+        self.assertIn("record=", tuesday["alerts"][0]["href"])
+
     def test_stale_saved_roster_is_withheld_from_student_schedule(self):
         from backend.services.schedule_experiments import save_experiment
         scoped = self.lesson(id="scoped", subject="Scoped", audience={"kind": "groups", "group_ids": [str(self.math["id"])]})
