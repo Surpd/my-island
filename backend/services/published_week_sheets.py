@@ -56,12 +56,34 @@ def enqueue(database, connection, week, publication_id):
 
 
 def _plan(database, job):
-    from backend.services.constructor_publication import get_published_source
-    archived = get_published_source(database, job["publication_id"])["published_source"]
+    from backend.services.canonical_schedule import _assignments, _block_rows, resolve_published_week
+    edition = resolve_published_week(database, job["week_start"])
+    if edition.metadata["publication_id"] != job["publication_id"] or edition.metadata["revision"] != job["head_revision"]:
+        raise DeliveryConflict("published_head_mismatch")
+    archived = edition.source
     if not archived:
         raise DeliveryConflict("missing_published_source")
     approved = {r["lesson_id"] for r in archived["records"] if r["status"] != "unresolved"}
-    payload = {**archived["payload"], "lessons": [l for l in archived["payload"]["lessons"] if str(l["id"]) in approved]}
+    authored = {str(lesson["id"]): lesson for lesson in archived["payload"]["lessons"]}
+    published = {}
+    for block in _block_rows(database, edition.effective["effective_week_id"]):
+        if block["change_kind"] == "cancelled":
+            continue
+        for assignment in _assignments(database, block["canonical_block_id"], block.get("patch")):
+            metadata = assignment.get("metadata") or {}
+            origin = metadata.get("constructor_lesson_id")
+            if origin not in approved or origin not in authored or origin in published:
+                raise DeliveryConflict("published_lesson_mapping_mismatch")
+            staff = [str(teacher) for teacher in assignment.get("teacher_ids") or []]
+            mode = metadata.get("day_plan_mode")
+            published[origin] = {**authored[origin], "day": block["weekday"],
+                                 "start": str(block["start_time"])[:5], "end": str(block["end_time"])[:5],
+                                 "teacherId": staff[0] if staff else "", "teacherIds": staff,
+                                 "room": "" if mode in {"online", "sdep"} else metadata.get("room") or "",
+                                 "responsible_teacher_ids": metadata.get("responsible_teacher_ids") or []}
+    if set(published) != approved:
+        raise DeliveryConflict("published_lesson_mapping_mismatch")
+    payload = {**archived["payload"], "lessons": [published[key] for key in authored if key in published]}
     if job["target_id"] != _target(payload.get("school_source")):
         raise DeliveryConflict("target_changed")
     source = {"draft_id": job["publication_id"], "name": "Опубликованная неделя", "revision": job["head_revision"]}
