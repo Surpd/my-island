@@ -1749,6 +1749,7 @@ def _changed_lesson_fields(before, after):
     previous, current = keyed(before), keyed(after)
     missing = object()
     changes = []
+    values = {}
     for key in sorted(previous.keys() | current.keys()):
         old, new = previous.get(key), current.get(key)
         if old == new:
@@ -1757,16 +1758,30 @@ def _changed_lesson_fields(before, after):
                         if (old or {}).get(name, missing) != (new or {}).get(name, missing))
         changes.append({"lesson_id": key, "operation": "added" if old is None else "removed" if new is None else "edited",
                         "fields": fields})
-    return changes
+        # Only numeric timetable coordinates can be retained as values.
+        coordinates = {}
+        for name, maximum in (("day", 7), ("weekday", 7), ("period", 99)):
+            if name not in fields:
+                continue
+            prior, following = (old or {}).get(name), (new or {}).get(name)
+            if all(v is None or (type(v) is int and 0 <= v <= maximum) for v in (prior, following)):
+                coordinates[name] = {"before": prior, "after": following}
+        if coordinates:
+            values[key] = coordinates
+    return changes, values
 
 
 def experiment_change_history(database, experiment_id, since_revision):
     with database.connection() as connection:
-        rows = database.execute(connection, """SELECT revision,actor_id,changed_at,changed_fields FROM directory_edit_history
+        rows = database.execute(connection, """SELECT revision,actor_id,changed_at,changed_fields,field_values FROM directory_edit_history
             WHERE entity_type='schedule_lessons' AND entity_id=? AND revision>? ORDER BY revision DESC LIMIT 100""",
             (experiment_id, since_revision)).fetchall()
-    return {"items": [{**dict(row), "changed_fields": json.loads(row["changed_fields"]) if isinstance(row["changed_fields"], str)
-                       else row["changed_fields"]} for row in rows]}
+    items = [dict(row) for row in rows]
+    for item in items:
+        for key in ("changed_fields", "field_values"):
+            if isinstance(item[key], str):
+                item[key] = json.loads(item[key])
+    return {"items": items}
 
 
 def _write_experiment_revision(database: Database, experiment_id: str, expected_revision: int,
@@ -1794,12 +1809,12 @@ def _write_experiment_revision(database: Database, experiment_id: str, expected_
                 WHERE id=? AND revision=? AND {archived} RETURNING *""",
                 (encoded, normalized_name, _draft_actor_id(database, actor_user_id), now, experiment_id, expected_revision)).fetchone()
             if row:
-                changes = _changed_lesson_fields(previous_payload, payload)
+                changes, values = _changed_lesson_fields(previous_payload, payload)
                 if changes:
                     database.execute(connection, f"""INSERT INTO directory_edit_history
-                        (entity_type,entity_id,revision,changed_fields,actor_id,changed_at)
-                        VALUES ('schedule_lessons',?,?,{encoded_sql},?,?)""",
-                        (experiment_id, row["revision"], json.dumps(changes, ensure_ascii=False),
+                        (entity_type,entity_id,revision,changed_fields,field_values,actor_id,changed_at)
+                        VALUES ('schedule_lessons',?,?,{encoded_sql},{encoded_sql},?,?)""",
+                        (experiment_id, row["revision"], json.dumps(changes, ensure_ascii=False), json.dumps(values),
                          str(actor_user_id) if actor_user_id is not None else None, now))
                 return _item(row)
             current = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
