@@ -95,7 +95,8 @@ def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: 
 def initialize_publication_schema(database: Any) -> None:
     """Explicit local fixture setup; production migrations must be approved."""
     with database.connection() as connection:
-        for statement in PUBLICATION_SCHEMA:
+        from backend.services.published_week_sheets import SCHEMA as sheet_schema
+        for statement in (*PUBLICATION_SCHEMA, *sheet_schema):
             database.execute(connection, statement)
 
 
@@ -1296,6 +1297,9 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
         if archived and (_hash(archived["payload"]) != archived["payload_fingerprint"] or
                          len(archived["records"]) != len(archived["payload"].get("lessons") or [])):
             raise RuntimeError("Published source integrity failed; transaction rolled back")
+        from backend.services.published_week_sheets import enabled, enqueue
+        if enabled() and preview["scope_kind"] == "week":
+            enqueue(database, connection, preview["week_start"], publication_id)
     return {"status": "published", "publication_id": publication_id, "scope_kind": preview["scope_kind"],
             "published_id": published_id, "previous_published_id": preview["previous_published_id"],
             "runtime_readback": readback_result, "deferred": preview["deferred"],
@@ -1425,10 +1429,22 @@ def list_publications(database: Any, draft_id: str | None = None) -> dict[str, A
                                 (draft_id,) if draft_id else ()).fetchall()
         heads = {row["scope_key"]: dict(row) for row in database.execute(connection,
             "SELECT * FROM schedule_publication_heads ORDER BY scope_key").fetchall()}
+        from backend.services.published_week_sheets import enabled
+        deliveries = {}
+        if rows and enabled():
+            ids = [r["id"] for r in rows]
+            params = ",".join("?" for _ in ids)
+            for job in database.execute(connection, f"""SELECT j.publication_id,j.state,j.attempts,j.error_code,
+                    j.head_revision,b.delivered_revision FROM published_week_sheet_jobs j
+                    JOIN published_week_sheet_bindings b USING(target_id,week_start)
+                    WHERE j.publication_id IN ({params})""", tuple(ids)).fetchall():
+                deliveries[job["publication_id"]] = dict(job)
     result = []
     for row in rows:
         item = dict(row)
         metadata = json.loads(item.pop("metadata"))
+        if item["id"] in deliveries:
+            item["sheet_delivery"] = deliveries[item["id"]]
         item["runtime_readback"] = metadata["runtime_readback"]
         item["restored_from"] = metadata.get("restored_from")
         item["diagnostics"] = metadata.get("preview", {}).get("diagnostics", [])

@@ -176,6 +176,21 @@ def create_constructor_publication_router(
         database, _ = admin(x_school_admin_session, preview_only=True)
         return call(list_publications, database, draft_id)
 
+    @router.post("/publication/{publication_id}/sheet-retry")
+    def retry_week_sheet(publication_id: str, x_school_admin_session: str | None = Header(default=None)):
+        from backend.services.published_week_sheets import enabled
+        database, _ = admin(x_school_admin_session)
+        if not enabled():
+            raise HTTPException(404, "Weekly Sheets delivery is disabled")
+        with database.connection() as connection:
+            row = database.execute(connection, """UPDATE published_week_sheet_jobs SET state='pending',next_attempt=0,error_code=NULL
+                WHERE publication_id=? AND state IN ('retry','blocked') AND EXISTS(
+                    SELECT 1 FROM schedule_publication_heads h WHERE h.scope_key='week:' || published_week_sheet_jobs.week_start
+                    AND h.revision=published_week_sheet_jobs.head_revision) RETURNING state""", (publication_id,)).fetchone()
+        if not row:
+            raise HTTPException(409, "Only a current failed delivery can be retried")
+        return {"state": row["state"]}
+
     @router.get("/publication/receipts/{operation_id}")
     def receipt(operation_id: str, x_school_admin_session: str | None = Header(default=None)):
         database, actor = admin(x_school_admin_session)
