@@ -92,9 +92,11 @@ def _plan(database, job):
         raise DeliveryConflict("target_changed")
     source = {"draft_id": job["publication_id"], "name": "Опубликованная неделя", "revision": job["head_revision"]}
     snapshot = freeze_week({"source": source, "payload": payload, **json.loads(job["directory_json"])}, job["week_start"])
-    return build_sheet_plan(snapshot, title="Неделя " + job["week_start"], sheet_id=job["sheet_id"],
-                           mapping_sheet_id=0, layout="school-grid",
-                           existing_notes={l["id"]: [l["note"]] for l in payload["lessons"] if l.get("note")})
+    plan = build_sheet_plan(snapshot, title="Неделя " + job["week_start"], sheet_id=job["sheet_id"],
+                            mapping_sheet_id=0, layout="school-grid",
+                            existing_notes={l["id"]: [l["note"]] for l in payload["lessons"] if l.get("note")})
+    return plan, (edition.metadata["effective_week_id"], edition.metadata["base_version_id"])
+
 
 
 def _contents(rows):
@@ -250,18 +252,19 @@ def deliver_one(database, client_factory, now=None):
             return False
     state, error, fingerprint = "delivered", None, None
     try:
-        def current():
+        def current(head=None):
+            predicate = " AND h.published_id=? AND h.version_id=?" if head else ""
             with database.connection() as conn:
-                return database.execute(conn, """SELECT 1 FROM schedule_publication_heads h JOIN published_week_sheet_jobs j
-                    ON h.scope_key=? AND h.revision=j.head_revision WHERE j.target_id=? AND j.publication_id=? AND j.lease_token=?""",
-                    ("week:" + job["week_start"], *key, token)).fetchone() is not None
+                return database.execute(conn, f"""SELECT 1 FROM schedule_publication_heads h JOIN published_week_sheet_jobs j
+                    ON h.scope_key=? AND h.revision=j.head_revision WHERE j.target_id=? AND j.publication_id=? AND j.lease_token=?
+                    {predicate}""", ("week:" + job["week_start"], *key, token, *(head or ()))).fetchone() is not None
         if current():
-            plan = _plan(database, job)
+            plan, head = _plan(database, job)
             client = client_factory()
             batch, fingerprint = _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client)
-            if batch and current():
+            if batch and current(head):
                 client.batch_update_spreadsheet(job["target_id"], batch)
-            if not current():
+            if not current(head):
                 state = "superseded"
             elif batch:
                 remaining, fingerprint = _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client)
