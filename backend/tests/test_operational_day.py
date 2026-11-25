@@ -90,6 +90,20 @@ class OperationalDayTests(TestCase):
         self.assertEqual({t["name"] for t in item["teachers"]}, {"Fixture Teacher A", "Fixture Teacher B"})
         self.assertEqual(item["lesson_ids"], ["a", "b"])
 
+    def test_cancelled_joint_segment_does_not_hide_remaining_scheduled_segment(self):
+        blocks = {key: block("09:00", "09:45") for key in ("a", "b")}
+        for item in blocks.values():
+            item["assignments"][0]["metadata"].update(joint_activity_id="synthetic-joint", audience_coverage="explicit")
+        canonical.import_canonical_artifact(self.db, {"version_id": "joint-cancel", "source_snapshot": {"id": "s", "fingerprint": "f"},
+                                           "blocks": blocks}, status="approved_baseline")
+        canonical.materialize_effective_week(self.db, "joint-cancel", MONDAY.isoformat(), [
+            {"block_key": "a", "change_kind": "cancelled"},
+        ])
+        report = operational_day(self.db, MONDAY, "Europe/Moscow")
+        self.assertEqual(report["scheduled_count"], 1)
+        self.assertEqual({item["change"]: item["block_keys"] for item in report["items"]},
+                         {"cancelled": ["a"], "unchanged": ["b"]})
+
     def test_admin_link_is_scoped_to_edition_and_role_and_handles_source_failure(self):
         self.materialize()
         admin = self.db.get_or_create_user(901001, "admin")

@@ -41,7 +41,7 @@ def _occurrence(assignment, block, index):
     responsible = sorted({str(x) for x in meta.get("responsible_teacher_ids") or []})
     joint = meta.get("joint_activity_id") if meta.get("audience_coverage") == "explicit" else None
     origin = meta.get("constructor_lesson_id")
-    key = _record_id("joint", joint, start, end) if joint else _record_id("assignment", block["block_key"], origin or index)
+    key = _record_id("joint", joint, start, end, "cancelled" if block.get("change_kind") == "cancelled" else "scheduled") if joint else _record_id("assignment", block["block_key"], origin or index)
     return {"id": key, "activity": activity, "activity_type": kind, "delivery_mode": mode,
             "teacher_ids": teachers, "responsible_teacher_ids": responsible,
             "group_ids": group_ids, "grade_scope": str(block.get("grade_scope") or "") or None,
