@@ -218,7 +218,8 @@ class PublishedWeekSheetsTests(TestCase):
         plan, _ = delivery._plan(self.database, job)
         requests, signature = delivery._batch(job, plan, self.client.weekly_spreadsheet(job["target_id"]), self.client)
         self.assertIsNone(signature)
-        self.assertEqual([next(iter(item)) for item in requests], ["deleteNamedRange", "addNamedRange"])
+        self.assertEqual([next(iter(item)) for item in requests],
+                         ["updateNamedRange", "deleteNamedRange", "addNamedRange"])
         marker["name"] = marker["name"].replace("_R1_", "_R0_")
         with self.assertRaisesRegex(delivery.DeliveryConflict, "unverified_legacy_layout"):
             delivery._batch(job, plan, self.client.weekly_spreadsheet(job["target_id"]), self.client)
