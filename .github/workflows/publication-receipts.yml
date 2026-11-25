@@ -7,6 +7,8 @@ on:
       - 'backend/tests/test_constructor_publication.py'
       - 'components/constructor-publication-panel.tsx'
       - 'e2e/constructor-publication.spec.ts'
+      - 'e2e/rev45-ui-screenshot.spec.ts'
+      - 'e2e/template-selection-dialog.spec.ts'
       - '.github/workflows/publication-receipts.yml'
 permissions:
   contents: read
@@ -30,3 +32,4 @@ jobs:
       - run: npx --no-install tsc --noEmit
       - run: npx --no-install playwright install --with-deps chromium
       - run: npx --no-install playwright test e2e/constructor-publication.spec.ts -g 'recovers a committed publication|reopening after reload|a missing receipt|changing publication scope|checking the whole draft'
+      - run: npx --no-install playwright test e2e/rev45-ui-screenshot.spec.ts e2e/template-selection-dialog.spec.ts
