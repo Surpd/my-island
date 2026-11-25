@@ -8,7 +8,9 @@ on:
       - 'backend/tests/test_canonical_schedule.py'
       - 'backend/tests/test_constructor_publication.py'
       - 'backend/services/teacher_load_analytics.py'
+      - 'backend/services/class_load_analytics.py'
       - 'backend/tests/test_admin_previews.py'
+      - 'backend/tests/test_canonical_schedule.py'
       - '.github/workflows/published-week.yml'
 permissions:
   contents: read

@@ -286,6 +286,27 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(group["scheduled_minutes"], 45)
         self.assertEqual(group["lesson_count"], 1)
 
+    def test_class_load_reports_trajectory_and_merges_overlapping_windows(self):
+        artifact = self.artifact()
+        artifact["blocks"][self.block_key]["assignments"][0]["teacher_ids"] = [str(self.teacher["id"])]
+        artifact["blocks"][self.block_key]["assignments"][0]["activity"] = "Первая часть"
+        artifact["blocks"]["2026-09-07|1|09:15|9A"] = {
+            "weekday": 0, "slot": {"start": "09:15", "end": "10:00"}, "grade_scope": "9",
+            "status": "resolved", "mode": "SINGLE", "assignments": [{
+                "activity": "Вторая часть", "role": "primary",
+                "audience": {"type": "canonical_groups", "canonical_group_ids": [str(self.math_group["id"])]},
+                "teacher_ids": [str(self.teacher["id"])], "source_cells": ["C3"],
+            }],
+        }
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        result = class_load_analytics(self.database, "2026-09-07", group_type="instructional")
+        group = next(item for item in result["groups"] if item["group_id"] == str(self.math_group["id"]))
+        self.assertEqual(group["trajectory"], "")
+        self.assertEqual(group["scheduled_minutes"], 60)
+        self.assertEqual(group["day_summaries"][0]["window_minutes"], 60)
+        self.assertEqual(group["day_summaries"][0]["gap_minutes"], 0)
+
     def test_teacher_range_accumulates_published_weeks_and_skips_unmaterialized_week(self):
         for version_id, week_start, activity in (
             ("teacher-range-september", "2026-09-28", "September lesson"),

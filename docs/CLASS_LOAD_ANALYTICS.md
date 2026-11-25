@@ -18,4 +18,10 @@ returned.
 Acceptance: a class with two teachers has one 45-minute interval; separate
 groups in a joint activity each retain their own audience bucket; sparse and
 historical ranges remain date-bounded; unknown time values are reported rather
-than silently treated as zero.
+than silently treated as zero. The implementation now exposes trajectory
+dimensions, group-type/trajectory filters, daily first/last interval windows,
+occupied minutes, and gap minutes computed from a union of overlapping
+intervals. This avoids the audit's false-window failure mode. A remaining
+scale risk is one canonical projection per active teacher; a future measured
+batch resolver should replace that fan-out before very large schools are
+enabled.
