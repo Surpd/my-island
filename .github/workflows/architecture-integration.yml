@@ -124,3 +124,33 @@ jobs:
           python -m unittest backend.tests.test_publication_partial_postgres
           backend.tests.test_journal_import_postgres backend.tests.test_journal_current_period_postgres
           backend.tests.test_codex_diagnostic_budget_postgres -v
+  school-browser:
+    if: github.head_ref == 'codex/architecture-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Verify retired routes and edits in the synthetic school profile
+        env:
+          MY_ISLAND_CONSOLIDATION_E2E: '1'
+        shell: bash
+        run: |
+          python scripts/schedule-regression/local_harness.py --seed-only
+          python scripts/schedule-regression/local_harness.py --reuse > "$RUNNER_TEMP/my-island-school-api.log" 2>&1 &
+          api_pid=$!
+          node scripts/schedule-regression/frontend.mjs > "$RUNNER_TEMP/my-island-school-web.log" 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true' EXIT
+          curl --silent --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8041/health >/dev/null
+          curl --silent --fail --retry 30 --retry-connrefused --retry-delay 2 http://localhost:3041/ >/dev/null
+          npx --no-install playwright test -c scripts/schedule-regression/playwright.config.mjs
