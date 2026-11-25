@@ -1531,7 +1531,7 @@ def create_router(database: Database) -> APIRouter:
         if start and end and start > end:
             raise HTTPException(status_code=422, detail="Некорректный диапазон дат")
         detail = database.journal_detail(source_id, group_marker)
-        if not detail or (group_marker and group_marker not in detail["groups"]):
+        if not detail or detail["source"]["excluded_from_journals"] or (group_marker and group_marker not in detail["groups"]):
             raise HTTPException(status_code=404, detail="Журнал или группа не найдены")
         return journal_analytics(detail, start, end)
 
