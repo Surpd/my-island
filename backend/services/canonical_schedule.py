@@ -2127,16 +2127,17 @@ def project_student_range(database: Database, identity_id: Any, start_day: str, 
         if week not in projections:
             projections[week] = project_student(database, identity_id, week)
         cursor += timedelta(days=1)
-    approved = {"approved_baseline", "approved_with_exceptions", "authoritative"}
-    items = [item for projection in projections.values() if projection["status"] in approved
-             for item in projection["items"] if start_day <= str(item.get("date")) <= finish]
-    day_modes = [item for projection in projections.values() if projection["status"] in approved
-                 for item in projection.get("day_modes", []) if start_day <= str(item.get("date")) <= finish]
-    optional_activities = [item for projection in projections.values() if projection["status"] in approved
-                           for item in projection.get("optional_activities", []) if start_day <= str(item.get("date")) <= finish]
-    issues = [issue for projection in projections.values() if projection["status"] in approved for issue in projection["issues"]]
+    visible = [projection for projection in projections.values() if projection["status"] in PUBLISHED_STATUSES]
+    items = [item for projection in visible for item in projection["items"]
+             if start_day <= str(item.get("date")) <= finish]
+    day_modes = [item for projection in visible for item in projection.get("day_modes", [])
+                 if start_day <= str(item.get("date")) <= finish]
+    optional_activities = [item for projection in visible for item in projection.get("optional_activities", [])
+                           if start_day <= str(item.get("date")) <= finish]
+    issues = [issue for projection in visible for issue in projection["issues"]
+              if not issue.get("date") or start_day <= str(issue["date"]) <= finish]
     statuses = [projection["status"] for projection in projections.values()]
-    status = next((item for item in statuses if item not in approved), statuses[0] if statuses else "canonical_not_materialized")
+    status = visible[0]["status"] if visible else (statuses[0] if statuses else "canonical_not_materialized")
     if status in {"draft", "superseded"}:
         status = "not_published"
     return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities,
