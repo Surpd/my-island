@@ -1,6 +1,7 @@
 /* oxlint-disable */
 'use client';
 
+import { ArchitectureCheck } from '../../components/architecture-check';
 import { selectSchoolAdminSession } from '../../components/admin-session';
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import dynamic from 'next/dynamic';
@@ -468,6 +469,10 @@ function ResponsiveSchedule({ request = api, diagnostic = false }: { request?: A
 
 function AppContent({ path, navigate, diagnostic = false }: { path: string; navigate: (href: string) => void; diagnostic?: boolean }) {
   const request = diagnostic ? diagnosticApi : api;
+  if (!diagnostic && localDevAuth() && path === '/admin/architecture-check'
+      && runtimeEnv.VITE_ARCHITECTURE_CHECK === 'true') {
+    return <ArchitectureCheck request={api} />;
+  }
   const directoryRequest = diagnostic ? diagnosticApi : schoolMode ? schoolApi : api;
   const directorySchoolMode = diagnostic || schoolMode;
   if (diagnostic && path === '/admin/schedule/published') return <ResponsiveSchedule request={request} diagnostic />;

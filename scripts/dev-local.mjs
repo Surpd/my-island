@@ -67,6 +67,7 @@ const localEnv = {
   MY_ISLAND_SCHOOL_WORKSPACE: schoolMode ? '1' : '',
   MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE: schoolMode ? '1' : '',
   VITE_API_BASE_URL: `http://127.0.0.1:${schoolMode ? 8000 : testApiPort}`,
+  VITE_ARCHITECTURE_CHECK: testProfile === 'e2e' ? 'true' : '',
   VITE_SCHOOL_DIRECTORY_MODE: schoolMode ? 'school' : 'demo',
   VITE_DATA_SOURCE_LABEL: schoolMode ? 'Школьная база · Supabase' : 'Тестовая база · SQLite',
   VITE_READ_ONLY_SCHOOL_WORKSPACE: schoolMode ? 'true' : 'false',
