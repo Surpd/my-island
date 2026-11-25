@@ -2299,9 +2299,13 @@ def project_teacher_range(database: Database, identity_id: Any, start_day: str, 
     })
     # Keep publication metadata added by the single-week projection.  Older
     # projections do not expose it, so absence remains backward compatible.
-    if any("publications" in value for value in projections.values()):
-        result["publications"] = [publication for value in projections.values()
-                                   for publication in (value.get("publications") or [])]
+    if any("publication" in value or "publications" in value for value in projections.values()):
+        publications = []
+        for value in projections.values():
+            if value.get("publication") is not None:
+                publications.append(value["publication"])
+            publications.extend(value.get("publications") or [])
+        result["publications"] = publications
     return result
 
 
