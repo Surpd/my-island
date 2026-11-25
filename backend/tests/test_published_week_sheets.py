@@ -138,7 +138,7 @@ class PublishedWeekSheetsTests(TestCase):
         self.tick()
         second = self.release("Second")
         job = self.job(second)
-        delayed, _ = delivery._batch(job, delivery._plan(self.database, job), self.client.weekly_spreadsheet(job["target_id"]), self.client)
+        delayed, _ = delivery._batch(job, delivery._plan(self.database, job)[0], self.client.weekly_spreadsheet(job["target_id"]), self.client)
         third = self.release("Third")
         self.tick()
         self.assertEqual(self.job(second)["state"], "superseded")
@@ -196,7 +196,7 @@ class PublishedWeekSheetsTests(TestCase):
         marker = self.client.markers[0]
         sha = delivery._contents(self.client.rows[sid])
         marker["name"] = marker["name"].split("_V2_")[0] + "_" + sha
-        plan = delivery._plan(self.database, job)
+        plan, _ = delivery._plan(self.database, job)
         requests, signature = delivery._batch(job, plan, self.client.weekly_spreadsheet(job["target_id"]), self.client)
         self.assertIsNone(signature)
         self.assertEqual([next(iter(item)) for item in requests], ["deleteNamedRange", "addNamedRange"])
@@ -254,6 +254,22 @@ class PublishedWeekSheetsTests(TestCase):
         self.tick()
         self.assertEqual(self.job(first)["error_code"], "published_head_mismatch")
         self.assertEqual(self.client.history, [])
+    def test_head_retargeted_at_same_revision_is_rechecked_before_remote_write(self):
+        first = self.start()
+        original = self.client.weekly_spreadsheet
+
+        def detach_target(target):
+            book = original(target)
+            with self.database.connection() as conn:
+                conn.execute("UPDATE schedule_publication_heads SET published_id='broken-during-delivery' WHERE scope_key=?",
+                             ("week:" + self.week,))
+            return book
+
+        with mock.patch.object(self.client, "weekly_spreadsheet", detach_target):
+            self.tick()
+        self.assertEqual(self.client.history, [])
+        self.assertEqual(self.job(first)["state"], "superseded")
+
     def test_smaller_week_clears_every_previous_managed_cell(self):
         self.start()
         wide = self.publish(self.draft([self.lesson(), self.lesson(id="extra", day=1, subject="Removed Tuesday")]),

@@ -29,8 +29,11 @@ class SheetLeasePostgresTests(TestCase):
             self.assertEqual(int(version)//10000, 17)
             # Tests own a dedicated database provisioned by the workflow.
             conn.execute("""CREATE TABLE IF NOT EXISTS schedule_publication_heads(
-                scope_key TEXT PRIMARY KEY, revision INTEGER NOT NULL)""")
-            conn.execute("INSERT INTO schedule_publication_heads VALUES(%s,1)", ("week:"+monday,))
+                scope_key TEXT PRIMARY KEY, revision INTEGER NOT NULL,
+                published_id TEXT NOT NULL, version_id TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            conn.execute("""INSERT INTO schedule_publication_heads(scope_key,revision,published_id,version_id,updated_at)
+                         VALUES(%s,1,%s,%s,'2026-12-28T00:00:00Z')""",
+                         ("week:"+monday, "released-fixture", "version-fixture"))
             conn.execute("INSERT INTO published_week_sheet_bindings(target_id,week_start,sheet_id,delivered_revision) VALUES(%s,%s,101,0)", (target,monday))
             conn.execute("""INSERT INTO published_week_sheet_jobs(target_id,publication_id,week_start,head_revision,directory_json,state)
                 VALUES(%s,%s,%s,1,'{}','working')""", (target,ident,monday))
@@ -45,7 +48,7 @@ class SheetLeasePostgresTests(TestCase):
             entered.set()
             if not resume.wait(15):
                 raise RuntimeError("Test worker timed out")
-            return plan
+            return plan, ("released-fixture", "version-fixture")
         try:
             with ThreadPoolExecutor(max_workers=2) as pool, patch.object(delivery, "_plan", render):
                 self.assertFalse(delivery.deliver_one(db, lambda: remote, now=99))
