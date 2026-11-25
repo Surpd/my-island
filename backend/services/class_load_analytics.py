@@ -175,14 +175,29 @@ def class_load_analytics(database: Database, start_day: str, end_day: str | None
     # A specific existing group's empty interval is measurable in an approved
     # week. An unpublished range carries its coverage without a synthetic zero.
     candidates = set(items)
-    if group_id in groups and published and published == len(weeks) and not partial_weeks and not unknown_audience:
+    if group_id in groups:
         candidates.add(group_id)
     for gid in candidates:
         group = groups[gid]
         path = "/".join(str(group[k]) for k in ("base_class_name","subject","subject_subgroup","exam_track") if group[k])
         if (group_id and gid != group_id) or (group_type and group["group_type"] != group_type) or (trajectory and trajectory != path):
             continue
-        result.append(_group_summary(group,path,items[gid].values(),pauses[gid]))
+        summary = _group_summary(group, path, items[gid].values(), pauses[gid])
+        coverage_status = ("unavailable" if not published else "partial"
+                           if published < len(weeks) or partial_weeks or unknown_audience else "complete")
+        summary["coverage_status"] = coverage_status
+        summary["duration_coverage"] = "unavailable" if not published else "partial" if summary["unknown_duration_items"] else "complete"
+        for field in ("lesson_count", "scheduled_minutes", "assignment_minutes", "mean_lesson_minutes",
+                      "unknown_duration_items", "known_duration_count", "optional_lesson_count", "optional_minutes",
+                      "optional_unknown_duration_items", "activity_minutes", "format_minutes", "subject_minutes",
+                      "day_summaries", "days"):
+            incomplete_duration = (summary["duration_coverage"] == "partial" and field in
+                                   {"scheduled_minutes","assignment_minutes","mean_lesson_minutes","activity_minutes",
+                                    "format_minutes","subject_minutes","day_summaries"})
+            if coverage_status != "complete" or incomplete_duration or (field == "optional_minutes" and summary["optional_unknown_duration_items"]):
+                summary["observed_" + field] = summary[field] if published else None
+                summary[field] = None
+        result.append(summary)
     result.sort(key=lambda x: (str(x["group_name"]), x["group_id"]))
     return {"status": status, "source": "published_canonical_assignments",
             "start_day": first.isoformat(), "end_day": last.isoformat(), "groups": result,
