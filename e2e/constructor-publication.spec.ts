@@ -97,6 +97,10 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === '/api/admin/schedule/experiments/school/audience-preview') return route.fulfill({json:{lessons:{}}});
     if (path === '/api/admin/school/teacher-ui-colors') return route.fulfill({json:{items:[]}});
     if (path === '/api/admin/schedule/observability') return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [], canonical: { version_id: 'base-version-hidden-in-ui', status: 'authoritative' } } });
+    if (path === '/api/admin/schedule/constructor/publication/publication-fixture/sheet-retry' && route.request().method() === 'POST') {
+      historyItems = historyItems.map(item => ({...item, sheet_delivery: {state: 'pending'}}));
+      return route.fulfill({json: {state: 'pending'}});
+    }
     if (path.startsWith('/api/admin/schedule/activities')) return route.fulfill({ json: { items: [] } });
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}`) {
       const lessons = ['lesson-info', 'lesson-conflict', 'lesson-related', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
@@ -147,8 +151,20 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       const scope = publishPayload.scope_kind === 'week' ? 'week' : 'template';
       const publishedWeek = typeof publishPayload.week_start === 'string' ? publishPayload.week_start : '';
       const historyPreview = preview('history');
+      if (scope === 'week') {
+        historyItems = [{
+          id: 'publication-fixture', sheet_delivery: {state: 'retry'}, scope_kind: scope, scope_key: `week:${publishedWeek}`,
+          created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
+          runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
+          diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
+        }];
+        return route.fulfill({json: {status: 'published', operation_id: publishPayload.operation_id,
+          sheet_delivery_queued: true, published_id: PUBLISHED_ID, version_id: VERSION_ID,
+          created_at: '2026-10-27T09:15:00Z', week_start: publishedWeek, summary: historyItems[0].summary,
+          runtime_readback: { verified: true, block_count: 7, assignment_count: 4 }}});
+      }
       historyItems = [{
-        id: 'publication-fixture', scope_kind: scope, scope_key: scope === 'week' ? `week:${publishedWeek}` : 'template',
+        id: 'publication-fixture', scope_kind: scope, scope_key: 'template',
         created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
         runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
         diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
@@ -328,11 +344,16 @@ test('changing publication scope clears confirmation and publish uses the latest
   expect((await publishResponse).ok()).toBeTruthy();
   expect(getPublishPayload()).toMatchObject({ scope_kind: 'week', week_start: '2026-10-26', preview_token: 'ui-preview-token-2', confirmed: true });
   await expect(dialog.getByText(/Проверка после публикации пройдена/)).toBeVisible();
+  await expect(dialog.getByText(/Задание на выгрузку в Google Sheets создано/)).toBeVisible();
   await expect(dialog.getByRole('link', {name:'Открыть опубликованное расписание'})).toHaveAttribute('href', /week_start=2026-10-26/);
   await dialog.getByRole('button', { name: 'Закрыть проверку' }).click();
   await page.locator('.constructor-draft-menu > summary').click();
   await page.getByRole('button', { name: 'История публикаций', exact: true }).click();
   const history = page.getByRole('dialog', { name: 'История публикаций' });
+  await expect(history.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
+  await expect(history.getByText(/Google Sheets · ожидает повторной попытки/)).toBeVisible();
+  await history.getByRole('button', {name: 'Повторить выгрузку'}).click();
+  await expect(history.getByText(/Google Sheets · ожидает выгрузки/)).toBeVisible();
   await expect(history.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
 });
 

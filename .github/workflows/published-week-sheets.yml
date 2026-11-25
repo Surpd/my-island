@@ -1,0 +1,39 @@
+name: Published week Sheets delivery
+on:
+  pull_request:
+    paths:
+      - 'backend/services/published_week_sheets.py'
+      - 'backend/services/constructor_publication.py'
+      - 'backend/services/google_live.py'
+      - 'backend/tests/test_published_week_sheets*.py'
+      - 'backend/migrations/056_published_week_sheets.sql'
+      - 'components/constructor-publication-panel.tsx'
+      - '.github/workflows/published-week-sheets.yml'
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: my_island_weekly_sheets_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - '127.0.0.1:55459:5432'
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      WEEK_SHEETS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:55459/my_island_weekly_sheets_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: |
+          psql "$WEEK_SHEETS_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c 'CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;'
+          psql "$WEEK_SHEETS_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/migrations/056_published_week_sheets.sql
+      - run: python -m unittest backend.tests.test_published_week_sheets backend.tests.test_published_week_sheets_postgres backend.tests.test_schedule_sheet_publishing -v

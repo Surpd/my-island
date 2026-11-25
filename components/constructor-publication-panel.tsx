@@ -83,7 +83,12 @@ type Diagnostic = {
 type Deferred = {lesson_id:string;reason:string;block_key?:string;exclusion_scope?:'direct'|'cascade';cause_codes?:string[];cause_lesson_ids?:string[];action:'excluded'|'preserved_base'|'unknown'|'retained_unresolved';context?:LessonContext};
 type Summary = {source_lessons?:number;resolved_lessons?:number;unresolved_lessons?:number;acknowledged_exceptions?:number;campus_lessons?:number;main_campus_cards?:number;elective_blocks?:number;elective_lanes?:number;clubs_hidden?:number;unresolved_personal_assignments?:number;non_blocking_warnings?:number;admin_only_lessons?:number;with_remarks_lessons?:number;diagnostic_events?:number;conflict_lessons?:number;affected_students?:number;day_mode_issues?:number;direct_exclusions?:number;cascade_exclusions?:number;ready_lessons:number;deferred_lessons:number;deferred_blocks:number;unchanged_lessons:number;replaced_lessons:number;info_count:number;conflict_count:number;critical_count:number};
 type Preview = {published_source?:{records?:DeliveryRecord[];elective_delivery_records?:DeliveryRecord[]};preview_token:string;can_publish:boolean;publication_available?:boolean;read_only?:boolean;base_version_id?:string|null;head_revision:number;blockers:Omit<Diagnostic,'severity'>[];deferred:Deferred[];diagnostics?:Diagnostic[];summary?:Summary;source_kind?:'template_week'|'authored_week'|'template';diff:{added:number;changed:number;removed:number;before_blocks:number;after_blocks:number};change_items?:{block_key:string;operation:string;before:SemanticBlock|null;after:SemanticBlock|null}[]};
-type Publication = {id:string;scope_kind:string;scope_key:string;created_at:string;published_id:string;version_id?:string;runtime_readback:{verified:boolean;block_count:number};restored_from?:string;summary?:Partial<Summary>;diagnostics?:Diagnostic[];deferred?:Deferred[];preview?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};preview_metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]}};
+type SheetDeliveryState = 'pending' | 'working' | 'retry' | 'blocked' | 'delivered' | 'superseded';
+const sheetDeliveryLabels: Record<SheetDeliveryState, string> = {
+  pending: 'ожидает выгрузки', working: 'выгружается', retry: 'ожидает повторной попытки',
+  blocked: 'требует проверки вкладки', delivered: 'выгружено', superseded: 'заменено новой редакцией',
+};
+type Publication = {id:string;sheet_delivery?: {state:SheetDeliveryState};scope_kind:string;scope_key:string;created_at:string;published_id:string;version_id?:string;runtime_readback:{verified:boolean;block_count:number};restored_from?:string;summary?:Partial<Summary>;diagnostics?:Diagnostic[];deferred?:Deferred[];preview?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]};preview_metadata?:{diagnostics?:Diagnostic[];summary?:Partial<Summary>;deferred?:Deferred[]}};
 type History = {items:Publication[];heads?:Record<string,{revision:number}>};
 
 export type ConstructorReviewLesson = {
@@ -399,6 +404,14 @@ export function ConstructorPublicationPanel({
     setSessionExpired((error as ApiError | null)?.status === 401);
   };
   const loadHistory = () => api<History>(`${prefix}/publications`).then(setHistory);
+  const retrySheet = async (publicationId: string) => {
+    setBusy(true);
+    try {
+      await api(`/api/admin/schedule/constructor/publication/${encodeURIComponent(publicationId)}/sheet-retry`, {method: 'POST'});
+      await loadHistory();
+    } catch (error) { showError(error); }
+    finally { setBusy(false); }
+  };
   useEffect(() => {
     if (!historyOnly) return;
     const controller = new AbortController();
@@ -878,7 +891,7 @@ export function ConstructorPublicationPanel({
       const where=result.week_start?` · неделя с ${result.week_start}`:scope==='week'?` · неделя с ${week}`:' · школьный шаблон';
       const resultSummary={...emptySummary,...(result.summary||activePreview.summary)};
       const totals=`В Campus доступны ${resultSummary.campus_lessons??resultSummary.ready_lessons} занятий. Требуют уточнения ${resultSummary.admin_only_lessons??resultSummary.deferred_lessons} записей.`;
-      setMessage(`Опубликовано${where} (${publishedWhen}). ${totals} ${result.runtime_readback.verified ? 'Проверка после публикации пройдена.' : 'Проверка после публикации ещё не пройдена.'}`);
+      setMessage(`Опубликовано${where} (${publishedWhen}). ${totals} ${result.runtime_readback.verified ? 'Проверка после публикации пройдена.' : 'Проверка после публикации ещё не пройдена.'}${'sheet_delivery_queued' in result && result.sheet_delivery_queued ? ' Задание на выгрузку в Google Sheets создано. Статус доступен в истории публикаций.' : ''}`);
       setPublished(true);setPreview(null);setConfirmed(false);await onPublished();
     } catch(error){showError(error);if ((error as ApiError)?.status === 409) {setPreview(null);setConfirmed(false);}}finally{setBusy(false);}
   };
@@ -1201,6 +1214,14 @@ export function ConstructorPublicationPanel({
         </nav> : null}
     {restore ? <section aria-label="Проверка восстановления"><h3>Восстановление отдельной новой версией</h3><p>Версия от {new Date(restore.publication.created_at).toLocaleString('ru-RU')}. Добавить: {restore.preview.diff.added}; изменить: {restore.preview.diff.changed}; удалить: {restore.preview.diff.removed}.</p>{restore.preview.blockers.map((item,index)=><p key={index} role="alert">{item.message}</p>)}<label className="constructor-publication-confirm"><input type="checkbox" checked={restoreConfirmed} onChange={event=>setRestoreConfirmed(event.target.checked)}/>Подтверждаю замену текущей публикации новой восстановленной версией.</label><button disabled={busy||!storageKey||Boolean(pendingCommand)||!restore.preview.can_restore||!restoreConfirmed} onClick={()=>void confirmRestore()}>Подтвердить восстановление</button><button disabled={busy} onClick={()=>setRestore(null)}>Отмена</button></section> : null}
     {historyOnly ? <ReviewDisclosure title="Журнал публикаций этого черновика" count={history.items.length} initiallyOpen>{historyPending ? <output>Загружаем публикации…</output> : !history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><ReviewDisclosure title="Сведения о проверке" secondary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnosticText(diagnostic).title}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</ReviewDisclosure><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{!readOnly && !dirty && history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</ReviewDisclosure> : null}
+    {historyOnly && history.items.some(item => item.sheet_delivery) ? <section aria-label="Выгрузка в Google Sheets">
+      {history.items.map(item => item.sheet_delivery ? <p key={item.id}>
+        Google Sheets · {sheetDeliveryLabels[item.sheet_delivery.state]} · версия {item.published_id}
+        <button disabled={busy} onClick={()=>void loadHistory().catch(showError)}>Обновить статус</button>
+        {!readOnly && ['retry','blocked'].includes(item.sheet_delivery.state)
+          ? <button disabled={busy} onClick={()=>void retrySheet(item.id)}>Повторить выгрузку</button> : null}
+      </p> : null)}
+    </section> : null}
     </div>
     <footer>
       <button type="button" disabled={busy} onClick={close}>К конструктору</button>

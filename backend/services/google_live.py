@@ -250,6 +250,10 @@ class GoogleLiveClient:
             {"fields": "spreadsheetId,properties.title,sheets(properties,merges)"},
         )
 
+    def weekly_spreadsheet(self, spreadsheet_id: str) -> dict[str, Any]:
+        return self.get("https://sheets.googleapis.com/", f"v4/spreadsheets/{quote(spreadsheet_id, safe='')}",
+                        {"fields": "spreadsheetId,sheets(properties(sheetId,title,gridProperties)),namedRanges"})
+
     def sheet_grid_range(self, spreadsheet_id: str, title: str, a1_range: str = "A1:V200") -> dict[str, Any]:
         escaped = title.replace("'", "''")
         return self.get(
