@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
@@ -239,6 +240,62 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         materialize_effective_week(self.database, self.version_id, "2026-09-07")
         teacher_projection = project_teacher_range(self.database, self.teacher["id"], "2026-09-09", "2026-09-09")
         self.assertEqual(teacher_projection["items"], [])
+
+    def test_teacher_range_accumulates_published_weeks_and_skips_unmaterialized_week(self):
+        for version_id, week_start, activity in (
+            ("teacher-range-september", "2026-09-28", "September lesson"),
+            ("teacher-range-october", "2026-10-12", "October lesson"),
+        ):
+            artifact = self.artifact()
+            artifact["version_id"] = version_id
+            artifact["source_snapshot"] = {"id": version_id + "-snapshot", "fingerprint": version_id + "-fingerprint"}
+            artifact["blocks"][self.block_key]["assignments"][0]["activity"] = activity
+            import_canonical_artifact(self.database, artifact)
+            materialize_effective_week(self.database, version_id, week_start)
+
+        result = project_teacher_range(self.database, self.teacher["id"], "2026-09-28", "2026-10-18")
+        self.assertEqual(result["status"], "approved_baseline")
+        self.assertEqual(
+            {(item["date"], item["activity"]) for item in result["items"]},
+            {("2026-09-28", "September lesson"), ("2026-10-12", "October lesson")},
+        )
+
+    def test_teacher_range_supports_month_and_year_boundary_and_exact_date_filter(self):
+        for version_id, week_start, activity in (
+            ("teacher-range-december", "2026-12-28", "Year end lesson"),
+            ("teacher-range-january", "2027-01-04", "Year start lesson"),
+        ):
+            artifact = self.artifact()
+            artifact["version_id"] = version_id
+            artifact["source_snapshot"] = {"id": version_id + "-snapshot", "fingerprint": version_id + "-fingerprint"}
+            artifact["blocks"][self.block_key]["assignments"][0]["activity"] = activity
+            import_canonical_artifact(self.database, artifact)
+            materialize_effective_week(self.database, version_id, week_start)
+
+        result = project_teacher_range(self.database, self.teacher["id"], "2026-12-31", "2027-01-05")
+        self.assertEqual([item["date"] for item in result["items"]], ["2027-01-04"])
+        self.assertEqual(result["items"][0]["activity"], "Year start lesson")
+
+    def test_teacher_range_preserves_single_and_plural_publication_metadata(self):
+        projections = [
+            {"status": "approved_baseline", "publication": {"id": "pub-1"}, "items": [], "issues": [], "day_modes": []},
+            {"status": "approved_baseline", "publication": {"id": "pub-2"}, "items": [], "issues": [], "day_modes": []},
+        ]
+        with patch("backend.services.canonical_schedule.project_teacher", side_effect=projections):
+            result = project_teacher_range(self.database, self.teacher["id"], "2026-09-07", "2026-09-14")
+        self.assertEqual(result["publication"], {"id": "pub-1"})
+        self.assertEqual(result["publications"], [{"id": "pub-1"}, {"id": "pub-2"}])
+
+    def test_teacher_range_keeps_visible_weeks_when_draft_is_in_the_middle(self):
+        projections = [
+            {"status": "approved_baseline", "items": [{"date": "2026-09-07"}], "issues": [], "day_modes": []},
+            {"status": "draft", "items": [{"date": "2026-09-14"}], "issues": [], "day_modes": []},
+            {"status": "approved_with_exceptions", "items": [{"date": "2026-09-21"}], "issues": [], "day_modes": []},
+        ]
+        with patch("backend.services.canonical_schedule.project_teacher", side_effect=projections):
+            result = project_teacher_range(self.database, self.teacher["id"], "2026-09-07", "2026-09-27")
+        self.assertEqual(result["status"], "approved_baseline")
+        self.assertEqual([item["date"] for item in result["items"]], ["2026-09-07", "2026-09-21"])
 
     def test_legacy_club_keeps_staffing_and_is_hidden_from_students(self):
         artifact = self.artifact()
