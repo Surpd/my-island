@@ -159,3 +159,46 @@ class PublishedWeekSheetsTests(TestCase):
         self.tick(300)
         self.assertEqual(self.job(third)["error_code"], "ownership_mismatch")
         self.assertEqual(len(self.client.history), 1)
+
+    def test_broken_publication_pointer_prevents_delivery(self):
+        first = self.start()
+        with self.database.connection() as conn:
+            conn.execute("UPDATE schedule_publication_heads SET published_id='missing' WHERE scope_key=?", ("week:" + self.week,))
+        self.tick()
+        self.assertEqual(self.job(first)["error_code"], "published_head_mismatch")
+        self.assertEqual(self.client.history, [])
+    def test_smaller_week_clears_every_previous_managed_cell(self):
+        self.start()
+        wide = self.publish(self.draft([self.lesson(), self.lesson(id="extra", day=1, subject="Removed Tuesday")]),
+                            "week", week_start=self.week)
+        self.tick()
+        sid = self.job(wide)["sheet_id"]
+        self.assertIn("Removed Tuesday", str(self.client.rows[sid]))
+        self.release("Only Monday")
+        self.tick(120)
+        self.assertNotIn("Removed Tuesday", str(self.client.rows[sid]))
+        updates = [r["updateCells"] for r in self.client.history[-1] if "updateCells" in r]
+        self.assertTrue(any(r.get("range") and not r.get("rows") for r in updates))
+
+    def test_retry_endpoint_rechecks_school_admin_and_current_head(self):
+        from fastapi import FastAPI, HTTPException
+        from fastapi.testclient import TestClient
+        from backend.handlers.constructor_publication_api import create_constructor_publication_router
+        first = self.start()
+        self.client.fail_status = 503
+        self.tick()
+        def school_admin(value):
+            if value != "synthetic-school-admin":
+                raise HTTPException(403)
+            return {"id": "test-admin"}
+        app = FastAPI()
+        app.include_router(create_constructor_publication_router(lambda: (self.database, self.database), school_admin))
+        http = TestClient(app)
+        path = f"/api/admin/schedule/constructor/publication/{first['publication_id']}/sheet-retry"
+        headers = {"X-School-Admin-Session": "synthetic-school-admin"}
+        with mock.patch.dict(os.environ, {"MY_ISLAND_CONSOLIDATED_SCHEDULE": "1"}):
+            self.assertEqual(http.post(path).status_code, 403)
+            self.assertEqual(http.post(path, headers=headers).json(), {"state":"pending"})
+        self.release("Superseding edition")
+        with mock.patch.dict(os.environ, {"MY_ISLAND_CONSOLIDATED_SCHEDULE": "1"}):
+            self.assertEqual(http.post(path, headers=headers).status_code, 409)
