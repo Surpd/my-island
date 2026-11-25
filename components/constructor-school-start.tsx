@@ -5,6 +5,7 @@ import { ArrowRight, Ellipsis, X } from 'lucide-react';
 import { TemplateSelectionDialog } from './template-selection-dialog';
 import { formatLessonTimeRange } from './lesson-time';
 import { normalizeRoomDisplay } from './schedule-rooms';
+import { groupSelectionProblems, type SelectionProblem } from './template-selection-problems';
 import './constructor-school-start.css';
 
 export type SchoolDraftSummary = { id: string; name: string; revision: number; lesson_count: number; updated_at?: string; week_start?: string | null; is_primary_template?: boolean; selection_stale?: boolean; selected_revision?: number; has_publications?: boolean; archived_at?: string; has_active_laboratories?: boolean; can_delete?: boolean; draft_kind: string; base_version_id?: string | null; source_template?: { id?: string; revision?: number } | null };
@@ -22,7 +23,7 @@ type SelectionPreview = {
   removed: { id: string; subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; activity_type?: string; special_mark?: string; audience_kind?: string; audience_mode?: string; excluded_groups?: string[]; problems: string[] }[];
   changed: { id: string; before: { subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; problems: string[] }; after: { subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; problems: string[] }; changes: { field: string; label: string; impact: string; before: string | string[] | number | boolean | null; after: string | string[] | number | boolean | null; before_text?: string; after_text?: string }[] }[];
   settings_changes: { field: string; label: string; impact: string; before: string; after: string }[];
-  problems: { lesson_id: string; details: string[] }[];
+  problems: SelectionProblem[];
   has_semantic_changes: boolean;
   baseline_recovery_required?: boolean;
   baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: SelectionPreview['added']; problems: SelectionPreview['problems'] } | null;
@@ -61,8 +62,9 @@ function StartMenuAction({ children, disabled, risk, onClick }: { children: Reac
   }}>{children}</button>;
 }
 
-function TemplateComparison({ preview, onClose }: { preview: SelectionPreview; onClose: () => void }) {
+function TemplateComparison({ preview, onClose, onReview }: { preview: SelectionPreview; onClose: () => void; onReview: () => void }) {
   const lessonText = (lesson: SelectionPreview['added'][number]) => [lesson.subject, formatLessonTimeRange(lesson.start, lesson.end), lesson.groups.join(', '), lesson.teachers.join(', '), lesson.room && normalizeRoomDisplay(lesson.room)].filter(Boolean).join(' · ');
+  const { legacy: legacyMarkers, heuristic: heuristicMatches, missingBaseline, unknown } = groupSelectionProblems(preview.problems);
   return <dialog className="constructor-conflict-dialog constructor-week-history schedule-start-comparison" ref={node => { if (node && !node.open) node.showModal(); }} aria-labelledby="schedule-start-comparison-title" onCancel={onClose}>
     <header><h2 id="schedule-start-comparison-title">Сравнение шаблонов</h2><button aria-label="Закрыть сравнение" onClick={onClose}><X size={20} /></button></header>
     <div className="schedule-start-comparison-content">
@@ -76,7 +78,12 @@ function TemplateComparison({ preview, onClose }: { preview: SelectionPreview; o
         {preview.changed.length ? <details><summary>Изменённые занятия · {preview.changed.length}</summary><ul>{preview.changed.map(lesson => <li key={lesson.id}><strong>{lesson.after.subject} · {formatLessonTimeRange(lesson.after.start, lesson.after.end)}</strong><ul>{lesson.changes.map(change => <li key={change.field}>{change.label} — {change.before_text ?? compareValue(change.before)} → {change.after_text ?? compareValue(change.after)}</li>)}</ul></li>)}</ul></details> : null}
         {preview.settings_changes.length ? <details><summary>Изменения настроек · {preview.settings_changes.length}</summary><ul>{preview.settings_changes.map(item => <li key={item.field}>{item.label} — {item.before} → {item.after}</li>)}</ul></details> : null}
       </> : null}
-      {preview.problems.length ? <details><summary>Замечания · {preview.problems.length}</summary><ul>{preview.problems.map(item => <li key={item.lesson_id}>{item.details.join(' · ')}</li>)}</ul></details> : null}
+      {preview.problems.length ? <p className="schedule-start-muted">Это обзор перед выбором основной ревизии, а не актуальная проверка расписания. Реальные конфликты проверяются кнопкой «Проверить расписание» в конструкторе.</p> : null}
+      {legacyMarkers.length ? <details><summary>Старые пометки в карточках · {legacyMarkers.length}</summary><ul>{legacyMarkers.map((item, index) => <li key={`${item.lesson_id}:${index}`}>{item.details.join(' · ')}</li>)}</ul></details> : null}
+      {heuristicMatches.length ? <details><summary>Эвристические совпадения времени · {heuristicMatches.length}</summary><p>Совпали сохранённые группы или преподаватели. Здесь не пересчитываются составы, SDEP, онлайн и подтверждённые решения.</p><ul>{heuristicMatches.map((item, index) => <li key={`${item.lesson_id}:${index}`}>{item.details.join(' · ')}</li>)}</ul></details> : null}
+      {unknown.length ? <details><summary>Другие замечания · {unknown.length}</summary><p>Формат этих записей не распознан интерфейсом. Они оставлены отдельно и по-прежнему требуют просмотра.</p><ul>{unknown.map((item, index) => <li key={`${item.lesson_id}:unknown:${index}`}>{item.details.join(' · ')}</li>)}</ul></details> : null}
+      {missingBaseline.length ? <details><summary>Недоступная история · {missingBaseline.length}</summary><ul>{missingBaseline.map((item, index) => <li key={`${item.lesson_id}:baseline:${index}`}>{item.details.join(' · ')}</li>)}</ul></details> : null}
+      <button className="schedule-start-button" onClick={onReview}>Проверить расписание этой ревизии</button>
     </div>
   </dialog>;
 }
@@ -367,7 +374,11 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
       <div className="schedule-start-list">{archived.map(draftCard)}</div>
     </details> : null}
     {!readOnly ? <details className="schedule-start-secondary"><summary>Дополнительно</summary><button className="schedule-start-button" onClick={onCreateEmpty}>Создать пустое расписание</button></details> : null}
-    {comparisonPreview ? <TemplateComparison preview={comparisonPreview} onClose={() => {
+    {comparisonPreview ? <TemplateComparison preview={comparisonPreview} onReview={() => {
+      const id = comparisonPreview.candidate.id;
+      setComparisonPreview(null);
+      void onReview(id);
+    }} onClose={() => {
       setComparisonPreview(null);
       window.requestAnimationFrame(() => comparisonTrigger.current?.focus());
     }} /> : null}
@@ -383,6 +394,11 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
       onAcknowledgeProblems={setAcknowledgeProblems}
       onAcknowledgeBaseline={setAcknowledgeBaseline}
       onCancel={() => setSelectionPreview(null)}
+      onReview={() => {
+        const id = selectionPreview.candidate.id;
+        setSelectionPreview(null);
+        void onReview(id);
+      }}
       onConfirm={() => void confirmTemplateSelection()}
       onApproveBaseline={() => void approveLegacyBaseline()}
     /> : null}

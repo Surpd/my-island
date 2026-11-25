@@ -1,6 +1,7 @@
 'use client';
 
 import { X } from 'lucide-react';
+import { groupSelectionProblems, type SelectionProblem } from './template-selection-problems';
 
 type Lesson = { id: string; subject: string; start: string; end: string; groups: string[]; members: string[]; teachers: string[]; room: string; activity_type?: string; special_mark?: string; audience_kind?: string; audience_mode?: string; excluded_groups?: string[]; problems: string[] };
 type Change = { field: string; label: string; impact: string; before: string | string[] | number | boolean | null; after: string | string[] | number | boolean | null; before_text?: string; after_text?: string };
@@ -12,7 +13,7 @@ type Preview = {
   removed: Lesson[];
   changed: { id: string; before: Omit<Lesson, 'id'>; after: Omit<Lesson, 'id'>; changes: Change[] }[];
   settings_changes: { field: string; label: string; impact: string; before: string; after: string }[];
-  problems: { lesson_id: string; details: string[] }[];
+  problems: SelectionProblem[];
   has_semantic_changes: boolean;
   baseline_recovery_required?: boolean;
   baseline_recovery?: { draft_id: string; revision: number; payload_hash: string; missing_revision: number; missing_payload_hash: string; contents: Lesson[]; problems: { lesson_id: string; details: string[] }[] } | null;
@@ -22,18 +23,19 @@ const labels: Record<string, string> = { lesson: 'Урок', club: 'Клуб', e
 const valueText = (value: string | string[] | number | boolean | null) => Array.isArray(value) ? value.join(', ') || 'нет' : value === null || value === '' ? 'нет' : typeof value === 'boolean' ? value ? 'да' : 'нет' : String(value);
 const lessonTitle = (item: Lesson) => `${item.subject || 'Без названия'} · ${item.start || 'время не указано'}–${item.end || ''}`;
 
-export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, acknowledgeProblems, acknowledgeBaseline, onAcknowledgeProblems, onAcknowledgeBaseline, onCancel, onConfirm, onApproveBaseline }: {
+export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, acknowledgeProblems, acknowledgeBaseline, onAcknowledgeProblems, onAcknowledgeBaseline, onCancel, onReview, onConfirm, onApproveBaseline }: {
   preview: Preview; busy: boolean; readOnly: boolean; actionError?: string; acknowledgeProblems: boolean; acknowledgeBaseline: boolean;
   onAcknowledgeProblems: (value: boolean) => void; onAcknowledgeBaseline: (value: boolean) => void;
-  onCancel: () => void; onConfirm: () => void; onApproveBaseline: () => void;
+  onCancel: () => void; onReview: () => void; onConfirm: () => void; onApproveBaseline: () => void;
 }) {
   const recoveryRequired = Boolean(preview.baseline_recovery_required && preview.baseline_recovery);
-  const blockedReason = readOnly ? 'Недостаточно прав для подтверждения.' : recoveryRequired ? 'Предыдущая версия недоступна. Требуется отдельное утверждение новой базовой версии.' : preview.problems.length && !acknowledgeProblems ? 'Отметьте подтверждение проблем.' : '';
+  const { legacy: legacyMarkers, heuristic: heuristicMatches, missingBaseline, unknown } = groupSelectionProblems(preview.problems);
+  const blockedReason = readOnly ? 'Недостаточно прав для подтверждения.' : recoveryRequired ? 'Предыдущая версия недоступна. Требуется отдельное утверждение новой базовой версии.' : preview.problems.length && !acknowledgeProblems ? 'Отметьте, что просмотрели замечания.' : '';
   const changeList = (items: Lesson[], kind: string) => items.map(item => <article className="constructor-history-lesson" key={`${kind}-${item.id}`}>
     <strong>{kind} · {lessonTitle(item)}</strong>
     <p>Тип: {labels[item.activity_type || 'lesson'] || item.activity_type || 'урок'}{item.special_mark ? ` · ${labels[item.special_mark] || item.special_mark}` : ''} · группы: {item.groups.join(', ') || '—'} · участников: {item.members.length} · преподаватели: {item.teachers.join(', ') || '—'} · кабинет: {item.room || '—'}</p>
     {item.audience_mode || item.audience_kind ? <p>Охват: {item.audience_kind || 'не указан'}{item.audience_mode ? ` · режим ${item.audience_mode}` : ''}{item.excluded_groups?.length ? ` · исключены группы ${item.excluded_groups.join(', ')}` : ''}</p> : null}
-    {item.problems.length ? <p role="alert">Проблемы: {item.problems.join('; ')}</p> : null}
+    {item.problems.length ? <p role="alert">Сохранённые пометки: {item.problems.join('; ')}</p> : null}
   </article>);
 
   return <div className="constructor-conflict-backdrop">
@@ -45,10 +47,12 @@ export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, 
         <dl className="constructor-selection-summary" aria-label="Сводка изменений">
           <div><dt>Добавлено</dt><dd>{preview.added.length}</dd></div><div><dt>Удалено</dt><dd>{preview.removed.length}</dd></div>
           <div><dt>Изменено</dt><dd>{preview.changed.length}</dd></div><div><dt>Календарь</dt><dd>{preview.settings_changes.length}</dd></div>
-          <div><dt>Конфликты</dt><dd>{preview.problems.length}</dd></div>
+          <div><dt>Старые пометки</dt><dd>{legacyMarkers.length}</dd></div>
+          <div><dt>Совпадения для проверки</dt><dd>{heuristicMatches.length}</dd></div>
+          <div><dt>Другие замечания</dt><dd>{unknown.length + missingBaseline.length}</dd></div>
         </dl>
         <output id="template-selection-status" className={`constructor-selection-readiness${blockedReason ? ' is-blocked' : ''}`} aria-live="polite">
-          {recoveryRequired ? 'Нужно утвердить новую базовую версию' : preview.problems.length ? acknowledgeProblems ? 'Проблемы отмечены для подтверждения' : 'Требуется подтверждение проблем' : 'Можно подтвердить'}
+          {recoveryRequired ? 'Нужно утвердить новую базовую версию' : preview.problems.length ? acknowledgeProblems ? 'Замечания просмотрены' : 'Требуется просмотреть замечания' : 'Можно подтвердить'}
           {blockedReason ? <span>{blockedReason}</span> : null}
         </output>
         {actionError ? <p className="constructor-selection-action-error" role="alert">{actionError}</p> : null}
@@ -66,14 +70,19 @@ export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, 
           <ul>{item.changes.map(change => <li key={change.field}><strong>{change.label}:</strong> {change.before_text || valueText(change.before)} → {change.after_text || valueText(change.after)}. {change.impact}</li>)}</ul>
         </article>)}</details>
         <details className="constructor-selection-details"><summary>Календарь и режимы · {preview.settings_changes.length}</summary>{preview.settings_changes.map(item => <article className="constructor-history-lesson" key={item.field}><strong>{item.label}</strong><p>Было: {item.before}</p><p>Стало: {item.after}</p><p>{item.impact}</p></article>)}</details>
-        <details className="constructor-selection-details" open={preview.problems.length > 0}><summary>Проблемы и конфликты · {preview.problems.length}</summary>{preview.problems.map(item => <article className="constructor-history-lesson" key={item.lesson_id}><strong>{item.lesson_id}</strong><p>{item.details.join(', ')}</p></article>)}</details>
+        {preview.problems.length ? <p className="schedule-start-muted">Эта сводка защищает выбор основной ревизии, но не заменяет актуальную проверку. Откройте шаблон и нажмите «Проверить расписание», чтобы пересчитать составы и реальные конфликты.</p> : null}
+        <details className="constructor-selection-details" open={legacyMarkers.length > 0}><summary>Старые пометки в карточках · {legacyMarkers.length}</summary><p>Сохранённые признаки импорта и уточнения. Они могут дублировать одну историческую причину и здесь не пересчитываются.</p>{legacyMarkers.map((item, index) => <article className="constructor-history-lesson" key={`${item.lesson_id}:legacy:${index}`}><strong>{item.lesson_id}</strong><p>{item.details.join(', ')}</p></article>)}</details>
+        <details className="constructor-selection-details" open={heuristicMatches.length > 0}><summary>Эвристические совпадения времени · {heuristicMatches.length}</summary><p>Совпали сохранённые группы или преподаватели. Эта проверка не учитывает рассчитанные составы, SDEP, онлайн и подтверждённые решения.</p>{heuristicMatches.map((item, index) => <article className="constructor-history-lesson" key={`${item.lesson_id}:overlap:${index}`}><strong>{item.lesson_id}</strong><p>{item.details.join(', ')}</p></article>)}</details>
+        <details className="constructor-selection-details" open={unknown.length > 0}><summary>Другие замечания · {unknown.length}</summary><p>Формат этих записей не распознан интерфейсом. Они не отнесены автоматически к старым пометкам или совпадениям и по-прежнему требуют просмотра.</p>{unknown.map((item, index) => <article className="constructor-history-lesson" key={`${item.lesson_id}:unknown:${index}`}><strong>{item.lesson_id}</strong><p>{item.details.join(', ')}</p></article>)}</details>
+        {missingBaseline.length ? <details className="constructor-selection-details" open><summary>Недоступная история · {missingBaseline.length}</summary>{missingBaseline.map((item, index) => <article className="constructor-history-lesson" key={`${item.lesson_id}:baseline:${index}`}><strong>{item.lesson_id}</strong><p>{item.details.join(', ')}</p></article>)}</details> : null}
       </div>
       <footer>
         <div className="constructor-selection-confirmations">
-          {recoveryRequired ? <label><input type="checkbox" checked={acknowledgeBaseline} onChange={event => onAcknowledgeBaseline(event.target.checked)} />Я понимаю, что историческая ревизия {preview.baseline_recovery!.missing_revision} недоступна, и утверждаю текущую ревизию {preview.baseline_recovery!.revision} как новую базовую версию.</label> : preview.problems.length ? <label><input type="checkbox" checked={acknowledgeProblems} onChange={event => onAcknowledgeProblems(event.target.checked)} />Я просмотрел проблемы и подтверждаю шаблон с ними.</label> : <span>{blockedReason || 'Проверьте сводку перед подтверждением.'}</span>}
+          {recoveryRequired ? <label><input type="checkbox" checked={acknowledgeBaseline} onChange={event => onAcknowledgeBaseline(event.target.checked)} />Я понимаю, что историческая ревизия {preview.baseline_recovery!.missing_revision} недоступна, и утверждаю текущую ревизию {preview.baseline_recovery!.revision} как новую базовую версию.</label> : preview.problems.length ? <label><input type="checkbox" checked={acknowledgeProblems} onChange={event => onAcknowledgeProblems(event.target.checked)} />Я просмотрел старые пометки и эвристические совпадения перед выбором основной ревизии.</label> : <span>{blockedReason || 'Проверьте сводку перед подтверждением.'}</span>}
           {recoveryRequired && (preview.baseline_recovery!.problems || []).length ? <label><input type="checkbox" checked={acknowledgeProblems} onChange={event => onAcknowledgeProblems(event.target.checked)} />Я просмотрел проблемы текущего шаблона и подтверждаю их.</label> : null}
         </div>
         <div className="constructor-selection-actions"><button disabled={busy} onClick={onCancel}>Отмена</button>
+          <button disabled={busy} onClick={onReview}>Проверить расписание этой ревизии</button>
           {recoveryRequired ? <button className="is-primary" disabled={busy || readOnly || !acknowledgeBaseline || Boolean(preview.baseline_recovery?.problems?.length && !acknowledgeProblems)} onClick={onApproveBaseline}>{busy ? 'Сохраняем…' : 'Утвердить новую базовую версию'}</button> : <button className="is-primary" disabled={busy || readOnly || Boolean(preview.problems.length && !acknowledgeProblems)} onClick={onConfirm}>{busy ? 'Сохраняем…' : 'Подтвердить основным'}</button>}
         </div>
       </footer>

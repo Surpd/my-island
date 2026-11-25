@@ -2947,7 +2947,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
           ) : null}
         </div>
       </header>
-      {draft && termComparison?.items.length ? <div className="constructor-term-strip">
+      {draft && pendingTermItems > 0 ? <div className="constructor-term-strip">
         <span>Сверка II триместра · без решения: {russianCount(pendingTermItems, 'позиция', 'позиции', 'позиций')}
           <small>Это сравнение с таблицей, а не число конфликтов или блокирующих ошибок.</small>
         </span>

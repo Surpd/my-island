@@ -1201,6 +1201,8 @@
   color:var(--cp-muted);
   font-size:13px;
 }
+.constructor-term-strip > span { flex:1 1 18rem; }
+.constructor-term-strip small { display:block; }
 .constructor-term-strip button { margin-left:auto; }
 .constructor-term-dialog .constructor-review-list { max-height:none; overflow:visible; }
 .constructor-term-dialog .constructor-term-list li { align-items:center; }
