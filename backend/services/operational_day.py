@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import os
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 from backend.database import Database
@@ -37,13 +37,18 @@ def _occurrence(assignment, block, index):
     start, end = str(block.get("start_time") or ""), str(block.get("end_time") or "")
     start_min, end_min = canonical._clock_minutes(start), canonical._clock_minutes(end)
     teachers = sorted({str(x) for x in assignment.get("teacher_ids") or []}) if mode != "sdep" else []
+    group_ids = sorted(set(canonical._assignment_group_ids(assignment)))
+    responsible = sorted({str(x) for x in meta.get("responsible_teacher_ids") or []})
     joint = meta.get("joint_activity_id") if meta.get("audience_coverage") == "explicit" else None
     origin = meta.get("constructor_lesson_id")
     key = _record_id("joint", joint, start, end) if joint else _record_id("assignment", block["block_key"], origin or index)
     return {"id": key, "activity": activity, "activity_type": kind, "delivery_mode": mode,
-            "teacher_ids": teachers, "room": room or None, "start": start, "end": end,
+            "teacher_ids": teachers, "responsible_teacher_ids": responsible,
+            "group_ids": group_ids, "grade_scope": str(block.get("grade_scope") or "") or None,
+            "activity_format": meta.get("activity_format"), "joint_activity_id": joint,
+            "room": room or None, "start": start, "end": end,
             "duration_minutes": end_min - start_min if start_min is not None and end_min is not None and end_min > start_min else None,
-            "lesson_id": origin, "block_keys": [block["block_key"]], "change": "unchanged"}
+            "lesson_id": origin, "lesson_ids": [origin] if origin else [], "block_keys": [block["block_key"]], "change": "unchanged"}
 
 
 def _overlaps(occurrences):
@@ -69,6 +74,38 @@ def _overlaps(occurrences):
     return alerts
 
 
+def _decorate_directory(database, occurrences):
+    groups = sorted({key for row in occurrences for key in row.get("group_ids", [])})
+    teacher_fields = ("teacher_ids", "responsible_teacher_ids", "previous_teacher_ids")
+    teachers = sorted({key for row in occurrences for field in teacher_fields for key in row.get(field, [])})
+    labels = {}
+    with database.connection() as connection:
+        for keys, table, fields in (
+            (groups, "groups", "COALESCE(display_name,name) AS name,group_type,base_class_name"),
+            (teachers, "identities", "display_name AS name,status"),
+        ):
+            labels[table] = {}
+            for offset in range(0, len(keys), 500):
+                batch = keys[offset:offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = database.execute(connection, f"""SELECT CAST(id AS TEXT) AS id,{fields}
+                    FROM {table} WHERE CAST(id AS TEXT) IN ({placeholders})""", tuple(batch)).fetchall()
+                labels[table].update({row["id"]: dict(row) for row in rows})
+    for row in occurrences:
+        row["groups"] = [dict(labels["groups"].get(key, {"id": key, "name": None})) for key in row.get("group_ids", [])]
+        for field in teacher_fields:
+            if field in row:
+                row[field.replace("teacher_ids", "teachers")] = [
+                    labels["identities"].get(key, {"id": key, "name": None}) for key in row[field]]
+
+
+def _baseline_intervals(database, version_id):
+    with database.connection() as connection:
+        rows = database.execute(connection, """SELECT id AS canonical_block_id,block_key,weekday,start_time,end_time
+            FROM canonical_schedule_blocks WHERE version_id=?""", (version_id,)).fetchall()
+    return {str(row["canonical_block_id"]): dict(row) for row in rows}
+
+
 def operational_day(database: Database, selected: date, zone: str) -> dict:
     edition = canonical.resolve_published_week(database, selected.isoformat())
     monday = date.fromisoformat(edition.metadata["week_start"])
@@ -76,7 +113,10 @@ def operational_day(database: Database, selected: date, zone: str) -> dict:
     items = {}
     alerts = []
     if edition.effective:
-        for block in canonical._block_rows(database, edition_id):
+        blocks = canonical._block_rows(database, edition_id)
+        canonical._prefetch_block_assignments(database, blocks)
+        previous_blocks = None
+        for block in blocks:
             if block.get("weekday") != selected.weekday():
                 continue
             change = block["change_kind"]
@@ -87,24 +127,45 @@ def operational_day(database: Database, selected: date, zone: str) -> dict:
                 item = _occurrence(assignment, block, index)
                 if not item:
                     continue
-                if item["id"] in items:
-                    items[item["id"]]["block_keys"].append(block["block_key"])
-                    continue
                 if change == "replaced":
                     matches = [a for a in baseline if item["lesson_id"] and (a.get("metadata") or {}).get("constructor_lesson_id") == item["lesson_id"]]
                     if not matches and len(baseline) == len(assignments) == 1:
                         matches = baseline
-                    previous = _occurrence(matches[0], block, index) if len(matches) == 1 else None
+                    if previous_blocks is None:
+                        previous_blocks = _baseline_intervals(database, edition.metadata["base_version_id"])
+                    base_block = previous_blocks.get(str(block["canonical_block_id"]))
+                    previous = _occurrence(matches[0], base_block, index) if len(matches) == 1 and base_block else None
                     if previous is None:
                         item["change"] = "unmatched"
-                    elif previous["teacher_ids"] != item["teacher_ids"]:
-                        item["change"] = "teacher_replaced"
-                        item["previous_teacher_ids"] = previous["teacher_ids"]
-                    elif any(previous[k] != item[k] for k in ("activity", "activity_type", "delivery_mode", "room")):
-                        item["change"] = "changed"
+                    else:
+                        changes = []
+                        if (base_block["weekday"], previous["start"], previous["end"]) != (block["weekday"], item["start"], item["end"]):
+                            changes.append("moved")
+                            item["previous_interval"] = {
+                                "day": (monday + timedelta(days=base_block["weekday"])).isoformat(),
+                                "start": previous["start"], "end": previous["end"]}
+                        if previous["teacher_ids"] != item["teacher_ids"]:
+                            changes.append("teacher_replaced")
+                            item["previous_teacher_ids"] = previous["teacher_ids"]
+                        if any(previous[k] != item[k] for k in ("activity", "activity_type", "delivery_mode", "room")):
+                            changes.append("changed")
+                        if changes:
+                            item.update(change=changes[0], changes=changes)
                 elif change in {"cancelled", "added"}:
                     item["change"] = change
-                items[item["id"]] = item
+                existing = items.get(item["id"])
+                if existing:
+                    for field in ("block_keys", "teacher_ids", "responsible_teacher_ids", "previous_teacher_ids",
+                                  "group_ids", "lesson_ids", "changes"):
+                        if field in item:
+                            existing[field] = sorted(set(existing.get(field, [])) | set(item[field]))
+                    if existing["change"] == "unchanged":
+                        existing["change"] = item["change"]
+                    if "previous_interval" in item:
+                        existing.setdefault("previous_interval", item["previous_interval"])
+                else:
+                    items[item["id"]] = item
+        _decorate_directory(database, items.values())
         for record in (edition.source or {}).get("records", []):
             if record.get("status") == "unresolved" and record.get("day") == selected.weekday():
                 alerts.append({"code": "deferred_lesson", "id": _record_id("deferred", record["lesson_id"]),
@@ -114,6 +175,10 @@ def operational_day(database: Database, selected: date, zone: str) -> dict:
     else:
         alerts.append({"code": edition.metadata["origin"] if edition.metadata["origin"] == "broken_head" else "no_published_week",
                        "id": _record_id("no_publication", selected.isoformat())})
+    for row in items.values():
+        for group in row["groups"]:
+            if group["name"]:
+                group["href"] = "/api/admin/groups/" + quote(group["id"], safe="")
     for row in [*items.values(), *alerts]:
         params = {"day": selected.isoformat(), "edition": edition_id or "unpublished", "record": row["id"]}
         row["href"] = "/api/admin/operations/day?" + urlencode(params)
@@ -135,7 +200,7 @@ def next_week_drafts(source: Database, store: Database, selected: date, draft_id
     with store.connection() as conn:
         rows = store.execute(conn, f"SELECT id,name,revision FROM schedule_experiment_drafts WHERE {predicate} ORDER BY updated_at DESC,id",
                              (week.isoformat(),)).fetchall()
-    drafts = [{**dict(r), "href": "/admin/schedule/constructor?" + urlencode({"draft": r["id"]})} for r in rows]
+    drafts = [{**dict(r), "readiness": "requires_preview", "href": "/admin/schedule/constructor?" + urlencode({"draft": r["id"]})} for r in rows]
     if draft_id or len(drafts) == 1:
         target = next((r for r in drafts if not draft_id or r["id"] == draft_id), None)
         if not target:
@@ -143,6 +208,7 @@ def next_week_drafts(source: Database, store: Database, selected: date, draft_id
         preview = preview_publication(source, target["id"], scope_kind="week", week_start=week.isoformat(),
                                       expected_revision=target["revision"], draft_database=store)
         target["can_publish"] = preview["can_publish"]
+        target["readiness"] = "ready" if preview["can_publish"] else "blocked"
         target["blockers"] = [{"code": x.get("code"), "lesson_id": x.get("lesson_id")} for x in preview["blockers"]]
         target["deferred_count"] = len(preview["deferred"])
     return {"week_start": week.isoformat(), "kind": "draft", "items": drafts}

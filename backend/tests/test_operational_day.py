@@ -60,6 +60,36 @@ class OperationalDayTests(TestCase):
         self.assertEqual(operational_day(self.db, date(2027, 1, 3), "Europe/Moscow")["scheduled_count"], 0)
         self.assertEqual(school_day(datetime(2027, 1, 3, 21, tzinfo=timezone.utc))[0], date(2027, 1, 4))
 
+    def test_joint_groups_and_teachers_remain_visible_after_move(self):
+        class_a = self.db.create_group("Fixture 9A", "class", base_class_name="9A")
+        class_b = self.db.create_group("Fixture 9B", "class", base_class_name="9B")
+        teacher_a = self.db.create_identity("teacher", "Fixture Teacher A")
+        teacher_b = self.db.create_identity("teacher", "Fixture Teacher B")
+        blocks = {}
+        for key, group, teacher in (("a", class_a, teacher_a), ("b", class_b, teacher_b)):
+            item = block("09:00", "09:45", str(teacher["id"]))
+            item["assignments"][0]["canonical_group_ids"] = [str(group["id"])]
+            item["assignments"][0]["metadata"].update(constructor_lesson_id=key, joint_activity_id="shared",
+                                                        audience_coverage="explicit", activity_type="lab")
+            blocks[key] = item
+        canonical.import_canonical_artifact(self.db, {"version_id": "joint-base", "source_snapshot": {"id": "s", "fingerprint": "f"},
+                                           "blocks": blocks}, status="approved_baseline")
+        canonical.materialize_effective_week(self.db, "joint-base", MONDAY.isoformat(), [
+            {"block_key": key, "change_kind": "replaced", "weekday": 1,
+             "slot": {"start": "11:00", "end": "11:45"}, "assignments": item["assignments"]}
+            for key, item in blocks.items()
+        ])
+
+        report = operational_day(self.db, date(2026, 12, 29), "Europe/Moscow")
+        self.assertEqual(len(report["items"]), 1)
+        item = report["items"][0]
+        self.assertEqual(item["change"], "moved")
+        self.assertEqual(item["previous_interval"], {"day": MONDAY.isoformat(), "start": "09:00", "end": "09:45"})
+        self.assertEqual(item["joint_activity_id"], "shared")
+        self.assertEqual({g["name"] for g in item["groups"]}, {"Fixture 9A", "Fixture 9B"})
+        self.assertEqual({t["name"] for t in item["teachers"]}, {"Fixture Teacher A", "Fixture Teacher B"})
+        self.assertEqual(item["lesson_ids"], ["a", "b"])
+
     def test_admin_link_is_scoped_to_edition_and_role_and_handles_source_failure(self):
         self.materialize()
         admin = self.db.get_or_create_user(901001, "admin")
