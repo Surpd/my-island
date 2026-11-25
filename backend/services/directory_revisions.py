@@ -1,6 +1,7 @@
 """Transactional optimistic editing of school directory aggregates."""
 from contextlib import contextmanager, nullcontext
 from copy import copy
+import hashlib
 import json
 
 from fastapi import HTTPException
@@ -135,3 +136,13 @@ def directory_history(database, table, entity_id):
             ORDER BY revision DESC LIMIT 100""", (table, str(entity_id))).fetchall()
     return {"items": [{**dict(row), "changed_fields": json.loads(row["changed_fields"])
                        if isinstance(row["changed_fields"], str) else row["changed_fields"]} for row in rows]}
+
+def directory_version(database):
+    """A token for exactly the directory rows, including inserts and removals."""
+    digest = hashlib.sha256()
+    with database.connection() as connection:
+        rows = database.execute(connection, """SELECT 'g' AS kind, CAST(id AS TEXT) AS key, revision FROM groups
+            UNION ALL SELECT 'i', CAST(id AS TEXT), revision FROM identities ORDER BY 1,2""")
+        for row in rows:
+            digest.update(f'{row["kind"]}/{row["key"]}/{row["revision"]}\n'.encode())
+    return digest.hexdigest()

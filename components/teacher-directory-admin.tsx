@@ -1,6 +1,7 @@
 /* oxlint-disable typescript/no-explicit-any, typescript/no-base-to-string, react/react-compiler, react-hooks/exhaustive-deps, jsx-a11y/prefer-tag-over-role */
 'use client';
 
+import { useLiveRevision } from './use-live-revision';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, ChevronRight, ExternalLink, Plus, RefreshCw, Search, ShieldAlert, UserRound, Users } from 'lucide-react';
 import { audienceGrade, audienceGrades, audienceLabel, audienceShortLabel, classLabel as formatClassLabel, lessonLabel, subjectLabel } from './school-audience';
@@ -11,7 +12,7 @@ import { useSchoolTeacherColors } from './use-school-teacher-colors';
 
 type Row = Record<string, any>;
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
-type Props = { api: Api; schoolMode?: boolean; connectionLabel?: string; navigate: (href: string) => void };
+type Props = { api: Api; schoolMode?: boolean; live?: boolean; connectionLabel?: string; navigate: (href: string) => void };
 type Directory = { groups: Row[]; students: Row[]; teachers: Row[]; write_ready?: boolean; read_only?: boolean; grade_assignment_ready?: boolean };
 type TeacherTab = 'main' | 'assignments' | 'schedule' | 'availability';
 type ScheduleResult = { status?: string; source?: string; week_start?: string; available_weeks?: string[]; items?: Row[]; issues?: Row[] };
@@ -33,7 +34,7 @@ const dayNames = ['Понедельник', 'Вторник', 'Среда', 'Ч�
 
 const assignmentContext = (row: Row) => [normalize(subjectLabel(row.subject)), normalize(row.subject_subgroup), normalize(row.exam_track), normalize(row.capability || 'teach'), String(row.classroom_course_id || ''), String(row.valid_from || ''), String(row.valid_until || '')].join('|');
 
-export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel = 'Локальная база', navigate }: Props) {
+export function TeacherDirectoryAdmin({ api, schoolMode = false, live = true, connectionLabel = 'Локальная база', navigate }: Props) {
   const [directory, setDirectory] = useState<Directory>({ groups: [], students: [], teachers: [] });
   const [selectedId, setSelectedId] = useState('');
   const [tab, setTab] = useState<TeacherTab>('main');
@@ -64,8 +65,8 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
   const [schoolCode, setSchoolCode] = useState('');
   const [authError, setAuthError] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
+  const load = useCallback(async (signal?: AbortSignal) => {
+    if (!signal) { setLoading(true); setError(''); }
     try {
       let next: Directory;
       if (schoolMode) {
@@ -79,11 +80,17 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
         ]);
         next = { groups: groups.items || [], teachers: teachers.items || [], students: [], write_ready: system.health?.environment === 'local_sqlite' || system.settings?.database_configured === false };
       }
-      setDirectory(next);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось загрузить преподавателей.'); }
-    finally { setLoading(false); }
+      if (!signal?.aborted) setDirectory(next);
+    } catch (cause) { if (signal) throw cause; setError(cause instanceof Error ? cause.message : 'Не удалось загрузить преподавателей.'); }
+    finally { if (!signal?.aborted) setLoading(false); }
   }, [api, schoolMode]);
 
+  useLiveRevision({
+    enabled: live && schoolSession,
+    api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
+    refresh: async (_marker, signal) => { await load(signal); },
+    revoke: () => window.location.reload(),
+  });
   useEffect(() => {
     if (!schoolMode) return;
     void api('/api/admin/school/auth/session').then(() => setSchoolSession(true)).catch(() => setSchoolSession(false)).finally(() => setAuthChecking(false));
@@ -199,7 +206,7 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
   if (schoolMode && !schoolSession) return <section className="admin-panel school-editor-auth"><h2>Вход в школьный справочник</h2><p>Параметр role=admin сам по себе не даёт доступ к настоящей базе. Получите одноразовый код командой /admincode в школьном Telegram-боте.</p><form onSubmit={async (event) => { event.preventDefault(); setAuthError(''); try { const result = await api<{ browser_session_token: string }>('/api/admin/school/auth/exchange', { method: 'POST', body: JSON.stringify({ code: schoolCode.trim() }) }); window.sessionStorage.setItem('my_island_school_admin_session', result.browser_session_token); setSchoolCode(''); setSchoolSession(true); } catch (cause) { setAuthError(cause instanceof Error ? cause.message : 'Код не принят.'); } }}><label className="school-field">Одноразовый код<input value={schoolCode} onChange={(event) => setSchoolCode(event.target.value)} autoComplete="one-time-code" /></label><button className="admin-button admin-button--primary" disabled={!schoolCode.trim()}>Войти</button></form>{authError ? <p role="alert" className="admin-error-text">{authError}</p> : null}</section>;
   if (loading && !teachers.length) return <div className="admin-panel">Загружаем преподавателей…</div>;
   if (selected || creating) {
-    const teacher = draft || selected || {};
+    const teacher = (editing || creating ? draft : selected) || {};
     const assignments: Row[] = assignmentRows(selected || teacher);
     const activeAssignments = assignments.filter((item: Row) => assignmentIsActive(item));
     const mergeAnalysis = analyzeAssignmentMerges(assignments, directory.teachers, directory.groups, directory.students);

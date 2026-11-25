@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from backend.config import get_settings
-from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction
+from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction, directory_version
 from backend.database import Database
 from backend.handlers.api import (
     GroupPayload, IdentityPayload, MembershipTransferPayload,
@@ -126,6 +126,11 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
         database, _ = require_school_admin(x_school_admin_session)
         database.revoke_admin_browser_session(x_school_admin_session)
         return {"state": "logged_out"}
+
+    @router.get("/directory/version")
+    def edit_version(x_school_admin_session: str | None = Header(default=None)):
+        database, actor = require_school_admin(x_school_admin_session)
+        return {"actor": str(actor), "version": directory_version(database)}
 
     @router.get("/directory/history/{entity_type}/{entity_id}")
     def edit_history(entity_type: str, entity_id: str, x_school_admin_session: str | None = Header(default=None)):
