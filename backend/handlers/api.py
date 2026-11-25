@@ -990,6 +990,8 @@ def create_router(database: Database) -> APIRouter:
 
     @router.get("/admin/analytics/teachers")
     def admin_teacher_load(start_day: str, end_day: str | None = None, teacher_id: str | None = None,
+                           activity_type: str | None = None, activity_format: str | None = None,
+                           group_id: str | None = None,
                            init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
                            x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
@@ -998,7 +1000,9 @@ def create_router(database: Database) -> APIRouter:
             date.fromisoformat(start_day)
             if end_day:
                 date.fromisoformat(end_day)
-            return teacher_load_analytics(database, start_day, end_day, teacher_id)
+            return teacher_load_analytics(database, start_day, end_day, teacher_id,
+                                          activity_type=activity_type, activity_format=activity_format,
+                                          group_id=group_id)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
 
