@@ -1599,12 +1599,15 @@ def create_router(database: Database) -> APIRouter:
                 "review_required": bool(head), "source_checked": False,
                 "automatic_application_enabled": False}
 
+    def workspace_data_endpoints():
+        return {route.path for route in router.routes if "GET" in getattr(route, "methods", ())}
+
     @router.get("/admin/workspace/layout")
     def admin_workspace_layout(response: Response, init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
                               x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         user = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         response.headers["Cache-Control"] = "private, no-store"
-        return read_layout(database, user["id"], school_day()[0])
+        return read_layout(database, user["id"], school_day()[0], workspace_data_endpoints())
 
     @router.put("/admin/workspace/layout")
     def save_admin_workspace_layout(payload: LayoutUpdate, response: Response, init_data: str | None = None,
@@ -1612,7 +1615,7 @@ def create_router(database: Database) -> APIRouter:
                                    x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         user = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         response.headers["Cache-Control"] = "private, no-store"
-        saved, layout = save_layout(database, user["id"], payload, school_day()[0])
+        saved, layout = save_layout(database, user["id"], payload, school_day()[0], workspace_data_endpoints())
         if not saved:
             raise HTTPException(409, {"code": "layout_changed", "current": layout}, headers={"Cache-Control": "no-store"})
         return layout

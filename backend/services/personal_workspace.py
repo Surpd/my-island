@@ -51,17 +51,24 @@ DEFAULTS = [{"instance_id": "today", "type": "operational_day", "size": "wide", 
             {"instance_id": "teachers", "type": "teacher_load", "size": "compact", "filters": {}}]
 
 
-def layout_view(row, today):
+def layout_view(row, today, endpoints=None):
+    catalog = {kind: entry for kind, entry in REGISTRY.items()
+               if endpoints is None or entry["endpoint"] in endpoints}
     if row and row["schema_version"] != 1:
         return {"schema_version": row["schema_version"], "revision": row["revision"], "read_only": True,
-                "widgets": [], "requests": {}, "catalog": REGISTRY, "sizes": ["compact", "wide"]}
+                "widgets": [], "requests": {}, "catalog": catalog, "sizes": ["compact", "wide"]}
     stored = json.loads(row["widgets_json"]) if row else None
-    widgets = DEFAULTS if stored is None else stored
+    widgets = [widget for widget in DEFAULTS if widget["type"] in catalog] if stored is None else stored
     requests = {}
     visible = []
+    unavailable = []
     for widget in widgets:
         definition = REGISTRY.get(widget["type"])
         if definition is None:
+            continue
+        visible.append(widget)
+        if widget["type"] not in catalog:
+            unavailable.append(widget["instance_id"])
             continue
         params = dict(widget["filters"])
         if widget["type"] == "teacher_load" and "start_day" not in params:
@@ -71,18 +78,17 @@ def layout_view(row, today):
             params.setdefault("day", today.isoformat())
         href = definition["endpoint"] + "?" + urlencode(sorted(params.items()))
         requests.setdefault(href, []).append(widget["instance_id"])
-        visible.append(widget)
     return {"schema_version": 1, "revision": row["revision"] if row else 0,
-            "widgets": visible, "requests": requests, "catalog": REGISTRY, "sizes": ["compact", "wide"]}
+            "widgets": visible, "requests": requests, "unavailable_instances": unavailable, "catalog": catalog, "sizes": ["compact", "wide"]}
 
 
-def read_layout(db, user_id, today):
+def read_layout(db, user_id, today, endpoints=None):
     with db.connection() as conn:
         row = db.execute(conn, "SELECT schema_version, revision, widgets_json FROM admin_widget_layouts WHERE user_id=?", (user_id,)).fetchone()
-    return layout_view(row, today)
+    return layout_view(row, today, endpoints)
 
 
-def save_layout(db, user_id, change, today):
+def save_layout(db, user_id, change, today, endpoints=None):
     widgets = None if change.widgets is None else [widget.model_dump() for widget in change.widgets]
     payload = json.dumps(widgets)
     with db.connection() as conn:
@@ -96,5 +102,5 @@ def save_layout(db, user_id, change, today):
                 (payload, user_id, change.expected_revision)).fetchone()
         if row is None:
             current = db.execute(conn, "SELECT schema_version, revision, widgets_json FROM admin_widget_layouts WHERE user_id=?", (user_id,)).fetchone()
-            return False, layout_view(current, today)
-    return True, layout_view(row, today)
+            return False, layout_view(current, today, endpoints)
+    return True, layout_view(row, today, endpoints)
