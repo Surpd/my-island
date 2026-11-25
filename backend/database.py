@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS users (
   identity_id INTEGER UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS admin_widget_layouts (
+  schema_version INTEGER NOT NULL DEFAULT 1 CHECK(schema_version > 0),
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  widgets_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS identities (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL CHECK (kind IN ('student', 'teacher')),
@@ -1169,6 +1175,7 @@ class Database:
                 "active": "INTEGER NOT NULL DEFAULT 1",
                 "last_seen_at": "TEXT",
             },
+            "admin_widget_layouts": {"schema_version": "INTEGER NOT NULL DEFAULT 1"},
             "journal_students": {"active": "INTEGER NOT NULL DEFAULT 1", "entry_kind": "TEXT NOT NULL DEFAULT 'individual'", "classification_method": "TEXT"},
             "journal_results": {
                 "journal_student_id": "INTEGER",
