@@ -142,6 +142,72 @@ class JournalRoleViewTests(unittest.TestCase):
                 self.database.execute(connection, """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref)
                     VALUES (?, ?, 'student', 'test_fixture', ?)""", (group_a, student, f"term-{term_number}"))
 
+    def test_journal_overview_reconciles_archive_and_current_source_with_detail(self):
+        self._create_user("overview-admin", "admin", None)
+        headers = {"X-Dev-Auth": "overview-admin"}
+        path = "/api/admin/analytics/journals"
+        self.assertEqual(self.client.get(path, headers={"X-Dev-Auth": "student-auth"}).status_code, 403)
+        params = {"group_marker": "A", "grade": 9, "subject": "Math", "academic_year": "2026/27"}
+        response = self.client.get(path, params=params, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["source_count"], 2)
+        for item in response.json()["items"]:
+            detail = self.client.get(f"/api/admin/journals/{item['id']}/analytics",
+                                     params={"group_marker": "A"}, headers=headers).json()
+            for field, value in detail["totals"].items():
+                self.assertEqual(item[field], value)
+        filtered = self.client.get(path, params={**params, "term_number": 2, "start": "2027-01-01"}, headers=headers)
+        self.assertEqual(filtered.json()["source_count"], 1)
+        self.assertIsNone(filtered.json()["items"][0]["numeric_coverage"])
+
+    def test_no_snapshot_and_failed_refresh_do_not_look_like_a_complete_matrix(self):
+        admin = self._create_user("snapshot-admin", "admin", None)
+        headers = {"X-Dev-Auth": "snapshot-admin"}
+        source = self.source_ids[0]
+        with self.database.connection() as conn:
+            waiting = self.database.execute(conn, """INSERT INTO journal_sources
+                (spreadsheet_id,spreadsheet_title,grade,subject,sheet_title,status,last_error_code)
+                VALUES ('synthetic-waiting','Fixture',9,'Science','Fixture','error','network')
+                RETURNING id""").fetchone()["id"]
+            self.database.execute(conn, """UPDATE journal_sources
+                SET status='error',last_error_code='network',last_synced_at=CURRENT_TIMESTAMP WHERE id=?""", (source,))
+            self.database.execute(conn, """UPDATE journal_assessments
+                SET weight=2,max_score=5,raw_source='{"category":"П"}' WHERE source_id=?""", (source,))
+        def detail(key):
+            return self.client.get(f"/api/admin/journals/{key}/analytics", headers=headers).json()
+        missing = detail(waiting)
+        self.assertEqual(missing["source"]["snapshot_state"], "unavailable")
+        self.assertIsNone(missing["totals"]["numeric_results"])
+        old = detail(source)
+        self.assertEqual(old["source"]["snapshot_state"], "last_success")
+        self.assertGreater(old["totals"]["numeric_results"], 0)
+        self.assertEqual({(row["category"], row["weight"], row["max_score"]) for row in old["works"]}, {("П", 2, 5)})
+        self.assertEqual(old["roster"]["team_rows"], 1)
+
+    def test_admin_snapshot_analytics_respects_period_marker_and_role(self):
+        self._create_user("analytics-admin", "admin", None)
+        headers = {"X-Dev-Auth": "analytics-admin"}
+        source_id = self.source_ids[0]
+        path = f"/api/admin/journals/{source_id}/analytics"
+        for role in ("student-auth", "teacher-auth"):
+            self.assertEqual(self.client.get(path, headers={"X-Dev-Auth": role}).status_code, 403)
+        self.assertEqual(self.client.get(path, headers=headers, params={"group_marker": "missing"}).status_code, 404)
+        self.assertEqual(self.client.get(path, headers=headers, params={"start": "2027-01-01", "end": "2026-01-01"}).status_code, 422)
+        with self.database.connection() as connection:
+            self.database.execute(connection, """UPDATE journal_results SET numeric_score=0
+                WHERE assessment_id IN (SELECT id FROM journal_assessments WHERE source_id=?)""", (source_id,))
+        response = self.client.get(path, headers=headers, params={"group_marker": "A"})
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["source"]["period_status"], "archived")
+        self.assertEqual(data["roster"], {"total_rows": 4, "team_rows": 1, "unlinked_individual_rows": 1})
+        self.assertEqual(data["totals"]["numeric_results"], 4)
+        self.assertEqual(data["totals"]["eligible_cells"], 4)
+        self.assertEqual(data["period_summary_cells"], {"average_grade": 1})
+        empty = self.client.get(path, headers=headers, params={"start": "2027-01-01"}).json()
+        self.assertIsNone(empty["totals"]["numeric_coverage"])
+        self.assertEqual(empty["works"], [])
+
     def test_student_journals_include_only_own_linked_individual_results_and_archived_periods(self):
         response = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"})
         self.assertEqual(response.status_code, 200, response.text)

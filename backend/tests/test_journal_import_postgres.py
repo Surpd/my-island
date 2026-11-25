@@ -186,6 +186,26 @@ class JournalImportPostgresTests(unittest.TestCase):
                 ("Петрова Анна",),
             )
 
+    def test_filtered_overview_matches_imported_source_matrix(self):
+        from backend.services.journal_analytics import journal_analytics, journal_overview
+
+        for values, name, tab in (
+                ([["Дата", "01.09"], ["Работа", "Work"], ["Вес", 1], ["Оценка", 5],
+                  ["Fixture Row", 0], ["Fixture Empty", ""]], "Subject A", 501),
+                ([["Дата", "02.09"], ["Работа", "Work"], ["Вес", 1], ["Оценка", 5],
+                  ["Fixture Row", 4]], "Subject B", 502)):
+            sync_journal_values(self.database, values, spreadsheet_id="synthetic-overview",
+                                spreadsheet_title="Synthetic", grade=9, subject=name, sheet_title=name, sheet_id=tab)
+        summary = journal_overview(self.database, grade=9, subject="Subject A")
+        self.assertEqual(summary["source_count"], 1)
+        item = summary["items"][0]
+        detail = journal_analytics(self.database.journal_detail(item["id"]), None, None)
+        self.assertEqual(item["numeric_results"], 1)
+        self.assertEqual(item["eligible_cells"], 2)
+        self.assertEqual(item["numeric_coverage"], 0.5)
+        for key, value in detail["totals"].items():
+            self.assertEqual(item[key], value)
+
     def _rows(self, query, params=()):
         with self.database.connection() as connection:
             return connection.execute(query, params).fetchall()
