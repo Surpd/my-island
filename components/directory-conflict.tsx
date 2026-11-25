@@ -28,9 +28,9 @@ export function DirectoryConflict({ api, historyPath, base, draft, remote, field
   const changed = Object.keys(fields).filter((key) => !equal(base[key], remote[key]));
   const conflicts = changed.filter((key) => !equal(base[key], draft[key]) && !equal(remote[key], draft[key]));
   const reconcile = () => {
-    const merged = { ...draft, revision: remote.revision };
-    for (const key of changed) {
-      if (!conflicts.includes(key) || choices[key] === 'remote') Object.assign(merged, { [key]: remote[key] });
+    const merged: RecordFields = { ...draft, ...remote };
+    for (const key of Object.keys(fields)) {
+      if (!changed.includes(key) || choices[key] === 'local') merged[key] = draft[key];
     }
     apply(merged);
   };

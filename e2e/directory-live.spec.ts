@@ -51,6 +51,13 @@ test('two administrators reconnect, compare a field with its author and explicit
     await first.getByLabel('Название').fill(name + ' first');
     await first.getByRole('button', { name: 'Сохранить группу' }).click();
     await expect(first).toHaveCount(0);
+    // The UI does not edit the group's internal name, but its save payload
+    // includes it. Rebasing the second form must retain the server's value.
+    const url = `${API}/api/admin/groups/${id}`;
+    const firstSaved = await (await page.request.get(url, { headers: admin })).json();
+    const renamed = await page.request.patch(url, { headers: admin,
+      data: { name: name + ' internal', expected_revision: firstSaved.revision } });
+    expect(renamed.ok()).toBeTruthy();
     await second.bringToFront();
     await other.setOffline(false);
     await second.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -63,7 +70,7 @@ test('two administrators reconnect, compare a field with its author and explicit
     await form.getByRole('button', { name: 'Сохранить группу' }).click();
     await expect(form).toHaveCount(0);
     const current = await page.request.get(`${API}/api/admin/groups/${id}`, { headers: admin });
-    expect((await current.json()).display_name).toBe(name + ' second');
+    expect(await current.json()).toMatchObject({ display_name: name + ' second', name: name + ' internal' });
     const history = await page.request.get(`${API}/api/admin/directory/history/groups/${id}`, { headers: admin });
     expect((await history.json()).items[0].actor_id).toBe(actor.id);
     const revoked = await second.request.post(`${API}/api/admin/auth/logout`, {
