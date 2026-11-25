@@ -321,6 +321,27 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual([item["date"] for item in result["items"]], ["2027-01-04"])
         self.assertEqual(result["items"][0]["activity"], "Year start lesson")
 
+    def test_teacher_range_preserves_single_and_plural_publication_metadata(self):
+        projections = [
+            {"status": "approved_baseline", "publication": {"id": "pub-1"}, "items": [], "issues": [], "day_modes": []},
+            {"status": "approved_baseline", "publication": {"id": "pub-2"}, "items": [], "issues": [], "day_modes": []},
+        ]
+        with patch("backend.services.canonical_schedule.project_teacher", side_effect=projections):
+            result = project_teacher_range(self.database, self.teacher["id"], "2026-09-07", "2026-09-14")
+        self.assertEqual(result["publication"], {"id": "pub-1"})
+        self.assertEqual(result["publications"], [{"id": "pub-1"}, {"id": "pub-2"}])
+
+    def test_teacher_range_keeps_visible_weeks_when_draft_is_in_the_middle(self):
+        projections = [
+            {"status": "approved_baseline", "items": [{"date": "2026-09-07"}], "issues": [], "day_modes": []},
+            {"status": "draft", "items": [{"date": "2026-09-14"}], "issues": [], "day_modes": []},
+            {"status": "approved_with_exceptions", "items": [{"date": "2026-09-21"}], "issues": [], "day_modes": []},
+        ]
+        with patch("backend.services.canonical_schedule.project_teacher", side_effect=projections):
+            result = project_teacher_range(self.database, self.teacher["id"], "2026-09-07", "2026-09-27")
+        self.assertEqual(result["status"], "approved_baseline")
+        self.assertEqual([item["date"] for item in result["items"]], ["2026-09-07", "2026-09-21"])
+
     def test_legacy_club_keeps_staffing_and_is_hidden_from_students(self):
         artifact = self.artifact()
         assignment = artifact["blocks"][self.block_key]["assignments"][0]
