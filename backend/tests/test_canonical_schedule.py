@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
@@ -307,6 +308,19 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(group["scheduled_minutes"], 60)
         self.assertEqual(group["day_summaries"][0]["window_minutes"], 60)
         self.assertEqual(group["day_summaries"][0]["gap_minutes"], 0)
+
+    def test_class_load_batch_query_count_does_not_scale_with_teacher_roster(self):
+        import_canonical_artifact(self.database, self.artifact())
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        with patch.object(self.database, "execute", wraps=self.database.execute) as execute:
+            class_load_analytics(self.database, "2026-09-07")
+            small_roster_calls = execute.call_count
+        for index in range(40):
+            self.database.create_identity("teacher", f"Class Unassigned {index}")
+        with patch.object(self.database, "execute", wraps=self.database.execute) as execute:
+            class_load_analytics(self.database, "2026-09-07")
+            large_roster_calls = execute.call_count
+        self.assertLessEqual(large_roster_calls, small_roster_calls + 1)
     def test_teacher_load_batch_query_count_does_not_scale_with_roster(self):
         import_canonical_artifact(self.database, self.artifact())
         materialize_effective_week(self.database, self.version_id, "2026-09-07")

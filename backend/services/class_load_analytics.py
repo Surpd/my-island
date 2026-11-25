@@ -6,7 +6,8 @@ from datetime import date, datetime
 from typing import Any
 
 from backend.database import Database
-from backend.services.canonical_schedule import PUBLISHED_STATUSES, project_teacher_range
+from backend.services.canonical_schedule import PUBLISHED_STATUSES
+from backend.services.teacher_load_analytics import _batch_teacher_projections
 
 
 def _duration(start_time: Any, end_time: Any) -> int | None:
@@ -43,8 +44,12 @@ def class_load_analytics(database: Database, start_day: str, end_day: str | None
     grouped: dict[str, dict[str, Any]] = {}
     seen: set[tuple[str, str, str, str, str, str]] = set()
     published_weeks = 0
+    publication_coverage: dict[str, dict[str, Any]] = {}
+    projections = _batch_teacher_projections(database, [str(teacher["id"]) for teacher in teachers], start_day, finish)
     for teacher in teachers:
-        projection = project_teacher_range(database, teacher["id"], start_day, finish)
+        projection = projections[str(teacher["id"])]
+        for metadata in projection.get("publications") or []:
+            publication_coverage[str(metadata.get("week_start"))] = metadata
         if projection.get("status") not in PUBLISHED_STATUSES:
             continue
         published_weeks += 1
@@ -110,7 +115,8 @@ def class_load_analytics(database: Database, start_day: str, end_day: str | None
         "start_day": start_day,
         "end_day": finish,
         "groups": output,
-        "coverage": {"group_count": len(output), "published_teacher_projections": published_weeks},
+        "coverage": {"group_count": len(output), "published_teacher_projections": published_weeks,
+                     "weeks": [publication_coverage[key] for key in sorted(publication_coverage)]},
         "source": "canonical_teacher_projection",
     }
 
