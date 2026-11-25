@@ -2280,15 +2280,14 @@ def project_teacher_range(database: Database, identity_id: Any, start_day: str, 
     # An unmaterialized week is an expected sparse-range state. It must not
     # hide approved weeks; only an explicitly unpublished week suppresses the
     # aggregate, matching the single-week publication contract.
-    status = next((value for value in statuses if value in {"draft", "superseded"}), None)
-    if status in {"draft", "superseded"}:
-        status = "not_published"
-        items, issues, day_modes = [], [], []
-    elif published:
+    blocked = any(value in {"draft", "superseded"} for value in statuses)
+    if published:
         status = published[0].get("status")
+    elif blocked:
+        status = "not_published"
     else:
         status = statuses[0] if statuses else "canonical_not_materialized"
-    result = dict(next(iter(projections.values()), {}))
+    result = dict(next(iter(published), next(iter(projections.values()), {})))
     result.update({
         "identity_id": str(identity_id),
         "start_day": start_day,
