@@ -57,6 +57,8 @@ jobs:
       - run: npm ci
       - run: npx --no-install playwright install --with-deps chromium
       - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+        env:
+          MY_ISLAND_E2E_VERIFY_DIAGNOSTICS: '1'
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
