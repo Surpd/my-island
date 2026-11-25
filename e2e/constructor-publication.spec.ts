@@ -143,18 +143,24 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       const scope = publishPayload.scope_kind === 'week' ? 'week' : 'template';
       const publishedWeek = typeof publishPayload.week_start === 'string' ? publishPayload.week_start : '';
       const historyPreview = preview('history');
-      historyItems = [{
-        id: 'publication-fixture', ...(scope === 'week' ? {sheet_delivery: {state: 'retry'}} : {}), scope_kind: scope, scope_key: scope === 'week' ? `week:${publishedWeek}` : 'template',
-        created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
-        runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
-        diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
-      }];
       if (scope === 'week') {
+        historyItems = [{
+          id: 'publication-fixture', sheet_delivery: {state: 'retry'}, scope_kind: scope, scope_key: `week:${publishedWeek}`,
+          created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
+          runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
+          diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
+        }];
         return route.fulfill({json: {status: 'published', operation_id: publishPayload.operation_id,
           sheet_delivery_queued: true, published_id: PUBLISHED_ID, version_id: VERSION_ID,
           created_at: '2026-10-27T09:15:00Z', week_start: publishedWeek, summary: historyItems[0].summary,
           runtime_readback: { verified: true, block_count: 7, assignment_count: 4 }}});
       }
+      historyItems = [{
+        id: 'publication-fixture', scope_kind: scope, scope_key: 'template',
+        created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
+        runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
+        diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
+      }];
       return route.fulfill({ json: { status: 'published', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
     }
     return route.continue();
