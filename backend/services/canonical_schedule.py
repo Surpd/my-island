@@ -2228,6 +2228,7 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
                 item['physical_presence']=teacher_id in teacher_ids
             joint_id = metadata.get("joint_activity_id") if metadata.get("audience_coverage") == "explicit" else None
             if joint_id:
+                item["provenance"]["joint_activity_id"] = str(joint_id)
                 joint_key = (day,str(block.get("start_time")),str(block.get("end_time")),str(joint_id))
                 previous = joint_items.get(joint_key)
                 if previous is not None:

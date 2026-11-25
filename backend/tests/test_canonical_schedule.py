@@ -12,6 +12,7 @@ from backend.services.canonical_schedule import (
     read_canonical_template,
     schedule_admin_observability,
 )
+from backend.services.teacher_load_analytics import teacher_load_analytics
 
 
 class CanonicalScheduleRuntimeTests(unittest.TestCase):
@@ -239,6 +240,37 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         materialize_effective_week(self.database, self.version_id, "2026-09-07")
         teacher_projection = project_teacher_range(self.database, self.teacher["id"], "2026-09-09", "2026-09-09")
         self.assertEqual(teacher_projection["items"], [])
+
+    def test_teacher_load_analytics_separates_minutes_and_exposes_provenance(self):
+        artifact = self.artifact()
+        metadata = artifact["blocks"][self.block_key]["assignments"][0].setdefault("metadata", {})
+        metadata.update({"joint_activity_id": "joint-1", "audience_coverage": "explicit"})
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+
+        result = teacher_load_analytics(self.database, "2026-09-07", "2026-09-13")
+        summary = result["teachers"][0]
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(summary["scheduled_minutes"], 45)
+        self.assertEqual(summary["lead_minutes"], 45)
+        self.assertEqual(summary["joint_minutes"], 45)
+        self.assertEqual(summary["items"][0]["duration_minutes"], 45)
+        self.assertEqual(summary["items"][0]["provenance"]["joint_activity_id"], "joint-1")
+
+    def test_teacher_load_analytics_keeps_responsible_practice_separate(self):
+        artifact = self.artifact()
+        artifact["version_id"] = "runtime-practice-load"
+        artifact["source_snapshot"] = {"id": "practice-snapshot", "fingerprint": "practice-fingerprint"}
+        assignment = artifact["blocks"][self.block_key]["assignments"][0]
+        assignment["teacher_ids"] = []
+        assignment["metadata"] = {"activity_format": "independent_practice", "responsible_teacher_ids": [str(self.teacher["id"])]}
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, artifact["version_id"], "2026-09-07")
+
+        summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
+        self.assertEqual(summary["lead_minutes"], 0)
+        self.assertEqual(summary["responsible_minutes"], 45)
+        self.assertEqual(summary["items"][0]["role"], "responsible")
 
     def test_teacher_range_accumulates_published_weeks_and_skips_unmaterialized_week(self):
         for version_id, week_start, activity in (
