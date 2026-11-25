@@ -237,6 +237,58 @@ class ConstructorPublicationTests(unittest.TestCase):
         draft["revision"] = result["draft_revision"]
         return result
 
+    def test_recovery_context_is_bound_to_current_school_admin(self):
+        from backend.handlers.constructor_publication_api import create_constructor_publication_router
+        from fastapi import HTTPException
+
+        def require_admin(token):
+            if token not in {"admin-one", "admin-two"}:
+                raise HTTPException(401)
+            return token
+
+        app = FastAPI()
+        app.include_router(create_constructor_publication_router(lambda: (self.database, self.database), require_admin))
+        client = TestClient(app)
+        root = "/api/admin/schedule/constructor"
+        one = {"X-School-Admin-Session": "admin-one"}
+        two = {"X-School-Admin-Session": "admin-two"}
+        with patch.dict(os.environ, {"MY_ISLAND_CONSOLIDATED_SCHEDULE": "1"}):
+            context = root + "/publication/recovery-context"
+            self.assertEqual(client.get(context).status_code, 401)
+            response = client.get(context, headers=one)
+            self.assertEqual(response.headers["cache-control"], "private, no-store")
+            owner = response.json()["owner"]
+            self.assertNotEqual(owner, client.get(context, headers=two).json()["owner"])
+            draft = self.draft()
+            args = {"scope_kind": "template", "expected_revision": draft["revision"]}
+            preview = preview_publication(self.database, draft["id"], **args)
+            body = {**args, "confirmed": True, "preview_token": preview["preview_token"],
+                    "recovery_owner": owner, "operation_id": "browser-pending"}
+            path = root + "/" + draft["id"] + "/publication/publish"
+            self.assertEqual(client.post(path, headers=two, json=body).status_code, 403)
+            self.assertEqual(list_publications(self.database)["items"], [])
+            result = client.post(path, headers=one, json=body)
+            self.assertEqual(result.status_code, 200, result.text)
+            receipt = root + "/publication/receipts/browser-pending"
+            self.assertEqual(client.get(receipt, headers=two).status_code, 404)
+            self.assertEqual(client.get(receipt, headers=one).json(), result.json())
+
+    def test_receipt_survives_lost_response_and_rejects_key_reuse(self):
+        from backend.services.constructor_publication import publication_receipt
+        draft = self.draft()
+        args = dict(scope_kind="template", expected_revision=draft["revision"])
+        preview = preview_publication(self.database, draft["id"], **args)
+        command = dict(**args, preview_token=preview["preview_token"], confirmed=True,
+                       actor_user_id="admin-one", operation_id="repeatable")
+        result = publish_publication(self.database, draft["id"], **command)
+        self.assertEqual(publish_publication(self.database, draft["id"], **command), result)
+        self.assertEqual(publication_receipt(self.database, "repeatable", "admin-one"), result)
+        self.assertIsNone(publication_receipt(self.database, "repeatable", "admin-two"))
+        for changes in ({"actor_user_id": "admin-two"}, {"expected_revision": 2}):
+            with self.assertRaises(PublicationConflict):
+                publish_publication(self.database, draft["id"], **(command | changes))
+        self.assertEqual(len(list_publications(self.database)["items"]), 1)
+
     def test_preview_has_no_writes_and_roundtrip_template_week_runtime(self):
         draft = self.draft()
         with self.database.connection() as conn:
@@ -1761,8 +1813,10 @@ class ConstructorPublicationTests(unittest.TestCase):
         with self.assertRaises(PublicationConflict):
             preview_restore(self.database, first["publication_id"], expected_head_revision=1)
         preview = preview_restore(self.database, first["publication_id"], expected_head_revision=2)
-        restored = restore_publication(self.database, first["publication_id"], expected_head_revision=2,
-                                       preview_token=preview["preview_token"], confirmed=True)
+        command = dict(expected_head_revision=2, preview_token=preview["preview_token"],
+                       confirmed=True, operation_id="restore-once")
+        restored = restore_publication(self.database, first["publication_id"], **command)
+        self.assertEqual(restore_publication(self.database, first["publication_id"], **command), restored)
         self.assertNotEqual(restored["published_id"], first["published_id"])
         self.assertEqual(next(iter(canonical.read_canonical_template(self.database)["blocks"].values()))["assignments"][0]["activity"], "Math")
         self.assertIsNotNone(canonical.read_canonical_template(self.database, second["published_id"]))

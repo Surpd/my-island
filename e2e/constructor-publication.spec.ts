@@ -71,7 +71,10 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   };
 }
 
-async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean; applyNotes?: boolean } = {}) {
+async function openPublicationPanel(page: import('@playwright/test').Page, options: {
+  readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean; applyNotes?: boolean;
+  rosterPreview?: (request: {expected_revision: number; scope: string}) => unknown;
+} = {}) {
   let previewCount = 0;
   let normalizationCount = 0;
   let appliedNoteBody: unknown = null;
@@ -123,7 +126,12 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
         plan_hash:'fixture-plan', automatic_count: changes.length, changes, manual: [], retained_warning_count: warnings.length, retained_warnings: warnings } });
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
-      return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
+      const request = route.request().postDataJSON();
+      return route.fulfill({ json: options.rosterPreview?.(request)
+        ?? { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
+    }
+    if (path === '/api/admin/schedule/constructor/publication/recovery-context') {
+      return route.fulfill({json: {owner: 'fixture-admin-owner'}});
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publications`) return route.fulfill({ json: { items: historyItems, heads: {} } });
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/preview` && route.request().method() === 'POST') {
@@ -145,7 +153,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
         runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
         diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
       }];
-      return route.fulfill({ json: { status: 'published', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
+      return route.fulfill({ json: { status: 'published', operation_id: publishPayload.operation_id, published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
     }
     return route.continue();
   });
@@ -227,6 +235,79 @@ test('read-only preview remains available and cannot publish', async ({ page }) 
   await expect(dialog.getByText('Эта версия доступна для просмотра.')).toBeVisible();
   await expect(dialog.getByRole('button', { name: /Опубликовать/ })).toHaveCount(0);
   await expect(dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ })).toHaveCount(0);
+});
+
+test('recovers a committed publication after the POST response is lost', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  let operationId = '';
+  let writes = 0;
+  await page.route(`${API}/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`, async route => {
+    operationId = route.request().postDataJSON().operation_id;
+    writes += 1;
+    await route.abort('connectionreset');
+  });
+  await page.route(`${API}/api/admin/schedule/constructor/publication/receipts/*`, async route => {
+    expect(operationId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(route.request().url()).toMatch(new RegExp(operationId + '$'));
+    await route.fulfill({json: {operation_id: operationId, published_id: PUBLISHED_ID,
+      runtime_readback: {verified: true, block_count: 1, assignment_count: 1}}});
+  });
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
+  await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
+  await expect(dialog.getByText(/Проверка после публикации пройдена/)).toBeVisible();
+  expect(writes).toBe(1);
+});
+
+test('reopening after reload checks the saved receipt without issuing a new command', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  let operationId = '';
+  let writes = 0;
+  let reloaded = false;
+  await page.route(`${API}/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`, async route => {
+    operationId = route.request().postDataJSON().operation_id;
+    writes += 1;
+    await route.abort('connectionreset');
+  });
+  await page.route(`${API}/api/admin/schedule/constructor/publication/receipts/*`, async route => {
+    expect(route.request().url()).toContain(operationId);
+    if (!reloaded) return route.fulfill({status: 503});
+    return route.fulfill({json: {operation_id: operationId, published_id: PUBLISHED_ID,
+      runtime_readback: {verified: true, block_count: 1, assignment_count: 1}}});
+  });
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
+  await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
+  await expect(dialog.getByRole('button', {name: 'Проверить квитанцию'})).toBeEnabled();
+  reloaded = true;
+  await page.reload();
+  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
+  await expect(dialog.getByText(/Найдена квитанция/)).toBeVisible();
+  expect(writes).toBe(1);
+});
+
+test('a missing receipt only allows retrying the original confirmed request', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  const commands: unknown[] = [];
+  await page.route(`${API}/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`, async route => {
+    const body = route.request().postDataJSON();
+    commands.push(body);
+    if (commands.length === 1) return route.abort('connectionreset');
+    return route.fulfill({json: {operation_id: body.operation_id, published_id: PUBLISHED_ID,
+      runtime_readback: {verified: true, block_count: 1, assignment_count: 1}}});
+  });
+  await page.route(`${API}/api/admin/schedule/constructor/publication/receipts/*`, route => route.fulfill({status: 404}));
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
+  await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
+  await expect(dialog.getByRole('button', {name: 'Проверить квитанцию'})).toBeEnabled();
+  await page.reload();
+  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
+  expect(commands).toHaveLength(1);
+  await dialog.getByRole('button', {name: 'Повторить исходную команду'}).click();
+  await expect(dialog.getByText(/Найдена квитанция/)).toBeVisible();
+  expect(commands).toHaveLength(2);
+  expect(commands[0]).toEqual(commands[1]);
 });
 
 test('changing publication scope clears confirmation and publish uses the latest exact preview token', async ({ page }) => {
@@ -343,32 +424,26 @@ test('checking the whole draft shows roster changes without saving them', async 
   page.on('request', request => {
     if (request.method() === 'PUT' || new URL(request.url()).pathname.endsWith('/audiences/apply')) writes.push(request.url());
   });
-  const { dialog } = await openPublicationPanel(page);
   const rosterBodies: unknown[] = [];
-  await page.route('**/audiences/preview', route => {
-    const body = route.request().postDataJSON();
+  const { dialog } = await openPublicationPanel(page, {rosterPreview: body => {
     rosterBodies.push(body);
     const wholeDraft = body.scope === 'template';
-    return route.fulfill({ json: { revision: 1, preview_token: 'synthetic',
+    return { revision: 1, preview_token: 'synthetic',
       summary: wholeDraft
         ? { selected_count: 1, changed_count: 1, safe_count: 1, unresolved_count: 0, added_count: 0, removed_count: 9 }
         : { selected_count: 0, changed_count: 0, safe_count: 0, unresolved_count: 0, added_count: 0, removed_count: 0 },
       lessons: wholeDraft
         ? [{ id: 'lesson-excluded', subject: 'Математика', changed: true, safe: true, old_count: 25, proposed_count: 16 }]
-        : [] } });
-  });
-  const initialPreview = page.waitForResponse(response => response.url().endsWith('/audiences/preview'));
+        : [] };
+  }});
   await dialog.getByRole('button', { name: 'Составы и старые записи' }).click();
-  await initialPreview;
-  expect(rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }]);
+  await expect.poll(() => rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }]);
   await dialog.locator('[data-review-fix="roster-scope"] > summary').click();
   const scope = dialog.getByLabel('Проверять при выборе');
   await expect(scope).toHaveValue('stale');
-  const wholeDraftPreview = page.waitForResponse(response => response.url().endsWith('/audiences/preview'));
   await scope.selectOption({ label: 'Весь черновик' });
-  await wholeDraftPreview;
   await expect(scope).toHaveValue('template');
-  expect(rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }, { expected_revision: 1, scope: 'template' }]);
+  await expect.poll(() => rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }, { expected_revision: 1, scope: 'template' }]);
   await expect(dialog.getByText(/Проверено занятий: 1/)).toBeVisible();
   const rosters = dialog.locator('[data-review-fix="roster-lessons"]');
   await rosters.locator('summary').click();
