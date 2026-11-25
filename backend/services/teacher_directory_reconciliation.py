@@ -16,6 +16,7 @@ from .teacher_directory import TEACHER_ALIASES, SUBJECT_ALIASES, _clean, _key, c
 
 
 SHEET_NAME = "Учителя и группы — данные"
+MANUAL_ASSIGNMENT_SOURCES = {"manual_confirmation", "admin_override"}
 WHOLE_CLASS = "whole_class"
 COMPUTED_AUDIENCE = "computed_schedule_audience"
 
@@ -389,21 +390,25 @@ def build_teacher_reconciliation_plan(
     for key, items in current_by_key.items():
         if key in desired_keys:
             if len(items) > 1:
-                ranked = sorted(items, key=lambda item: (0 if item.get("source") in {"manual_confirmation", "admin_override"} else 1, str(item.get("id", ""))))
+                ranked = sorted(items, key=lambda item: (0 if item.get("source") in MANUAL_ASSIGNMENT_SOURCES else 1, str(item.get("id", ""))))
                 survivor_id = ranked[0].get("id")
-                duplicates.extend({**dict(item), "duplicate_of_id": survivor_id} for item in ranked[1:])
+                for item in ranked[1:]:
+                    if item.get("source") in MANUAL_ASSIGNMENT_SOURCES:
+                        manual_missing.append(item)
+                    else:
+                        duplicates.append({**dict(item), "duplicate_of_id": survivor_id})
             continue
         for item in items:
             source = str(item.get("source", ""))
             source_ref = str(item.get("source_ref", ""))
-            if source == "official_import" or source_ref.startswith("Учителя и группы!"):
+            if source in MANUAL_ASSIGNMENT_SOURCES:
+                manual_missing.append(item)
+            elif source == "official_import" or source_ref.startswith("Учителя и группы!"):
                 scope = (_key(item.get("teacher_name")), _key(item.get("subject")), _clean(item.get("base_class_name")))
                 if scope in unresolved_scope:
                     manual_missing.append({**dict(item), "deactivation_guard": "source has unresolved audience for the same teacher/subject/grade"})
                 else:
                     stale.append(item)
-            elif source == "manual_confirmation" or source == "admin_override":
-                manual_missing.append(item)
     plan.stale_assignments = stale
     plan.duplicate_assignments = duplicates
     plan.manual_protected_assignments = manual_missing
