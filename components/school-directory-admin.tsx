@@ -419,7 +419,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
         <DirectoryConflict key={String(remoteGroup.revision)} api={api}
           historyPath={`${schoolMode ? '/api/admin/school' : '/api/admin'}/directory/history/groups/${groupDraft.id}`}
           base={groupDraft._base} draft={groupDraft} remote={remoteGroup}
-          fields={{ display_name: 'Название', subject: 'Предмет', comment: 'Комментарий', default_teacher_identity_id: 'Преподаватель' }}
+          fields={{ display_name: 'Название', group_type: 'Тип группы', subject: 'Предмет', comment: 'Комментарий', default_teacher_identity_id: 'Преподаватель' }}
           apply={(merged) => { setError(''); setGroupDraft({ ...merged, _base: remoteGroup, _original_subject: remoteGroup.subject,
             _original_default_teacher_identity_id: remoteGroup.default_teacher_identity_id }); }} />}
       {groupDraft.id && !remoteGroup && <p role="alert">Запись удалена. Введённые значения остаются в форме для копирования.</p>}
