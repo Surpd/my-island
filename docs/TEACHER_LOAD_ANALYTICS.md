@@ -16,8 +16,14 @@ per teacher projection and carry their provenance ID. Cancelled, lunch,
 no-lesson, draft, and superseded rows are not workload.
 
 The response never includes student membership or roster data. If no approved
-canonical week is available, the response reports `canonical_not_materialized`
-and an empty workload rather than manufacturing zero-valued lessons.
+canonical week is available, the response reports `canonical_not_materialized`;
+aggregate numeric fields are `null` rather than manufactured zeroes. For a
+partially covered range, aggregate fields are also `null` and observed values
+are exposed under `observed_*` with `coverage_status: partial`. Zero is emitted
+only when every requested week is known and published
+(`coverage_status: complete`), including a fully published week with no teacher
+intervals. A broken publication head is unavailable and never falls back to
+legacy schedule data.
 
 Acceptance: minutes are reproducible from published interval records; 30/45/90
 minute intervals, historical and sparse weeks, joint/online lessons, cancelled
