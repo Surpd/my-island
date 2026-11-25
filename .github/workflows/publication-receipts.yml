@@ -26,6 +26,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npx --no-install tsc --noEmit
       - run: npx --no-install playwright install --with-deps chromium
       - run: npx --no-install playwright test e2e/constructor-publication.spec.ts -g 'recovers a committed publication|reopening after reload|a missing receipt|changing publication scope'
