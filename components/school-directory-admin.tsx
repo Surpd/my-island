@@ -53,7 +53,8 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
   const [teacherDraft, setTeacherDraft] = useState<Row | null>(null);
   const [dragStudent, setDragStudent] = useState<Row | null>(null);
   const [pendingMove, setPendingMove] = useState<{ student: Row; target: Row; source: Row } | null>(null);
-  const [pickedStudents, setPickedStudents] = useState<string[]>([]);
+  const [pickedRevisions, setPickedRevisions] = useState(new Map<string, number | undefined>());
+  const pickedStudents = Array.from(pickedRevisions.keys());
   const [assignment, setAssignment] = useState({ group_id: '', subject: '', grade_level: '' });
   const [sourceMode, setSourceMode] = useState('');
   const [schoolWritable, setSchoolWritable] = useState(false);
@@ -85,13 +86,12 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
     setGroupMenuId('');
     const base = { ...group, display_name: audienceLabel(group), _original_subject: group.subject || '', comment: group.comment ?? group.admin_note ?? '', default_teacher_identity_id: defaultTeacher, _original_default_teacher_identity_id: defaultTeacher };
     setGroupDraft({ ...base, _base: base });
-    setPickedStudents([]); pickedRevisions.current.clear();
+    setPickedRevisions(new Map());
   }, []);
 
   const readSequence = useRef(0);
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const read = useCallback(async (signal?: AbortSignal) => {
     const sequence = ++readSequence.current;
-    if (!signal) { setLoading(true); setError(''); }
     try {
       if (schoolMode) {
         const directory = await api<Directory>('/api/admin/school/directory', { signal });
@@ -128,14 +128,31 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
     } catch (e) { if (signal?.aborted || sequence !== readSequence.current) return false as const; if (signal) throw e; if (schoolMode) setConnectionLost(true); setError(e instanceof Error ? e.message : 'Не удалось загрузить школьный справочник.'); }
     finally { if (!signal?.aborted && sequence === readSequence.current) setLoading(false); }
   }, [api, editGroup, initialGroupId, schoolMode]);
+  const load = useCallback(() => {
+    setLoading(true);
+    setError('');
+    return read();
+  }, [read]);
   useLiveRevision({
     enabled: live && schoolSession && !accessLost,
     api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
-    refresh: (_marker, signal) => load(signal),
+    refresh: (_marker, signal) => read(signal),
     unavailable: () => { void load(); },
     revoke: () => { readSequence.current++; setAccessLost(true); },
   });
-  useEffect(() => { if (schoolSession && !live) void load(); }, [live, load, schoolSession]);
+  useEffect(() => {
+    if (!schoolSession || live) return;
+    const controller = new AbortController();
+    void Promise.resolve().then(() => {
+      if (!controller.signal.aborted) return read(controller.signal);
+    }).catch((cause: unknown) => {
+      if (!controller.signal.aborted) {
+        if (schoolMode) setConnectionLost(true);
+        setError(cause instanceof Error ? cause.message : 'Не удалось загрузить школьный справочник.');
+      }
+    });
+    return () => controller.abort();
+  }, [live, read, schoolMode, schoolSession]);
 
   const classes = useMemo(() => data.groups.filter((g) => !g.archived_at && String(g.group_type || '').toLocaleLowerCase('ru') === 'class').sort((a, b) => classLabel(a).localeCompare(classLabel(b), 'ru', { numeric: true })), [data.groups]);
   const classNames = useMemo(() => classes.map(classLabel).filter(Boolean), [classes]);
@@ -245,14 +262,13 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
   const remoteGroup: Row | null = groupServer ? { ...groupServer, display_name: audienceLabel(groupServer),
     comment: groupServer.comment ?? groupServer.admin_note ?? '',
     default_teacher_identity_id: String(groupServer.default_teacher_identity_id || '') } : null;
-  const pickedRevisions = useRef(new Map<string, number>());
   const pickMembers = (ids: string[]) => {
-    const kept = new Map<string, number>();
+    const kept = new Map<string, number | undefined>();
     for (const id of ids) {
-      const version = pickedRevisions.current.get(id) ?? data.students.find((row) => String(row.id) === id)?.revision;
-      if (version !== undefined) kept.set(id, version);
+      const version = pickedRevisions.get(id) ?? data.students.find((row) => String(row.id) === id)?.revision;
+      kept.set(id, version);
     }
-    pickedRevisions.current = kept; setPickedStudents(ids);
+    setPickedRevisions(kept);
   };
   const saveGroup = async (membersOnly: boolean) => {
     if (!groupDraft) return;
@@ -265,7 +281,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
       ...(groupDraft.id && String(groupDraft.default_teacher_identity_id || '') === String(groupDraft._original_default_teacher_identity_id || '') ? {} : { default_teacher_identity_id: groupDraft.default_teacher_identity_id || null }),
     };
     const add_members = pickedStudents.map((id) => ({
-      identity_id: id, expected_revision: pickedRevisions.current.get(id),
+      identity_id: id, expected_revision: pickedRevisions.get(id),
     }));
     setBusy(true); setError('');
     try {
@@ -273,7 +289,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
         method: groupDraft.id ? 'PATCH' : 'POST',
         body: JSON.stringify({ ...fields, expected_revision: groupDraft.revision, add_members }),
       });
-      setNotice('Изменения сохранены.'); setGroupDraft(null); setPickedStudents([]); pickedRevisions.current.clear();
+      setNotice('Изменения сохранены.'); setGroupDraft(null); setPickedRevisions(new Map());
       window.dispatchEvent(new Event('school-directory-updated')); await load();
     } catch (cause) {
       if ((cause as { status?: number })?.status === 409) await load();

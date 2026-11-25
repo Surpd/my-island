@@ -16,7 +16,7 @@ on:
       - 'backend/tests/test*directory*.py'
       - 'components/*directory*.tsx'
       - 'components/use-live-revision.ts'
-      - 'tests/live-revision.test.cjs'
+      - 'tests/live-revision.test.mjs'
       - 'components/schedule-constructor.tsx'
       - 'e2e/*directory*'
 
@@ -71,7 +71,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: node --test tests/live-revision.test.cjs
+      - run: node --test tests/live-revision.test.mjs
       - run: npx --no-install tsc --noEmit
       - run: npx --no-install playwright install --with-deps chromium
       - name: Verify school directory forms in Chromium
