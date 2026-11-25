@@ -73,6 +73,7 @@ def teacher_load_analytics(database: Database, start_day: str, end_day: str | No
             "activity_minutes": {},
             "items": [],
             "coverage": projection.get("publications") or [],
+            "coverage_status": projection.get("coverage_status", "unavailable"),
         }
         day_values: set[str] = set()
         day_items: dict[str, list[dict[str, Any]]] = {}
@@ -121,6 +122,16 @@ def teacher_load_analytics(database: Database, start_day: str, end_day: str | No
         summary["days"] = sorted(day_values)
         summary["activity_minutes"] = dict(sorted(activity_minutes.items()))
         summary["day_summaries"] = _day_summaries(day_items)
+        if summary["coverage_status"] != "complete":
+            # Numeric totals over a sparse or entirely unpublished period are
+            # not complete totals. Keep the observed partial values explicit
+            # instead of presenting them as school-wide zeroes/totals.
+            for field in ("lesson_count", "scheduled_minutes", "lead_minutes",
+                          "responsible_minutes", "joint_minutes",
+                          "unknown_duration_items", "days", "activity_minutes",
+                          "day_summaries"):
+                summary[f"observed_{field}"] = summary[field]
+                summary[field] = None
         teachers.append(summary)
     return {
         "status": "published" if published_teacher_count else "canonical_not_materialized",
@@ -145,7 +156,9 @@ def _batch_teacher_projections(database: Database, teacher_ids: list[str], start
         teacher_rows = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND id IN ({})".format(",".join("?" for _ in teacher_ids)), tuple(teacher_ids)).fetchall() if teacher_ids else []
     groups = {str(row["id"]): str(row["display_name"] or row["name"]) for row in group_rows}
     names = {str(row["id"]): str(row["display_name"]) for row in teacher_rows}
-    result = {teacher_id: {"status": "canonical_not_materialized", "items": [], "publications": [], "coverage": []} for teacher_id in teacher_ids}
+    result = {teacher_id: {"status": "canonical_not_materialized", "items": [], "publications": [], "coverage": [],
+                           "requested_week_count": 0, "published_week_count": 0,
+                           "coverage_status": "unavailable"} for teacher_id in teacher_ids}
     seen_weeks: set[str] = set()
     cursor = first
     while cursor <= last:
@@ -157,6 +170,9 @@ def _batch_teacher_projections(database: Database, teacher_ids: list[str], start
         publication = resolve_published_week(database, week_start)
         for teacher_id in teacher_ids:
             result[teacher_id]["publications"].append(dict(publication.metadata))
+            result[teacher_id]["requested_week_count"] += 1
+            if publication.status in PUBLISHED_STATUSES:
+                result[teacher_id]["published_week_count"] += 1
         effective = publication.effective
         if effective and publication.status in PUBLISHED_STATUSES:
             blocks = _block_rows(database, effective["effective_week_id"])
@@ -205,6 +221,13 @@ def _batch_teacher_projections(database: Database, teacher_ids: list[str], start
                 result[teacher_id]["coverage"].append(dict(publication.metadata))
                 result[teacher_id]["items"].extend(per_teacher[teacher_id])
         cursor += timedelta(days=1)
+    for teacher_id in teacher_ids:
+        requested = result[teacher_id]["requested_week_count"]
+        published = result[teacher_id]["published_week_count"]
+        result[teacher_id]["coverage_status"] = (
+            "complete" if requested and published == requested else
+            "partial" if published else "unavailable"
+        )
     return result
 
 

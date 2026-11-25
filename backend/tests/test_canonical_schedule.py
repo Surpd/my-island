@@ -14,6 +14,7 @@ from backend.services.canonical_schedule import (
     schedule_admin_observability,
 )
 from backend.services.teacher_load_analytics import teacher_load_analytics
+from backend.services.constructor_publication import initialize_publication_schema
 
 
 class CanonicalScheduleRuntimeTests(unittest.TestCase):
@@ -272,6 +273,43 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["lead_minutes"], 0)
         self.assertEqual(summary["responsible_minutes"], 45)
         self.assertEqual(summary["items"][0]["role"], "responsible")
+
+    def test_teacher_load_missing_period_uses_null_totals(self):
+        summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
+        self.assertEqual(summary["coverage_status"], "unavailable")
+        self.assertIsNone(summary["scheduled_minutes"])
+        self.assertIsNone(summary["lesson_count"])
+        self.assertIsNone(summary["lead_minutes"])
+
+    def test_teacher_load_complete_known_zero_is_not_null(self):
+        import_canonical_artifact(self.database, self.artifact())
+        materialize_effective_week(self.database, self.version_id, "2026-09-07", patches=[{
+            "block_key": self.block_key,
+            "change_kind": "cancelled",
+        }], overlay_source_snapshot_id="zero-week-snapshot")
+        summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
+        self.assertEqual(summary["coverage_status"], "complete")
+        self.assertEqual(summary["scheduled_minutes"], 0)
+        self.assertEqual(summary["lesson_count"], 0)
+
+    def test_teacher_load_partial_period_exposes_observed_values(self):
+        import_canonical_artifact(self.database, self.artifact())
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        summary = teacher_load_analytics(self.database, "2026-09-07", "2026-09-14")["teachers"][0]
+        self.assertEqual(summary["coverage_status"], "partial")
+        self.assertIsNone(summary["scheduled_minutes"])
+        self.assertEqual(summary["observed_scheduled_minutes"], 45)
+        self.assertEqual(summary["observed_lesson_count"], 1)
+
+    def test_teacher_load_broken_head_is_unavailable_not_legacy_data(self):
+        initialize_publication_schema(self.database)
+        with self.database.connection() as connection:
+            self.database.execute(connection, "INSERT INTO schedule_publication_heads(scope_key,published_id,version_id,revision,updated_at) VALUES (?,?,?,?,?)",
+                                  ("week:2026-09-07", "missing-effective", "missing-version", 1, "2026-09-07"))
+        summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
+        self.assertEqual(summary["coverage_status"], "unavailable")
+        self.assertIsNone(summary["scheduled_minutes"])
+        self.assertEqual(summary["coverage"][0]["origin"], "broken_head")
 
     def test_teacher_load_batch_query_count_does_not_scale_with_roster(self):
         import_canonical_artifact(self.database, self.artifact())
