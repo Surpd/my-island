@@ -35,7 +35,7 @@ class ConfiguredProductionDatabase(Database):
     def execute(self, connection, query, params=()):
         class Result:
             def fetchall(self):
-                return [object(), object()] if "information_schema.columns" in query else [object()]
+                return [object()] * 4 if "information_schema.columns" in query else [object()]
 
             def fetchone(self):
                 return object()
@@ -149,17 +149,17 @@ class SchoolDirectoryApiAuthTests(unittest.TestCase):
                 created_group = client.post("/api/admin/groups", json={"name": "6А", "group_type": "class"})
                 self.assertEqual(created_group.status_code, 200, created_group.text)
                 created = client.post("/api/admin/teacher-assignments", json={
-                    "teacher_identity_id": str(teacher["id"]), "grade_level": "6", "subject": "Математика", "exam_track": "ЕГЭ"
+                    "expected_revision": database.get_identity(teacher["id"])["revision"], "teacher_identity_id": str(teacher["id"]), "grade_level": "6", "subject": "Математика", "exam_track": "ЕГЭ"
                 })
                 self.assertEqual(created.status_code, 200, created.text)
                 assignment_id = str(created.json()["items"][0]["id"])
                 edited = client.post("/api/admin/teacher-assignments", json={
-                    "teacher_identity_id": str(teacher["id"]), "assignment_id": assignment_id,
+                    "expected_revision": created.json()["revision"], "teacher_identity_id": str(teacher["id"]), "assignment_id": assignment_id,
                     "grade_level": "7", "subject": "Физика", "exam_track": "ОГЭ"
                 })
                 self.assertEqual(edited.status_code, 200, edited.text)
                 group_edited = client.post("/api/admin/teacher-assignments", json={
-                    "teacher_identity_id": str(teacher["id"]), "assignment_id": str(group_assignment["id"]),
+                    "expected_revision": edited.json()["revision"], "teacher_identity_id": str(teacher["id"]), "assignment_id": str(group_assignment["id"]),
                     "group_id": str(second_class["id"]), "subject": "Информатика", "exam_track": "ОГЭ"
                 })
                 self.assertEqual(group_edited.status_code, 200, group_edited.text)

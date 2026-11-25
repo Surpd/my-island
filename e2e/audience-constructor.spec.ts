@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { expect, test } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -15,7 +16,7 @@ test('one subject and teacher work with seventh-grade split and administrative c
   const klass = groups.find((item) => item.name === 'grade7:base:7-А');
   const teacher = teachers.find((item) => item.display_name === 'Тестовый преподаватель');
   expect(split && klass && teacher).toBeTruthy();
-  const assignment = await page.request.post(`${API}/api/admin/teacher-assignments`, { headers: ADMIN, data: { teacher_identity_id: String(teacher!.id), grade_level: '7', subject: 'Литература', active: true } });
+  const assignment = await page.request.post(`${API}/api/admin/teacher-assignments`, { headers: ADMIN, data: { expected_revision: await personRevision(page, String(teacher!.id)), teacher_identity_id: String(teacher!.id), grade_level: '7', subject: 'Литература', active: true } });
   expect(assignment.ok(), await assignment.text()).toBeTruthy();
 
   await page.setViewportSize({ width: 1920, height: 1080 });
@@ -55,7 +56,7 @@ test('exact English group suggests its teacher and a lesson may override that te
   const assigned = teachers.find((item) => item.display_name === 'Педагог 9-1');
   const substitute = teachers.find((item) => item.display_name === 'Тестовый преподаватель');
   expect(group && klass && assigned && substitute).toBeTruthy();
-  const response = await page.request.post(`${API}/api/admin/teacher-assignments`, { headers: ADMIN, data: { teacher_identity_id: String(assigned!.id), group_id: String(group!.id), subject: 'Английский язык', active: true } });
+  const response = await page.request.post(`${API}/api/admin/teacher-assignments`, { headers: ADMIN, data: { expected_revision: await personRevision(page, String(assigned!.id)), teacher_identity_id: String(assigned!.id), group_id: String(group!.id), subject: 'Английский язык', active: true } });
   expect(response.ok(), await response.text()).toBeTruthy();
 
   await page.setViewportSize({ width: 1366, height: 768 });

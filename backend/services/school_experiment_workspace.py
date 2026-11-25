@@ -248,11 +248,15 @@ def school_editor_directory(source: ReadOnlySchoolDatabase) -> dict[str, Any]:
     with source.connection() as connection:
         archive_column = source.execute(connection, """SELECT 1 FROM information_schema.columns
             WHERE table_schema='public' AND table_name='groups' AND column_name='archived_at'""").fetchone()
+        revision_ready = source.execute(connection, """SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='identities' AND column_name='revision'""").fetchone()
+        revision_select = "revision" if revision_ready else "NULL AS revision"
+        note_select = "admin_note" if revision_ready else "NULL AS admin_note"
         archived_select = "archived_at" if archive_column else "NULL AS archived_at"
         groups = [dict(row) for row in source.execute(connection, f"""SELECT id,name,display_name,group_type,role,semantic_dimension,subject,
-                base_class_name,subject_subgroup,exam_track,canonical,{archived_select}
+                base_class_name,subject_subgroup,exam_track,canonical,{archived_select},{revision_select},{note_select}
             FROM groups WHERE canonical IS TRUE ORDER BY name""").fetchall()]
-        people = [dict(row) for row in source.execute(connection, """SELECT id,kind,display_name,class_name,status
+        people = [dict(row) for row in source.execute(connection, f"""SELECT id,kind,display_name,class_name,status,{revision_select}
             FROM identities WHERE status IN ('active','inactive') ORDER BY display_name""").fetchall()]
         # Active memberships are the canonical source. Exclusion overrides mask
         # them, while include overrides can supply a membership missing from the

@@ -11,7 +11,7 @@ from backend.services.journal_matching import suggestion_reason
 def exercise_matching(database):
     with database.connection() as connection:
         actor = database.execute(connection,"INSERT INTO users(telegram_user_id,role) VALUES (991122,'admin') RETURNING id").fetchone()['id']
-    database.create_group('6-А','class',base_class_name='6-А',actor_user_id=actor)
+    group = database.create_group('6-А','class',base_class_name='6-А',actor_user_id=actor)
     def sync():
         for title, name, sheet in [('Math','Мальцев Саша',61),('Science','Мальцев Александр',62)]:
             sync_journal_values(database,[['Дата','01.09'],['Задание','Test'],['Вес',1],['Оценка',10],[name,8]],
@@ -21,6 +21,14 @@ def exercise_matching(database):
                'surname':'Мальцев','given_name':'Александр','grade':6,'comment':''}
     preview = create_student(database,payload)
     assert preview['can_confirm'] and preview['record_count'] == 2 and preview['result_count'] == 2
+    database.update_admin_group(group["id"], {"comment": "fixture change"}, actor)
+    try:
+        create_student(database, dict(payload, preview_token=preview['preview_token']), actor, True)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("journal creation accepted stale class revision")
+    preview = create_student(database, payload)
     result = create_student(database,dict(payload,preview_token=preview['preview_token']),actor,True)
     identity_id = result['identity_id']
     assert len(candidates(database,6)) == 1

@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { expect, test } from '@playwright/test';
 
 const API = 'http://localhost:8011';
@@ -144,7 +145,7 @@ test('group CRUD, student details, and administrative class editing remain usabl
   expect(teachers.length).toBeGreaterThan(0);
   const assignmentResponse = await page.request.post(`${API}/api/admin/teacher-assignments`, {
     headers: ADMIN,
-    data: { teacher_identity_id: String(teachers[0].id), group_id: createdGroupId, subject: 'E2E уникальный предмет', active: true },
+    data: { expected_revision: await personRevision(page, String(teachers[0].id)), teacher_identity_id: String(teachers[0].id), group_id: createdGroupId, subject: 'E2E уникальный предмет', active: true },
   });
   expect(assignmentResponse.ok(), await assignmentResponse.text()).toBeTruthy();
 
@@ -227,5 +228,44 @@ test('directory navigation and board fit both requested desktop widths', async (
     await expect(page.locator('.school-class-shelf')).toBeVisible();
     await expect(page.locator('.school-board-groups')).toBeVisible();
     expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(viewport.width + 2);
+  }
+});
+
+test('two open group forms preserve the second draft on a stale save', async ({ page, browser }) => {
+  const name = `E2E версия группы ${Date.now()}`;
+  const created = await page.request.post(`${API}/api/admin/groups`, {
+    headers: ADMIN, data: { name, group_type: 'instructional' },
+  });
+  expect(created.ok()).toBeTruthy();
+  const id = String((await created.json()).id);
+  const second = await browser.newContext();
+  try {
+    const other = await second.newPage();
+    for (const tab of [page, other]) {
+      await tab.goto('http://localhost:3011/admin/people?role=admin');
+      const card = groupCard(tab, name, id);
+      await card.getByRole('button', { name: /^Действия группы/ }).click();
+      await card.getByRole('menuitem', { name: 'Редактировать' }).click();
+    }
+    const first = page.getByRole('dialog', { name: 'Настройки группы' });
+    const stale = other.getByRole('dialog', { name: 'Настройки группы' });
+    await first.getByLabel('Название').fill(name + ' A');
+    await stale.getByLabel('Название').fill(name + ' B');
+    const mutation = `**/api/admin/groups/${id}`;
+    await page.route(mutation, (route) => route.abort('failed'), { times: 1 });
+    await first.getByRole('button', { name: 'Сохранить группу' }).click();
+    await expect(first.getByRole('alert')).toBeVisible();
+    await expect(first.getByLabel('Название')).toHaveValue(name + ' A');
+    await first.getByRole('button', { name: 'Сохранить группу' }).click();
+    await expect(first).toHaveCount(0);
+    const conflict = other.waitForResponse((r) => r.request().method() === 'PATCH' && r.url().endsWith('/groups/' + id));
+    await stale.getByRole('button', { name: 'Сохранить группу' }).click();
+    expect((await conflict).status()).toBe(409);
+    await expect(stale.getByRole('alert')).toContainText('Запись уже изменена');
+    await expect(stale.getByLabel('Название')).toHaveValue(name + ' B');
+    const stored = await page.request.get(`${API}/api/admin/groups/${id}`, { headers: ADMIN });
+    expect((await stored.json()).display_name).toBe(name + ' A');
+  } finally {
+    await second.close();
   }
 });

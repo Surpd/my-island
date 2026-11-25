@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, type Page } from '@playwright/test';
@@ -60,7 +61,7 @@ async function addStudentToClass(page: Page, classId: string, className: string,
   const studentId = String((await identity.json()).id);
   const membership = await page.request.post(`${API}/api/admin/memberships`, {
     headers: ADMIN,
-    data: { group_id: classId, identity_id: studentId },
+    data: { expected_revision: await personRevision(page, studentId), group_id: classId, identity_id: studentId },
   });
   expect(membership.ok()).toBeTruthy();
   return studentId;
@@ -69,7 +70,7 @@ async function addStudentToClass(page: Page, classId: string, className: string,
 async function addMembership(page: Page, groupId: string, studentId: string) {
   const membership = await page.request.post(`${API}/api/admin/memberships`, {
     headers: ADMIN,
-    data: { group_id: groupId, identity_id: studentId },
+    data: { expected_revision: await personRevision(page, studentId), group_id: groupId, identity_id: studentId },
   });
   expect(membership.ok()).toBeTruthy();
 }

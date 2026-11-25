@@ -6,6 +6,7 @@ import logging
 from typing import Any
 from collections import Counter
 
+from backend.services.directory_revisions import directory_import_connection
 from backend.config import Settings
 from backend.database import Database
 from backend.services.google_classroom_sync import sync_classroom_course
@@ -16,7 +17,7 @@ from backend.services.journal_import import (classify_journal_values, deferred_g
                                              parse_journal_values, subject_period_from_title, sync_journal_values)
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
-from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
+from backend.services.teacher_directory_reconciliation import MANUAL_ASSIGNMENT_SOURCES, SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
 
 
 CURRENT_JOURNAL_FOLDER_ID = "1u7LS5hjyiTRe4fgUoEqRB4T9c02Nq18L"
@@ -725,7 +726,7 @@ def _apply_plan(database: Database, connection: Any, plan: TeacherReconciliation
                 "subject_subgroup": desired.subject_subgroup,
                 "exam_track": desired.exam_track,
             }.items()) or survivor.get("valid_until") is not None
-            if changed:
+            if changed and survivor.get("source") not in MANUAL_ASSIGNMENT_SOURCES:
                 database.execute(
                     connection,
                     """UPDATE teacher_assignments
@@ -767,7 +768,7 @@ def _apply_plan(database: Database, connection: Any, plan: TeacherReconciliation
 def refresh_teacher_directory_reconciliation_apply(database: Database, settings: Settings) -> dict[str, Any]:
     """Apply the guarded structured teacher-directory reconciliation to production."""
     spreadsheet_id, title, sheet_title, values = _structured_teacher_source(settings, database)
-    with database.connection() as connection:
+    with directory_import_connection(database) as connection:
         foundation = _ensure_literature_11_base(database, connection)
         teachers, groups, current_assignments, canonical_subjects = _reconciliation_inputs(database, connection)
         plan = build_teacher_reconciliation_plan(values, canonical_teachers=teachers, canonical_groups=groups, canonical_subjects=canonical_subjects, current_assignments=current_assignments)

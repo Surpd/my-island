@@ -1071,6 +1071,8 @@ class Database:
             connection.execute(
                 "INSERT OR IGNORE INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_at) SELECT id, identity_id, 'confirmed', 'legacy_backfill', 'users.identity_id', created_at FROM users WHERE identity_id IS NOT NULL"
             )
+            from backend.services.directory_revisions import initialize_sqlite
+            initialize_sqlite(connection)
         from backend.services.schedule_activities import seed_activities
         seed_activities(self)
 
@@ -1916,7 +1918,7 @@ class Database:
         with self.connection() as connection:
             identities = self.execute(
                 connection,
-                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
+                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note, i.revision FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
                 params,
             ).fetchall()
             result: list[dict[str, Any]] = []
@@ -2123,7 +2125,7 @@ class Database:
                 dict(row)
                 for row in self.execute(
                     connection,
-                    f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note "
+                    f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note, i.revision "
                     f"FROM identities i WHERE {' AND '.join(clauses)} "
                     "ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
                     tuple(params),
@@ -2741,7 +2743,8 @@ class Database:
             if "groups" not in tables:
                 return None
             archived_select = "archived_at" if "archived_at" in tables["groups"] else "NULL AS archived_at"
-            group = self.execute(connection, f"SELECT id, canonical, {archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
+            revision_select = "revision" if "revision" in tables["groups"] else "NULL AS revision"
+            group = self.execute(connection, f"SELECT id, canonical, {archived_select}, {revision_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
             if not group:
                 return None
 
@@ -2858,7 +2861,7 @@ class Database:
                 if n:
                     unknown_references.append({"table": table, "count": n})
             all_counts = sum(counts.values()) + sum(item["count"] for item in unknown_references)
-            return {"group_id": gid, "archived": bool(group["archived_at"]), "counts": counts,
+            return {"group_id": gid, "revision": group["revision"], "archived": bool(group["archived_at"]), "counts": counts,
                     "unknown_references": unknown_references,
                     "safe_to_archive": all_counts == 0 and not unknown_references}
 
@@ -2953,9 +2956,15 @@ class Database:
                         cleaned_subjects.setdefault(cleaned.casefold(), cleaned)
             normalized_subjects = sorted(cleaned_subjects.values(), key=str.casefold)
             if subjects_supplied:
-                self.execute(connection, "UPDATE teacher_subjects SET active = FALSE WHERE teacher_identity_id = ? AND source = 'admin_override' AND active IS TRUE", (identity_id,))
-                existing_subjects = self.execute(connection, "SELECT subject FROM teacher_subjects WHERE teacher_identity_id = ? AND active IS TRUE", (identity_id,)).fetchall()
-                existing_keys = {" ".join(str(row["subject"]).split()).casefold() for row in existing_subjects}
+                active_subjects = self.execute(connection, """SELECT id,subject,source FROM teacher_subjects
+                    WHERE teacher_identity_id=? AND active IS TRUE""", (identity_id,)).fetchall()
+                existing_keys = set()
+                for row in active_subjects:
+                    key = " ".join(str(row["subject"]).split()).casefold()
+                    if row["source"] == "admin_override" and cleaned_subjects.get(key) != row["subject"]:
+                        self.execute(connection, "UPDATE teacher_subjects SET active=FALSE WHERE id=?", (row["id"],))
+                    else:
+                        existing_keys.add(key)
                 for subject in normalized_subjects:
                     if subject.casefold() in existing_keys:
                         continue
@@ -3072,7 +3081,7 @@ class Database:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
+                """SELECT g.id, g.revision, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
                           g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref, g.admin_note,
                           (SELECT ta.teacher_identity_id FROM teacher_assignments ta WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE ORDER BY ta.id DESC LIMIT 1) AS default_teacher_identity_id,
                           (SELECT ti.display_name FROM teacher_assignments ta JOIN identities ti ON ti.id = ta.teacher_identity_id WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE AND ti.status = 'active' ORDER BY ta.id DESC LIMIT 1) AS default_teacher_name,
@@ -3146,7 +3155,7 @@ class Database:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
+                """SELECT g.id, g.revision, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
                           g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref, g.admin_note,
                           (SELECT ta.teacher_identity_id FROM teacher_assignments ta WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE ORDER BY ta.id DESC LIMIT 1) AS default_teacher_identity_id,
                           (SELECT ti.display_name FROM teacher_assignments ta JOIN identities ti ON ti.id = ta.teacher_identity_id WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE AND ti.status = 'active' ORDER BY ta.id DESC LIMIT 1) AS default_teacher_name,
