@@ -846,6 +846,8 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  type LessonChange = { actor_id?: string; changed_at: string; changed_fields: { lesson_id: string; operation: string; fields: string[] }[] };
+  const [lessonChanges, setLessonChanges] = useState<LessonChange[]>([]);
   const [versionConflict, setVersionConflict] = useState<{ base: Draft | null; server: Draft; local: Draft; conflicts: ScheduleMergeConflict[] } | null>(null);
   const [conflictActionBusy, setConflictActionBusy] = useState(false);
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'local' | 'server'>>({});
@@ -901,6 +903,23 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const schedulePath = (suffix = '') => workspace === 'school'
     ? `/api/admin/schedule/experiments/school${suffix}`
     : `/api/admin/schedule/experiments${suffix}`;
+  const conflictDraftId = versionConflict?.server.id;
+  const conflictRevision = versionConflict?.server.revision;
+  const conflictBase = versionConflict?.base?.revision ?? 0;
+  useEffect(() => {
+    setLessonChanges([]);
+    if (!conflictDraftId || diagnostic) return;
+    const controller = new AbortController();
+    void api<{ items: LessonChange[] }>(schedulePath(`/${encodeURIComponent(conflictDraftId)}?lesson_changes_since=${conflictBase}`),
+      { signal: controller.signal }).then(({ items }) => { if (!controller.signal.aborted) setLessonChanges(items); }).catch(() => {});
+    return () => controller.abort();
+  }, [api, workspace, conflictDraftId, conflictRevision, conflictBase, diagnostic]);
+  const conflictAuthor = (change: ScheduleMergeConflict) => {
+    if (!change.lessonId) return null;
+    const entry = lessonChanges.find((row) => row.changed_fields.some((item) => item.lesson_id === change.lessonId &&
+      (item.operation !== 'edited' || item.fields.includes(change.field.split('.')[0]))));
+    return entry ? <small>{entry.actor_id ? `Администратор ${entry.actor_id}` : 'Системное изменение'} · {new Date(entry.changed_at).toLocaleString('ru-RU')}</small> : null;
+  };
   const editActivity = (item?: ScheduleActivity, requestedType: 'club' | 'elective' = 'club') => {
     setActivityEditor({ item, name: item?.name || '', type: item?.type === 'elective' ? 'elective' : requestedType,
       aliases: (item?.aliases || []).join(', '), teacher_ids: item?.teacher_ids || [], room: item?.room || '', eligible_grades: item?.eligible_grades || [] });
@@ -3228,7 +3247,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
             <div className="constructor-conflict-diff">
               <strong>Выберите, какой вариант оставить</strong>
               {versionConflicts.map((change) => <article key={change.key}>
-                <b>{conflictTitle(change)}</b>
+                <b>{conflictTitle(change)}</b>{conflictAuthor(change)}
                 <span>Ваш вариант: {conflictValueLabel(change, 'local')}</span>
                 <span>Другой вариант: {conflictValueLabel(change, 'server')}</span>
                 <label><select aria-label={`Вариант для ${conflictTitle(change)}`} value={conflictChoices[change.key] || 'local'} onChange={(event) => setConflictChoices((current) => ({ ...current, [change.key]: event.target.value as 'local' | 'server' }))}><option value="local">Оставить мой вариант</option><option value="server">Оставить другой вариант</option></select></label>

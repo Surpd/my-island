@@ -9,6 +9,7 @@ on:
       - 'backend/handlers/school_directory_api.py'
       - 'backend/migrations/054_directory_revisions.sql'
       - 'backend/services/directory_revisions.py'
+      - 'backend/services/schedule_experiments.py'
       - 'backend/services/school_experiment_workspace.py'
       - 'backend/tests/test*directory*.py'
       - 'components/*directory*.tsx'
@@ -53,14 +54,15 @@ jobs:
           CREATE SCHEMA extensions;
           CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
           SQL
-          for migration in {001..010} 013 020 021 034 035 036 037 054; do
+          for migration in {001..010} 013 020 021 028 033 034 035 036 037 038 054; do
             psql "$MY_ISLAND_DIRECTORY_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/migrations/"${migration}"_*.sql
           done
       - name: Verify SQLite and PostgreSQL transactions and administrative APIs
         run: >-
           python -m unittest backend.tests.test_directory_live backend.tests.test_directory_revisions
           backend.tests.test_admin_console backend.tests.test_school_directory_api
-          backend.tests.test_school_directory_admin_projection -v
+          backend.tests.test_school_directory_admin_projection backend.tests.test_schedule_experiments
+          backend.tests.test_school_experiment_workspace backend.tests.test_constructor_preview_auth -v
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

@@ -134,8 +134,10 @@ def school_source() -> ReadOnlySchoolDatabase:
 
 def school_drafts() -> Database:
     SCHOOL_DB.parent.mkdir(parents=True, exist_ok=True)
+    from backend.services.directory_revisions import initialize_history
     database = Database(path=SCHOOL_DB)
     with database.connection() as connection:
+        initialize_history(connection)
         connection.execute("""CREATE TABLE IF NOT EXISTS schedule_experiment_drafts (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, base_version_id TEXT,
             revision INTEGER NOT NULL DEFAULT 1, payload TEXT NOT NULL DEFAULT '{}',
