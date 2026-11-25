@@ -106,6 +106,28 @@ def _baseline_intervals(database, version_id):
     return {str(row["canonical_block_id"]): dict(row) for row in rows}
 
 
+def _cross_block_moves(database, blocks, monday):
+    """Pair explicit lesson lineage when the overlay cancels and adds different block keys."""
+    changed = {"cancelled": defaultdict(list), "added": defaultdict(list)}
+    for block in blocks:
+        change = block["change_kind"]
+        if change not in changed or block.get("weekday") is None:
+            continue
+        patch = block.get("patch") if change == "added" else None
+        for index, assignment in enumerate(canonical._assignments(database, block["canonical_block_id"], patch)):
+            item = _occurrence(assignment, block, index)
+            if item and item["lesson_id"]:
+                interval = {"day": (monday + timedelta(days=block["weekday"])).isoformat(),
+                            "start": item["start"], "end": item["end"]}
+                changed[change][item["lesson_id"]].append(interval)
+    pairs = {}
+    for lesson_id, previous in changed["cancelled"].items():
+        current = changed["added"].get(lesson_id, [])
+        if len(previous) == len(current) == 1 and previous[0] != current[0]:
+            pairs[lesson_id] = previous[0], current[0]
+    return pairs
+
+
 def operational_day(database: Database, selected: date, zone: str) -> dict:
     edition = canonical.resolve_published_week(database, selected.isoformat())
     monday = date.fromisoformat(edition.metadata["week_start"])
@@ -116,6 +138,7 @@ def operational_day(database: Database, selected: date, zone: str) -> dict:
         blocks = canonical._block_rows(database, edition_id)
         canonical._prefetch_block_assignments(database, blocks)
         previous_blocks = None
+        cross_block_moves = _cross_block_moves(database, blocks, monday)
         for block in blocks:
             if block.get("weekday") != selected.weekday():
                 continue
@@ -153,6 +176,11 @@ def operational_day(database: Database, selected: date, zone: str) -> dict:
                             item.update(change=changes[0], changes=changes)
                 elif change in {"cancelled", "added"}:
                     item["change"] = change
+                    move = cross_block_moves.get(item["lesson_id"])
+                    if move and change == "added":
+                        item.update(change="moved", changes=["moved"], previous_interval=move[0])
+                    elif move:
+                        item["replacement_interval"] = move[1]
                 existing = items.get(item["id"])
                 if existing:
                     for field in ("block_keys", "teacher_ids", "responsible_teacher_ids", "previous_teacher_ids",
