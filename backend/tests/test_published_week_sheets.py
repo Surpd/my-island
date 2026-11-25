@@ -188,6 +188,29 @@ class PublishedWeekSheetsTests(TestCase):
         self.assertEqual(self.job(second)["error_code"], "managed_cells_edited")
         self.assertEqual(len(self.client.history), 1)
 
+    def test_legacy_marker_is_upgraded_only_when_current_layout_is_proven(self):
+        first = self.start()
+        self.tick()
+        job = self.job(first)
+        sid = job["sheet_id"]
+        marker = self.client.markers[0]
+        sha = delivery._contents(self.client.rows[sid])
+        marker["name"] = marker["name"].split("_V2_")[0] + "_" + sha
+        plan = delivery._plan(self.database, job)
+        requests, signature = delivery._batch(job, plan, self.client.weekly_spreadsheet(job["target_id"]), self.client)
+        self.assertIsNone(signature)
+        self.assertEqual([next(iter(item)) for item in requests], ["deleteNamedRange", "addNamedRange"])
+        marker["name"] = marker["name"].replace("_R1_", "_R0_")
+        with self.assertRaisesRegex(delivery.DeliveryConflict, "unverified_legacy_layout"):
+            delivery._batch(job, plan, self.client.weekly_spreadsheet(job["target_id"]), self.client)
+
+    def test_color_style_readback_matches_rendered_color(self):
+        old = {"backgroundColor": {"red": .2, "green": .3},
+               "textFormat": {"foregroundColor": {}, "bold": False}}
+        echoed = {"backgroundColorStyle": {"rgbColor": {"red": .200000004, "green": .3, "blue": 0}},
+                  "textFormat": {"foregroundColorStyle": {"rgbColor": {"red": 0, "green": 0}}}}
+        self.assertEqual(delivery._normalize_format(old), delivery._normalize_format(echoed))
+
     def test_restore_updates_the_same_weekly_gid_and_keeps_unrelated_tabs(self):
         first = self.start()
         self.tick()
