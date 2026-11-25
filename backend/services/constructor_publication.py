@@ -1298,9 +1298,10 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
                          len(archived["records"]) != len(archived["payload"].get("lessons") or [])):
             raise RuntimeError("Published source integrity failed; transaction rolled back")
         from backend.services.published_week_sheets import enabled, enqueue
-        if enabled() and preview["scope_kind"] == "week":
+        sheet_delivery_queued = enabled() and preview["scope_kind"] == "week"
+        if sheet_delivery_queued:
             enqueue(database, connection, preview["week_start"], publication_id)
-    return {"status": "published", "publication_id": publication_id, "scope_kind": preview["scope_kind"],
+    return {"status": "published", "sheet_delivery_queued": sheet_delivery_queued, "publication_id": publication_id, "scope_kind": preview["scope_kind"],
             "published_id": published_id, "previous_published_id": preview["previous_published_id"],
             "runtime_readback": readback_result, "deferred": preview["deferred"],
             "summary": preview.get("summary"), "version_id": version_id, "created_at": now,

@@ -149,7 +149,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
         runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
         diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
       }];
-      return route.fulfill({ json: { status: 'published', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
+      return route.fulfill({ json: { status: 'published', sheet_delivery_queued: scope === 'week', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
     }
     return route.continue();
   });
@@ -273,6 +273,7 @@ test('changing publication scope clears confirmation and publish uses the latest
   expect((await publishResponse).ok()).toBeTruthy();
   expect(getPublishPayload()).toMatchObject({ scope_kind: 'week', week_start: '2026-10-26', preview_token: 'ui-preview-token-2', confirmed: true });
   await expect(dialog.getByText(/Проверка после публикации пройдена/)).toBeVisible();
+  await expect(dialog.getByText(/Задание на выгрузку в Google Sheets создано/)).toBeVisible();
   await expect(dialog.getByRole('link', {name:'Открыть опубликованное расписание'})).toHaveAttribute('href', /week_start=2026-10-26/);
   await dialog.getByRole('button', { name: 'Закрыть проверку' }).click();
   await page.locator('.constructor-draft-menu > summary').click();
