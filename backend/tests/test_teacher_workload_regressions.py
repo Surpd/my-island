@@ -126,3 +126,27 @@ class TeacherAnalyticsTests(TestCase):
         self.assertEqual(result["conflict_minutes"], 0)
         online = self.read("2026-09-07", activity_format="online")["teachers"][0]
         self.assertEqual(online["scheduled_minutes"], 30)
+
+    def test_laboratory_segments_and_actual_replacement_have_separate_deltas(self):
+        artifact = self.artifact()
+        artifact["blocks"] = {}
+        old_id = str(self.teacher["id"])
+        replacement = str(self.database.create_identity("teacher", "Replacement")["id"])
+        anchored = self.artifact()["blocks"][self.block_key]
+        artifact["blocks"][self.block_key] = anchored
+        anchored["assignments"][0]["metadata"] = {"constructor_lesson_id": "lesson-swap"}
+        for key, start, end in (("lab-a", "10:00", "10:45"), ("lab-b", "11:15", "12:45")):
+            self.add(artifact, key, 0, start, end, metadata={"activity_type": "laboratory"})
+        import_canonical_artifact(self.database, artifact)
+        changed = deepcopy(anchored["assignments"][0])
+        changed["teacher_ids"] = [replacement]
+        materialize_effective_week(self.database, self.version_id, "2026-09-07", patches=[
+            {"block_key": self.block_key, "change_kind": "replaced", "assignments": [changed]},
+        ])
+        report = self.read("2026-09-07")
+        rows = {teacher["teacher_id"]: teacher for teacher in report["teachers"]}
+        self.assertEqual(rows[old_id]["comparison"]["scheduled_minutes_delta"], -45)
+        self.assertEqual(rows[replacement]["comparison"]["scheduled_minutes_delta"], 45)
+        self.assertEqual(rows[old_id]["comparison"]["changes"][0]["kinds"], ["teacher_replaced"])
+        self.assertEqual(rows[old_id]["activity_minutes"], {"laboratory": 135})
+        self.assertEqual(rows[old_id]["gap_minutes"], 30)

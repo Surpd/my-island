@@ -82,11 +82,19 @@ class AdminPreviewRoutesTests(unittest.TestCase):
         }
         import_canonical_artifact(self.database, artifact)
         materialize_effective_week(self.database, version_id, "2026-09-07")
-        response = self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers=self.headers)
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            response = self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers=self.headers)
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertEqual(payload["teachers"][0]["observed_scheduled_minutes"], 45)
         self.assertIn(self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers={"X-Dev-Auth": "student:1"}).status_code, {401, 403})
+
+    def test_teacher_workload_requires_active_canonical_backend(self):
+        path = "/api/admin/analytics/teachers?start_day=2026-09-07"
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "disabled"}):
+            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 503)
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            self.assertEqual(self.client.get(path + "&end_day=2027-09-08", headers=self.headers).status_code, 400)
 
     def test_preview_people_directory_search_is_unicode_case_insensitive(self):
         target = self.database.create_identity("student", "ТЕСТовый ученик", actor_user_id=self.admin_id)

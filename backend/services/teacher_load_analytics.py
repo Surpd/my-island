@@ -15,7 +15,7 @@ def _teacher_rows(database, teacher_id):
     query = "SELECT id,display_name,status FROM identities WHERE kind='teacher'"
     params = ()
     if teacher_id:
-        query += " AND id=?"
+        query += " AND CAST(id AS TEXT)=?"
         params = (str(teacher_id),)
     with database.connection() as connection:
         return [dict(row) for row in database.execute(connection, query + " ORDER BY id", params).fetchall()]
