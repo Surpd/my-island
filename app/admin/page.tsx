@@ -469,7 +469,7 @@ function ResponsiveSchedule({ request = api, diagnostic = false }: { request?: A
 
 function AppContent({ path, navigate, diagnostic = false }: { path: string; navigate: (href: string) => void; diagnostic?: boolean }) {
   const request = diagnostic ? diagnosticApi : api;
-  if (!diagnostic && localDevAuth() && path === '/admin/architecture-check'
+  if (isLocalBuild && !diagnostic && localDevAuth() && path === '/admin/architecture-check'
       && runtimeEnv.VITE_ARCHITECTURE_CHECK === 'true') {
     return <ArchitectureCheck request={api} />;
   }
