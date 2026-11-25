@@ -20,10 +20,22 @@ from backend.services.schedule_subjects import program_key, subject_label
 from backend.services.schedule_rooms import display_room
 
 
+PUBLISHED_STATUSES = {"authoritative", "approved_baseline", "approved_with_exceptions"}
 CANONICAL_STATUSES = {"draft", "approved_baseline", "approved_with_exceptions", "authoritative", "superseded"}
 _NO_LESSON = "NO_LESSON"
 _OPTIONAL_TEACHER_ACTIVITIES = {"Творчество", "Тренинг", "Курс по выбору", "Цифровой трек", "SDEP"}
 _RESIDUAL_ROLES = {"default", "residual", "final_state", "final_unassigned", "explicit_no_lesson"}
+
+
+@dataclass
+class PublishedWeek:
+    """A pinned runtime row, its checked source, and school-safe edition metadata."""
+
+    metadata: dict[str, Any]
+    status: str
+    effective: dict[str, Any] | None = None
+    source: dict[str, Any] | None = None
+    source_publication_id: str | None = None
 
 
 @dataclass
@@ -680,9 +692,10 @@ def build_student_projection_context(
     week_start: str,
     *,
     version_id: str | None = None,
+    publication: PublishedWeek | None = None,
 ) -> StudentProjectionContext | None:
     """Load mutable directory state once; never retain it on ``Database``."""
-    effective = _effective_week(database, version_id, week_start)
+    effective = publication.effective if publication else _effective_week(database, version_id, week_start)
     if not effective:
         return None
     students = {
@@ -1050,13 +1063,88 @@ def _effective_week(database: Database, version_id: str | None, week_start: str)
         return dict(row) if row else None
 
 
+def resolve_published_week(database: Database, day: str) -> PublishedWeek:
+    """Select a school-visible edition independently of the current template and drafts."""
+    monday = _week_start(day)
+    scope = f"week:{monday}"
+    metadata = {"week_start": monday, "origin": "missing", "published": False,
+                "publication_id": None, "effective_week_id": None, "base_version_id": None,
+                "revision": None, "coverage": "unknown"}
+    with database.connection() as connection:
+        tables = {row["name"] for row in database.execute(connection,
+            "SELECT table_name AS name FROM information_schema.tables WHERE table_schema=current_schema() "
+            "AND table_name IN ('schedule_publication_heads','schedule_constructor_publications')"
+            if database.database_url else
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('schedule_publication_heads','schedule_constructor_publications')").fetchall()}
+        # Read the head and its immutable target in the same SQL snapshot.
+        join = ("LEFT JOIN schedule_publication_heads h ON h.scope_key=?"
+                if "schedule_publication_heads" in tables else
+                "LEFT JOIN (SELECT NULL AS published_id, NULL AS version_id, NULL AS revision) h ON 1=0")
+        params = (scope, monday) if "schedule_publication_heads" in tables else (monday,)
+        row = database.execute(connection, f"""
+            SELECT h.published_id AS head_target,h.revision AS head_revision,
+                   ew.*,cv.status AS canonical_status,cv.source_snapshot_id,cv.source_fingerprint
+            FROM (SELECT 1 AS anchor) anchor {join}
+            LEFT JOIN canonical_effective_weeks ew ON ew.week_start=?
+                AND (h.published_id IS NULL OR (ew.effective_week_id=h.published_id AND ew.version_id=h.version_id))
+            LEFT JOIN canonical_schedule_versions cv ON cv.version_id=ew.version_id
+            ORDER BY CASE WHEN cv.status IN ('authoritative','approved_baseline','approved_with_exceptions')
+                          THEN 0 ELSE 1 END,ew.revision_at DESC,ew.created_at DESC,ew.effective_week_id DESC LIMIT 1
+            """, params).fetchone()
+        effective = dict(row)
+        manual = effective.pop("head_target") is not None
+        revision = effective.pop("head_revision")
+        broken = PublishedWeek({**metadata, "origin": "broken_head", "revision": revision}, "broken_publication")
+        if manual and effective["canonical_status"] not in PUBLISHED_STATUSES:
+            return broken
+        if not effective["effective_week_id"]:
+            template = canonical_version(database)
+            if template and template["status"] in PUBLISHED_STATUSES:
+                metadata.update(origin="template_only", base_version_id=template["version_id"])
+            return PublishedWeek(metadata, "canonical_not_materialized")
+        if effective["canonical_status"] not in PUBLISHED_STATUSES:
+            return PublishedWeek(metadata, effective["canonical_status"])
+        if manual:
+            if "schedule_constructor_publications" not in tables:
+                return broken
+            archive = database.execute(connection, """SELECT id,payload_fingerprint,metadata
+                FROM schedule_constructor_publications WHERE published_id=? AND version_id=?
+                AND scope_key=? AND scope_kind='week' ORDER BY created_at DESC,id DESC LIMIT 1""",
+                (effective["effective_week_id"], effective["version_id"], scope)).fetchone()
+            if not archive:
+                return broken
+            from backend.services.constructor_publication import _checked_published_source
+            try:
+                source = _checked_published_source(json.loads(archive["metadata"]), archive["payload_fingerprint"])
+            except (AttributeError, TypeError, ValueError, KeyError):
+                return broken
+            publication_id = archive["id"]
+        else:
+            source, publication_id = _published_source_for_effective(database, effective)
+    coverage = "unknown"
+    if source:
+        coverage = "partial" if any(r.get("status") == "unresolved" for r in source["records"]) else "complete"
+    elif effective["canonical_status"] == "approved_with_exceptions":
+        coverage = "with_exceptions"
+    metadata.update(origin="manual_week" if manual else "approved_materialization", published=True,
+                    publication_id=publication_id if manual else None, effective_week_id=effective["effective_week_id"],
+                    base_version_id=effective["version_id"], revision=revision or effective["overlay_fingerprint"],
+                    coverage=coverage)
+    return PublishedWeek(metadata, effective["canonical_status"], effective, source, publication_id)
+
+
 def effective_status(database: Database, week_start: str | None = None) -> dict[str, Any]:
     version = canonical_version(database)
     result = {"canonical": version, "effective_week": None, "status": "canonical_not_imported" if not version else version["status"]}
-    if week_start and version:
+    if week_start:
         # Historical weeks keep their own approved base after a newer template
         # is saved. Match the runtime selector rather than hiding that week.
-        effective = _effective_week(database, None, week_start)
+        publication = resolve_published_week(database, week_start)
+        result["publication"] = publication.metadata
+        effective = publication.effective
+        if publication.status == "broken_publication":
+            result["status"] = publication.status
         result["effective_week"] = effective
         if effective:
             result["canonical"] = canonical_version(database, effective["version_id"])
@@ -1962,15 +2050,19 @@ def project_student(
     *,
     context: StudentProjectionContext | None = None,
 ) -> dict[str, Any]:
-    context = context or build_student_projection_context(database, week_start)
+    week_start = _week_start(week_start)
+    publication = None if context else resolve_published_week(database, week_start)
+    context = context or build_student_projection_context(database, week_start, publication=publication)
+    edition = {"publication": publication.metadata} if publication else {}
     student_id = str(identity_id)
     if not context:
-        return {"identity_id": student_id, "week_start": week_start, "status": "canonical_not_materialized", "items": [], "issues": []}
+        return {**edition, "identity_id": student_id, "week_start": week_start, "status": publication.status if publication else "canonical_not_materialized", "items": [], "issues": []}
     effective = context.effective
     student = context.students.get(student_id)
     if not student or student.get("status") != "active":
         return {"identity_id": student_id, "week_start": week_start, "status": "student_not_found", "items": [], "issues": []}
-    published_source, publication_id = _published_source_for_effective(database, effective)
+    published_source, publication_id = ((publication.source, publication.source_publication_id) if publication
+                                        else _published_source_for_effective(database, effective))
     day_modes=_student_day_modes(context,student,published_source,week_start)
     day_modes_by_date={item['date']:item['mode'] for item in day_modes}
     items, issues = [], []
@@ -2015,7 +2107,7 @@ def project_student(
         items.extend(unresolved)
     items = _event_priority_items(items)
     optional_activities = _published_optional_activities(database, effective, student, context, week_start)
-    return {"identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities}
+    return {**edition, "identity_id": student_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities}
 
 
 def _week_start(day: str) -> str:
@@ -2035,19 +2127,21 @@ def project_student_range(database: Database, identity_id: Any, start_day: str, 
         if week not in projections:
             projections[week] = project_student(database, identity_id, week)
         cursor += timedelta(days=1)
-    approved = {"approved_baseline", "approved_with_exceptions", "authoritative"}
-    items = [item for projection in projections.values() if projection["status"] in approved
-             for item in projection["items"] if start_day <= str(item.get("date")) <= finish]
-    day_modes = [item for projection in projections.values() if projection["status"] in approved
-                 for item in projection.get("day_modes", []) if start_day <= str(item.get("date")) <= finish]
-    optional_activities = [item for projection in projections.values() if projection["status"] in approved
-                           for item in projection.get("optional_activities", []) if start_day <= str(item.get("date")) <= finish]
-    issues = [issue for projection in projections.values() if projection["status"] in approved for issue in projection["issues"]]
+    visible = [projection for projection in projections.values() if projection["status"] in PUBLISHED_STATUSES]
+    items = [item for projection in visible for item in projection["items"]
+             if start_day <= str(item.get("date")) <= finish]
+    day_modes = [item for projection in visible for item in projection.get("day_modes", [])
+                 if start_day <= str(item.get("date")) <= finish]
+    optional_activities = [item for projection in visible for item in projection.get("optional_activities", [])
+                           if start_day <= str(item.get("date")) <= finish]
+    issues = [issue for projection in visible for issue in projection["issues"]
+              if not issue.get("date") or start_day <= str(issue["date"]) <= finish]
     statuses = [projection["status"] for projection in projections.values()]
-    status = next((item for item in statuses if item not in approved), statuses[0] if statuses else "canonical_not_materialized")
+    status = visible[0]["status"] if visible else (statuses[0] if statuses else "canonical_not_materialized")
     if status in {"draft", "superseded"}:
         status = "not_published"
-    return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities}
+    return {"identity_id": str(identity_id), "start_day": start_day, "end_day": finish, "status": status, "items": items, "issues": issues, "day_modes":day_modes, "optional_activities":optional_activities,
+            "publications": [p["publication"] for p in projections.values() if "publication" in p]}
 
 
 def student_campus_projection(database: Database, identity_id: Any, start_day: str,
@@ -2071,10 +2165,11 @@ def student_campus_projection(database: Database, identity_id: Any, start_day: s
 
 def project_teacher(database: Database, identity_id: Any, week_start: str) -> dict[str, Any]:
     week_start = _week_start(week_start)
-    effective = _effective_week(database, None, week_start)
+    publication = resolve_published_week(database, week_start)
+    effective = publication.effective
     teacher_id = str(identity_id)
     if not effective:
-        return {"identity_id": teacher_id, "week_start": week_start, "status": "canonical_not_materialized", "items": [], "issues": []}
+        return {"publication": publication.metadata, "identity_id": teacher_id, "week_start": week_start, "status": publication.status, "items": [], "issues": []}
     if database.autocommit:
         group_rows: list[Any] = []
         offset = 0
@@ -2150,10 +2245,10 @@ def project_teacher(database: Database, identity_id: Any, week_start: str) -> di
     for key, values in occupied.items():
         if len(values) > 1:
             issues.append({"date": key[0], "start_time": key[1], "reason": "teacher has simultaneous canonical assignments", "items": values})
-    published_source, publication_id = _published_source_for_effective(database, effective)
+    published_source, publication_id = publication.source, publication.source_publication_id
     items.extend(_published_unresolved_items(published_source,publication_id,teacher_id,week_start,'teacher'))
     day_modes=_teacher_day_modes(database,published_source,teacher_id,week_start)
-    return {"identity_id": teacher_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes}
+    return {"publication": publication.metadata, "identity_id": teacher_id, "week_start": week_start, "status": effective["canonical_status"], "source_snapshot_id": effective["source_snapshot_id"], "items": items, "issues": issues, "day_modes":day_modes}
 
 
 def project_teacher_range(database: Database, identity_id: Any, start_day: str, end_day: str | None = None) -> dict[str, Any]:
@@ -2182,18 +2277,15 @@ def effective_blocks(database: Database, week_start: str) -> dict[str, Any]:
 
 def published_week_view(database: Database, week_start: str) -> dict[str, Any]:
     """Read runtime-selected effective blocks only for approved canonical versions."""
-    result = effective_blocks(database, week_start)
-    published = result.get("status") in {"approved_baseline", "approved_with_exceptions", "authoritative"}
-    if not published:
-        return {"status": result.get("status", "canonical_not_materialized"), "published": False,
-                "week_start": week_start,
-                "effective_week_id": (result.get("effective_week") or {}).get("effective_week_id"), "items": []}
-
+    edition = resolve_published_week(database, week_start)
+    response = {"status": edition.status, "published": edition.metadata["published"], "publication": edition.metadata,
+                "week_start": edition.metadata["week_start"], "effective_week_id": edition.metadata["effective_week_id"]}
     items = []
-    for block in result.get("items") or []:
+    if not edition.effective:
+        return {**response, "items": items}
+    for block in _block_rows(database, edition.effective["effective_week_id"]):
         patch = block.get("patch") if isinstance(block.get("patch"), Mapping) else {}
         assignments = [] if block.get("change_kind") == "cancelled" else _assignments(
             database, block.get("canonical_block_id"), patch)
         items.append({**block, "assignments": assignments})
-    return {"status": result["status"], "published": True, "week_start": week_start,
-            "effective_week_id": (result.get("effective_week") or {}).get("effective_week_id"), "items": items}
+    return {**response, "items": items}

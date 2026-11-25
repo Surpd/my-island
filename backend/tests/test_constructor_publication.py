@@ -312,6 +312,52 @@ class ConstructorPublicationTests(unittest.TestCase):
             self.assertEqual(projection["status"], "not_published")
             self.assertEqual(projection["items"], [])
 
+    def test_selected_edition_is_shared_and_broken_pointer_never_falls_back(self):
+        monday = "2026-12-28"
+        sunday = "2027-01-03"
+        empty = canonical.resolve_published_week(self.database, sunday)
+        self.assertEqual((empty.metadata["week_start"], empty.metadata["origin"]), (monday, "missing"))
+        draft = self.draft([self.lesson(), self.lesson(id="unresolved", day=1, teacherId="missing")])
+        self.publish(draft)
+        self.assertEqual(canonical.resolve_published_week(self.database, sunday).metadata["origin"], "template_only")
+        weekly = self.publish(draft, "week", week_start=monday)
+        def read_all():
+            return (canonical.student_campus_projection(self.database, self.student["id"], monday, sunday),
+                    canonical.project_teacher_range(self.database, self.teacher["id"], monday, sunday),
+                    canonical.published_week_view(self.database, monday))
+        student, teacher, admin = read_all()
+        edition = admin["publication"]
+        self.assertEqual(student["publications"], [edition])
+        self.assertEqual(teacher["publication"], edition)
+        self.assertEqual((edition["origin"], edition["coverage"], edition["revision"]), ("manual_week", "partial", 1))
+        self.assertEqual(edition["publication_id"], weekly["publication_id"])
+        self.assertEqual(edition["effective_week_id"], weekly["published_id"])
+        self.assertEqual(edition["base_version_id"], weekly["version_id"])
+        for column in ("version_id", "published_id"):
+            with self.subTest(column=column):
+                with self.database.connection() as conn:
+                    self.database.execute(conn, f"UPDATE schedule_publication_heads SET {column}=? WHERE scope_key=?",
+                                          ("missing", "week:" + monday))
+                student, teacher, admin = read_all()
+                self.assertEqual(admin["publication"]["origin"], "broken_head")
+                self.assertEqual(student["publications"], [admin["publication"]])
+                self.assertEqual(teacher["publication"], admin["publication"])
+                self.assertTrue(all(r["items"] == [] and r["status"] == "broken_publication" for r in (student, teacher, admin)))
+                with self.database.connection() as conn:
+                    self.database.execute(conn, f"UPDATE schedule_publication_heads SET {column}=? WHERE scope_key=?",
+                                          (weekly[column], "week:" + monday))
+
+    def test_newer_unapproved_materialization_cannot_shadow_approved_history(self):
+        for version, status, observed in (("old", "approved_baseline", "2026-11-01"), ("new", "draft", "2026-11-02")):
+            canonical.import_canonical_artifact(self.database, {"version_id": version,
+                "source_snapshot": {"id": version, "fingerprint": version}, "blocks": self.artifact_blocks_for_draft()}, status=status)
+            canonical.materialize_effective_week(self.database, version, "2026-11-02", overlay_observed_at=observed)
+        week = canonical.published_week_view(self.database, "2026-11-02")
+        self.assertTrue(week["published"])
+        self.assertEqual(week["publication"]["origin"], "approved_materialization")
+        self.assertEqual(week["publication"]["base_version_id"], "old")
+        self.assertIsNone(week["publication"]["publication_id"])
+
     def test_overview_uses_historical_runtime_week_after_new_template(self):
         def imported(version):
             canonical.import_canonical_artifact(self.database, {

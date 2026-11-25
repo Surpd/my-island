@@ -15,6 +15,26 @@ from backend.services.canonical_schedule import (
 
 
 class CanonicalScheduleRuntimeTests(unittest.TestCase):
+    def test_student_range_preserves_approved_week_and_keeps_day_scoped_issues(self):
+        from unittest.mock import patch
+        from backend.services.canonical_schedule import project_student_range
+
+        def project(_db, _student, monday):
+            if monday == "2026-12-28":
+                return {"status": "approved_baseline", "publication": {"week_start": monday, "published": True},
+                        "items": [{"date": "2026-12-31", "activity": "Fixture"}],
+                        "issues": [{"date": "2026-12-27", "code": "outside"},
+                                   {"date": "2026-12-31", "code": "inside"}]}
+            return {"status": "draft", "publication": {"week_start": monday, "published": False},
+                    "items": [{"date": "2027-01-04", "activity": "private-fixture"}], "issues": []}
+
+        with patch("backend.services.canonical_schedule.project_student", side_effect=project):
+            result = project_student_range(self.database, self.student["id"], "2026-12-31", "2027-01-04")
+        self.assertEqual(result["status"], "approved_baseline")
+        self.assertEqual([row["published"] for row in result["publications"]], [True, False])
+        self.assertEqual([row["activity"] for row in result["items"]], ["Fixture"])
+        self.assertEqual([row["code"] for row in result["issues"]], ["inside"])
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database = Database(Path(self.temp_dir.name) / "runtime.db")
