@@ -71,7 +71,10 @@ function preview(token: string, options: { readOnly?: boolean; critical?: boolea
   };
 }
 
-async function openPublicationPanel(page: import('@playwright/test').Page, options: { readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean; applyNotes?: boolean } = {}) {
+async function openPublicationPanel(page: import('@playwright/test').Page, options: {
+  readOnly?: boolean; critical?: boolean; studentOverlap?: boolean; legacyReview?: boolean; applyNotes?: boolean;
+  rosterPreview?: (request: {expected_revision: number; scope: string}) => unknown;
+} = {}) {
   let previewCount = 0;
   let normalizationCount = 0;
   let appliedNoteBody: unknown = null;
@@ -127,7 +130,9 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
         plan_hash:'fixture-plan', automatic_count: changes.length, changes, manual: [], retained_warning_count: warnings.length, retained_warnings: warnings } });
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
-      return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
+      const request = route.request().postDataJSON();
+      return route.fulfill({ json: options.rosterPreview?.(request)
+        ?? { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
     }
     if (path === '/api/admin/schedule/constructor/publication/recovery-context') {
       return route.fulfill({json: {owner: 'fixture-admin-owner'}});
@@ -440,32 +445,26 @@ test('checking the whole draft shows roster changes without saving them', async 
   page.on('request', request => {
     if (request.method() === 'PUT' || new URL(request.url()).pathname.endsWith('/audiences/apply')) writes.push(request.url());
   });
-  const { dialog } = await openPublicationPanel(page);
   const rosterBodies: unknown[] = [];
-  await page.route('**/audiences/preview', route => {
-    const body = route.request().postDataJSON();
+  const { dialog } = await openPublicationPanel(page, {rosterPreview: body => {
     rosterBodies.push(body);
     const wholeDraft = body.scope === 'template';
-    return route.fulfill({ json: { revision: 1, preview_token: 'synthetic',
+    return { revision: 1, preview_token: 'synthetic',
       summary: wholeDraft
         ? { selected_count: 1, changed_count: 1, safe_count: 1, unresolved_count: 0, added_count: 0, removed_count: 9 }
         : { selected_count: 0, changed_count: 0, safe_count: 0, unresolved_count: 0, added_count: 0, removed_count: 0 },
       lessons: wholeDraft
         ? [{ id: 'lesson-excluded', subject: 'Математика', changed: true, safe: true, old_count: 25, proposed_count: 16 }]
-        : [] } });
-  });
-  const initialPreview = page.waitForResponse(response => response.url().endsWith('/audiences/preview'));
+        : [] };
+  }});
   await dialog.getByRole('button', { name: 'Составы и старые записи' }).click();
-  await initialPreview;
-  expect(rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }]);
+  await expect.poll(() => rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }]);
   await dialog.locator('[data-review-fix="roster-scope"] > summary').click();
   const scope = dialog.getByLabel('Проверять при выборе');
   await expect(scope).toHaveValue('stale');
-  const wholeDraftPreview = page.waitForResponse(response => response.url().endsWith('/audiences/preview'));
   await scope.selectOption({ label: 'Весь черновик' });
-  await wholeDraftPreview;
   await expect(scope).toHaveValue('template');
-  expect(rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }, { expected_revision: 1, scope: 'template' }]);
+  await expect.poll(() => rosterBodies).toEqual([{ expected_revision: 1, scope: 'stale' }, { expected_revision: 1, scope: 'template' }]);
   await expect(dialog.getByText(/Проверено занятий: 1/)).toBeVisible();
   const rosters = dialog.locator('[data-review-fix="roster-lessons"]');
   await rosters.locator('summary').click();
