@@ -44,6 +44,8 @@ test('Campus shows shared elective block names inline without lane details or cl
   await page.setViewportSize({ width: 390, height: 844 });
   await openCampusSchedule(page);
 
+  await expect(page.getByRole('button', { name: /^понедельник,? 26 октября/i }).locator('small')).toHaveText('Пн');
+
   const stack = page.locator('.student-schedule-stack');
   await expect(stack.locator('.student-schedule-lesson')).toHaveCount(3);
   await expect(stack).toContainText('Цифровой трек');
