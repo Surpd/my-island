@@ -41,6 +41,7 @@ from backend.services.schedule_activities import ActivityConflict, ActivityNotFo
 from backend.services.google_sync_service import JournalImportBusy, CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability, student_campus_projection
 from backend.services.teacher_load_analytics import teacher_load_analytics
+from backend.services.class_load_analytics import class_load_analytics
 from backend.services.schedule_drafts import (
     audience_preview, get_draft,
 )
@@ -999,6 +1000,20 @@ def create_router(database: Database) -> APIRouter:
             if end_day:
                 date.fromisoformat(end_day)
             return teacher_load_analytics(database, start_day, end_day, teacher_id)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
+
+    @router.get("/admin/analytics/classes")
+    def admin_class_load(start_day: str, end_day: str | None = None,
+                         init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                         x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        try:
+            date.fromisoformat(start_day)
+            if end_day:
+                date.fromisoformat(end_day)
+            return class_load_analytics(database, start_day, end_day)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
 

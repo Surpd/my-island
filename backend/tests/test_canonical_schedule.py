@@ -13,6 +13,7 @@ from backend.services.canonical_schedule import (
     schedule_admin_observability,
 )
 from backend.services.teacher_load_analytics import teacher_load_analytics
+from backend.services.class_load_analytics import class_load_analytics
 
 
 class CanonicalScheduleRuntimeTests(unittest.TestCase):
@@ -271,6 +272,19 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["lead_minutes"], 0)
         self.assertEqual(summary["responsible_minutes"], 45)
         self.assertEqual(summary["items"][0]["role"], "responsible")
+
+    def test_class_load_deduplicates_co_teaching_interval(self):
+        second_teacher = self.database.create_identity("teacher", "Teacher Two")
+        artifact = self.artifact()
+        assignment = artifact["blocks"][self.block_key]["assignments"][0]
+        assignment["teacher_ids"] = [str(self.teacher["id"]), str(second_teacher["id"])]
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+
+        result = class_load_analytics(self.database, "2026-09-07")
+        group = next(item for item in result["groups"] if str(self.math_group["id"]) == item["group_id"])
+        self.assertEqual(group["scheduled_minutes"], 45)
+        self.assertEqual(group["lesson_count"], 1)
 
     def test_teacher_range_accumulates_published_weeks_and_skips_unmaterialized_week(self):
         for version_id, week_start, activity in (
