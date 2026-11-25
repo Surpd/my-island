@@ -4061,6 +4061,7 @@ class Database:
 
     def _save_journal_snapshot_locked(self, source: dict[str, Any], assessments: list[dict[str, Any]], results: list[dict[str, Any]], students: list[dict[str, Any]] | None = None, summaries: list[dict[str, Any]] | None = None) -> dict[str, int]:
         import json
+        from backend.services.journal_periods import valid_journal_period
         with self.connection() as connection:
             boolean_true = "TRUE" if self.database_url else "1"
             boolean_false = "FALSE" if self.database_url else "0"
@@ -4076,6 +4077,8 @@ class Database:
             else:
                 self.execute(connection, "BEGIN IMMEDIATE")
             source["academic_year"] = source.get("academic_year") or "2026/27"
+            if not valid_journal_period(source["grade"], source.get("term_number")) or not valid_journal_period(source["grade"], source.get("expected_term")):
+                raise ValueError("Период не соответствует системе обучения этого класса.")
             self._lock_journal_period(connection, (source["spreadsheet_id"], source["grade"], source["academic_year"]))
             if source.get("sheet_id") is not None:
                 source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
@@ -4096,7 +4099,8 @@ class Database:
                                    or (not source_row["term_number"] and source_row["last_synced_at"] is not None)):
                     raise ValueError("Период вкладки отличается от сохранённого.")
             settings = self.execute(connection, "SELECT current_term FROM journal_term_settings WHERE spreadsheet_id = ? AND grade = ? AND academic_year = ?", (source["spreadsheet_id"], source["grade"], source.get("academic_year", "2026/27"))).fetchone()
-            current_term = int(settings["current_term"]) if settings else 1
+            stored_current_term = int(settings["current_term"]) if settings else 1
+            current_term = stored_current_term if valid_journal_period(source["grade"], stored_current_term) else 1
             if not settings:
                 self.execute(connection, "INSERT INTO journal_term_settings(spreadsheet_id, grade, academic_year, current_term) VALUES (?, ?, ?, ?)", (source["spreadsheet_id"], source["grade"], source["academic_year"], current_term))
             if source_row and source_row["term_number"]:
@@ -4511,6 +4515,10 @@ class Database:
                      JOIN groups mapped_group ON mapped_group.id = gm.group_id
                        AND mapped_group.canonical IS TRUE AND mapped_group.archived_at IS NULL
                      JOIN journal_sources js ON js.id = gm.source_id AND js.period_status = 'current'
+                       AND js.excluded_from_journals IS FALSE AND js.classification IS NULL
+                       AND NOT (js.grade = 7 AND js.term_number = 2
+                         AND (js.subject LIKE '%Математик%' OR js.subject LIKE '%математик%'
+                           OR js.subject LIKE '%Физик%' OR js.subject LIKE '%физик%'))
                      JOIN journal_assessments ja ON ja.source_id = js.id AND ja.active IS TRUE
                        AND ja.group_marker IN (gm.group_marker, 'all')
                      JOIN journal_students js2 ON js2.source_id = js.id AND js2.group_marker = gm.group_marker
@@ -4571,6 +4579,10 @@ class Database:
         sql = """SELECT 1
                  FROM users u
                  JOIN journal_sources js ON js.id = ?
+                   AND js.excluded_from_journals IS FALSE AND js.classification IS NULL
+                   AND NOT (js.grade = 7 AND js.term_number = 2
+                     AND (js.subject LIKE '%Математик%' OR js.subject LIKE '%математик%'
+                       OR js.subject LIKE '%Физик%' OR js.subject LIKE '%физик%'))
                 WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
                   EXISTS (
                     SELECT 1 FROM journal_group_mappings gm
@@ -4664,7 +4676,8 @@ class Database:
                 return None
             source = self.execute(connection, """SELECT id, spreadsheet_title, grade, subject, sheet_title,
                     academic_year, term_number, period_status, last_synced_at
-                FROM journal_sources WHERE id = ?""", (source_id,)).fetchone()
+                FROM journal_sources WHERE id = ?
+                  AND excluded_from_journals IS FALSE AND classification IS NULL""", (source_id,)).fetchone()
             mapping = self.execute(connection, """SELECT group_id, base_class_name, subject_subgroup,
                     classroom_course_id, exam_track FROM journal_group_mappings
                 WHERE source_id = ? AND group_marker = ?""", (source_id, group_marker)).fetchone()
@@ -4885,7 +4898,8 @@ class Database:
             DO UPDATE SET current_term=excluded.current_term,updated_at=CURRENT_TIMESTAMP""", (*scope, term_number))
 
     def set_journal_current_term(self, spreadsheet_id: str, grade: int, academic_year: str, term_number: int) -> bool:
-        if term_number not in (1, 2, 3):
+        from backend.services.journal_periods import valid_journal_period
+        if not valid_journal_period(grade, term_number):
             return False
         scope = (spreadsheet_id, grade, academic_year)
         with self.connection() as connection:
@@ -4901,8 +4915,6 @@ class Database:
             return True
 
     def set_journal_source_term(self, source_id: Any, term_number: int, make_current: bool = False) -> bool:
-        if term_number not in (1, 2, 3):
-            return False
         with self.connection() as connection:
             if not self.database_url:
                 self.execute(connection, "BEGIN IMMEDIATE")
@@ -4910,6 +4922,9 @@ class Database:
                 return self.execute(connection, "SELECT spreadsheet_id,grade,academic_year,subject FROM journal_sources WHERE id=?", (source_id,)).fetchone()
             source = find_source()
             if not source:
+                return False
+            from backend.services.journal_periods import valid_journal_period
+            if not valid_journal_period(int(source["grade"]), term_number):
                 return False
             scope = (source["spreadsheet_id"], source["grade"], source["academic_year"])
             self._lock_journal_period(connection, scope)
@@ -5044,9 +5059,18 @@ class Database:
                 items.append(item)
             return items
 
-    def set_journal_auto_sync(self, spreadsheet_id: str, enabled: bool) -> int:
+    def set_journal_auto_sync(self, spreadsheet_id: str, enabled: bool, *, grade: int | None = None, term_number: int | None = None) -> int:
         with self.connection() as connection:
-            cursor = self.execute(connection, "UPDATE journal_sources SET auto_sync_enabled = ? WHERE spreadsheet_id = ?", (bool(enabled), spreadsheet_id))
+            if grade is None and term_number is None:
+                cursor = self.execute(connection, "UPDATE journal_sources SET auto_sync_enabled = ? WHERE spreadsheet_id = ?", (bool(enabled), spreadsheet_id))
+            elif grade is None or term_number is None:
+                raise ValueError("Scoped journal automation needs both grade and term")
+            else:
+                cursor = self.execute(connection, """UPDATE journal_sources SET auto_sync_enabled = ?
+                    WHERE spreadsheet_id = ? AND grade = ? AND academic_year = '2026/27' AND term_number = ?
+                      AND period_status IN ('current','archived') AND last_synced_at IS NOT NULL
+                      AND classification IS NULL AND excluded_from_journals IS FALSE""",
+                    (bool(enabled), spreadsheet_id, grade, term_number))
             return int(cursor.rowcount or 0)
 
     def journal_import_scope(self, spreadsheet_id: str, grade: int, academic_year: str = "2026/27") -> dict[str, Any]:
@@ -5061,7 +5085,9 @@ class Database:
 
     def journal_source_sync_settings(self, spreadsheet_id: str) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            return [dict(row) for row in self.execute(connection, "SELECT id,spreadsheet_id,sheet_id,sheet_title,auto_sync_enabled,excluded_from_journals FROM journal_sources WHERE spreadsheet_id=?", (spreadsheet_id,)).fetchall()]
+            return [dict(row) for row in self.execute(connection, """SELECT id,spreadsheet_id,sheet_id,sheet_title,
+                grade,subject,academic_year,term_number,period_status,auto_sync_enabled,excluded_from_journals
+                FROM journal_sources WHERE spreadsheet_id=?""", (spreadsheet_id,)).fetchall()]
 
     def set_journal_source_mode(self, source_id: Any, mode: str) -> dict[str, Any]:
         if mode not in {'auto', 'manual', 'excluded'}:
@@ -5375,6 +5401,10 @@ class Database:
                 JOIN identities canonical_identity ON canonical_identity.id = student.identity_id
                     AND canonical_identity.kind = 'student' AND canonical_identity.status = 'active'
                 JOIN journal_sources source ON source.id = student.source_id
+                    AND source.excluded_from_journals IS FALSE AND source.classification IS NULL
+                    AND NOT (source.grade = 7 AND source.term_number = 2
+                      AND (source.subject LIKE '%Математик%' OR source.subject LIKE '%математик%'
+                        OR source.subject LIKE '%Физик%' OR source.subject LIKE '%физик%'))
                 WHERE student.identity_id = ? AND student.active IS TRUE AND TRIM(student.group_marker) <> ''
                     AND student.entry_kind = 'individual' AND student.match_status = 'linked'
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number, source.id""",
@@ -5429,6 +5459,10 @@ class Database:
                     mapping.exam_track
                 FROM journal_group_mappings mapping
                 JOIN journal_sources source ON source.id = mapping.source_id
+                    AND source.excluded_from_journals IS FALSE AND source.classification IS NULL
+                    AND NOT (source.grade = 7 AND source.term_number = 2
+                      AND (source.subject LIKE '%Математик%' OR source.subject LIKE '%математик%'
+                        OR source.subject LIKE '%Физик%' OR source.subject LIKE '%физик%'))
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number,
                     source.id, mapping.group_marker""").fetchall()
             candidates = [dict(row) for row in candidates]
@@ -5438,7 +5472,11 @@ class Database:
                     NULL AS base_class_name, NULL AS subject_subgroup, NULL AS classroom_course_id,
                     NULL AS exam_track
                 FROM journal_sources source
-                WHERE NOT EXISTS (SELECT 1 FROM journal_group_mappings mapping
+                WHERE source.excluded_from_journals IS FALSE AND source.classification IS NULL
+                  AND NOT (source.grade = 7 AND source.term_number = 2
+                    AND (source.subject LIKE '%Математик%' OR source.subject LIKE '%математик%'
+                      OR source.subject LIKE '%Физик%' OR source.subject LIKE '%физик%'))
+                  AND NOT EXISTS (SELECT 1 FROM journal_group_mappings mapping
                     WHERE mapping.source_id = source.id AND mapping.group_marker = 'all')
                   AND EXISTS (SELECT 1 FROM journal_students marker_student
                     WHERE marker_student.source_id = source.id AND marker_student.group_marker = 'all'

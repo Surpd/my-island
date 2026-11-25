@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Info, LoaderCircle, RefreshCw } from 'lucide-react';
-import { isDefaultJournalPeriod, journalCategoryLabel, studentPeriodStatus, studentSummaryPreview, journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
+import { isDefaultJournalPeriod, journalCategoryLabel, journalPeriodNameWithNumber, studentPeriodStatus, studentSummaryPreview, journalKey, journalValue, recentResultsAcrossSubjects, recentStudentResults, recentStudentStatuses, studentJournalRows, studentPeriodKey, studentPeriodLabel, studentResultDisplay, type StudentJournalItem } from './student-journal-view';
 import './student-journals.css';
 
 export type RoleJournalsApi = <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -96,8 +96,8 @@ function formatDate(value?: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(parsed);
 }
 
-function termLabel(source: { term_number?: number | null; period_status: string }): string {
-  const term = source.term_number ? `${['I', 'II', 'III'][source.term_number - 1] || source.term_number} триместр` : '';
+function termLabel(source: { grade: number; term_number?: number | null; period_status: string }): string {
+  const term = source.term_number ? journalPeriodNameWithNumber(source.grade, source.term_number) : '';
   const period = source.period_status === 'archived' ? 'архив' : source.period_status === 'unassigned' ? 'период не указан' : '';
   return [term, period].filter(Boolean).join(' · ') || 'текущий журнал';
 }
@@ -193,7 +193,9 @@ export function StudentRoleJournals({ api, selectedKey: controlledKey, onOpenDet
   const currentPeriods = new Map((items || []).filter(isDefaultJournalPeriod).map(item => [studentPeriodKey(item), studentPeriodLabel(item)]));
   const periodGroups = new Map<string, StudentJournalItem[]>();
   for (const item of visibleItems) { const key = studentPeriodKey(item); periodGroups.set(key, [...(periodGroups.get(key) || []), item]); }
-  const currentLabel = 'II триместр · 2026/27';
+  const currentLabel = currentPeriods.size === 1
+    ? [...currentPeriods.values()][0]
+    : items?.some(item => item.source.grade >= 10) ? 'Текущий период' : 'II триместр · 2026/27';
   const disambiguation = (item: StudentJournalItem) => {
     const peers = (periodGroups.get(studentPeriodKey(item)) || []).filter(peer => peer.source.subject === item.source.subject);
     if (peers.length < 2) return '';

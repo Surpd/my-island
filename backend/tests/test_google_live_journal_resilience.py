@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from backend.config import Settings
 from backend.database import Database
-from backend.handlers.api import create_router
+from backend.handlers.api import _connected_current_journal_refresh_plan, create_router
 from backend.services.google_contract import GoogleIntegrationConfig
 from backend.services.google_live import GoogleApiError, GoogleLiveClient, GoogleTokenStore
 from backend.services.google_sync_service import _journal_error_diagnostic, refresh_grade_journal
@@ -245,8 +245,10 @@ class JournalSyncResilienceTests(unittest.TestCase):
         client = TestClient(app)
         settings = Mock(journal_cron_secret="cron-secret")
         with patch("backend.handlers.api.get_settings", return_value=settings), patch.object(
-            self.database, "journal_auto_sync_sources",
-            return_value=[{"spreadsheet_id": "book-cron", "grade": 9}],
+            self.database, "journal_status",
+            return_value=[{"spreadsheet_id": "book-cron", "grade": 9, "academic_year": "2026/27",
+                           "term_number": 2, "period_status": "archived", "last_synced_at": "2026-11-01",
+                           "classification": None, "excluded_from_journals": False, "auto_sync_enabled": True}],
         ), patch("backend.handlers.api.refresh_grade_journal", return_value={"status": "success", "tabs": [{"status": "success"}]}) as refresh:
             response = client.post("/api/admin/journals/cron", headers={"X-Journal-Cron-Secret": "cron-secret"})
 
@@ -254,10 +256,114 @@ class JournalSyncResilienceTests(unittest.TestCase):
         item = response.json()["items"][0]
         self.assertEqual(item["status"], "running")
         self.assertEqual(refresh.call_args.kwargs["trigger_kind"], "scheduled")
+        self.assertEqual(refresh.call_args.kwargs["term_number"], 2)
         run = self.database.get_journal_sync_run(item["run_id"])
         self.assertEqual(run["trigger_kind"], "scheduled")
         self.assertEqual(run["status"], "success")
-        self.assertEqual(run["counts"], {"completed_tabs": 1, "total_tabs": 1, "succeeded": 1, "failed": 0, "skipped": 0, "excluded": 0})
+        self.assertEqual(run["counts"], {"completed_tabs": 1, "total_tabs": 1, "succeeded": 1, "failed": 0,
+                                         "skipped": 0, "excluded": 0, "not_imported": 0})
+
+    def test_refresh_all_plan_uses_operational_second_trimester_and_current_semester(self):
+        rows = [
+            {"spreadsheet_id": "book-6", "grade": 6, "academic_year": "2026/27", "term_number": 2,
+             "period_status": "archived", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
+            {"spreadsheet_id": "book-6", "grade": 6, "academic_year": "2026/27", "term_number": 1,
+             "period_status": "current", "last_synced_at": "2026-09-01", "classification": None, "excluded_from_journals": False},
+            {"spreadsheet_id": "book-10", "grade": 10, "academic_year": "2026/27", "term_number": 2,
+             "period_status": "current", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
+            {"spreadsheet_id": "book-11", "grade": 11, "academic_year": "2026/27", "term_number": 1,
+             "period_status": "archived", "last_synced_at": "2026-09-01", "classification": None, "excluded_from_journals": False},
+            {"spreadsheet_id": "book-7", "grade": 7, "academic_year": "2026/27", "term_number": 2,
+             "period_status": "archived", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": True},
+        ]
+
+        jobs, skipped = _connected_current_journal_refresh_plan(rows)
+
+        self.assertEqual(jobs, [
+            {"spreadsheet_id": "book-6", "grade": 6, "term_number": 2},
+            {"spreadsheet_id": "book-10", "grade": 10, "term_number": 2},
+        ])
+        self.assertEqual({item["spreadsheet_id"] for item in skipped}, {"book-7", "book-11"})
+        rows[0]["auto_sync_enabled"] = False
+        rows[2]["auto_sync_enabled"] = True
+        auto_jobs, _ = _connected_current_journal_refresh_plan(rows, require_auto=True)
+        self.assertEqual(auto_jobs, [{"spreadsheet_id": "book-10", "grade": 10, "term_number": 2}])
+
+    def test_auto_sync_scope_is_optional_and_forwarded_without_changing_legacy_contract(self):
+        user_id = self._create_admin()
+        token, _ = self.database.create_admin_login_challenge(user_id)
+        browser_token, _ = self.database.consume_admin_login_challenge(token)
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        headers = {"X-Dev-Auth": f"browser:{browser_token}"}
+        with patch.object(self.database, "journal_scheduler_configured", return_value=True), patch.object(
+            self.database, "set_journal_auto_sync", return_value=3,
+        ) as update:
+            scoped = client.post("/api/admin/journals/auto-sync", headers=headers, json={
+                "spreadsheet_id": "book-6", "enabled": True, "grade": 6, "term_number": 2,
+            })
+            legacy = client.post("/api/admin/journals/auto-sync", headers=headers, json={
+                "spreadsheet_id": "book-6", "enabled": False,
+            })
+            incomplete = client.post("/api/admin/journals/auto-sync", headers=headers, json={
+                "spreadsheet_id": "book-6", "enabled": True, "grade": 6,
+            })
+
+        self.assertEqual(scoped.status_code, 200, scoped.text)
+        self.assertEqual(scoped.json()["updated_sources"], 3)
+        self.assertEqual(update.call_args_list[0].kwargs, {"grade": 6, "term_number": 2})
+        self.assertEqual(legacy.status_code, 200, legacy.text)
+        self.assertEqual(update.call_args_list[1].kwargs, {"grade": None, "term_number": None})
+        self.assertEqual(incomplete.status_code, 422, incomplete.text)
+
+    def test_scoped_auto_sync_update_is_limited_to_connected_class_period(self):
+        database = _FakePostgresDatabase(True)
+
+        self.assertEqual(database.set_journal_auto_sync("book-6", True, grade=6, term_number=2), 1)
+        scoped_sql, scoped_params = database.fake_connection.queries[-1]
+        self.assertIn("grade =", scoped_sql)
+        self.assertIn("term_number =", scoped_sql)
+        self.assertIn("last_synced_at IS NOT NULL", scoped_sql)
+        self.assertIn("excluded_from_journals IS FALSE", scoped_sql)
+        self.assertEqual(scoped_params, (True, "book-6", 6, 2))
+
+        self.assertEqual(database.set_journal_auto_sync("book-6", False), 1)
+        legacy_sql, legacy_params = database.fake_connection.queries[-1]
+        self.assertNotIn("grade =", legacy_sql)
+        self.assertEqual(legacy_params, (False, "book-6"))
+
+    def test_refresh_all_is_admin_only_and_enqueues_connected_books_sequentially(self):
+        user_id = self._create_admin()
+        token, _ = self.database.create_admin_login_challenge(user_id)
+        browser_token, _ = self.database.consume_admin_login_challenge(token)
+        app = FastAPI()
+        app.include_router(create_router(self.database))
+        client = TestClient(app)
+        headers = {"X-Dev-Auth": f"browser:{browser_token}"}
+        rows = [
+            {"spreadsheet_id": "book-6", "grade": 6, "academic_year": "2026/27", "term_number": 2,
+             "period_status": "archived", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
+            {"spreadsheet_id": "book-9", "grade": 9, "academic_year": "2026/27", "term_number": 2,
+             "period_status": "current", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
+            {"spreadsheet_id": "book-10", "grade": 10, "academic_year": "2026/27", "term_number": 1,
+             "period_status": "current", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
+        ]
+
+        self.assertEqual(client.post("/api/admin/journals/refresh-all").status_code, 401)
+        with patch.object(self.database, "journal_status", return_value=rows), patch.object(
+            self.database, "start_journal_sync",
+            side_effect=lambda spreadsheet_id, *_args, **_kwargs: None if spreadsheet_id == "book-9" else f"run-{spreadsheet_id}",
+        ), patch("backend.handlers.api.get_settings", return_value=object()), patch(
+            "backend.handlers.api.refresh_grade_journal", return_value={"status": "success", "tabs": []},
+        ) as refresh:
+            response = client.post("/api/admin/journals/refresh-all", headers=headers)
+
+        self.assertEqual(response.status_code, 202, response.text)
+        payload = response.json()
+        self.assertEqual([item["spreadsheet_id"] for item in payload["items"]], ["book-6", "book-10"])
+        self.assertEqual(payload["busy"], [{"spreadsheet_id": "book-9", "grade": 9, "term_number": 2, "status": "already_running"}])
+        self.assertEqual([(call.args[2], call.kwargs["term_number"]) for call in refresh.call_args_list], [(6, 2), (10, 1)])
 
     def test_unexpected_refresh_failure_finishes_run_and_next_refresh_succeeds(self):
         user_id = self._create_admin()

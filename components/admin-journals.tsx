@@ -1,9 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type SubmitEvent } from 'react';
-import { AlertTriangle, ArrowLeft, BookOpen, CheckCircle2, ExternalLink, LoaderCircle, RefreshCw, Search } from 'lucide-react';
-import { journalCategoryLabel } from './student-journal-view';
+import { AlertTriangle, ArrowLeft, BookOpen, ExternalLink, LoaderCircle, RefreshCw, Search, Settings } from 'lucide-react';
+import { journalCategoryLabel, journalPeriodNameWithNumber, journalPeriodNumbers } from './student-journal-view';
 import { GoogleConnectionCard } from '@/components/google-connection-card';
+import { AdminArchivedJournalSummary, AdminModernJournal, isArchivedFirstTermJournal, isModernJournalDetail } from './admin-modern-journal';
+import './admin-journal-catalog.css';
 
 type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
 type JournalSource = {
@@ -26,6 +28,7 @@ type JournalGroupMapping = { group_marker: string; group_id?: string | number | 
 type CanonicalGroup = { id: string | number; name: string; display_name?: string | null; group_type: string; subject?: string | null; base_class_name?: string | null; subject_subgroup?: string | null; exam_track?: string | null; student_count?: number };
 type JournalDetail = { source: JournalSource; groups: string[]; group_labels?: Record<string, string>; mappings?: JournalGroupMapping[]; assessments: Array<{ id: string | number; title: string; category?: string | null; assessed_on?: string | null; weight?: number | null; max_score?: number | null; group_marker: string }>; students: JournalStudent[] };
 type JournalSyncRun = { id: string | number; trigger_kind: string; status: string; started_at: string; finished_at?: string | null; error?: string | null; counts?: Record<string, number> };
+type JournalBatchRefresh = { items: Array<{ run_id: string; grade: number }>; busy: unknown[]; skipped: unknown[] };
 type PersonOption = { id: string | number; display_name: string; class_name?: string | null };
 type PersonResults = { items: PersonOption[] };
 type MatchSuggestion = { identity_id: string | number; display_name: string; class_name?: string | null; status?: string; groups?: Array<{ id: string | number; name: string }>; reason?: string };
@@ -72,14 +75,86 @@ function JournalWorkList({ detail }: { detail: JournalDetail }) {
   </section>;
 }
 
+function subjectName(source: JournalSource): string {
+  return (source.subject || source.sheet_title).trim().replace(/\s+/g, ' ');
+}
+
+function subjectKey(source: JournalSource): string {
+  return subjectName(source).toLocaleLowerCase('ru').replaceAll('ё', 'е');
+}
+
+function isAuxiliaryTab(source: JournalSource): boolean {
+  return source.classification === 'instructions' || source.classification === 'derived_results'
+    || /^(?:I{1,3}\s*·\s*)?как работать$/iu.test(source.sheet_title.trim());
+}
+
+function isDeferredTab(source: JournalSource): boolean {
+  return source.grade === 7 && source.term_number === 2
+    && /^(?:II\s*·\s*)?(?:математика|физика)(?:\s*\/\s*(?:физика|математика))?$/iu.test(subjectName(source));
+}
+
 function journalSubjectGroups(sources: JournalSource[]) {
-  const groups = new Map<string, JournalSource[]>();
-  for (const source of sources.filter(item => item.classification !== 'instructions')) groups.set(source.subject || source.sheet_title, [...(groups.get(source.subject || source.sheet_title) || []), source]);
-  return [...groups.entries()].map(([subject, periods]) => ({ subject, periods: periods.sort((a, b) => (a.term_number || 0) - (b.term_number || 0)) }));
+  const groups = new Map<string, { subject: string; periods: JournalSource[] }>();
+  for (const source of sources) {
+    if (isAuxiliaryTab(source) || isDeferredTab(source)) continue;
+    const key = subjectKey(source);
+    const group = groups.get(key) || { subject: subjectName(source), periods: [] };
+    group.periods.push(source);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map(group => ({
+    ...group,
+    periods: group.periods.sort((a, b) => (a.term_number || 0) - (b.term_number || 0)),
+  }));
+}
+
+function activeJournalPeriod(sources: JournalSource[], grade: number): number {
+  if (grade < 10) return 2;
+  const current = sources.find(source => source.period_status === 'current');
+  return current?.term_number === 2 ? 2 : 1;
+}
+
+function subjectCountLabel(count: number): string {
+  const last = count % 10;
+  const teen = count % 100 >= 11 && count % 100 <= 14;
+  return `${count} ${!teen && last === 1 ? 'предмет' : !teen && last >= 2 && last <= 4 ? 'предмета' : 'предметов'}`;
 }
 
 function sourceMode(source: JournalSource, overrides: Record<string, 'auto' | 'manual' | 'excluded'>): 'auto' | 'manual' | 'excluded' {
   return overrides[String(source.id)] || (source.excluded_from_journals ? 'excluded' : source.auto_sync_enabled ? 'auto' : 'manual');
+}
+
+function sourceHasError(source: JournalSource): boolean {
+  return Boolean(source.last_error || source.status === 'error');
+}
+
+function journalGoogleUrl(source: JournalSource): string {
+  const base = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(source.spreadsheet_id)}/edit`;
+  return source.sheet_id == null ? base : `${base}#gid=${encodeURIComponent(String(source.sheet_id))}`;
+}
+
+function JournalSourceMenu({ source, busy, onRefresh, onDisable, detail = false }: {
+  source: JournalSource;
+  busy: boolean;
+  onRefresh: () => void;
+  onDisable: () => void;
+  detail?: boolean;
+}) {
+  const menuId = `journal-source-menu-${source.id}`;
+  const title = `Настройки вкладки «${subjectName(source)}»`;
+  return <>
+    <button type="button" className={detail ? 'admin-button admin-button--quiet' : 'journal-source-menu-button'}
+      aria-label={detail ? 'Настройки вкладки' : title} title={title} popoverTarget={menuId}><Settings size={18} aria-hidden="true" />
+      {detail ? 'Настройки вкладки' : null}
+    </button>
+    <div popover="auto" id={menuId} className="journal-source-menu">
+      <strong>{subjectName(source)}</strong>
+      {source.term_number ? <small>{journalPeriodNameWithNumber(source.grade, source.term_number)}</small> : null}
+      <a href={journalGoogleUrl(source)} target="_blank" rel="noreferrer"><ExternalLink size={16} /> Открыть вкладку в Google</a>
+      <button type="button" popoverTarget={menuId} popoverTargetAction="hide" disabled={busy} onClick={onRefresh}><RefreshCw size={16} /> Обновить вкладку</button>
+      <button type="button" className="journal-menu-danger" popoverTarget={menuId} popoverTargetAction="hide" disabled={busy} onClick={onDisable}>Отключить вкладку</button>
+    </div>
+  </>;
 }
 
 function candidateGrade(candidate?: Candidate | null): number | null {
@@ -102,6 +177,11 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   const [loadError, setLoadError] = useState('');
   const [selectedId, setSelectedId] = useState<string | number | null>(null);
   const [selectedGrade, setSelectedGrade] = useState(5);
+  const [catalogPeriod, setCatalogPeriod] = useState(2);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
+  const [onlyErrors, setOnlyErrors] = useState(false);
+  const [batchNotice, setBatchNotice] = useState('');
+  const [batchRuns, setBatchRuns] = useState<JournalBatchRefresh | null>(null);
   const [selectedTerm, setSelectedTerm] = useState<number | null>(null);
   const [detail, setDetail] = useState<JournalDetail | null>(null);
   const [syncHistory, setSyncHistory] = useState<JournalSyncRun[]>([]);
@@ -112,8 +192,8 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   const [preflight, setPreflight] = useState<{ key: string; token: string | null; tabs: JournalPreflightTab[] } | null>(null);
   const [selectedSheetIds, setSelectedSheetIds] = useState<string[]>([]);
   const [connectionGrade, setConnectionGrade] = useState(5);
+  const [connectionPeriod, setConnectionPeriod] = useState(2);
   const [connectionOpen, setConnectionOpen] = useState(false);
-  const [progress, setProgress] = useState<Record<string, { completed: number; total: number }>>({});
   const [matchingBook, setMatchingBook] = useState('');
   const [matching, setMatching] = useState<MatchingData | null>(null);
   const [matchingByBook, setMatchingByBook] = useState<Record<string, MatchingData>>({});
@@ -164,7 +244,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     try {
       const query = marker ? `?group_marker=${encodeURIComponent(marker)}` : '';
       let result = await api<JournalDetail>(`/api/admin/journals/${id}/detail${query}`);
-      if (!marker && result.groups.some((item) => ['A', 'B', 'C'].includes(item))) {
+      if (!marker && !isModernJournalDetail(result) && result.groups.some((item) => ['A', 'B', 'C'].includes(item))) {
         marker = result.groups.find(item => ['A', 'B', 'C'].includes(item))!;
         setGroupMarker(marker);
         result = await api<JournalDetail>(`/api/admin/journals/${id}/detail?group_marker=${encodeURIComponent(marker)}`);
@@ -180,6 +260,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   }, [api]);
 
   useEffect(() => {
+    if (batchRuns) return;
     const runningSource = sources.find((source) => source.active_run_id);
     const runId = runningSource?.active_run_id;
     if (!runId) return;
@@ -188,9 +269,6 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
       try {
         const run = await api<JournalSyncRun>(`/api/admin/journals/sync-runs/${encodeURIComponent(String(runId))}`);
         if (cancelled) return;
-        if (runningSource && run.counts?.total_tabs) {
-          setProgress((current) => ({ ...current, [runningSource.spreadsheet_id]: { completed: run.counts?.completed_tabs || 0, total: run.counts?.total_tabs || 0 } }));
-        }
         await loadSources();
         if (run.status !== 'running') {
           if (run.status === 'error') setActionError('Не удалось обновить журнал. Предыдущие данные сохранены. Повторите обновление позже.');
@@ -202,7 +280,39 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
       }
     }, 3000);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [api, sources, loadSources, loadDetail, selectedId, groupMarker, selectedTerm]);
+  }, [api, sources, loadSources, loadDetail, selectedId, groupMarker, selectedTerm, batchRuns]);
+
+  useEffect(() => {
+    if (!batchRuns?.items.length) return;
+    let cancelled = false;
+    let timer: number;
+    const poll = async () => {
+      try {
+        const runs = await Promise.all(batchRuns.items.map(item =>
+          api<JournalSyncRun>(`/api/admin/journals/sync-runs/${encodeURIComponent(item.run_id)}`)));
+        if (cancelled) return;
+        const completed = runs.filter(run => run.status !== 'running');
+        if (completed.length < runs.length) {
+          setBatchNotice(`Обновляем журналы · ${completed.length} из ${runs.length} таблиц`);
+          timer = window.setTimeout(poll, 3000);
+          return;
+        }
+        const errors = completed.filter(run => run.status !== 'success').length;
+        const skipped = batchRuns.busy.length + batchRuns.skipped.length;
+        setBatchNotice([`Таблиц обновлено полностью — ${runs.length - errors}`,
+          errors ? `с ошибками — ${errors}` : '', skipped ? `пропущено — ${skipped}` : ''].filter(Boolean).join(' · '));
+        setBatchRuns(null);
+        await loadSources();
+      } catch {
+        if (cancelled) return;
+        setBatchNotice('Не удалось получить итог общего запуска. Статусы доступны в обновлениях.');
+        setBatchRuns(null);
+        void loadSources();
+      }
+    };
+    timer = window.setTimeout(poll, 1500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [api, batchRuns, loadSources]);
 
   useEffect(() => {
     let active = true;
@@ -212,7 +322,10 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
         setSources(result.items || []);
         setKnownSources(result.known_sources || []);
         const firstConnectedGrade = result.known_sources?.find((source) => source.connected)?.grade ?? result.items?.[0]?.grade;
-        if (firstConnectedGrade) setSelectedGrade(firstConnectedGrade);
+        if (firstConnectedGrade) {
+          setSelectedGrade(firstConnectedGrade);
+          setCatalogPeriod(activeJournalPeriod((result.items || []).filter(item => item.grade === firstConnectedGrade), firstConnectedGrade));
+        }
         setSchedulerConfigured(Boolean(result.scheduler_configured));
       })
       .catch((error: unknown) => { if (active) setLoadError(errorText(error)); })
@@ -229,17 +342,14 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   }, [api]);
 
   const books = useMemo(() => {
-    const map = new Map<string, { id: string; title: string; grade: number; spreadsheetId: string; subjects: JournalSource[]; syncedAt?: string | null; error?: string | null; auto: boolean; refreshing: boolean }>();
+    const map = new Map<string, { id: string; title: string; grade: number; spreadsheetId: string; subjects: JournalSource[]; refreshing: boolean }>();
     for (const source of sources) {
       const mode = sourceMode(source, sourceModes);
-      if (mode === 'excluded' || source.classification === 'instructions') continue;
+      if (mode === 'excluded' || isAuxiliaryTab(source) || isDeferredTab(source)) continue;
       const key = source.spreadsheet_id;
-      const book = map.get(key) || { id: key, title: source.spreadsheet_title, grade: source.grade, spreadsheetId: key, subjects: [], auto: Boolean(source.auto_sync_enabled), refreshing: false };
+      const book = map.get(key) || { id: key, title: source.spreadsheet_title, grade: source.grade, spreadsheetId: key, subjects: [], refreshing: false };
       book.subjects.push(source);
-      book.auto ||= Boolean(source.auto_sync_enabled);
-      book.refreshing ||= mode === 'auto' && (Boolean(source.refreshing || source.active_run_id) || source.status === 'refreshing');
-      if (!book.syncedAt || (source.last_synced_at && source.last_synced_at > book.syncedAt)) book.syncedAt = source.last_synced_at;
-      if (source.last_error) book.error = 'Часть предметов не обновилась. Предыдущие данные сохранены.';
+      book.refreshing ||= Boolean(source.refreshing || source.active_run_id) || source.status === 'refreshing';
       map.set(key, book);
     }
     return [...map.values()].sort((a, b) => a.grade - b.grade || a.title.localeCompare(b.title, 'ru'));
@@ -263,12 +373,22 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   const gradeBooks = books.filter((book) => book.grade === selectedGrade);
   const gradeJournalSources = sources.filter((source) => source.grade === selectedGrade);
   const activeGradeSources = gradeJournalSources.filter((source) => sourceMode(source, sourceModes) !== 'excluded');
+  const visibleSources = gradeBooks.flatMap(book => book.subjects).filter(source => source.term_number === catalogPeriod);
+  const visibleErrors = visibleSources.filter(sourceHasError);
+  const latestSync = visibleSources.reduce<string | undefined>((latest, source) =>
+    source.last_synced_at && (!latest || source.last_synced_at > latest) ? source.last_synced_at : latest, undefined);
+  const automaticSources = visibleSources.filter(source => sourceMode(source, sourceModes) === 'auto'
+    && (source.grade <= 9 ? source.term_number === 2 : source.period_status === 'current'));
   const detailSubjects = useMemo(() => detail ? journalSubjectGroups(sources.filter((source) => source.grade === detail.source.grade && source.spreadsheet_id === detail.source.spreadsheet_id && source.academic_year === detail.source.academic_year && sourceMode(source, sourceModes) !== 'excluded')) : [], [sources, sourceModes, detail]);
   const matchingBookEntry = books.find((book) => book.spreadsheetId === matchingBook);
   const crossGradeCandidate = candidateScope === 'school' && candidateGrade(candidateSelection) !== null && candidateGrade(candidateSelection) !== (matchingBookEntry?.grade || selectedGrade);
-  const periodSources = useMemo(() => detail ? sources.filter((source) => source.spreadsheet_id === detail.source.spreadsheet_id && source.grade === detail.source.grade && source.academic_year === detail.source.academic_year && source.subject === detail.source.subject && sourceMode(source, sourceModes) !== 'excluded') : [], [sources, sourceModes, detail]);
+  const periodSources = useMemo(() => detail ? detailSubjects.find(group => subjectKey(group.periods[0]) === subjectKey(detail.source))?.periods || [] : [], [detailSubjects, detail]);
+  const detailPeriods = detail ? journalPeriodNumbers(detail.source.grade) : [];
+  const visibleDetailPeriods = [...new Set([...detailPeriods, ...periodSources.flatMap(source => source.term_number ? [source.term_number] : [])])];
   const selectedPeriodSource = periodSources.find((source) => source.term_number === selectedTerm);
   const viewingEmptyTerm = (selectedTerm !== null && !selectedPeriodSource) || (selectedTerm !== null && detail?.source.term_number !== selectedTerm) || detail?.source.period_status === 'unassigned';
+  const modernDetail = detail && isModernJournalDetail(detail);
+  const archivedDetail = detail && isArchivedFirstTermJournal(detail);
 
   function summaryDisplay(student: JournalStudent, kind: string): string {
     const summary = student.summaries.find((item) => item.summary_type === kind);
@@ -286,7 +406,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     return summary.text_value || '—';
   }
 
-  const preflightKey = JSON.stringify([connectionGrade, connectionUrl.trim(), 2]);
+  const preflightKey = JSON.stringify([connectionGrade, connectionUrl.trim(), connectionPeriod]);
   const checked = preflight?.key === preflightKey ? preflight : null;
   const verifiedSubjects = checked?.tabs.filter(tab => tab.status === 'success').length || 0;
   const eligibleSheetIds = new Set(checked?.tabs.filter(tab => tab.status === 'success').map(tab => tab.sheet_id) || []);
@@ -298,7 +418,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     setBusy('preview'); setActionError(''); setPreflight(null); setSelectedSheetIds([]);
     try {
       const result = await api<{ preflight_token?: string; tabs: JournalPreflightTab[] }>('/api/admin/journals/connect', {
-        method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, term_number: 2, dry_run: true, auto_sync_enabled: false }),
+        method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, term_number: connectionPeriod, dry_run: true, auto_sync_enabled: false }),
       });
       setPreflight({ key, token: result.preflight_token || null, tabs: result.tabs });
       setSelectedSheetIds(result.tabs.flatMap(tab => tab.status === 'success' && tab.sheet_id ? [tab.sheet_id] : []));
@@ -312,7 +432,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     setBusy('connect'); setActionError('');
     try {
       const result = await api<{ status: string; spreadsheet_id: string; message?: string; tabs?: JournalImportTab[] }>('/api/admin/journals/connect', {
-        method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, auto_sync_enabled: false, term_number: 2,
+        method: 'POST', body: JSON.stringify({ spreadsheet_url: connectionUrl, grade: connectionGrade, auto_sync_enabled: false, term_number: connectionPeriod,
           selected_sheet_ids: selectedVerifiedIds, preflight_token: checked.token }),
       });
       setPreflight(null);
@@ -326,7 +446,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
       }
       setConnectionOpen(false); setConnectionUrl('');
       const next = await loadSources();
-      const source = next.find((item) => item.spreadsheet_id === result.spreadsheet_id && item.term_number === 2 && item.grade === connectionGrade);
+      const source = next.find((item) => item.spreadsheet_id === result.spreadsheet_id && item.term_number === connectionPeriod && item.grade === connectionGrade);
       if (source) await loadDetail(source.id);
       if (result.status === 'partial' || result.status === 'failed') {
         const tabs = result.tabs || [];
@@ -339,16 +459,18 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
 
   function connectKnownSource(source: KnownJournalSource) {
     setConnectionGrade(source.grade);
+    setConnectionPeriod(source.grade === selectedGrade ? catalogPeriod :
+      activeJournalPeriod(sources.filter(item => item.spreadsheet_id === source.spreadsheet_id && item.grade === source.grade), source.grade));
     setConnectionUrl(source.spreadsheet_id);
     setPreflight(null);
     setActionError('');
     setConnectionOpen(true);
   }
 
-  async function refreshBook(spreadsheetId: string, grade: number) {
+  async function refreshBook(spreadsheetId: string, grade: number, term: number) {
     setBusy(`refresh:${spreadsheetId}`); setActionError('');
     try {
-      const query = new URLSearchParams({ grade: String(grade), spreadsheet_id: spreadsheetId, term_number: '2' });
+      const query = new URLSearchParams({ grade: String(grade), spreadsheet_id: spreadsheetId, term_number: String(term) });
       const result = await api<{ status: string; run_id?: string }>(`/api/admin/journals/refresh-grade?${query}`, { method: 'POST' });
       await loadSources();
       if (result.status === 'running') return;
@@ -356,6 +478,33 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
       if (result.status !== 'success') setActionError('Не все вкладки обновились. Для ошибочных вкладок сохранены предыдущие данные; подробности доступны в карточках предметов.');
     } catch (error) { setActionError(errorText(error)); await loadSources(); }
     finally { setBusy(''); }
+  }
+
+  async function refreshAll() {
+    setBusy('refresh-all');
+    setActionError('');
+    setBatchNotice('');
+    try {
+      const result = await api<JournalBatchRefresh>('/api/admin/journals/refresh-all', { method: 'POST' });
+      if (result.items.length) {
+        setBatchRuns(result);
+        setBatchNotice(`Обновляем журналы · 0 из ${result.items.length} таблиц`);
+      } else {
+        setBatchNotice(result.busy.length ? 'Таблицы уже обновляются.' : 'Нет подключённых вкладок выбранных учебных периодов для обновления.');
+      }
+      await loadSources();
+    } catch (error) { setActionError(errorText(error)); }
+    finally { setBusy(''); }
+  }
+
+  function openConnectionForm() {
+    setConnectionGrade(selectedGrade);
+    setConnectionPeriod(catalogPeriod);
+    setConnectionUrl('');
+    setPreflight(null);
+    setSelectedSheetIds([]);
+    setActionError('');
+    setConnectionOpen(true);
   }
 
   async function saveGroupMapping(marker: string, groupId: string) {
@@ -370,10 +519,18 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     finally { setBusy(''); }
   }
 
-  async function setAutomation(spreadsheetId: string, enabled: boolean) {
+  async function setAutomation(spreadsheetId: string, grade: number, term: number) {
     setBusy(`auto:${spreadsheetId}`); setActionError('');
     try {
-      await api('/api/admin/journals/auto-sync', { method: 'POST', body: JSON.stringify({ spreadsheet_id: spreadsheetId, enabled }) });
+      await api('/api/admin/journals/auto-sync', { method: 'POST',
+        body: JSON.stringify({ spreadsheet_id: spreadsheetId, enabled: true, grade, term_number: term }) });
+      const sourceIds = sources.filter(source => source.spreadsheet_id === spreadsheetId && source.grade === grade
+        && source.term_number === term && sourceMode(source, sourceModes) !== 'excluded').map(source => String(source.id));
+      setSourceModes(current => {
+        const next = { ...current };
+        for (const id of sourceIds) delete next[id];
+        return next;
+      });
       await loadSources();
     } catch (error) { setActionError(errorText(error)); }
     finally { setBusy(''); }
@@ -398,27 +555,16 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     finally { setBusy(''); }
   }
 
-  async function loadAllMatching() {
-    if (!books.length) return;
-    setBusy('matching-all');
-    const results: Array<{ id: string; ok: true; data: MatchingData } | { id: string; ok: false; error: string }> = await Promise.all(books.map(async (book) => {
-      try { return { id: book.spreadsheetId, ok: true as const, data: await api<MatchingData>(`/api/admin/journals/matching?spreadsheet_id=${encodeURIComponent(book.spreadsheetId)}`) }; }
-      catch (error) { return { id: book.spreadsheetId, ok: false as const, error: errorText(error) }; }
-    }));
-    setMatchingByBook((current) => {
-      const next = { ...current };
-      for (const result of results) if (result.ok) next[result.id] = result.data;
-      return next;
-    });
-    setMatchingErrors((current) => {
-      const next = { ...current };
-      for (const result of results) {
-        if (result.ok) delete next[result.id];
-        else next[result.id] = result.error;
-      }
-      return next;
-    });
-    setBusy('');
+  function leaveJournal() {
+    if (detail && selectedTerm !== null && journalPeriodNumbers(detail.source.grade).includes(selectedTerm)) setCatalogPeriod(selectedTerm);
+    setDetail(null);
+    setSelectedId(null);
+  }
+
+  function openDetailMatching(spreadsheetId: string) {
+    leaveJournal();
+    setMatchingOpen(true);
+    void openMatching(spreadsheetId);
   }
 
   async function searchMatchPeople(key: string, query: string) {
@@ -484,14 +630,25 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
 
   async function setSourceMode(source: JournalSource, mode: 'auto' | 'manual' | 'excluded') {
     setBusy(`source:${source.id}`); setActionError('');
-    try { await api('/api/admin/journals/source-settings', { method: 'POST', body: JSON.stringify({ source_id: source.id, mode }) }); setSourceModes((current) => ({ ...current, [String(source.id)]: mode })); await loadSources(); }
+    try {
+      await api('/api/admin/journals/source-settings', { method: 'POST', body: JSON.stringify({ source_id: source.id, mode }) });
+      setSourceModes((current) => ({ ...current, [String(source.id)]: mode }));
+      if (mode === 'excluded' && String(selectedId) === String(source.id)) {
+        leaveJournal(); setUpdatesOpen(true);
+      }
+      await loadSources();
+    }
     catch (error) { setActionError(errorText(error)); }
     finally { setBusy(''); }
   }
 
   async function refreshSource(source: JournalSource) {
     setBusy(`source-refresh:${source.id}`); setActionError('');
-    try { await api('/api/admin/journals/source-refresh', { method: 'POST', body: JSON.stringify({ source_id: source.id }) }); await loadSources(); }
+    try {
+      await api('/api/admin/journals/source-refresh', { method: 'POST', body: JSON.stringify({ source_id: source.id }) });
+      await loadSources();
+      if (String(selectedId) === String(source.id)) await loadDetail(source.id, groupMarker, selectedTerm ?? undefined);
+    }
     catch (error) { setActionError(errorText(error)); }
     finally { setBusy(''); }
   }
@@ -575,10 +732,100 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     {loadError ? <div className="admin-error" role="alert"><AlertTriangle size={17} /><div><strong>Не удалось загрузить список</strong><p>{loadError}</p></div><button className="admin-button admin-button--quiet" onClick={() => { setLoading(true); setLoadError(''); void loadSources(); }}>Повторить</button></div> : null}
 
     {!detail ? <>
-      <div className="journal-grade-tabs" role="tablist" aria-label="Класс">{gradeList.map((grade) => { const connected = knownSources.find((item) => item.grade === grade)?.connected ?? books.some((book) => book.grade === grade); const count = books.filter((book) => book.grade === grade).length; return <button key={grade} role="tab" aria-selected={selectedGrade === grade} className={selectedGrade === grade ? 'is-active' : ''} onClick={() => { setSelectedGrade(grade); setActionError(''); }}>{grade} класс<span>{count ? `${count} журналов` : connected ? 'нет активных вкладок' : 'не подключён'}</span></button>; })}</div>
-      <div className="admin-page-actions journal-intro"><p>{readOnly ? 'Доступны предметы и статус обновления. Оценки и составы скрыты.' : 'Выберите предмет, чтобы открыть оценки.'}{!schedulerConfigured ? <><br /><span className="admin-help-text">Журналы обновляются вручную.</span></> : null}</p>{!readOnly && <div className="admin-button-row"><button className={`admin-button ${matchingOpen ? 'admin-button--primary' : 'admin-button--quiet'}`} aria-pressed={matchingOpen} onClick={() => { const next = !matchingOpen; setMatchingOpen(next); if (next) { setActionError(''); void loadAllMatching(); } }}><Search size={15} /> Сопоставление учеников</button><button className="admin-button admin-button--primary" onClick={() => { setActionError(''); setPreflight(null); setSelectedSheetIds([]); setConnectionOpen((value) => !value); }}><BookOpen size={15} /> Подключить Google Таблицу</button></div>}</div>
-      {connectionOpen ? <section className="admin-panel journal-connect-panel"><div><h2>Подключить Google Таблицу</h2><p className="admin-help-text">Выберите класс и проверьте предметные вкладки II триместра перед импортом.</p></div><form onSubmit={(event) => void connect(event)}><label htmlFor="journal-grade-select">Класс</label><select id="journal-grade-select" value={connectionGrade} onChange={(event) => { setConnectionGrade(Number(event.target.value)); setPreflight(null); }}>{gradeList.map((grade) => <option value={grade} key={grade}>{grade} класс</option>)}</select><label htmlFor="journal-source-url">Ссылка на таблицу</label><input id="journal-source-url" value={connectionUrl} onChange={(event) => { setConnectionUrl(event.target.value); setPreflight(null); }} placeholder="https://docs.google.com/spreadsheets/d/…" required />{checked && <fieldset className="journal-import-pick">
-      <legend>Предметные вкладки II триместра</legend>
+      <div className="journal-catalog-actions">
+        <div className="journal-update-status" aria-live="polite">
+          <span>{!schedulerConfigured ? 'Обновление по расписанию пока не настроено'
+            : automaticSources.length === visibleSources.length && visibleSources.length ? 'Автообновление каждый час'
+            : automaticSources.length ? 'Автообновление не для всех вкладок периода'
+            : 'Автообновление для этого периода не включено'}</span>
+          {latestSync ? <span>Последнее успешное обновление · {dateText(latestSync)}</span> : null}
+          {batchNotice ? <strong>{batchNotice}</strong> : null}
+        </div>
+        {!readOnly && <div className="admin-button-row">
+          <button type="button" className="admin-button admin-button--quiet" aria-controls="journal-updates-panel" aria-expanded={updatesOpen} onClick={() => setUpdatesOpen(open => !open)}>
+            <Settings size={16} /> Обновления и источники{visibleErrors.length ? <span className="journal-error-count">{visibleErrors.length}</span> : null}
+          </button>
+          <button type="button" className="admin-button admin-button--primary" disabled={Boolean(busy || batchRuns) || !books.length} onClick={() => void refreshAll()}>
+            <RefreshCw size={16} /> {batchRuns ? 'Обновляем журналы…' : 'Обновить все'}
+          </button>
+        </div>}
+      </div>
+      <div className="journal-grade-tabs" role="tablist" aria-label="Класс">
+        {gradeList.map(grade => {
+          const gradeSources = books.filter(book => book.grade === grade).flatMap(book => book.subjects);
+          const connected = knownSources.find(item => item.grade === grade)?.connected ?? Boolean(gradeSources.length);
+          const count = journalSubjectGroups(gradeSources).length;
+          return <button key={grade} role="tab" aria-selected={selectedGrade === grade} className={selectedGrade === grade ? 'is-active' : ''} onClick={() => {
+            setSelectedGrade(grade);
+            setCatalogPeriod(activeJournalPeriod(gradeSources, grade));
+            setOnlyErrors(false);
+            setActionError('');
+          }}>{grade} класс<span>{count ? subjectCountLabel(count) : connected ? 'Нет активных вкладок' : 'Не подключён'}</span></button>;
+        })}
+      </div>
+      <div className="journal-group-tabs" role="tablist" aria-label="Период класса">
+        {journalPeriodNumbers(selectedGrade).map(term => <button key={term} role="tab" aria-selected={catalogPeriod === term}
+          className={catalogPeriod === term ? 'is-active' : ''} onClick={() => { setCatalogPeriod(term); setOnlyErrors(false); }}>
+          {journalPeriodNameWithNumber(selectedGrade, term)}
+        </button>)}
+      </div>
+      {selectedGrade === 7 && catalogPeriod === 2 ? <p className="admin-help-text">Подключение математики и физики за II триместр отложено.</p> : null}
+      {!readOnly && updatesOpen ? <section id="journal-updates-panel" className="admin-panel journal-updates-panel">
+        <div className="journal-updates-heading">
+          <h2>Обновления и источники</h2>
+          <button type="button" className="admin-link" onClick={() => setUpdatesOpen(false)}>Закрыть</button>
+        </div>
+        <div className="admin-button-row">
+          <button type="button" className="admin-button admin-button--quiet" onClick={openConnectionForm}>
+            <BookOpen size={15} /> Подключить Google Таблицу
+          </button>
+          <button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || !gradeBooks.length} onClick={() => {
+            setMatchingOpen(true);
+            const book = gradeBooks[0];
+            if (book) void openMatching(book.spreadsheetId);
+          }}><Search size={15} /> Сопоставить учеников</button>
+        </div>
+        {visibleErrors.length ? <section className="journal-update-errors" aria-label="Ошибки обновления">
+          <h3>Ошибки обновления · {visibleErrors.length}</h3>
+          {visibleErrors.map(source => <div className="journal-source-error" key={source.id}>
+            <AlertTriangle size={16} />
+            <span><strong>{subjectName(source)}</strong> · {source.last_error || 'Вкладка не обновилась.'}</span>
+            <button type="button" className="admin-link" disabled={Boolean(busy || batchRuns || source.active_run_id)} onClick={() => void refreshSource(source)}>Повторить</button>
+          </div>)}
+        </section> : null}
+        {gradeBooks.map(book => <div className="journal-book-sync" key={book.id}>
+          <strong>{book.title}</strong>
+          <button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy || batchRuns || book.refreshing) || !book.subjects.some(source => source.term_number === catalogPeriod)}
+            onClick={() => void refreshBook(book.spreadsheetId, book.grade, catalogPeriod)}>
+            <RefreshCw size={15} /> {book.refreshing ? 'Обновляется' : 'Обновить выбранный период'}
+          </button>
+          {book.subjects.some(source => source.term_number === catalogPeriod
+            && (source.grade <= 9 ? source.term_number === 2 : source.period_status === 'current')
+            && sourceMode(source, sourceModes) !== 'auto') ? <button type="button" className="admin-button admin-button--quiet"
+              disabled={Boolean(busy || batchRuns) || !schedulerConfigured}
+              onClick={() => void setAutomation(book.spreadsheetId, book.grade, catalogPeriod)}>
+              Включить почасовое обновление периода
+            </button> : null}
+        </div>)}
+        {gradeJournalSources.length ? <details className="journal-tab-settings">
+          <summary>Режимы синхронизации и отключённые вкладки</summary>
+          {gradeJournalSources.map(source => {
+            const mode = sourceMode(source, sourceModes);
+            return <div className="journal-tab-setting-row" key={source.id}>
+              <span><strong>{source.sheet_title}</strong><small>{isDeferredTab(source) ? 'Подключение отложено' : mode === 'excluded' ? 'Отключена в My Island' : source.last_error || source.classification_reason ||
+                (source.last_synced_at ? dateText(source.last_synced_at) : 'Ещё не обновлялась')}</small></span>
+              <a href={journalGoogleUrl(source)} className="admin-link" target="_blank" rel="noreferrer">Открыть в Google</a>
+              {!isDeferredTab(source) && <select aria-label={'Режим синхронизации: ' + source.sheet_title} value={mode} disabled={Boolean(busy || batchRuns)}
+                onChange={event => void setSourceMode(source, event.target.value as 'auto' | 'manual' | 'excluded')}>
+                <option value="auto">Автоматически</option><option value="manual">Только вручную</option><option value="excluded">Отключена</option>
+              </select>}
+            </div>;
+          })}
+        </details> : null}
+        <details><summary>Аккаунт Google</summary><GoogleConnectionCard api={api} apiOrigin={apiOrigin} /></details>
+      </section> : null}
+      {connectionOpen ? <section className="admin-panel journal-connect-panel"><div><h2>Подключить Google Таблицу</h2><p className="admin-help-text">Выберите класс и период, затем проверьте предметные вкладки перед импортом.</p></div><form onSubmit={(event) => void connect(event)}><label htmlFor="journal-grade-select">Класс</label><select id="journal-grade-select" value={connectionGrade} onChange={(event) => { const grade = Number(event.target.value); setConnectionGrade(grade); setConnectionPeriod(activeJournalPeriod(sources.filter(source => source.grade === grade), grade)); setPreflight(null); }}>{gradeList.map((grade) => <option value={grade} key={grade}>{grade} класс</option>)}</select><label htmlFor="journal-period-select">Учебный период</label><select id="journal-period-select" value={connectionPeriod} onChange={event => { setConnectionPeriod(Number(event.target.value)); setPreflight(null); }}>{journalPeriodNumbers(connectionGrade).map(term => <option value={term} key={term}>{journalPeriodNameWithNumber(connectionGrade, term)}</option>)}</select><label htmlFor="journal-source-url">Ссылка на таблицу</label><input id="journal-source-url" value={connectionUrl} onChange={(event) => { setConnectionUrl(event.target.value); setPreflight(null); }} placeholder="https://docs.google.com/spreadsheets/d/…" required />{checked && <fieldset className="journal-import-pick">
+      <legend>Предметные вкладки · {journalPeriodNameWithNumber(connectionGrade, connectionPeriod)}</legend>
       <output aria-live="polite">{verifiedSubjects
         ? `Выбрано: ${selectedVerifiedIds.length} из ${verifiedSubjects} проверенных вкладок.`
         : 'Нет проверенных предметных вкладок для импорта.'}</output>
@@ -595,7 +842,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
         </li>;
       })}</ul>
       </fieldset>}<div className="admin-button-row"><button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || !connectionUrl.trim()} onClick={() => void previewConnection()}>Проверить без сохранения</button><button className="admin-button admin-button--primary" disabled={Boolean(busy) || !hasPreflight}>{busy === 'connect' ? <LoaderCircle size={15} className="admin-spin" /> : null} Подключить и импортировать</button><button type="button" className="admin-button admin-button--quiet" onClick={() => { setConnectionOpen(false); setPreflight(null); }}>Отмена</button></div></form></section> : null}
-      {matchingOpen ? <section className="admin-panel journal-central-matching"><div className="journal-central-matching-heading"><div><p className="admin-eyebrow">ЖУРНАЛЫ</p><h2>Сопоставление учеников и команд</h2><p className="admin-help-text">Записи сгруппированы по имени внутри каждой таблицы и охватывают все её предметы. Данные таблиц загружаются при открытии этого раздела.</p>{Object.keys(matchingByBook).length ? <p className="admin-help-text">Загружено таблиц: {Object.keys(matchingByBook).length} · ожидают: {Object.values(matchingByBook).reduce((sum, data) => sum + data.individuals.length, 0)} имён · {Object.values(matchingByBook).reduce((sum, data) => sum + data.teams.length, 0)} команд</p> : null}</div><button className="admin-button admin-button--quiet" onClick={() => { setMatchingOpen(false); setMatching(null); setMatchingBook(''); }}>Закрыть</button></div>{busy === 'matching-all' ? <div className="admin-loading"><LoaderCircle size={16} className="admin-spin" /> Загружаем сопоставления по таблицам…</div> : null}<div className="journal-matching-books">{books.map((book) => { const data = matchingByBook[book.spreadsheetId]; return <button key={book.spreadsheetId} disabled={busy === 'matching-all'} className={`journal-matching-book ${matchingBook === book.spreadsheetId ? 'is-active' : ''}`} onClick={() => { setSelectedGrade(book.grade); void openMatching(book.spreadsheetId); }}><strong>{book.grade} класс · {book.title}</strong><span>{data ? `${data.individuals.length} имён ожидают · ${data.teams.length} команд` : matchingErrors[book.spreadsheetId] ? 'Ошибка загрузки' : 'Загрузка…'}</span></button>; })}</div>
+      {matchingOpen ? <section className="admin-panel journal-central-matching"><div className="journal-central-matching-heading"><div><p className="admin-eyebrow">ЖУРНАЛЫ</p><h2>Сопоставление учеников и команд</h2><p className="admin-help-text">Записи сгруппированы по имени внутри каждой таблицы и охватывают все её предметы. Выберите таблицу, чтобы загрузить её сопоставления.</p>{Object.keys(matchingByBook).length ? <p className="admin-help-text">Загружено таблиц: {Object.keys(matchingByBook).length} · ожидают: {Object.values(matchingByBook).reduce((sum, data) => sum + data.individuals.length, 0)} имён · {Object.values(matchingByBook).reduce((sum, data) => sum + data.teams.length, 0)} команд</p> : null}</div><button className="admin-button admin-button--quiet" onClick={() => { setMatchingOpen(false); setMatching(null); setMatchingBook(''); }}>Закрыть</button></div><div className="journal-matching-books">{books.map((book) => { const data = matchingByBook[book.spreadsheetId]; return <button key={book.spreadsheetId} disabled={busy === 'matching-all'} className={`journal-matching-book ${matchingBook === book.spreadsheetId ? 'is-active' : ''}`} onClick={() => { setSelectedGrade(book.grade); void openMatching(book.spreadsheetId); }}><strong>{book.grade} класс · {book.title}</strong><span>{data ? `${data.individuals.length} имён ожидают · ${data.teams.length} команд` : matchingErrors[book.spreadsheetId] ? 'Ошибка загрузки' : 'Загрузка…'}</span></button>; })}</div>
         {matchingBook && !matching && busy === 'matching' ? <div className="admin-loading"><LoaderCircle size={16} className="admin-spin" /> Загружаем сопоставления…</div> : null}
         {matchingBook && matchingErrors[matchingBook] && !matching ? <div className="journal-source-error" role="alert"><AlertTriangle size={14} /><span>{matchingErrors[matchingBook]}</span><button className="admin-link" onClick={() => void openMatching(matchingBook)}>Повторить</button></div> : null}
         {matchingBook && matching ? <div className="journal-matching-panel" aria-label={`Сопоставление: ${matchingBookEntry?.grade || ''} класс`}><p className="admin-help-text">Таблица: {matchingBookEntry?.title || matchingBook}</p>
@@ -623,33 +870,100 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
           <h3>Команды</h3>{!matching.teams.length ? <p className="admin-help-text">Командных записей нет.</p> : matching.teams.map((team) => { const selected = teamChoices[String(team.id)] || team.members.map((member) => String(member.identity_id)); return <div className="journal-mapping-row" key={`${matchingBook}:${team.id}`}><div><strong>{team.display_name}</strong><small>{team.subject} · группа {team.group_marker} · {team.result_count} результатов</small><small>Участники: {team.members.map((member) => member.display_name).join(', ') || 'не указаны'}</small></div><div className="journal-map-controls"><label>Найти участников<input value={matchSearch[`team:${team.id}`] || ''} onChange={(event) => void searchMatchPeople(`team:${team.id}`, event.target.value)} placeholder="Введите имя" /></label><label>Участники<select multiple aria-label={`Участники команды ${team.display_name}`} value={selected} onChange={(event) => setTeamChoices((current) => ({ ...current, [String(team.id)]: Array.from(event.target.selectedOptions, (option) => option.value) }))}>{[...team.members.map((member) => ({ id: member.identity_id, display_name: member.display_name, class_name: member.class_name })), ...(matchOptions[`team:${team.id}`] || [])].filter((person, index, all) => all.findIndex((candidate) => String(candidate.id) === String(person.id)) === index).map((person) => <option key={person.id} value={String(person.id)}>{person.display_name} · {person.class_name || 'класс не указан'}</option>)}</select></label><button className="admin-button admin-button--quiet" onClick={() => void saveTeamMembers(team.id)} disabled={Boolean(busy)}>Сохранить состав</button></div></div>; })}
         </div> : null}
       </section> : null}
-      {!gradeBooks.length ? <section className="admin-panel journal-empty"><div className="journal-empty-mark"><BookOpen size={23} /></div><h2>{selectedGrade} класс</h2><p>{gradeJournalSources.length && !activeGradeSources.length ? 'Все вкладки этого класса исключены из списка журналов. Их можно включить в настройках источников ниже.' : knownSources.find((source) => source.grade === selectedGrade)?.connected ? 'Таблица подключена, но импортированные предметы пока не появились.' : 'Для этого класса журнал ещё не подключён.'}</p>{readOnly || gradeJournalSources.length && !activeGradeSources.length ? null : knownSources.find((source) => source.grade === selectedGrade) ? <button className="admin-button admin-button--primary" disabled={Boolean(busy)} onClick={() => connectKnownSource(knownSources.find((source) => source.grade === selectedGrade)!)}>{busy === `connect:${selectedGrade}` ? <LoaderCircle size={15} className="admin-spin" /> : null}{knownSources.find((source) => source.grade === selectedGrade)?.connected ? 'Повторить подключение' : `Подключить журнал ${selectedGrade} класса`}</button> : <button className="admin-button admin-button--primary" onClick={() => { setConnectionGrade(selectedGrade); setConnectionOpen(true); }}>Подключить таблицу</button>}</section> : gradeBooks.map((book) => <section className="admin-panel journal-book" key={book.spreadsheetId}>
-        <div className="journal-book-heading"><div><p className="admin-eyebrow">УЧЕБНЫЙ ГОД 2026/27</p><h2>{book.grade} класс</h2><p>{book.title} {!readOnly && <a href={`https://docs.google.com/spreadsheets/d/${encodeURIComponent(book.spreadsheetId)}/edit`} target="_blank" rel="noreferrer" aria-label="Открыть оригинальную таблицу"><ExternalLink size={13} /></a>}</p></div><div className="journal-book-actions"><span className={`journal-sync-status ${book.refreshing ? 'is-running' : book.error ? 'is-error' : 'is-ready'}`}><i />{book.refreshing ? (progress[book.spreadsheetId]?.total ? `Обновляется ${progress[book.spreadsheetId].completed} из ${progress[book.spreadsheetId].total}` : 'Обновляется') : book.error ? 'Есть ошибка' : `Обновлено ${dateText(book.syncedAt)}`}</span>{!readOnly && <><button className="admin-button admin-button--quiet" disabled={Boolean(busy) || book.refreshing} onClick={() => void refreshBook(book.spreadsheetId, book.grade)}><RefreshCw size={15} className={busy.startsWith('refresh:') ? 'admin-spin' : ''} /> {busy === `refresh:${book.spreadsheetId}` ? 'Обновляем…' : 'Обновить сейчас'}</button><label className="journal-toggle"><input type="checkbox" checked={book.auto} disabled={Boolean(busy) || !schedulerConfigured} onChange={(event) => void setAutomation(book.spreadsheetId, event.target.checked)} /><span>{schedulerConfigured ? 'Автоматически каждый час' : 'Расписание не настроено'}</span></label></>}</div></div>
-        {book.error && <details className="admin-panel"><summary>Ошибки обновления</summary>{book.subjects.filter((source) => sourceMode(source, sourceModes) !== 'excluded' && source.last_error).map((source) => <div className="journal-source-error" key={`error:${source.id}`}><AlertTriangle size={14} /><span>Вкладка «{source.sheet_title}»: {source.last_error || book.error || 'Не удалось обновить. Предыдущие данные сохранены.'}</span><button type="button" className="admin-link" disabled={Boolean(busy) || book.refreshing} onClick={() => void refreshSource(source)}>Повторить обновление вкладки</button></div>)}</details>}
-        <div className="journal-subject-heading"><strong>Предметы</strong><span>{journalSubjectGroups(book.subjects).length}</span></div><div className="journal-subject-grid">{journalSubjectGroups(book.subjects).map(({ subject, periods }) => { const source = periods.find((item) => item.term_number === 2) || periods[0]; const terms = periods.filter((item) => item.term_number).map((item) => ['I', 'II', 'III'][Number(item.term_number) - 1]).join(' · '); const mode = sourceMode(source, sourceModes); const hasError = Boolean(source.last_error || source.status === 'error'); return <button key={subject} className="journal-subject-card" onClick={() => { setActionError(''); void loadDetail(source.id, '', 2); }}><span className="journal-subject-icon"><BookOpen size={15} /></span><span className="journal-subject-copy"><strong>{subject}</strong><small>{terms ? `${terms} триместр${periods.some((item) => item.term_number === 2) ? ' · открыт II' : ' · II пока отсутствует'} · ` : ''}{source.assessment_count || 0} работ · {source.roster_student_count || 0} учеников{source.team_count ? ` · ${source.team_count} команд` : ''}{mode === 'manual' ? ' · обновление вручную' : ''}</small></span><span className={`journal-subject-state ${hasError ? 'is-error' : ''}`} title={mode === 'manual' ? 'Синхронизация по расписанию пропускает эту вкладку; её можно обновить вручную.' : source.status === 'empty' ? 'Вкладка без оценок' : hasError ? 'Не удалось обновить вкладку. Предыдущие данные сохранены.' : 'Обновлено'}>{hasError ? <AlertTriangle size={15} /> : mode === 'manual' ? <RefreshCw size={15} /> : <CheckCircle2 size={15} />}</span></button>; })}</div>
-      </section>)}
-      <details className="admin-panel"><summary>Подключение Google</summary><GoogleConnectionCard api={api} apiOrigin={apiOrigin} /></details>
-      {!readOnly && <details className="admin-panel journal-tab-settings"><summary>Настройки вкладок · {selectedGrade} класс</summary><p className="admin-help-text">Исключённые и структурно классифицированные вспомогательные вкладки не считаются ошибками стандартного журнала.</p>{gradeJournalSources.map((source) => { const mode = sourceMode(source, sourceModes); const statusText = mode === 'excluded' ? 'Исключена из журналов и оценок' : mode === 'manual' ? 'Обновление вручную' : source.last_error ? source.last_error : source.last_synced_at ? `Обновлено ${dateText(source.last_synced_at)}` : 'Ещё не обновлялась'; return <div className="journal-tab-setting-row" key={`tab-mode:${source.id}`}><span><strong>{source.sheet_title}</strong><small>{statusText}</small>{source.last_error_details ? <details><summary>Технические подробности</summary><code>{source.last_error_details}</code></details> : null}<a href={`https://docs.google.com/spreadsheets/d/${encodeURIComponent(source.spreadsheet_id)}/edit#gid=${encodeURIComponent(String(source.sheet_id))}`} target="_blank" rel="noreferrer">Открыть Google-вкладку</a></span><select aria-label={`Режим синхронизации: ${source.sheet_title}`} value={mode} disabled={Boolean(busy)} onChange={(event) => void setSourceMode(source, event.target.value as 'auto' | 'manual' | 'excluded')}><option value="auto">Автоматически</option><option value="manual">Только вручную</option><option value="excluded">Исключить</option></select><button type="button" className="admin-button admin-button--quiet" disabled={Boolean(busy) || mode === 'excluded'} onClick={() => void refreshSource(source)}>{busy === `source-refresh:${source.id}` ? 'Обновляем…' : 'Обновить вкладку'}</button></div>; })}</details>}
+      <section className="journal-catalog" aria-label="Предметы выбранного периода">
+        <div className="journal-updates-heading">
+          <h2>Предметы</h2>
+          <div className="admin-button-row" aria-label="Фильтр по обновлению">
+            <button type="button" className="admin-button admin-button--quiet" aria-pressed={!onlyErrors} onClick={() => setOnlyErrors(false)}>Все</button>
+            <button type="button" className="admin-button admin-button--quiet" aria-pressed={onlyErrors} onClick={() => setOnlyErrors(true)}>С ошибкой</button>
+          </div>
+        </div>
+        {!gradeBooks.length ? <section className="admin-panel journal-empty">
+          <h3>{selectedGrade} класс</h3>
+          <p>{gradeJournalSources.length && !activeGradeSources.length ? 'Все вкладки класса отключены.' :
+            'Для этого класса пока нет подключённых предметов.'}</p>
+          {!readOnly && !connectionOpen ? <button type="button" className="admin-button admin-button--primary" disabled={Boolean(busy)} onClick={() => {
+            const known = knownSources.find(source => source.grade === selectedGrade);
+            if (known) connectKnownSource(known); else openConnectionForm();
+          }}>Подключить Google Таблицу</button> : null}
+        </section> : onlyErrors && !visibleErrors.length ? <p className="admin-panel journal-no-errors">За этот период ошибок обновления нет.</p> :
+          gradeBooks.map(book => <div key={book.id}>
+            {gradeBooks.length > 1 ? <h3>{book.title}</h3> : null}
+            <div className="journal-catalog-table-wrap">
+              <table className="journal-catalog-table">
+                <thead><tr><th scope="col">Предмет</th><th scope="col">Ученики</th><th scope="col">Работы</th><th scope="col">Обновление</th>{!readOnly ? <th scope="col" aria-label="Настройки" /> : null}</tr></thead>
+                <tbody>{journalSubjectGroups(book.subjects).map(({ subject, periods }) => {
+                  const active = periods.find(item => item.term_number === catalogPeriod);
+                  const source = active || periods[0];
+                  const deferred = !active && isDeferredTab({ ...source, term_number: catalogPeriod });
+                  const failed = active && sourceHasError(active);
+                  if (onlyErrors && !failed) return null;
+                  return <tr key={subject} className={failed ? 'journal-catalog-row-error' : undefined}>
+                    <th scope="row">{readOnly || deferred ? subject : <button type="button" className="journal-open-subject" onClick={() => {
+                      setActionError(''); void loadDetail(source.id, '', catalogPeriod);
+                    }}>{subject}</button>}</th>
+                    <td>{active ? active.roster_student_count ?? '—' : '—'}</td>
+                    <td>{active ? active.assessment_count ?? '—' : '—'}</td>
+                    <td>{failed ? <span className="journal-row-status is-error"><AlertTriangle size={16} /><span><strong>Не обновился</strong>{active?.last_synced_at ? <small>Последнее успешное · {dateText(active.last_synced_at)}</small> : null}</span></span>
+                      : active ? <span className={active.last_synced_at ? 'journal-row-status is-ready' : 'journal-row-status'}>{active.active_run_id ? 'Обновляется…' : active.last_synced_at ? dateText(active.last_synced_at) : 'Ещё не обновлялся'}</span>
+                      : deferred ? 'Подключение отложено' : 'Нет журнала за период'}</td>
+                    {!readOnly ? <td className="journal-catalog-menu-cell">{active && <JournalSourceMenu source={active} busy={Boolean(busy || batchRuns || active.active_run_id)}
+                      onRefresh={() => void refreshSource(active)} onDisable={() => void setSourceMode(active, 'excluded')} />}</td> : null}
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          </div>)}
+      </section>
     </> : <>
-        <button className="admin-back" onClick={() => { setDetail(null); setSelectedId(null); setActionError(''); }}><ArrowLeft size={15} /> Все журналы</button>
-      <nav className="journal-detail-nav" aria-label="Навигация по журналам"><label>Класс<select value={detail.source.grade} onChange={(event) => { const grade = Number(event.target.value); const nextBook = books.find((book) => book.grade === grade); const nextSubjects = journalSubjectGroups(sources.filter((source) => source.grade === grade && (!nextBook || source.spreadsheet_id === nextBook.spreadsheetId))); const sameSubject = nextSubjects.find((item) => item.subject === detail.source.subject); const group = sameSubject || nextSubjects[0]; const source = group?.periods.find((item) => item.term_number === 2) || group?.periods[0]; if (source) void loadDetail(source.id, '', 2); else { setDetail(null); setSelectedId(null); setSelectedGrade(grade); } }}>{gradeList.map((grade) => <option key={grade} value={grade}>{grade} класс</option>)}</select></label><label>Предмет<select value={detail.source.subject} onChange={(event) => { const group = detailSubjects.find((item) => item.subject === event.target.value); const source = group?.periods.find((item) => item.term_number === 2) || group?.periods[0]; if (source) void loadDetail(source.id, '', 2); }} >{detailSubjects.map((group) => <option key={group.subject} value={group.subject}>{group.subject}</option>)}</select></label></nav>
-      <section className="admin-panel journal-detail-head"><div className="journal-detail-title"><div className="journal-detail-icon"><BookOpen size={18} /></div><div><p className="admin-eyebrow">{detail.source.grade} КЛАСС · ЖУРНАЛ ПРЕДМЕТА</p><h2>{detail.source.subject}</h2><p>{detail.source.spreadsheet_title} <span>·</span> {detail.source.academic_year} · обновлено {dateText(detail.source.last_synced_at)}</p></div></div>{!readOnly && <div className="admin-button-row"><a className="admin-button admin-button--quiet" href={`https://docs.google.com/spreadsheets/d/${encodeURIComponent(detail.source.spreadsheet_id)}/edit#gid=${encodeURIComponent(String(detail.source.sheet_id || ''))}`} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Оригинальная таблица</a><button className="admin-button admin-button--quiet" disabled={Boolean(busy) || Boolean(selectedSource?.active_run_id)} onClick={() => void refreshSource(detail.source)}><RefreshCw size={14} /> Обновить сейчас</button></div>}</section>
-      <div className="journal-group-tabs" role="tablist" aria-label="Триместр">{[1, 2, 3].map((term) => { const source = periodSources.find((item) => item.term_number === term); return <button key={term} role="tab" aria-selected={selectedTerm === term} className={selectedTerm === term ? 'is-active' : ''} onClick={() => { setSelectedTerm(term); if (source) void loadDetail(source.id); }}>{['I', 'II', 'III'][term - 1]} триместр{source?.period_status === 'current' ? ' · текущий' : ''}</button>; })}</div>
-      {!readOnly && periodSources.filter((source) => source.period_status === 'unassigned' || source.term_number === null).map((source) => <div className="journal-source-error" key={source.id}><AlertTriangle size={14} /><span>Вкладка «{source.sheet_title}» ожидает подтверждения триместра.</span>{[1, 2, 3].map((term) => <button className="admin-link" key={term} disabled={Boolean(busy)} onClick={async () => { setBusy('period'); try { await api(`/api/admin/journals/${source.id}/period`, { method: 'PUT', body: JSON.stringify({ term_number: term, make_current: false }) }); await loadSources(); await loadDetail(source.id); } catch (error) { setActionError(errorText(error)); } finally { setBusy(''); } }}>Привязать к {['I', 'II', 'III'][term - 1]}</button>)}</div>)}
-      {!readOnly && selectedPeriodSource && selectedTerm !== null && periodSources.find((source) => source.period_status === 'current')?.term_number !== selectedTerm ? <button className="admin-button admin-button--quiet" disabled={Boolean(busy)} onClick={async () => { setBusy('period'); try { await api('/api/admin/journals/current-term', { method: 'PUT', body: JSON.stringify({ spreadsheet_id: detail.source.spreadsheet_id, grade: detail.source.grade, academic_year: detail.source.academic_year || '2026/27', term_number: selectedTerm }) }); await loadSources(); } catch (error) { setActionError(errorText(error)); } finally { setBusy(''); } }}>Сделать выбранный триместр текущим</button> : null}
-      {viewingEmptyTerm ? <section className="admin-panel"><div className="admin-empty">Журнал за выбранный триместр ещё не создан.</div></section> : <>
+        <button className="admin-back" onClick={() => { leaveJournal(); setActionError(''); }}><ArrowLeft size={15} /> Все журналы</button>
+      <nav className="journal-detail-nav" aria-label="Навигация по журналам"><label>Класс<select value={detail.source.grade} onChange={(event) => { const grade = Number(event.target.value); const nextBook = books.find((book) => book.grade === grade); const nextSubjects = journalSubjectGroups(nextBook?.subjects || []); const sameSubject = nextSubjects.find(item => subjectKey(item.periods[0]) === subjectKey(detail.source)); const group = sameSubject || nextSubjects[0]; const preferred = activeJournalPeriod(nextBook?.subjects || [], grade); const source = group?.periods.find(item => item.term_number === preferred) || group?.periods[0]; if (source) void loadDetail(source.id, '', grade < 10 ? preferred : undefined); else { setDetail(null); setSelectedId(null); setSelectedGrade(grade); } }}>{gradeList.map((grade) => <option key={grade} value={grade}>{grade} класс</option>)}</select></label><label>Предмет<select value={detailSubjects.find(group => subjectKey(group.periods[0]) === subjectKey(detail.source))?.subject || detail.source.subject} onChange={(event) => { const group = detailSubjects.find(item => item.subject === event.target.value); const preferred = activeJournalPeriod(detailSubjects.flatMap(item => item.periods), detail.source.grade); const source = group?.periods.find(item => item.term_number === preferred) || group?.periods[0]; if (source) void loadDetail(source.id, '', detail.source.grade < 10 ? preferred : undefined); }} >{detailSubjects.map((group) => <option key={group.subject} value={group.subject}>{group.subject}</option>)}</select></label></nav>
+      <section className="journal-subject-header">
+        <div className="journal-detail-title">
+          <div><p className="admin-eyebrow">{detail.source.grade} КЛАСС · {detail.source.academic_year}</p>
+            <h2>{subjectName(detail.source)}</h2>
+            {detail.source.last_synced_at ? <p>Обновлено · {dateText(detail.source.last_synced_at)}</p> : null}
+          </div>
+        </div>
+        {!readOnly && !viewingEmptyTerm && <div className="admin-button-row">
+          <a className="admin-button admin-button--quiet" href={journalGoogleUrl(detail.source)} target="_blank" rel="noreferrer">
+            <ExternalLink size={16} /> Открыть вкладку в Google
+          </a>
+          <JournalSourceMenu source={detail.source} detail busy={Boolean(busy || selectedSource?.active_run_id)}
+            onRefresh={() => void refreshSource(detail.source)} onDisable={() => void setSourceMode(detail.source, 'excluded')} />
+        </div>}
+      </section>
+      <div className="journal-group-tabs" role="tablist" aria-label="Учебный период">{visibleDetailPeriods.map((term) => { const source = periodSources.find((item) => item.term_number === term); return <button key={term} role="tab" aria-selected={selectedTerm === term} className={selectedTerm === term ? 'is-active' : ''} onClick={() => { setSelectedTerm(term); if (source) void loadDetail(source.id); }}>{journalPeriodNameWithNumber(detail.source.grade, term)}{source?.period_status === 'current' ? ' · текущий' : ''}</button>; })}</div>
+      {!readOnly && periodSources.filter((source) => source.period_status === 'unassigned' || source.term_number === null).map((source) => <div className="journal-source-error" key={source.id}><AlertTriangle size={14} /><span>Вкладка «{source.sheet_title}» ожидает привязки к учебному периоду.</span>{detailPeriods.map((term) => <button className="admin-link" key={term} disabled={Boolean(busy)} onClick={async () => { setBusy('period'); try { await api(`/api/admin/journals/${source.id}/period`, { method: 'PUT', body: JSON.stringify({ term_number: term, make_current: false }) }); await loadSources(); await loadDetail(source.id); } catch (error) { setActionError(errorText(error)); } finally { setBusy(''); } }}>Привязать · {journalPeriodNameWithNumber(detail.source.grade, term)}</button>)}</div>)}
+      {!readOnly && selectedPeriodSource && selectedTerm !== null && detailPeriods.includes(selectedTerm) && periodSources.find((source) => source.period_status === 'current')?.term_number !== selectedTerm ? <button className="admin-button admin-button--quiet" disabled={Boolean(busy)} onClick={async () => { setBusy('period'); try { await api('/api/admin/journals/current-term', { method: 'PUT', body: JSON.stringify({ spreadsheet_id: detail.source.spreadsheet_id, grade: detail.source.grade, academic_year: detail.source.academic_year || '2026/27', term_number: selectedTerm }) }); await loadSources(); } catch (error) { setActionError(errorText(error)); } finally { setBusy(''); } }}>Сделать выбранный период текущим</button> : null}
+      {viewingEmptyTerm ? <section className="admin-panel"><div className="admin-empty">Журнал за {detail.source.grade >= 10 ? 'выбранное полугодие' : 'выбранный триместр'} ещё не создан.</div></section> : <>
       {sourceMode(detail.source, sourceModes) !== 'excluded' && detail.source.last_error ? <div className="journal-source-error"><AlertTriangle size={14} /><span>{detail.source.last_error}{detail.source.last_error_details ? <details><summary>Технические подробности</summary><code>{detail.source.last_error_details}</code></details> : null}</span></div> : null}
       {detail.source.status === 'skipped' && detail.source.classification_reason ? <div className="admin-panel"><strong>Вспомогательная вкладка пропущена</strong><p>{detail.source.classification_reason}</p></div> : null}
-      {detail.groups.filter((marker) => marker !== 'all').length ? <div className="journal-group-tabs" role="tablist" aria-label="Учебная группа">{detail.groups.filter((marker) => marker !== 'all').map((marker) => <button key={marker} role="tab" aria-selected={(groupMarker || detail.groups[0]) === marker} className={(groupMarker || detail.groups[0]) === marker ? 'is-active' : ''} onClick={() => void loadDetail(detail.source.id, marker)}>{journalGroupLabel(marker)}</button>)}</div> : null}
-      {detail.source.term_number === 2 && <JournalWorkList key={`${detail.source.id}:${groupMarker}`} detail={detail} />}
+      {detail.groups.some(marker => marker !== 'all') ? modernDetail
+        ? <label className="journal-group-select">Учебная группа
+          <select aria-label="Учебная группа" value={groupMarker} onChange={event => void loadDetail(detail.source.id, event.target.value)}>
+            <option value="">Все ученики</option>
+            {detail.groups.filter(marker => marker !== 'all').map(marker => <option key={marker} value={marker}>{journalGroupLabel(marker)}</option>)}
+          </select>
+        </label>
+        : <div className="journal-group-tabs" role="tablist" aria-label="Учебная группа">{detail.groups.filter(marker => marker !== 'all').map(marker =>
+          <button key={marker} role="tab" aria-selected={(groupMarker || detail.groups[0]) === marker}
+            className={(groupMarker || detail.groups[0]) === marker ? 'is-active' : ''} onClick={() => void loadDetail(detail.source.id, marker)}>
+            {journalGroupLabel(marker)}
+          </button>)}</div>
+        : null}
+      {modernDetail ? <AdminModernJournal key={String(detail.source.id) + ':' + groupMarker} detail={detail}
+        onMatchStudent={() => openDetailMatching(detail.source.spreadsheet_id)} />
+        : archivedDetail ? <AdminArchivedJournalSummary detail={detail} onMatchStudent={() => openDetailMatching(detail.source.spreadsheet_id)} />
+          : detail.source.term_number === 2 ? <JournalWorkList key={String(detail.source.id) + ':' + groupMarker} detail={detail} /> : null}
       <details className="admin-panel journal-history"><summary>История синхронизаций <span>{syncHistory.length}</span></summary>{syncHistory.length ? <ul>{syncHistory.map((run) => <li key={run.id}><strong>{run.status === 'success' ? 'Успешно' : run.status === 'partial' ? 'Частично' : run.status === 'running' ? 'Выполняется' : 'Ошибка'}</strong><span>{run.trigger_kind === 'scheduled' ? 'По расписанию' : 'Вручную'} · {dateText(run.started_at)}</span>{run.error ? <small>Синхронизация завершилась с ошибкой. Предыдущие данные сохранены.</small> : null}</li>)}</ul> : <p className="admin-help-text">Синхронизаций ещё нет.</p>}</details>
       {unnamedGroup ? <p className="admin-help-text">Для части групп в исходной таблице нет однозначного названия. Проверьте заголовки разделов и обновите журнал. Номер помогает различать разделы, но не определяет школьную группу.</p> : null}
       <details className="admin-panel"><summary>Настройки учебной группы</summary>{activeGroupMarker === 'all' ? <section className="admin-panel journal-mapping-row"><div><strong>Общий журнал класса</strong><small>{allMarkerLinked.length} из {allMarkerStudents.length} учеников связаны с каноническими личностями; у {allMarkerWithMembership.length} есть действующее членство в классе{allMarkerClasses.length ? ` · классы ${allMarkerClasses.join(', ')}` : ''}.</small>{allMarkerMissingMembership ? <small>{allMarkerMissingMembership} связанных учеников без действующего membership в каноническом классе.</small> : null}<small>{allMarkerStudents.length && allMarkerLinked.length === allMarkerStudents.length ? 'Каноническая группа не требуется: доступ определяется по личности и её действующим memberships.' : 'Сопоставьте отсутствующие личности; общему журналу не назначается одна группа класса.'}</small></div></section> : activeGroupMarker ? <section className="admin-panel journal-mapping-row"><div><strong>Связь группы журнала · {journalGroupLabel(activeGroupMarker)}</strong><small>{activeGroupMapping?.group_id ? `Сейчас связана с: ${canonicalGroups.find((group) => String(group.id) === String(activeGroupMapping.group_id))?.display_name || canonicalGroups.find((group) => String(group.id) === String(activeGroupMapping.group_id))?.name || `группа ${activeGroupMapping.group_id}`}` : 'Каноническая группа ещё не подтверждена.'}</small><small>Выберите существующую каноническую группу. Новые группы здесь не создаются.</small></div><div className="journal-map-controls"><label>Каноническая группа<select aria-label={`Школьная группа для «${journalGroupLabel(activeGroupMarker)}»`} value={selectedGroupMapId} onChange={(event) => setGroupMapChoice((current) => ({ ...current, [groupMapKey]: event.target.value }))}><option value="">Выберите группу</option>{activeGroupMapping?.group_id && !canonicalGroups.some((group) => String(group.id) === String(activeGroupMapping.group_id)) ? <option value={String(activeGroupMapping.group_id)} disabled>Текущая группа {activeGroupMapping.group_id} недоступна</option> : null}{canonicalGroups.map((group) => <option key={group.id} value={String(group.id)}>{group.display_name || group.name} · {group.subject || group.group_type}{group.base_class_name ? ` · ${group.base_class_name}` : ''} · {group.student_count || 0} учеников</option>)}</select></label><button className="admin-button admin-button--quiet" disabled={!selectedGroupMapId || !groupMapKey || Boolean(busy)} onClick={() => void saveGroupMapping(activeGroupMarker, selectedGroupMapId)}>{busy === 'map-group' ? 'Сохраняем…' : activeGroupMapping?.group_id ? 'Сохранить связь' : 'Подтвердить группу'}</button></div></section> : null}
       </details>
-      <details className="journal-roster-details" key={`roster:${detail.source.id}:${groupMarker}`} open={detail.source.term_number !== 2}><summary>Состав и все оценки · {detail.students.length}</summary>
+      {!modernDetail && !archivedDetail && <details className="journal-roster-details" key={`roster:${detail.source.id}:${groupMarker}`} open={detail.source.term_number !== 2}><summary>Состав и все оценки · {detail.students.length}</summary>
       {detail.students.some((student) => (student.entry_kind || 'individual') === 'individual') ? resultTable(detail.students.filter((student) => (student.entry_kind || 'individual') === 'individual')) : null}
       {detail.students.some((student) => student.entry_kind === 'team') ? <><h3 className="journal-team-heading">Командные результаты · оценки относятся к команде</h3>{resultTable(detail.students.filter((student) => student.entry_kind === 'team'), true)}</> : null}
-      </details>
+      </details>}
       {!detail.students.length ? <section className="admin-panel"><div className="admin-empty">В этой группе пока нет распознанных учеников или команд.</div></section> : null}
       </>}
     </>}

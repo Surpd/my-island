@@ -12,7 +12,8 @@ from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.journal_group_labels import JournalGroupLabelConflict
-from backend.services.journal_import import classify_journal_values, parse_journal_values, subject_period_from_title, sync_journal_values
+from backend.services.journal_import import (classify_journal_values, deferred_grade7_second_period_subject,
+                                             parse_journal_values, subject_period_from_title, sync_journal_values)
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
 from backend.services.teacher_directory_reconciliation import SHEET_NAME as STRUCTURED_TEACHER_SHEET, TeacherReconciliationPlan, build_teacher_reconciliation_plan, render_teacher_reconciliation_report
@@ -233,6 +234,13 @@ def _refresh_single_journal(database: Database, settings: Settings, grade: int, 
         preference = load_source_settings(database, spreadsheet_id).get(str(selected.get("sheetId")))
         if preference and preference.get("excluded_from_journals"):
             raise JournalSourceExcluded("Эта вкладка исключена из журналов и не может быть обновлена.")
+        bound_period = preference.get("term_number") if preference else None
+        bound_subject = preference.get("subject") if preference else sheet_title
+        if grade == 7 and deferred_grade7_second_period_subject(bound_subject or sheet_title, bound_period):
+            return {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": title, "grade": grade,
+                    "subject": sheet_title, "sheet_id": selected.get("sheetId"), "status": "skipped",
+                    "classification": "deferred_grade7_period2",
+                    "reason": "Импорт математики и физики 7 класса за II период временно отложен."}
         escaped_title = sheet_title.replace("'", "''")
         values = client.sheet_values(spreadsheet_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
         auxiliary = classify_journal_values(values, sheet_title=sheet_title)
@@ -279,6 +287,9 @@ def refresh_grade_journal(database: Database, settings: Settings, grade: int = 9
 def _refresh_grade_journal_locked(database: Database, settings: Settings, grade: int, target_id: str, *, trigger_kind: str, run_id: Any | None, term_number: int | None, dry_run: bool,
                                   selected_sheet_ids: list[str] | None, preflight_token: str | None) -> dict[str, Any]:
     """Import every gradebook tab in one connected workbook using stable Google tab IDs."""
+    from backend.services.journal_periods import journal_period_label, valid_journal_period
+    if not valid_journal_period(grade, term_number):
+        raise ValueError(f"Для {grade} класса доступны только 1–2 {journal_period_label(grade)}.")
     client, _ = _client(settings, database)
     metadata = client.spreadsheet(target_id)
     title = str((metadata.get("properties") or {}).get("title", f"Журнал {grade} класс"))
@@ -287,15 +298,18 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
         raise GoogleLiveError(f"В источнике {title} нет вкладок")
     outcomes = []
     valid_tabs = [tab for tab in tabs if str(tab.get("title", "")).strip() and tab.get("sheetId") is not None]
-    if term_number is not None and trigger_kind != "scheduled":
+    if term_number is not None:
         return _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs,
                                        term_number=term_number, dry_run=dry_run, run_id=run_id,
-                                       selected_sheet_ids=selected_sheet_ids, preflight_token=preflight_token)
+                                       selected_sheet_ids=selected_sheet_ids, preflight_token=preflight_token,
+                                       trigger_kind=trigger_kind)
+    journal_scope = database.journal_import_scope(target_id, grade)
+    source_by_sheet_id = {str(row["sheet_id"]): row for row in journal_scope["sources"]
+                          if row["sheet_id"] is not None}
     scheduled_ids = None
     if trigger_kind == "scheduled":
-        scope = database.journal_import_scope(target_id, grade)
-        current_term = scope["current_term"]
-        by_id = {str(row["sheet_id"]): row for row in scope["sources"] if row["sheet_id"] is not None}
+        current_term = journal_scope["current_term"]
+        by_id = source_by_sheet_id
         # An hourly job cannot approve a recognized prefix by itself. Both the
         # book's current-term setting and this existing tab's opt-in must agree.
         scheduled_ids = {str(tab["sheetId"]) for tab in valid_tabs if (
@@ -305,8 +319,7 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             subject_period_from_title(tab["title"])[1] in (None, current_term)
         )}
     if trigger_kind != "scheduled" and term_number is None and not dry_run:
-        current_scope = database.journal_import_scope(target_id, grade)
-        previously_connected = {str(row["sheet_id"]) for row in current_scope["sources"]
+        previously_connected = {str(row["sheet_id"]) for row in journal_scope["sources"]
                                  if row["last_synced_at"] is not None and row["period_status"] != "unassigned"}
         valid_tabs = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] in (None, 1)
                       or str(tab["sheetId"]) in previously_connected]
@@ -336,6 +349,20 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
             continue
         escaped_title = sheet_title.replace("'", "''")
         try:
+            bound_period = (source_by_sheet_id.get(str(sheet_id)) or {}).get("term_number")
+            if grade == 7 and deferred_grade7_second_period_subject(sheet_title, bound_period):
+                outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "skipped",
+                    "classification": "deferred_grade7_period2",
+                    "reason": "Импорт математики и физики 7 класса за II период временно отложен."})
+                skipped_count += 1
+                if run_id is not None:
+                    database.update_journal_sync_progress(run_id, {
+                        "completed_tabs": len(outcomes), "total_tabs": total_tabs,
+                        "succeeded": sum(item["status"] == "success" for item in outcomes),
+                        "failed": sum(item["status"] == "error" for item in outcomes),
+                        "skipped": skipped_count, "excluded": excluded_count,
+                    })
+                continue
             values = [] if classify_journal_values([], sheet_title=sheet_title) else client.sheet_values(target_id, f"'{escaped_title}'!A:ZZ", value_render_option="UNFORMATTED_VALUE")
             auxiliary = classify_journal_values(values, sheet_title=sheet_title)
             if auxiliary:
@@ -354,12 +381,14 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
                 continue
             if dry_run:
                 subject, _ = subject_period_from_title(sheet_title)
-                preview = parse_journal_values(values, grade=grade, subject=subject, sheet_title=sheet_title, sheet_id=sheet_id)
+                preview = parse_journal_values(values, grade=grade, subject=subject, sheet_title=sheet_title,
+                                               sheet_id=sheet_id, period_number=bound_period)
                 counts = {key: len(preview[key]) for key in ("assessments", "students", "results", "summaries")}
             else:
                 counts = sync_journal_values(
                     database, values, spreadsheet_id=target_id, spreadsheet_title=title,
                     grade=grade, subject=sheet_title.strip(), sheet_title=sheet_title, sheet_id=sheet_id,
+                    expected_term=bound_period,
                 )
             outcomes.append({"sheet_id": sheet_id, "subject": sheet_title, "status": "success", "counts": counts})
         except Exception as error:
@@ -394,7 +423,7 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
 
 
 def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs, *, term_number, dry_run, run_id,
-                             selected_sheet_ids, preflight_token):
+                             selected_sheet_ids, preflight_token, trigger_kind="manual"):
     """Plan selected tabs with one Google read each, then write only if all pass."""
     year = "2026/27"
     scope = database.journal_import_scope(target_id, grade, year)
@@ -403,9 +432,16 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
     connected_ids = {str(row["sheet_id"]) for row in sources if row["sheet_id"] is not None
                      and row["grade"] == grade and row["academic_year"] == year and row["term_number"] == term_number
                      and row["period_status"] != "unassigned" and row["last_synced_at"] is not None
-                     and not row["classification"]}
-    selected = [tab for tab in valid_tabs if subject_period_from_title(tab["title"])[1] == term_number
-                and (dry_run or is_selection or str(tab["sheetId"]) in connected_ids)]
+                     and not row["classification"]
+                     and (trigger_kind != "scheduled" or row["auto_sync_enabled"])}
+    excluded_ids = {str(row["sheet_id"]) for row in sources if row["excluded_from_journals"]}
+    selected = []
+    for tab in valid_tabs:
+        tab_id = str(tab["sheetId"])
+        explicit_period = subject_period_from_title(tab["title"])[1]
+        matches_period = explicit_period == term_number or (explicit_period is None and tab_id in connected_ids)
+        if matches_period and (dry_run or is_selection or (tab_id in connected_ids and tab_id not in excluded_ids)):
+            selected.append(tab)
     registered_grade = next((number for number, book in CURRENT_JOURNAL_SPREADSHEETS.items() if book == target_id), grade)
     if registered_grade != grade or any(row["grade"] != grade for row in sources):
         raise ValueError("Выбранный класс не соответствует этому источнику журнала.")
@@ -434,6 +470,10 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
             continue
         row = {"sheet_id": sheet_id, "subject": sheet_title, "connected": sheet_id in connected_ids}
         rows.append(row)
+        if grade == 7 and deferred_grade7_second_period_subject(sheet_title, term_number):
+            row.update(status="skipped", classification="deferred_grade7_period2",
+                       reason="Импорт математики и физики 7 класса за II период временно отложен.")
+            continue
         if metadata_ids[sheet_id] > 1:
             row.update(status="error", error_code="sheet_identity_conflict", error="ID вкладки встречается в книге больше одного раза.")
             continue
@@ -467,7 +507,8 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
             if auxiliary:
                 rows.remove(row)
                 continue
-            parsed = parse_journal_values(values, grade=grade, subject=label, sheet_title=sheet_title, sheet_id=sheet_id)
+            parsed = parse_journal_values(values, grade=grade, subject=label, sheet_title=sheet_title,
+                                          sheet_id=sheet_id, period_number=term_number)
             # Match the snapshot writer: prefer exact GID, then an unupgraded
             # record with the same title. This read does not reconnect a tab.
             prior = next((item for item in stable if str(item["sheet_id"]) == sheet_id), None)
@@ -539,6 +580,18 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
                     })
                 except Exception:
                     logging.getLogger(__name__).warning("Journal import progress update unavailable")
+    # A real refresh of an already connected tab must leave an actionable
+    # diagnostic on that stable source. Preflight and selected imports remain
+    # read-only/atomic, and record_journal_failure preserves the old snapshot.
+    if not dry_run and not is_selection:
+        for row in rows:
+            if row.get("connected") and row.get("status") == "error":
+                label, _ = subject_period_from_title(row["subject"])
+                database.record_journal_failure(
+                    target_id, label, row["error"], code=row.get("error_code"),
+                    grade=grade, spreadsheet_title=title, sheet_title=row["subject"],
+                    sheet_id=row["sheet_id"],
+                )
     succeeded = sum(row["status"] == "success" for row in rows) if dry_run or not blocked else 0
     failures = sum(row["status"] == "error" for row in rows)
     skipped = sum(row["status"] == "skipped" for row in rows)

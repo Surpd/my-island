@@ -19,6 +19,7 @@ export const assessments = Array.from({ length: 18 }, (_, i) => ({
   assessed_on: '2026-11-10',
   weight: 1,
   max_score: i % 3 === 0 ? 20 : null,
+  category: i % 3 === 0 ? 'У' : i % 3 === 1 ? 'О' : 'П',
   group_marker: 'all',
 }));
 export const students = Array.from({ length: 30 }, (_, i) => ({
@@ -43,6 +44,48 @@ export const students = Array.from({ length: 30 }, (_, i) => ({
       label: 'Итоговая',
       summary_type: 'term_grade',
       numeric_value: (i % 5) + 1,
+      text_value: null,
+    },
+    {
+      label: 'Итоговая за год',
+      summary_type: 'final_grade',
+      numeric_value: ((i + 1) % 5) + 1,
+      text_value: null,
+    },
+    {
+      label: 'Учебные',
+      summary_type: 'learning_grade',
+      numeric_value: i === 0 ? 0 : 4.5,
+      text_value: null,
+    },
+    {
+      label: 'Обязательные',
+      summary_type: 'required_grade',
+      numeric_value: 4,
+      text_value: null,
+    },
+    {
+      label: 'Расчётная',
+      summary_type: 'calculated_grade',
+      numeric_value: 3.67,
+      text_value: null,
+    },
+    {
+      label: 'Округлённая',
+      summary_type: 'rounded_grade',
+      numeric_value: 4,
+      text_value: null,
+    },
+    {
+      label: 'Корректировка преподавателя',
+      summary_type: 'teacher_adjustment',
+      numeric_value: i === 0 ? 0 : null,
+      text_value: null,
+    },
+    {
+      label: 'Долг по аттестации',
+      summary_type: 'assessment_debt',
+      numeric_value: i === 0 ? 1 : 0,
       text_value: null,
     },
     {

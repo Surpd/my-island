@@ -1,0 +1,184 @@
+.modern-journal {
+  --journal-ink: #101a3a;
+  --journal-muted: #65708d;
+  --journal-line: #d9e0ef;
+  --journal-blue: #155eef;
+  min-width: 0;
+  color: var(--journal-ink);
+  padding: 24px;
+  border: 1px solid #e0e6f2;
+  border-radius: 22px;
+  background: linear-gradient(145deg, #fff 0%, #f6f9ff 100%);
+  box-shadow: 0 18px 50px rgb(44 73 130 / 9%);
+}
+
+.modern-journal__toolbar, .modern-journal__work header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.modern-journal__count { margin: 0; color: var(--journal-muted); }
+
+.modern-journal__toolbar { margin-top: 24px; border-bottom: 1px solid var(--journal-line); }
+.modern-journal__modes { display: flex; gap: 14px; }
+.modern-journal__modes button { padding: 14px 16px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--journal-muted); font: inherit; font-weight: 800; cursor: pointer; }
+.modern-journal__modes button[aria-selected='true'] { border-color: var(--journal-blue); color: var(--journal-blue); }
+.modern-journal__search { display: block; min-width: min(320px, 42vw); }
+.modern-journal__search input { width: 100%; padding: 11px 15px; border: 1px solid #cdd6e8; border-radius: 12px; background: #fff; color: inherit; font: inherit; }
+.modern-journal__search input:focus { outline: 3px solid rgb(21 94 239 / 16%); border-color: var(--journal-blue); }
+.modern-journal__count { padding: 16px 2px 12px; }
+
+.modern-journal__table-wrap {
+  max-width: 100%;
+  max-height: min(64vh, 45rem);
+  overflow: auto;
+  border: 1px solid var(--journal-line);
+  border-radius: 16px;
+  background: #fff;
+}
+.modern-journal__table { width: max-content; min-width: 100%; border-spacing: 0; border-collapse: separate; font-variant-numeric: tabular-nums; }
+.modern-journal__table th, .modern-journal__table td { min-width: 116px; padding: 12px 14px; border-right: 1px solid var(--journal-line); border-bottom: 1px solid var(--journal-line); text-align: center; }
+.modern-journal__table tbody tr:last-child > * { border-bottom: 0; }
+.modern-journal__table tr > *:last-child { border-right: 0; }
+.modern-journal__table thead {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  box-shadow: 0 2px 0 #bbc9de;
+}
+.modern-journal__table thead :is(th, td) { background: #f8faff; }
+.modern-journal__table thead th[scope='col'] { vertical-align: middle; }
+.modern-journal__table thead th.modern-journal__work-column { vertical-align: top; }
+.modern-journal__table thead .modern-journal__work-column strong {
+  display: -webkit-box;
+  max-width: 128px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.modern-journal__table .modern-journal__work-metadata td { padding: 8px 10px; vertical-align: top; }
+.modern-journal__work-meta-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  color: #485570;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.modern-journal__work-meta-line span + span {
+  border-left: 1px solid #bfcbe0;
+  padding-left: 8px;
+  font-weight: 650;
+}
+.modern-journal__work-metadata small { display: inline-grid; min-width: 26px; margin-top: 6px; padding: 3px 7px; place-items: center; border-radius: 7px; background: #e8edf7; }
+.modern-journal__student-column { position: sticky !important; left: 0; z-index: 3 !important; min-width: 210px !important; max-width: 260px; background: #fff !important; text-align: left !important; box-shadow: 1px 0 var(--journal-line); }
+.modern-journal__student-column span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.modern-journal__student-column button { margin-top: 5px; padding: 0; border: 0; background: none; color: var(--journal-blue); font: inherit; font-size: 12px; cursor: pointer; }
+.modern-journal__summary-head { background: #f1f5fc !important; }
+.modern-journal__summary { background-color: #f6f8fc; font-weight: 800; }
+
+.modern-journal__table .is-required, .modern-journal__work.is-required { background: #f3ecff; }
+.modern-journal__table .is-retake, .modern-journal__work.is-retake { background: #e7fbf2; }
+.modern-journal__table .is-learning, .modern-journal__work.is-learning { background: #f7f9fc; }
+.modern-journal__table thead .is-required small { background: #d8c1ff; color: #5520b7; }
+.modern-journal__table thead .is-retake small { background: #b9f2d8; color: #096743; }
+.modern-journal__summary.is-critical { background: #fee8e7; color: #a72b26; }
+.modern-journal__summary.is-low { background: #fff0df; color: #9a4f0b; }
+.modern-journal__summary.is-mid { background: #fff8d9; color: #7a5b00; }
+.modern-journal__summary.is-good { background: #e9f3ff; color: #174f8d; }
+.modern-journal__summary.is-high { background: #e4f7eb; color: #17623a; }
+.modern-journal__summary.has-debt { background: #fff0d1; color: #8a4b00; }
+
+@media (min-width: 900px) {
+  .modern-journal__table {
+    --journal-summary-width: 124px;
+  }
+  .modern-journal__table :is([data-summary='learning_grade'], [data-summary='required_grade'], [data-summary='term_grade']) {
+    position: sticky;
+    box-sizing: border-box;
+    width: var(--journal-summary-width);
+    min-width: var(--journal-summary-width);
+    max-width: var(--journal-summary-width);
+    padding-inline: 8px;
+    z-index: 1;
+    box-shadow: -1px 0 var(--journal-line);
+  }
+  .modern-journal__table [data-summary='learning_grade'] { right: calc(2 * var(--journal-summary-width)); }
+  .modern-journal__table [data-summary='required_grade'] { right: var(--journal-summary-width); }
+  .modern-journal__table [data-summary='term_grade'] { right: 0; }
+  .modern-journal__table thead :is([data-summary='learning_grade'], [data-summary='required_grade'], [data-summary='term_grade']) { z-index: 4; }
+}
+.modern-journal__work { overflow: hidden; border: 1px solid var(--journal-line); border-radius: 15px; background: #fff; }
+.modern-journal__work header { padding: 14px; border-bottom: 1px solid rgb(120 137 168 / 22%); }
+.modern-journal__work header strong, .modern-journal__work header span { display: block; }
+.modern-journal__work header span, .modern-journal__work header small { margin-top: 3px; color: var(--journal-muted); }
+.modern-journal__work ul { max-height: 360px; overflow: auto; margin: 0; padding: 0; list-style: none; background: rgb(255 255 255 / 72%); }
+.modern-journal__work li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--journal-line); }
+.modern-journal__work li:last-child { border-bottom: 0; }
+.modern-journal__legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 15px; color: var(--journal-muted); font-size: 13px; }
+.modern-journal__legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 3px; }
+.modern-journal__legend i.is-learning { background: #dce3ef; }
+.modern-journal__legend i.is-required { background: #d8c1ff; }
+.modern-journal__legend i.is-retake { background: #b9f2d8; }
+.modern-journal__empty { padding: 24px; color: var(--journal-muted); text-align: center; }
+.modern-journal__search--archive { margin: 18px 0 12px auto; }
+.modern-journal__archive-table { width: 100%; }
+.modern-journal--archive { background: #f9faff; }
+
+@media (max-width: 760px) {
+  .modern-journal { padding: 16px; border-radius: 16px; }
+  .modern-journal__toolbar { align-items: stretch; flex-direction: column; }
+  .modern-journal__search { width: 100%; min-width: 0; margin-bottom: 12px; }
+  .modern-journal__student-column { min-width: 170px !important; }
+}
+.modern-journal__count-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.modern-journal__work-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(0, 2fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.modern-journal__work-list {
+  display: grid;
+  max-height: 34rem;
+  overflow-y: auto;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid #d9e1ef;
+  border-radius: 12px;
+  background: white;
+}
+
+.modern-journal__work-list button {
+  display: grid;
+  gap: 3px;
+  border: 0;
+  border-radius: 7px;
+  padding: 10px 12px;
+  text-align: left;
+  background: white;
+  color: inherit;
+  cursor: pointer;
+}
+
+.modern-journal__work-list button[aria-pressed="true"] { background: #e8efff; color: #204eae; }
+.modern-journal__work-list button:not([aria-pressed="true"]):hover { background: #f2f5fa; }
+.modern-journal__work-list small { font-size: 12px; }
+.modern-journal__summary small { display: block; }
+
+@media (max-width: 640px) {
+  .modern-journal__work-layout { grid-template-columns: minmax(0, 1fr); }
+  .modern-journal__work-list { max-height: 13rem; }
+}

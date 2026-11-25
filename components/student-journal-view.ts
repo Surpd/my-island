@@ -99,23 +99,42 @@ export function recentResultsAcrossSubjects(items: StudentJournalItem[], limit =
   return results;
 }
 
+export function journalPeriodName(grade: number): 'триместр' | 'полугодие' {
+  return grade >= 10 ? 'полугодие' : 'триместр';
+}
+
+export function journalPeriodNumbers(grade: number): number[] {
+  return grade >= 10 ? [1, 2] : [1, 2, 3];
+}
+
+export function journalPeriodNameWithNumber(grade: number, number: number): string {
+  const ordinal = ['I', 'II', 'III'][number - 1] || String(number);
+  if (!journalPeriodNumbers(grade).includes(number)) return `Период ${ordinal}`;
+  return `${ordinal} ${journalPeriodName(grade)}`;
+}
+
 export function isDefaultJournalPeriod(item: StudentJournalItem): boolean {
+  if (item.source.grade >= 10) return item.source.academic_year === '2026/27' && item.source.period_status === 'current';
   return item.source.academic_year === '2026/27' && item.source.term_number === 2 && item.source.period_status !== 'unassigned';
 }
 
 export function studentPeriodStatus(item: StudentJournalItem): string {
   if (isDefaultJournalPeriod(item)) return 'current';
-  if (item.source.academic_year === '2026/27' && item.source.term_number === 1 && item.source.period_status !== 'unassigned') return 'archived';
+  if (item.source.grade >= 10 && item.source.period_status === 'current') return 'archived';
+  if (journalPeriodName(item.source.grade) === 'триместр' && item.source.academic_year === '2026/27' && item.source.term_number === 1 && item.source.period_status !== 'unassigned') return 'archived';
   return item.source.period_status;
 }
 
 export function studentPeriodKey(item: StudentJournalItem): string {
-  return `period:${JSON.stringify([item.source.academic_year, item.source.term_number ?? null, studentPeriodStatus(item)])}`;
+  const { grade, academic_year: year, term_number: term } = item.source;
+  const period = [year, term ?? null, studentPeriodStatus(item)];
+  if (grade >= 10) period.push('полугодие');
+  return `period:${JSON.stringify(period)}`;
 }
 
 export function studentPeriodLabel(item: StudentJournalItem): string {
   const { term_number: term, academic_year: year } = item.source;
-  const name = term ? `${['I', 'II', 'III'][term - 1] || term} триместр` : 'Период не указан';
+  const name = term ? journalPeriodNameWithNumber(item.source.grade, term) : 'Период не указан';
   return [name, year, studentPeriodStatus(item) === 'archived' ? 'архив' : ''].filter(Boolean).join(' · ');
 }
 

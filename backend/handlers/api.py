@@ -225,6 +225,8 @@ class JournalConnectPayload(BaseModel):
 class JournalAutoSyncPayload(BaseModel):
     spreadsheet_id: str
     enabled: bool
+    grade: int | None = Field(default=None, ge=5, le=11)
+    term_number: int | None = Field(default=None, ge=1, le=3)
 
 
 class JournalPeriodPayload(BaseModel):
@@ -471,6 +473,58 @@ def _refresh_grade_journal_background(database: Database, settings: Any, grade: 
             database.finish_journal_sync(run_id, status="error", error=message[:1000])
         except Exception:
             logger.exception("Failed to finalize journal sync run_id=%s after refresh failure", run_id)
+
+
+def _connected_current_journal_refresh_plan(rows: list[dict[str, Any]], *, require_auto: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Select connected operational workbooks without discovering new tabs."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        spreadsheet_id = str(row.get("spreadsheet_id") or "").strip()
+        if spreadsheet_id:
+            grouped.setdefault(spreadsheet_id, []).append(row)
+
+    jobs: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for spreadsheet_id, sources in grouped.items():
+        grades = {int(row["grade"]) for row in sources if row.get("grade") is not None}
+        if len(grades) != 1:
+            skipped.append({"spreadsheet_id": spreadsheet_id, "reason": "mixed_grade_source"})
+            continue
+        grade = next(iter(grades))
+        if grade not in range(5, 12):
+            skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "unsupported_grade"})
+            continue
+        connected = [row for row in sources if (
+            row.get("academic_year") == "2026/27"
+            and row.get("term_number") is not None
+            and row.get("last_synced_at") is not None
+            and not row.get("classification")
+            and not row.get("excluded_from_journals")
+            and (not require_auto or row.get("auto_sync_enabled"))
+        )]
+        if grade <= 9:
+            # II trimester is the explicitly approved operational scope even
+            # while older UI state still marks those assigned tabs archived.
+            eligible = [row for row in connected if int(row["term_number"]) == 2
+                        and row.get("period_status") in {"current", "archived"}]
+            term_number = 2
+        else:
+            eligible = [row for row in connected if row.get("period_status") == "current"]
+            terms = {int(row["term_number"]) for row in eligible}
+            if len(terms) > 1:
+                skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "ambiguous_current_period"})
+                continue
+            term_number = next(iter(terms)) if terms else None
+            if term_number is not None and term_number not in (1, 2):
+                skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "unsupported_current_period"})
+                continue
+        if not eligible or term_number is None:
+            skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "no_connected_current_sources"})
+            continue
+        jobs.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "term_number": term_number})
+    jobs.sort(key=lambda item: (item["grade"], item["spreadsheet_id"]))
+    skipped.sort(key=lambda item: (item.get("grade", 99), item["spreadsheet_id"]))
+    return jobs, skipped
 
 
 def create_router(database: Database) -> APIRouter:
@@ -1171,6 +1225,9 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_connect(payload: JournalConnectPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
+        from backend.services.journal_periods import valid_journal_period
+        if not valid_journal_period(payload.grade, payload.term_number):
+            raise HTTPException(status_code=422, detail=f"Для {payload.grade} класса доступны только два полугодия.")
         raw = payload.spreadsheet_url.strip()
         match = re.search(r"docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)", raw)
         spreadsheet_id = match.group(1) if match else raw
@@ -1214,6 +1271,9 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_refresh_grade(background_tasks: BackgroundTasks, grade: int = 9, term_number: int | None = Query(default=None, ge=1, le=3), spreadsheet_id: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
+        from backend.services.journal_periods import valid_journal_period
+        if not valid_journal_period(grade, term_number):
+            raise HTTPException(status_code=422, detail=f"Для {grade} класса доступны только два полугодия.")
         target_id = spreadsheet_id or CURRENT_JOURNAL_SPREADSHEETS.get(grade)
         if not target_id:
             raise HTTPException(status_code=400, detail="Для этого класса ещё не подключена таблица")
@@ -1222,6 +1282,29 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=409, detail="Для этой таблицы уже выполняется синхронизация")
         background_tasks.add_task(_refresh_grade_journal_background, database, get_settings(), grade, target_id, run_id, actor["id"], term_number=term_number)
         return {"run_id": str(run_id), "spreadsheet_id": target_id, "grade": grade, "status": "running"}
+
+    @router.post("/admin/journals/refresh-all", status_code=202)
+    def admin_journal_refresh_all(background_tasks: BackgroundTasks, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        jobs, skipped = _connected_current_journal_refresh_plan(database.journal_status())
+        settings = get_settings()
+        items: list[dict[str, Any]] = []
+        busy: list[dict[str, Any]] = []
+        for job in jobs:
+            run_id = database.start_journal_sync(job["spreadsheet_id"], job["grade"], None, "manual")
+            if run_id is None:
+                busy.append({**job, "status": "already_running"})
+                continue
+            background_tasks.add_task(
+                _refresh_grade_journal_background, database, settings, job["grade"],
+                job["spreadsheet_id"], run_id, actor["id"], term_number=job["term_number"],
+            )
+            items.append({**job, "run_id": str(run_id), "status": "running"})
+        database.record_audit_event("journal_sync.batch_started", "journal_sync", {
+            "run_ids": [item["run_id"] for item in items], "started": len(items),
+            "busy": len(busy), "skipped": len(skipped),
+        }, actor["id"])
+        return {"items": items, "busy": busy, "skipped": skipped}
 
     @router.get("/admin/journals/sync-runs/{run_id}")
     def admin_journal_sync_run(run_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1236,17 +1319,30 @@ def create_router(database: Database) -> APIRouter:
     def admin_journal_auto_sync(payload: JournalAutoSyncPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
+        if (payload.grade is None) != (payload.term_number is None):
+            raise HTTPException(status_code=422, detail="Для ограниченного включения укажите и класс, и период.")
+        if payload.grade is not None:
+            from backend.services.journal_periods import valid_journal_period
+            if not valid_journal_period(payload.grade, payload.term_number):
+                raise HTTPException(status_code=422, detail=f"Для {payload.grade} класса выбран недоступный период.")
         if payload.enabled and not database.journal_scheduler_configured():
             raise HTTPException(status_code=409, detail="Почасовое расписание ещё не настроено")
-        changed = database.set_journal_auto_sync(payload.spreadsheet_id, payload.enabled)
+        changed = database.set_journal_auto_sync(
+            payload.spreadsheet_id, payload.enabled, grade=payload.grade, term_number=payload.term_number,
+        )
         if not changed:
             raise HTTPException(status_code=404, detail="Источник журнала не найден")
-        database.record_audit_event("journal_sync.automation_changed", "journal_source", {"spreadsheet_id": payload.spreadsheet_id, "enabled": payload.enabled}, actor["id"])
-        return {"spreadsheet_id": payload.spreadsheet_id, "auto_sync_enabled": payload.enabled}
+        result = {"spreadsheet_id": payload.spreadsheet_id, "auto_sync_enabled": payload.enabled,
+                  "grade": payload.grade, "term_number": payload.term_number, "updated_sources": changed}
+        database.record_audit_event("journal_sync.automation_changed", "journal_source", result, actor["id"])
+        return result
 
     @router.put("/admin/journals/current-term")
     def admin_journal_current_term(payload: JournalCurrentTermPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        from backend.services.journal_periods import valid_journal_period
+        if not valid_journal_period(payload.grade, payload.term_number):
+            raise HTTPException(status_code=422, detail=f"Для {payload.grade} класса доступны только два полугодия.")
         if not database.set_journal_current_term(payload.spreadsheet_id, payload.grade, payload.academic_year, payload.term_number):
             raise HTTPException(status_code=404, detail="Источник журнала не найден")
         database.record_audit_event("journal_period.current_changed", "journal_source", {"spreadsheet_id": payload.spreadsheet_id, "grade": payload.grade, "academic_year": payload.academic_year, "term_number": payload.term_number}, actor["id"])
@@ -1396,17 +1492,18 @@ def create_router(database: Database) -> APIRouter:
         if not expected or not x_journal_cron_secret or not hmac.compare_digest(expected, x_journal_cron_secret):
             raise HTTPException(status_code=401, detail="Scheduled journal authorization failed")
         outcomes = []
-        for source in database.journal_auto_sync_sources():
+        jobs, skipped = _connected_current_journal_refresh_plan(database.journal_status(), require_auto=True)
+        for source in jobs:
             run_id = database.start_journal_sync(source["spreadsheet_id"], int(source["grade"]), None, "scheduled")
             if run_id is None:
                 outcomes.append({"spreadsheet_id": source["spreadsheet_id"], "status": "already_running"})
                 continue
             background_tasks.add_task(
                 _refresh_grade_journal_background, database, settings, int(source["grade"]),
-                source["spreadsheet_id"], run_id, None, "scheduled",
+                source["spreadsheet_id"], run_id, None, "scheduled", source["term_number"],
             )
-            outcomes.append({"spreadsheet_id": source["spreadsheet_id"], "run_id": str(run_id), "status": "running"})
-        return {"items": outcomes}
+            outcomes.append({**source, "run_id": str(run_id), "status": "running"})
+        return {"items": outcomes, "skipped": skipped}
 
     @router.post("/admin/journals/refresh")
     def admin_journal_refresh(grade: int = 9, subject: str = "Математика", init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

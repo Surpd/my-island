@@ -17,6 +17,12 @@ SUMMARY_TYPES = {
     "средняя отметка": "average_grade", "средняя оценка": "average_grade", "средний балл": "average_grade", "средний балл за триместр": "average_grade",
     "итог": "term_grade", "итоговая": "term_grade", "итоговая оценка": "term_grade", "оценка за триместр": "term_grade",
     "пропущенные весы": "missing_weights", "пропущенные работы": "missing_weights", "не выставлены оценки": "missing_weights",
+    "учебная 40%": "learning_grade", "учебные 40%": "learning_grade",
+    "освоение 60%": "required_grade", "обязательные 60%": "required_grade",
+    "расчет т": "calculated_grade", "общий балл": "calculated_grade",
+    "округл.": "rounded_grade", "округление": "rounded_grade",
+    "повысить +1": "teacher_adjustment", "повысить на 1": "teacher_adjustment",
+    "контрольные": "assessment_debt", "долги по работам": "assessment_debt",
 }
 SUMMARY_HEADERS = set(SUMMARY_TYPES) | {"допуск к аттестации", "итоговая оценка"}
 HEADER_ALIASES = {
@@ -27,6 +33,10 @@ HEADER_ALIASES = {
     "max_score": {"оценка", "максимальный балл", "макс. балл", "максимум"},
 }
 MATH_GROUP_RE = re.compile(r"^(?:9\s*[-–]?\s*[ABC]|9\s*[-–]?\s*[123]|[ABC])$", re.IGNORECASE)
+MODERN_ASSESSMENT_FIRST_COLUMN = 2  # C
+MODERN_ASSESSMENT_LAST_COLUMN = 33  # AH
+MODERN_SUMMARY_FIRST_COLUMN = 34  # AI
+MODERN_SUMMARY_LAST_COLUMN = 40  # AO
 
 
 def column_name(index: int) -> str:
@@ -98,14 +108,22 @@ def _summary_type(value: object) -> str | None:
     return SUMMARY_TYPES.get(_normalized(value).rstrip(":"))
 
 
-_TERM_RE = re.compile(r"\s*(?:[-–—:]\s*)?(?:\(\s*)?(?:триместр\s*)?(?:([1-3])|([ivx]+))(?:\s*триместр)?\s*\)?\s*$", re.IGNORECASE)
+_TERM_RE = re.compile(
+    r"\s*(?:[-–—:]\s*)?(?:\(\s*)?(?:(?:триместр|полугодие|семестр)\s*)?"
+    r"(?:([1-3])|([ivx]+))(?:\s*(?:триместр|полугодие|семестр))?\s*\)?\s*$",
+    re.IGNORECASE,
+)
 
 
 def subject_period_from_title(title: str) -> tuple[str, int | None]:
     """Return a canonical subject and an explicit trimester, if present."""
-    prefix = re.fullmatch(r"(I{1,3})\s*·\s*(.+)", title.strip(), re.IGNORECASE)
+    prefix = re.fullmatch(
+        r"(?:(I{1,3}|[1-3])\s*(?:триместр|полугодие|семестр)?|(?:триместр|полугодие|семестр)\s*(I{1,3}|[1-3]))\s*·\s*(.+)",
+        title.strip(), re.IGNORECASE)
     if prefix:
-        return prefix[2].strip(), len(prefix[1])
+        token = (prefix[1] or prefix[2]).casefold()
+        term = int(token) if token.isdigit() else {"i": 1, "ii": 2, "iii": 3}.get(token)
+        return prefix[3].strip(), term
     match = _TERM_RE.search(title.strip())
     if not match:
         return title.strip(), None
@@ -113,6 +131,13 @@ def subject_period_from_title(title: str) -> tuple[str, int | None]:
     term = int(token) if token.isdigit() else {"i": 1, "ii": 2, "iii": 3}.get(token)
     subject = title[:match.start()].strip(" -–—:()")
     return (subject or title.strip()), term
+
+
+def deferred_grade7_second_period_subject(title: str, period_override: int | None = None) -> bool:
+    subject, explicit_period = subject_period_from_title(title)
+    period = explicit_period if explicit_period is not None else period_override
+    normalized = _normalized(subject).replace(" / ", "/")
+    return period == 2 and bool(re.search(r"\b(?:математика|физика)\b", normalized))
 
 
 def _date(value: object, school_year_start: int) -> str | None:
@@ -202,7 +227,7 @@ def _section_label(value: object) -> bool:
 
 def parse_journal_values(
     values: Sequence[Sequence[object]], *, grade: int, subject: str, sheet_title: str,
-    school_year_start: int = 2026, sheet_id: int | str | None = None,
+    school_year_start: int = 2026, sheet_id: int | str | None = None, period_number: int | None = None,
 ) -> dict[str, Any]:
     """Parse structurally-discovered gradebook blocks without relying on row/column coordinates.
 
@@ -276,8 +301,20 @@ def parse_journal_values(
             marker = labels[0] if labels else f"block {block_index + 1}"
 
         title_row = values[block["title"]]
-        summary_columns = [(column, str(_cell(title_row, column) or "").strip(), _summary_type(_cell(title_row, column))) for column in range(1, width) if _summary_type(_cell(title_row, column))]
-        if "category" in block:
+        date_row = values[block["date"]]
+        modern_summary_columns = [
+            (column, str(_cell(date_row, column) or "").strip(), _summary_type(_cell(date_row, column)))
+            for column in range(MODERN_SUMMARY_FIRST_COLUMN, min(width, MODERN_SUMMARY_LAST_COLUMN + 1))
+            if _summary_type(_cell(date_row, column))
+        ]
+        explicit_period = subject_period_from_title(sheet_title)[1]
+        effective_period = explicit_period if explicit_period is not None else period_number
+        modern_period_two = (grade in range(5, 10) and effective_period == 2
+                             and "category" in block and bool(modern_summary_columns))
+        summary_columns = (modern_summary_columns if modern_period_two else
+            [(column, str(_cell(title_row, column) or "").strip(), _summary_type(_cell(title_row, column)))
+             for column in range(1, width) if _summary_type(_cell(title_row, column))])
+        if "category" in block and not modern_period_two:
             summary_columns = [(1, "Итог", "term_grade"), *(entry for entry in summary_columns if entry[0] != 1)]
         metadata_rows = {key: values[row_index] for key, row_index in block.items()}
         end = blocks[block_index + 1]["date"] if block_index + 1 < len(blocks) else len(values)
@@ -330,7 +367,8 @@ def parse_journal_values(
                 })
 
         block_assessments: list[tuple[int, dict[str, Any]]] = []
-        for column in range(2 if "category" in block else 1, width):
+        assessment_end = min(width, MODERN_ASSESSMENT_LAST_COLUMN + 1) if modern_period_two else width
+        for column in range(MODERN_ASSESSMENT_FIRST_COLUMN if "category" in block else 1, assessment_end):
             title = str(_cell(title_row, column) if _cell(title_row, column) is not None else "").strip()
             if not title or _summary_type(title):
                 continue
@@ -338,7 +376,8 @@ def parse_journal_values(
                 "title": title,
                 "assessed_on": _date(_cell(metadata_rows["date"], column), school_year_start),
                 "weight": _number(_cell(metadata_rows.get("weight", []), column)),
-                "max_score": _maximum(_cell(metadata_rows.get("max_score", []), column)),
+                "max_score": (5.0 if modern_period_two else
+                              _maximum(_cell(metadata_rows.get("max_score", []), column))),
                 "group_marker": marker,
             }
             if "category" in block:
@@ -456,7 +495,10 @@ def sync_journal_values(
     sheet_id: int | str | None = None, expected_term: int | None = None,
 ) -> dict[str, int]:
     canonical_subject, explicit_term = subject_period_from_title(sheet_title)
-    parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title, sheet_id=sheet_id)
+    if grade == 7 and deferred_grade7_second_period_subject(canonical_subject, expected_term or explicit_term):
+        raise ValueError("Импорт математики и физики 7 класса за II период временно отложен.")
+    parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title,
+                                  sheet_id=sheet_id, period_number=expected_term or explicit_term)
     school_year_start = 2026
     school_year = f"{school_year_start}/{str(school_year_start + 1)[-2:]}"
     source = {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "grade": grade,

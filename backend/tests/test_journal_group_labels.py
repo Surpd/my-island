@@ -56,6 +56,10 @@ class JournalGroupLabelTests(unittest.TestCase):
         self.assertEqual(journal_group_labels(english["assessments"]), {"block 1": "Английский 3", "block 2": "Английский 1"})
         self.assertNotIn("Пример", str(english["assessments"]))
         self.assertFalse(journal_group_labels(parse(("Итог", "", "Итог"), grade=7, subject="Математика/Физика")["assessments"]))
+        half_year = parse(("II полугодие · Английский 1", "полугодие II · Английский 2", ""),
+                          grade=10, subject="Английский язык")
+        self.assertEqual(journal_group_labels(half_year["assessments"]),
+                         {"block 1": "Английский 1", "block 2": "Английский 2"})
         self.assertFalse(journal_group_labels(parse(("II триместр · Английский 3  · Пример", "", ""),
                                                    grade=8, subject="Химия")["assessments"]))
         with self.assertRaisesRegex(ValueError, "одно название группы"):

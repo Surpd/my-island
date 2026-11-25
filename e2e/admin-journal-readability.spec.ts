@@ -5,18 +5,47 @@ const sources = [
   source,
   { ...source, id: 99002, subject: 'Физика', sheet_title: 'Физика' },
   { ...source, id: 99003, grade: 8, spreadsheet_id: 'synthetic-8' },
+  { ...source, id: 99004, subject: 'Физика ', sheet_title: 'II · Физика', term_number: 2, period_status: 'archived' },
+  { ...source, id: 99005, subject: 'II · Как работать', sheet_title: 'II · Как работать', status: 'error' },
+  { ...source, id: 99006, grade: 11, spreadsheet_id: 'synthetic-11', subject: 'Русский язык', sheet_title: 'Русский язык' },
+  { ...source, id: 99007, subject: 'Математика', sheet_title: 'II · Математика', term_number: 2, period_status: 'current' },
+  { ...source, id: 99008, grade: 8, spreadsheet_id: 'synthetic-8', sheet_title: 'II · Математика', term_number: 2, period_status: 'current' },
 ];
+
+async function openLegacyJournal(page: import('@playwright/test').Page) {
+  await page.getByRole('tab', { name: /11 класс/ }).click();
+  await page.getByRole('button', { name: 'Русский язык', exact: true }).click();
+  await expect(page.getByRole('tab', { name: /I полугодие · текущий/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.journal-table')).toBeVisible();
+}
+
+async function openModernJournal(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: 'Все журналы' }).click();
+  await page.getByRole('tab', { name: /8 класс/ }).click();
+  await page.getByRole('button', { name: 'Математика', exact: true }).click();
+  await expect(page.getByRole('tab', { name: /^II триместр/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.modern-journal')).toBeVisible();
+}
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/admin/journals**', async (route) => {
-    expect(route.request().method()).toBe('GET');
+    if (route.request().method() !== 'GET') {
+      if (route.request().url().endsWith('/source-refresh'))
+        return route.fulfill({ json: { status: 'success' } });
+      if (route.request().url().endsWith('/source-settings'))
+        return route.fulfill({ json: { status: 'success' } });
+      return route.fulfill({ json: {} });
+    }
     const url = new URL(route.request().url());
     const selected =
       sources.find((item) => url.pathname.includes(`/${item.id}/`)) || source;
     let data: unknown = { items: [] };
-    if (url.pathname.endsWith('/detail'))
-      data = { source: selected, assessments, students, groups: ['A', 'B'] };
-    else if (url.pathname === '/api/admin/journals/matching')
+    if (url.pathname.endsWith('/detail')) {
+      const detailAssessments = selected.id === 99008
+        ? [{ ...assessments[0], title: 'Дроби' }, ...assessments.slice(1)]
+        : assessments;
+      data = { source: selected, assessments: detailAssessments, students, groups: ['A', 'B'] };
+    } else if (url.pathname === '/api/admin/journals/matching')
       data = { individuals: [], teams: [] };
     else if (url.pathname === '/api/admin/journals')
       data = {
@@ -24,6 +53,7 @@ test.beforeEach(async ({ page }) => {
         known_sources: [
           { grade: 7, connected: true },
           { grade: 8, connected: true },
+          { grade: 11, connected: true },
           { grade: 5, spreadsheet_id: 'synthetic-journal-workbook-a', connected: false },
         ],
         scheduler_configured: true,
@@ -31,14 +61,100 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ json: data });
   });
   await page.goto('/admin/journals?role=admin');
-  await page
-    .getByRole('button', { name: /Математика/ })
-    .first()
-    .click();
-  await expect(page.getByRole('tab', { name: 'II триместр', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('.journal-table')).toHaveCount(0);
-  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
-  await expect(page.locator('.journal-table')).toBeVisible();
+  await openLegacyJournal(page);
+});
+
+test('class cards count unique subjects and senior details use semesters', async ({ page }) => {
+  await page.getByRole('button', { name: 'Все журналы' }).click();
+  await expect(page.getByRole('tab', { name: /7 класс/ })).toContainText('2 предмета');
+  await expect(page.getByRole('button', { name: /Как работать/ })).toHaveCount(0);
+  await expect(page.getByText('Ошибки обновления', { exact: true })).toHaveCount(0);
+  await page.getByRole('tab', { name: /11 класс/ }).click();
+  await expect(page.getByRole('tab', { name: /11 класс/ })).toContainText('1 предмет');
+  await page.getByRole('button', { name: 'Русский язык', exact: true }).click();
+  const periodTabs = page.getByRole('tablist', { name: 'Учебный период' });
+  await expect(periodTabs.getByRole('tab')).toHaveCount(2);
+  await expect(periodTabs.getByRole('tab', { name: 'I полугодие · текущий' })).toHaveAttribute('aria-selected', 'true');
+  await periodTabs.getByRole('tab', { name: 'II полугодие', exact: true }).click();
+  await expect(page.getByText('Журнал за выбранное полугодие ещё не создан.')).toBeVisible();
+});
+
+test('modern II detail, archived I summary, and source menu use the intended entrypoints', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await openModernJournal(page);
+  const table = page.locator('.modern-journal__table');
+  await expect(table).toBeVisible();
+  await expect(table.locator('thead th.is-required').first()).toHaveCSS('background-color', 'rgb(243, 236, 255)');
+  await expect(table.locator('thead th.is-retake').first()).toHaveCSS('background-color', 'rgb(231, 251, 242)');
+
+  const first = table.locator('tbody tr').first();
+  const scroller = page.getByRole('region', { name: 'Таблица оценок с прокруткой' });
+  const header = table.locator('thead');
+  const titles = header.locator('.modern-journal__work-titles th strong');
+  const metadata = header.locator('.modern-journal__work-meta-line');
+  await expect(titles.first()).toHaveText('Дроби');
+  await expect(titles).toHaveCount(18);
+  await expect(metadata).toHaveCount(18);
+  const shortTitle = (await titles.first().boundingBox())!;
+  const longTitle = (await titles.nth(1).boundingBox())!;
+  expect(shortTitle.height).toBeLessThan(longTitle.height);
+  expect(shortTitle.y).toBe(longTitle.y);
+  const firstMetadata = (await metadata.first().boundingBox())!;
+  expect(firstMetadata.y).toBe((await metadata.nth(1).boundingBox())!.y);
+  expect(firstMetadata.y).toBeGreaterThan(longTitle.y + longTitle.height);
+  const headerTop = (await header.boundingBox())!.y;
+  expect(await scroller.evaluate(element => {
+    element.scrollTop = 180;
+    return element.scrollTop;
+  })).toBeGreaterThan(0);
+  expect(Math.abs((await header.boundingBox())!.y - headerTop)).toBeLessThan(2);
+  await scroller.evaluate(element => { element.scrollTop = 0; });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1441);
+  expect(await scroller.evaluate(element => element.scrollWidth)).toBeGreaterThan(1440);
+  const pinnedColumns = [first.getByRole('rowheader'), ...['learning_grade', 'required_grade', 'term_grade'].map(kind =>
+    first.locator(`[data-summary="${kind}"]`))];
+  const beforeScroll = await Promise.all(pinnedColumns.map(column => column.boundingBox()));
+  await scroller.evaluate(element => { element.scrollLeft = 260; });
+  const afterScroll = await Promise.all(pinnedColumns.map(column => column.boundingBox()));
+  afterScroll.forEach((position, index) => expect(Math.abs(position!.x - beforeScroll[index]!.x)).toBeLessThan(2));
+  await scroller.evaluate(element => { element.scrollLeft = 0; });
+  await expect(first.locator('td').nth(5)).toHaveText('0');
+  await expect(first.locator('td').nth(6)).toHaveText('н');
+  await expect(table.getByRole('columnheader', { name: 'Учебные 40%' })).toBeVisible();
+  await expect(first.locator('[data-summary="learning_grade"]')).toHaveText('0');
+  await expect(first.locator('[data-summary="term_grade"]')).toContainText('1');
+  await expect(first.locator('[data-summary="term_grade"]')).toContainText('Есть долг');
+  await expect(first.locator('[data-summary="term_grade"]')).toHaveClass(/has-debt/);
+  await scroller.screenshot({ path: testInfo.outputPath('modern-journal-table.png') });
+  await page.getByRole('button', { name: 'Показать расчёт' }).click();
+  await expect(first.locator('[data-summary="teacher_adjustment"]')).toHaveText('0');
+
+  const search = page.getByPlaceholder('Найти ученика');
+  await search.fill('Синтетический-2 Длинная');
+  await expect(table.locator('tbody tr')).toHaveCount(1);
+  await search.fill('');
+  await page.getByRole('tab', { name: 'По работам' }).click();
+  const works = page.getByRole('navigation', { name: 'Работы' });
+  await expect(works.getByRole('button')).toHaveCount(18);
+  await works.getByRole('button', { name: new RegExp(assessments[1].title) }).click();
+  await expect(page.locator('article.modern-journal__work')).toContainText('Обязательная');
+  await page.screenshot({ path: testInfo.outputPath('modern-journal-ii.png'), fullPage: true });
+
+  const refreshRequest = page.waitForRequest(request => request.url().endsWith('/api/admin/journals/source-refresh'));
+  await page.getByRole('button', { name: 'Настройки вкладки', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Отключить вкладку' })).toBeVisible();
+  await page.getByRole('button', { name: 'Обновить вкладку' }).click();
+  await refreshRequest;
+  await expect(page.locator('.modern-journal')).toBeVisible();
+
+  await page.getByRole('tab', { name: /^I триместр/ }).click();
+  const archive = page.locator('.modern-journal--archive');
+  await expect(archive).toBeVisible();
+  await expect(archive.getByRole('columnheader')).toHaveCount(2);
+  await expect(archive.getByRole('columnheader', { name: 'Итоговая оценка' })).toBeVisible();
+  await expect(archive.getByText(assessments[0].title, { exact: true })).toHaveCount(0);
+  await expect(archive.locator('tbody tr').first().locator('td').nth(0)).toHaveText('1');
+  await page.screenshot({ path: testInfo.outputPath('archived-journal-i.png'), fullPage: true });
 });
 
 for (const width of [1920, 1440, 1280, 768, 430, 390, 360]) {
@@ -135,11 +251,11 @@ test('journal selectors keep existing navigation and matching actions', async ({
     'aria-selected',
     'true',
   );
-  await page.getByRole('tab', { name: 'II триместр', exact: true }).click();
+  await page.getByRole('tab', { name: 'II полугодие', exact: true }).click();
   await expect(
-    page.getByText('Журнал за выбранный триместр ещё не создан.'),
+    page.getByText('Журнал за выбранное полугодие ещё не создан.'),
   ).toBeVisible();
-  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
+  await page.getByRole('tab', { name: /I полугодие · текущий/ }).click();
   await expect(page.locator('.journal-table')).toBeVisible();
   await page
     .getByRole('combobox', { name: 'Класс', exact: true })
@@ -152,13 +268,15 @@ test('journal selectors keep existing navigation and matching actions', async ({
     .selectOption('7');
   await page.getByRole('combobox', { name: 'Предмет' }).selectOption('Физика');
   await expect(page.locator('.journal-detail-title')).toContainText('Физика');
-  await page.getByRole('tab', { name: /I триместр · текущий/ }).click();
+  await expect(page.getByText('Журнал за выбранный триместр ещё не создан.')).toBeVisible();
+  await page.getByRole('tab', { name: /^I триместр/ }).click();
+  await expect(page.locator('.modern-journal--archive')).toBeVisible();
   await page
-    .locator('.journal-table tbody tr')
+    .locator('.modern-journal--archive tbody tr')
     .first()
-    .getByRole('button', { name: 'Сопоставить ученика' })
+    .getByRole('button', { name: 'Сопоставить' })
     .click();
-  await expect(page.locator('.journal-table')).toHaveCount(0);
+  await expect(page.locator('.modern-journal--archive')).toHaveCount(0);
 });
 
 test('compact journal menu shares layout space and can be pinned', async ({ page }, testInfo) => {
@@ -254,7 +372,7 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   });
   await page.getByRole('button', { name: 'Все журналы' }).click();
   await page.getByRole('tab', { name: /^5 класс/ }).click();
-  await page.getByRole('button', { name: 'Подключить журнал 5 класса', exact: true }).click();
+  await page.getByRole('button', { name: 'Подключить Google Таблицу', exact: true }).click();
   const editor = page.locator('.journal-connect-panel');
   const source = editor.getByLabel('Ссылка на таблицу');
   const commit = editor.getByRole('button', { name: 'Подключить и импортировать' });

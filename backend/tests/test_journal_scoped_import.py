@@ -44,6 +44,22 @@ class ScopedImportTests(unittest.TestCase):
         preview = preview or self.refresh(term_number=2, dry_run=True)
         return self.refresh(term_number=2, selected_sheet_ids=list(ids), preflight_token=preview.get("preflight_token"))
 
+    def test_scoped_refresh_includes_bound_unnumbered_tabs_and_ignores_disabled_tabs(self):
+        self.source(1, "Алгебра")
+        self.source(2, "I · Физика")
+        disabled = next(row for row in self.rows() if str(row["sheet_id"]) == "2")
+        self.db.set_journal_source_mode(disabled["id"], "excluded")
+        self.tabs((1, "Алгебра"), (2, "I · Физика"), (3, "Новая вкладка"))
+        self.google.sheet_values.side_effect = None
+        self.google.sheet_values.return_value = FIRST
+
+        result = self.refresh(term_number=1)
+
+        self.assertEqual(result["successful_tabs"], 1)
+        self.assertEqual(result["failed_tabs"], 0)
+        self.assertEqual([tab["sheet_id"] for tab in result["tabs"]], ["1"])
+        self.google.sheet_values.assert_called_once()
+
     def test_group_label_conflict_is_read_only_and_other_tab_remains_selectable(self):
         label = "II · Английский язык"
         names = ("Synthetic Alpha", "Synthetic Beta")
@@ -172,6 +188,30 @@ class ScopedImportTests(unittest.TestCase):
         self.assertEqual(self.refresh(term_number=2)["status"], "blocked")
         self.google.sheet_values.assert_not_called()
         self.assertEqual(self.rows(), [])
+
+    def test_connected_refresh_failure_persists_diagnostic_only_on_real_run(self):
+        self.source(2, "II · История", SECOND)
+        source = self.rows()[0]
+        before = self.db.journal_detail(source["id"])
+        self.tabs((2, "II · История"))
+        self.google.sheet_values.side_effect = None
+        self.google.sheet_values.return_value = [["Нераспознаваемая структура", 1]]
+
+        preview = self.refresh(term_number=2, dry_run=True)
+        self.assertEqual(preview["tabs"][0]["status"], "error")
+        after_preview = self.db.journal_detail(source["id"])
+        self.assertEqual(after_preview["source"]["status"], "ready")
+        self.assertIsNone(after_preview["source"]["last_error"])
+        self.assertEqual(after_preview["assessments"], before["assessments"])
+
+        result = self.refresh(term_number=2)
+        self.assertEqual(result["status"], "blocked")
+        failed = self.db.journal_detail(source["id"])
+        self.assertEqual(failed["source"]["status"], "error")
+        self.assertTrue(failed["source"]["last_error"])
+        self.assertTrue(failed["source"]["last_error_code"])
+        self.assertEqual(failed["assessments"], before["assessments"])
+        self.assertEqual(failed["source"]["id"], source["id"])
 
     def test_partial_choice_refreshes_only_connected_tabs_and_keeps_omitted_existing_source(self):
         self.source(1, "I · История")

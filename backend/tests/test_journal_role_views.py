@@ -160,16 +160,22 @@ class JournalRoleViewTests(unittest.TestCase):
         book = "synthetic-school-journal"
         first = [["Дата", "01.09"], ["Работа", "Архив"], ["Вес", 1],
                  ["Оценка", 5], ["Student One", 3]]
-        second = [["Дата", "II триместр · Группа 1", "25.11", "26.11"], ["Задание / работа", "", "Отчёт", "Повтор"],
-                  ["Вес", "", 2, 1], ["Категория (У/О/П)", "", "О", "П"],
-                  ["Student One", 4, 2, 4], ["Other Fixture", 5, 5, ""]]
-        title = "II · Математика/Физика"
-        preview = parse_journal_values(second, grade=7, subject="Математика/Физика", sheet_title=title)
+        second = [[None] * 41 for _ in range(6)]
+        second[0][0], second[1][0], second[2][0], second[3][0] = "Дата", "Задание / работа", "Вес", "Категория (У/О/П)"
+        second[0][1] = "II триместр · Группа 1"
+        second[0][2:4], second[1][2:4] = ["25.11", "26.11"], ["Отчёт", "Повтор"]
+        second[2][2:4], second[3][2:4] = [2, 1], ["О", "П"]
+        second[4][0], second[4][2:4] = "Student One", [2, 4]
+        second[5][0], second[5][2:4] = "Other Fixture", [5, ""]
+        second[0][39] = "Итог"
+        second[4][39], second[5][39] = 4, 5
+        title = "II · История"
+        preview = parse_journal_values(second, grade=7, subject="История", sheet_title=title)
         self.assertEqual([item["category"] for item in preview["assessments"]], ["О", "П"])
         self.assertEqual({row["group_marker"] for row in preview["students"]}, {"Группа 1"})
         self.assertEqual(len(preview["summaries"]), 2)
         self.assertFalse(any(item["spreadsheet_id"] == book for item in self.database.journal_status()))
-        tabs = {"I · Математика/Физика": first, title: second, "II · Как работать": [["Инструкция"]]}
+        tabs = {"I · История": first, title: second, "II · Как работать": [["Инструкция"]]}
         google = Mock()
         google.spreadsheet.return_value = {"sheets": [
             {"properties": {"sheetId": index, "title": name}} for index, name in enumerate(tabs, 1)]}
@@ -181,7 +187,7 @@ class JournalRoleViewTests(unittest.TestCase):
             self.assertEqual(dry.json()["tabs"][0]["counts"], {"students": 2, "results": 3, "summaries": 2, "assessments": 2})
             self.assertFalse(any(row["spreadsheet_id"] == book for row in self.database.journal_status()))
             sync_journal_values(self.database, first, spreadsheet_id=book, spreadsheet_title="Fixture",
-                                grade=7, subject="Математика/Физика", sheet_title="I · Математика/Физика", sheet_id=1)
+                                grade=7, subject="История", sheet_title="I · История", sheet_id=1)
             google.sheet_values.reset_mock()
             for attempt in range(2):
                 checked = self.client.post("/api/admin/journals/connect", headers={"X-Dev-Auth": "admin-auth"},
@@ -199,7 +205,7 @@ class JournalRoleViewTests(unittest.TestCase):
                         self.assertTrue(self.database.match_journal_student(source["id"], student["id"], self.student_identity))
             self.assertEqual([call.args[1] for call in google.sheet_values.call_args_list], [f"'{title}'!A:ZZ"] * 4)
         items = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"}).json()["items"]
-        visible = {item["source"]["term_number"]: item for item in items if item["source"]["subject"] == "Математика/Физика"}
+        visible = {item["source"]["term_number"]: item for item in items if item["source"]["subject"] == "История"}
         self.assertEqual([row["numeric_score"] for row in visible[1]["results"]], [3])
         self.assertEqual([row["numeric_score"] for row in visible[2]["results"]], [2, 4])
         self.assertEqual([row["numeric_value"] for row in visible[2]["summaries"]], [4])
@@ -209,7 +215,7 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual([(row["category"], row["weight"]) for row in admin["assessments"]], [("О", 2), ("П", 1)])
         with self.assertRaisesRegex(ValueError, "Период вкладки"):
             sync_journal_values(self.database, second, spreadsheet_id=book, spreadsheet_title="Fixture",
-                                grade=7, subject="Математика/Физика", sheet_title=title, sheet_id=1)
+                                grade=7, subject="История", sheet_title=title, sheet_id=1)
 
     def test_blank_student_group_and_conflicting_result_group_fail_closed(self):
         with self.database.connection() as connection:
@@ -252,6 +258,54 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual(len(pairs), 2)
         self.assertEqual({item["group_marker"] for item in pairs}, {"A"})
         self.assertEqual(set(item["source_id"] for item in pairs), set(self.source_ids))
+
+    def test_excluded_source_stays_in_admin_history_but_is_hidden_from_role_views(self):
+        excluded_source = self.source_ids[1]
+        self.database.set_journal_source_mode(excluded_source, "excluded")
+
+        student_items = self.client.get(
+            "/api/student/journals", headers={"X-Dev-Auth": "student-auth"}
+        ).json()["items"]
+        self.assertEqual({item["source"]["source_id"] for item in student_items}, {self.source_ids[0]})
+
+        teacher_items = self.client.get(
+            "/api/teacher/journals", headers={"X-Dev-Auth": "teacher-auth"}
+        ).json()["items"]
+        self.assertEqual({item["source_id"] for item in teacher_items}, {self.source_ids[0]})
+        self.assertFalse(self.database.teacher_can_access_journal_marker(self.teacher_user, excluded_source, "A"))
+        self.assertIsNone(self.database.teacher_journal_detail(self.teacher_user, excluded_source, "A"))
+        self.assertEqual(self.database.list_group_journal(self.group_ids[-1]), [])
+
+        admin_detail = self.database.journal_detail(excluded_source)
+        self.assertIsNotNone(admin_detail)
+        self.assertTrue(admin_detail["source"]["excluded_from_journals"])
+        self.assertTrue(admin_detail["assessments"])
+
+    def test_deferred_grade7_second_period_math_is_preserved_but_hidden_from_role_views(self):
+        deferred_source = self.source_ids[1]
+        with self.database.connection() as connection:
+            self.database.execute(connection, """UPDATE journal_sources
+                SET grade = 7, subject = 'Математика', term_number = 2
+                WHERE id = ?""", (deferred_source,))
+
+        student_items = self.client.get(
+            "/api/student/journals", headers={"X-Dev-Auth": "student-auth"}
+        ).json()["items"]
+        self.assertEqual({item["source"]["source_id"] for item in student_items}, {self.source_ids[0]})
+
+        teacher_items = self.client.get(
+            "/api/teacher/journals", headers={"X-Dev-Auth": "teacher-auth"}
+        ).json()["items"]
+        self.assertEqual({item["source_id"] for item in teacher_items}, {self.source_ids[0]})
+        self.assertFalse(self.database.teacher_can_access_journal_marker(self.teacher_user, deferred_source, "A"))
+        self.assertIsNone(self.database.teacher_journal_detail(self.teacher_user, deferred_source, "A"))
+        self.assertEqual(self.database.list_group_journal(self.group_ids[-1]), [])
+
+        admin_detail = self.database.journal_detail(deferred_source)
+        self.assertIsNotNone(admin_detail)
+        self.assertEqual(admin_detail["source"]["term_number"], 2)
+        self.assertEqual(admin_detail["source"]["subject"], "Математика")
+        self.assertTrue(admin_detail["assessments"])
 
     def test_unmapped_all_marker_falls_back_only_to_assigned_canonical_class(self):
         with self.database.connection() as connection:

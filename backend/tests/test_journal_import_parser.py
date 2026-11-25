@@ -6,6 +6,45 @@ from backend.services.journal_import import classify_journal_values, parse_journ
 
 
 class JournalImportParserTests(unittest.TestCase):
+    def test_modern_second_period_sheet_uses_c_to_ah_and_typed_ai_to_ao_summaries(self):
+        width = 41  # A:AO
+        row = lambda: [None] * width
+        dates, titles, weights, categories, student = row(), row(), row(), row(), row()
+        dates[0], titles[0], weights[0], categories[0], student[0] = (
+            "Дата", "Задание", "Вес", "Категория (У/О/П)", "Ученик Пример")
+        titles[1], student[1] = "Итог", 5  # Mirrored final; not a second summary.
+        dates[2], dates[3] = "25.11", "26.11"
+        titles[2], titles[3] = "Работа с нулём", "Работа со статусом"
+        weights[2], weights[3] = 1, 2
+        categories[2], categories[3] = "У", "О"
+        student[2], student[3] = 0, "Р"
+        labels = ["Учебные 40%", "Обязательные 60%", "Общий балл", "Округление",
+                  "Повысить на 1", "Итог", "Долги по работам"]
+        summary_values = [0, "Р", 3.6, 4, 1, 5, "2 работы"]
+        for column, (label, value) in enumerate(zip(labels, summary_values), 34):
+            dates[column], student[column] = label, value
+
+        parsed = parse_journal_values([dates, titles, weights, categories, student], grade=8,
+                                      subject="История", sheet_title="II триместр · История", sheet_id=88)
+
+        self.assertEqual([item["source_column"] for item in parsed["assessments"]], ["C", "D"])
+        self.assertEqual([item["max_score"] for item in parsed["assessments"]], [5.0, 5.0])
+        self.assertEqual([(item["numeric_score"], item["status"]) for item in parsed["results"]],
+                         [(0.0, None), (None, "р")])
+        summaries = {item["summary_type"]: item for item in parsed["summaries"]}
+        self.assertEqual(set(summaries), {"learning_grade", "required_grade", "calculated_grade",
+                                          "rounded_grade", "teacher_adjustment", "term_grade",
+                                          "assessment_debt"})
+        self.assertEqual(summaries["learning_grade"]["numeric_value"], "0")
+        self.assertEqual(summaries["required_grade"]["text_value"], "Р")
+        self.assertEqual(summaries["assessment_debt"]["text_value"], "2 работы")
+        self.assertEqual(len([item for item in parsed["summaries"] if item["summary_type"] == "term_grade"]), 1)
+        rebound = parse_journal_values([dates, titles, weights, categories, student], grade=8,
+                                       subject="История", sheet_title="История", sheet_id=88, period_number=2)
+        self.assertEqual([(item["source_column"], item["max_score"]) for item in rebound["assessments"]],
+                         [("C", 5.0), ("D", 5.0)])
+        self.assertEqual({item["summary_type"] for item in rebound["summaries"]}, set(summaries))
+
     def test_multiline_term_two_headers_keep_parts_and_empty_final(self):
         values = [["Дата", "Итог", "01.12", "02.12", "03.12"], ["", "", "", "", ""],
                   ["", "", "", "", ""], ["Блок\nЗадание / работа", "", "A", "B", "C"],

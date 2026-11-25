@@ -6,7 +6,11 @@ import re
 from collections import defaultdict
 from typing import Any, Iterable, Mapping
 
-TERM_PREFIX = re.compile(r"I{1,3}\s+триместр\s*·\s*(.+)", re.IGNORECASE)
+TERM_PREFIX = re.compile(
+    r"(?:(?:I{1,3}|[1-3])\s+(?:триместр|полугодие|семестр)|"
+    r"(?:триместр|полугодие|семестр)\s+(?:I{1,3}|[1-3]))\s*·\s*(.+)",
+    re.IGNORECASE,
+)
 MATH_LABEL = re.compile(r"9\s*[-–]?\s*([ABCАВС])", re.IGNORECASE)
 GROUP_LABEL = re.compile(r"группа\s+(?:№\s*)?([1-9][0-9]?|[A-ZА-ЯЁ])", re.IGNORECASE)
 ENGLISH_SUBGROUP = re.compile(
