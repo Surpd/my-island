@@ -41,6 +41,8 @@ from backend.services.schedule_activities import ActivityConflict, ActivityNotFo
 from backend.services.google_sync_service import JournalImportBusy, CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability, student_campus_projection
 from backend.services.teacher_load_analytics import teacher_load_analytics
+from backend.services.operational_day import operational_day, next_week_drafts, school_day
+from backend.services.constructor_publication import PublicationConflict
 from backend.services.schedule_drafts import (
     audience_preview, get_draft,
 )
@@ -1614,6 +1616,48 @@ def create_router(database: Database) -> APIRouter:
         return {"week_start": monday, "manual_publication_active": bool(head),
                 "review_required": bool(head), "source_checked": False,
                 "automatic_application_enabled": False}
+
+    @router.get("/admin/operations/day")
+    def admin_operational_day(day: date | None = None, edition: str | None = None, record: str | None = None,
+                              init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                              x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if not canonical_admin_backend_enabled():
+            raise HTTPException(503, "Published schedule backend is disabled")
+        today, zone = school_day()
+        try:
+            result = operational_day(database, day or today, zone)
+        except (sqlite3.OperationalError, PostgresOperationalError) as error:
+            raise HTTPException(503, "Published schedule is temporarily unavailable") from error
+        current = result["publication"]["effective_week_id"] or "unpublished"
+        if edition is not None and current != edition:
+            raise HTTPException(409, {"code": "edition_changed", "publication": result["publication"],
+                                      "href": "/api/admin/operations/day?day=" + result["day"]})
+        if record is not None:
+            if edition is None:
+                raise HTTPException(422, "An edition is required for a record link")
+            row = next((r for r in (*result["items"], *result["alerts"]) if r["id"] == record), None)
+            if row is None:
+                raise HTTPException(404, "Record is unavailable in this edition")
+            return {"day": result["day"], "publication": result["publication"], "record": row}
+        return result
+
+    @router.get("/admin/operations/next-week-drafts")
+    def admin_next_week_drafts(day: date | None = None, draft_id: str | None = None,
+                               init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                               x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+                               x_school_admin_session: str | None = Header(default=None)):
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        require_real_school_admin(x_school_admin_session, principal)
+        source, store = school_stores()
+        try:
+            return next_week_drafts(source, store, day or school_day()[0], draft_id)
+        except (KeyError, ExperimentNotFound) as error:
+            raise HTTPException(404, "Week draft not found") from error
+        except (ExperimentConflict, PublicationConflict) as error:
+            raise HTTPException(409, "Week draft changed. Reload its current revision.") from error
+        except (sqlite3.OperationalError, PostgresOperationalError) as error:
+            raise HTTPException(503, "Draft preview is temporarily unavailable") from error
 
     @router.get("/admin/schedule/overview")
     def admin_schedule_overview(week_start: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
