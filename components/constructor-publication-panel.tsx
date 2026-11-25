@@ -752,9 +752,6 @@ export function ConstructorPublicationPanel({
   useEffect(() => {
     if (!publicationEnabled || readOnly) return;
     const abort = new AbortController();
-    setReceiptOwner('');
-    setRecoveryFailed(false);
-    setRecoveryNotice('');
     async function recoverOnOpen() {
       const {owner} = await api<{owner: string}>(`${publicationPath}/recovery-context`, {signal: abort.signal, cache: 'no-store'});
       if (abort.signal.aborted) return;
@@ -963,11 +960,17 @@ export function ConstructorPublicationPanel({
           <p>Срок входа мог истечь. Перепроверьте вход, чтобы продолжить.</p>
           <button type="button" className="admin-button" disabled={busy} onClick={() => window.location.reload()}>Перепроверить вход</button>
         </section> : null}
-        {publicationEnabled && !readOnly && recoveryFailed ? <p role="status">
-          Не удалось проверить незавершённую публикацию. <button type="button" onClick={() => setRecoveryAttempt(value => value + 1)}>Повторить проверку квитанций</button>
-        </p> : null}
-        {recoveryNotice ? <p role="status">{recoveryNotice}</p> : null}
-        {pendingCommand ? <section aria-label="Незавершённая публикация">
+        {publicationEnabled && !readOnly && recoveryFailed ? <div>
+          <output>Не удалось проверить незавершённую публикацию.</output>
+          <button type="button" onClick={() => {
+            setReceiptOwner('');
+            setRecoveryFailed(false);
+            setRecoveryNotice('');
+            setRecoveryAttempt(value => value + 1);
+          }}>Повторить проверку квитанций</button>
+        </div> : null}
+        {recoveryNotice ? <output>{recoveryNotice}</output> : null}
+        {publicationEnabled && !readOnly && pendingCommand ? <section aria-label="Незавершённая публикация">
           <p>Требуется проверить исход предыдущей команды.</p>
           <button type="button" disabled={busy} onClick={() => void checkPending(pendingCommand, false)}>Проверить квитанцию</button>
           <button type="button" disabled={busy || dirty} onClick={() => void checkPending(pendingCommand, true)}>Повторить исходную команду</button>
