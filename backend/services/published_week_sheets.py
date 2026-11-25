@@ -219,15 +219,20 @@ def _batch(job, plan, book, client):
                 raise DeliveryConflict("occupied_expansion")
     if any(_intersects(rect, item) and not _intersects(old_rect, item) for item in remote_merges):
         raise DeliveryConflict("occupied_expansion")
+    # Google treats deletion of a missing named range as a no-op. An update
+    # to the same name requires the ID to exist and rejects a stale batch.
+    replace_marker = [
+        {"updateNamedRange": {"namedRange": {"namedRangeId": marker["namedRangeId"], "name": marker["name"]},
+                              "fields": "name"}},
+        {"deleteNamedRange": {"namedRangeId": marker["namedRangeId"]}},
+    ]
     if previous_revision == job["head_revision"]:
         if previous_layout != digest:
             raise DeliveryConflict("revision_content_mismatch")
         if not match[2]:
-            return [{"deleteNamedRange": {"namedRangeId": marker["namedRangeId"]}}, add_marker], None
+            return [*replace_marker, add_marker], None
         return [], observed_format
-    # Consuming Google's previous namedRangeId fences a delayed batch. A stale
-    # delete fails validation, so no cell in that atomic batch is changed.
-    changes = [{"deleteNamedRange": {"namedRangeId": marker["namedRangeId"]}}]
+    changes = replace_marker
     for key in ("rowCount", "columnCount"):
         needed = plan["rows" if key == "rowCount" else "columns"]
         if grid[key] < needed:

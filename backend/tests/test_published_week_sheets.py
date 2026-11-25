@@ -60,11 +60,14 @@ class FakeSheets:
                         item for item in self.sheets[rect["sheetId"]].get("merges", []) if not delivery._intersects(rect, item)]
                 elif kind == "addNamedRange":
                     self.markers.append({**action["namedRange"], "namedRangeId": f"range-{len(self.history)}"})
-                elif kind == "deleteNamedRange":
-                    selected = next((m for m in self.markers if m["namedRangeId"] == action["namedRangeId"]), None)
+                elif kind == "updateNamedRange":
+                    updated = action["namedRange"]
+                    selected = next((m for m in self.markers if m["namedRangeId"] == updated["namedRangeId"]), None)
                     if selected is None:
                         raise ValueError("predecessor already consumed")
-                    self.markers.remove(selected)
+                    selected["name"] = updated["name"]
+                elif kind == "deleteNamedRange":
+                    self.markers = [m for m in self.markers if m["namedRangeId"] != action["namedRangeId"]]
                 elif kind == "appendDimension":
                     key = "rowCount" if action["dimension"] == "ROWS" else "columnCount"
                     self.sheets[action["sheetId"]]["properties"]["gridProperties"][key] += action["length"]
