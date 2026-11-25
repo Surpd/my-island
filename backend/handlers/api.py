@@ -40,6 +40,7 @@ from backend.services.school_template_selection import (
 from backend.services.schedule_activities import ActivityConflict, ActivityNotFound, list_activities, save_activity, seed_activities
 from backend.services.google_sync_service import JournalImportBusy, CURRENT_JOURNAL_SPREADSHEETS, refresh_classroom, refresh_journal, refresh_grade_journal
 from backend.services.canonical_schedule import effective_blocks, effective_status, project_student_range, project_teacher_range, publication_head, published_week_view, schedule_admin_observability, student_campus_projection
+from backend.services.teacher_load_analytics import teacher_load_analytics
 from backend.services.schedule_drafts import (
     audience_preview, get_draft,
 )
@@ -986,6 +987,25 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
         return database.list_people_filter_options()
+
+    @router.get("/admin/analytics/teachers")
+    def admin_teacher_load(start_day: str, end_day: str | None = None, teacher_id: str | None = None,
+                           activity_type: str | None = None, activity_format: str | None = None,
+                           group_id: str | None = None,
+                           init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                           x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        require_role(telegram_user, "admin")
+        if not canonical_admin_backend_enabled():
+            raise HTTPException(status_code=503, detail="Published schedule backend is disabled")
+        try:
+            return teacher_load_analytics(database, start_day, end_day, teacher_id,
+                                          activity_type=activity_type, activity_format=activity_format,
+                                          group_id=group_id)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Select between 1 and 366 calendar days with ISO start_day and end_day") from error
+        except (sqlite3.OperationalError, PostgresOperationalError) as error:
+            raise HTTPException(status_code=503, detail="Published schedule is temporarily unavailable") from error
 
     @router.get("/admin/people/{identity_id}/schedule")
     def admin_person_schedule(identity_id: str, start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
