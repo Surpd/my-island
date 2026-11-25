@@ -66,5 +66,39 @@ test('two administrators reconnect, compare a field with its author and explicit
     expect((await current.json()).display_name).toBe(name + ' second');
     const history = await page.request.get(`${API}/api/admin/directory/history/groups/${id}`, { headers: admin });
     expect((await history.json()).items[0].actor_id).toBe(actor.id);
+    const revoked = await second.request.post(`${API}/api/admin/auth/logout`, {
+      headers: { 'X-Dev-Auth': `browser:${actor.token}` },
+    });
+    expect(revoked.ok()).toBeTruthy();
+    await second.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(second.getByText('Доступ администратора изменился.', { exact: false })).toBeVisible({ timeout: 25000 });
+    await expect(second.locator(`[data-group-id="${id}"]`)).toHaveCount(0);
   } finally { await other.close(); }
+});
+
+test('a constructor draft keeps typed text offline and opens its existing conflict dialog on reconnect', async ({ page, request }) => {
+  const name = `Live draft ${Date.now()}`;
+  const endpoint = API + '/api/admin/schedule/experiments';
+  await page.goto('/admin/schedule/constructor?role=admin');
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && r.url().endsWith('/api/admin/schedule/experiments'));
+  await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
+  const draft = await (await created).json();
+  await page.locator('.constructor-draft-menu summary').click();
+  const input = page.getByRole('textbox', { name: 'Название черновика' });
+  await expect(input).toHaveValue(draft.name);
+  await page.context().setOffline(true);
+  await input.fill(name + ' local');
+  const update = await request.put(`${endpoint}/${draft.id}`, {
+    headers: admin, data: { name: name + ' remote', expected_revision: draft.revision, payload: draft.payload },
+  });
+  expect(update.ok()).toBeTruthy();
+  await page.context().setOffline(false);
+  await expect(input).toHaveValue(name + ' local');
+  // Leave the buffered field. A visible/focused editor can now compare revisions.
+  await input.evaluate((el) => el.blur());
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const conflict = page.getByRole('dialog', { name: 'Расписание изменилось в другой вкладке или сеансе' });
+  await expect(conflict).toBeVisible({ timeout: 30000 });
+  await expect(conflict).toContainText(name + ' local');
+  await expect(conflict).toContainText(name + ' remote');
 });
