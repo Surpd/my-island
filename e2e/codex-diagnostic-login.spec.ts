@@ -60,6 +60,9 @@ test('diagnostic login loads the existing admin shell, never borrowing the human
   await expect(page.getByRole('rowheader', { name: 'Диагностический предмет' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Диагностический предмет', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Подключить таблицу', exact: true })).toHaveCount(0);
+  await page.getByRole('navigation', { name: 'Основные разделы', exact: true })
+    .getByRole('button', { name: 'Сегодня', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Расписание школы' })).toBeVisible();
   await page.getByRole('button', { name: 'Выйти', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Диагностический вход' })).toBeVisible();
   expect(revoked).toBeTruthy();
