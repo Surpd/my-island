@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
@@ -274,6 +275,16 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         result = project_teacher_range(self.database, self.teacher["id"], "2026-12-31", "2027-01-05")
         self.assertEqual([item["date"] for item in result["items"]], ["2027-01-04"])
         self.assertEqual(result["items"][0]["activity"], "Year start lesson")
+
+    def test_teacher_range_preserves_single_and_plural_publication_metadata(self):
+        projections = [
+            {"status": "approved_baseline", "publication": {"id": "pub-1"}, "items": [], "issues": [], "day_modes": []},
+            {"status": "approved_baseline", "publication": {"id": "pub-2"}, "items": [], "issues": [], "day_modes": []},
+        ]
+        with patch("backend.services.canonical_schedule.project_teacher", side_effect=projections):
+            result = project_teacher_range(self.database, self.teacher["id"], "2026-09-07", "2026-09-14")
+        self.assertEqual(result["publication"], {"id": "pub-1"})
+        self.assertEqual(result["publications"], [{"id": "pub-1"}, {"id": "pub-2"}])
 
     def test_legacy_club_keeps_staffing_and_is_hidden_from_students(self):
         artifact = self.artifact()
