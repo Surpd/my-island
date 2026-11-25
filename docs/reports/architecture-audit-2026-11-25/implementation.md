@@ -1,37 +1,54 @@
 # Реестр реализации от 25 ноября 2026
 
-База первой волны — [main на момент начала работы](https://github.com/Surpd/my-island/tree/6eda54a79e8606021bfda7385004c8d0e8294218). Числа ниже соответствуют строкам [плана поставки](plan.md), где указаны миграции, сценарии тестирования и критерии приёмки каждого PR. C — исправление, выделенное из пункта 8. [Архитектурный аудит](README.md) и [галерея](gallery.html) относятся к исходной ревизии.
+[Аудит и его исходная ревизия](README.md) · [План и критерии приёмки](plan.md) · [Документационный PR №47](https://github.com/Surpd/my-island/pull/47) · [Галерея тестовых сценариев](gallery.html)
 
-| Пункт | Состояние и ветка | Зависимость | Условие приёмки |
-|---|---|---|---|
-| 1. Опубликованная неделя | [PR 48](https://github.com/Surpd/my-island/pull/48) · `codex/published-week` | — | Обе роли Campus и административный просмотр читают одну редакцию, в том числе после смены шаблона. Повреждённая ссылка диагностируется. |
-| 2. Квитанция публикации | [PR 55](https://github.com/Surpd/my-island/pull/55) · `codex/publication-receipt` | 1 | Повтор с тем же ключом возвращает исходную квитанцию. Две транзакции PostgreSQL не создают две публикации. |
-| 3. Google Sheets | Ожидает квитанции | 1, 2 | Повтор сохраняет gid, старая задача не перезаписывает новую редакцию, ошибка выгрузки допускает retry. |
-| 4. Справочник | [PR 49](https://github.com/Surpd/my-island/pull/49) · `codex/directory-revisions` | — | Устаревшая форма получает конфликт. Связанные изменения и история фиксируются одной транзакцией в SQLite и PostgreSQL. |
-| 5. Совместная работа | Ожидает версий справочника | 4 | Две сессии получают актуальную версию, несохранённый ввод переживает разрыв соединения. |
-| 6. Визуальная система | [Дизайн-поток, PR 51](https://github.com/Surpd/my-island/pull/51) | Независим | Критерии эталонных экранов перечислены в плане. |
-| 7. Сегодня | [PR 54](https://github.com/Surpd/my-island/pull/54) · `codex/operational-day` | 1, оформление после 6 | Выборка дня показывает происхождение, покрытие и исключения. Отсутствие недели различимо. |
-| C. Диапазон преподавателя | [PR 52](https://github.com/Surpd/my-island/pull/52) · `codex/teacher-range` | — | Все недели диапазона, включая переход года и пропуск недели. Сохраняется фильтр преподавателя. |
-| 8. Нагрузка преподавателей | В разработке, `codex/teacher-load` | 1, C | Минуты и роли воспроизводятся по занятиям и интервалам, покрытие показано явно. |
-| 9. Аналитика классов | Ожидает интервальной выборки | 8 | Общие и параллельные занятия учитываются по траектории без удвоения длительности дня. |
-| 10. Журналы | [PR 50](https://github.com/Surpd/my-island/pull/50) · `codex/journal-analytics` | 6 для UI | Ноль, отсутствие результата, категория, пересдача и итог различимы. Повторный sync не удваивает результаты. |
-| 11. Вложенные экраны | Отдельный дизайн-поток владельца | 6 | Сохранены плотность и закрепления таблиц, клавиатурное управление и локальная прокрутка. |
-| 12. Виджеты | Ожидает рабочих источников данных | 5, 7, 8 | Разные администраторы имеют независимые версионные раскладки. Права определяются сервером. |
+Первая волна стартовала от `6eda54a79e8606021bfda7385004c8d0e8294218`. Номера пунктов относятся к плану аудита. Состояние в таблице относится к указанному SHA. Вкладка Checks каждого PR показывает последующие запуски. Все функциональные поставки представлены отдельными Draft PR.
 
-## Принятые решения
+| Пункт | PR и контракт реализации | База и зависимости | Проверенная ревизия | GitHub Actions |
+|---|---|---|---|---|
+| 1. Опубликованная неделя | [#48](https://github.com/Surpd/my-island/pull/48) · [документация](https://github.com/Surpd/my-island/blob/codex/published-week/docs/SCHEDULE_ARCHITECTURE.md) | `main` | [edfeffa3f](https://github.com/Surpd/my-island/commit/edfeffa3ff40f1f58353c0221cf7412d929ff36b) | [✓ Published week contract](https://github.com/Surpd/my-island/actions/runs/45632109769) |
+| 4. Справочник | [#49](https://github.com/Surpd/my-island/pull/49) · [документация](https://github.com/Surpd/my-island/blob/codex/directory-revisions/docs/DIRECTORY_REVISIONS.md) | `main` | [51d48ccac](https://github.com/Surpd/my-island/commit/51d48ccac0a2ea1b8938b0ea5da89b261ecf8f25) | [✓ School directory revisions](https://github.com/Surpd/my-island/actions/runs/45633874900) |
+| C. Диапазон преподавателя | [#52](https://github.com/Surpd/my-island/pull/52) · [документация](https://github.com/Surpd/my-island/blob/codex/teacher-range/docs/SCHEDULE_TEACHER_RANGE_CONTRACT.md) | `main` | [52108d728](https://github.com/Surpd/my-island/commit/52108d728fdf764ad12e1d16e31e7dacb040bee9) | [✓ Teacher range contract](https://github.com/Surpd/my-island/actions/runs/45636457494) |
+| 2. Квитанция публикации | [#55](https://github.com/Surpd/my-island/pull/55) · [документация](https://github.com/Surpd/my-island/blob/codex/publication-receipt/docs/PUBLICATION_RECEIPTS.md) | `codex/published-week` · #48 | [941c8b8ef](https://github.com/Surpd/my-island/commit/941c8b8ef32cd1cdc03dc60b03afa000649b1ff5) | [✓ Published week contract](https://github.com/Surpd/my-island/actions/runs/45635629411) · [✓ Publication receipts](https://github.com/Surpd/my-island/actions/runs/45635630247) |
+| 3. Постоянная вкладка Sheets | [#57](https://github.com/Surpd/my-island/pull/57) · [документация](https://github.com/Surpd/my-island/blob/codex/published-week-sheets/docs/SCHEDULE_ARCHITECTURE.md) | `codex/publication-receipt` · #55 | [59340a89e](https://github.com/Surpd/my-island/commit/59340a89e3b30f8903b367923c7472056cebbb31) | [✓ Published week Sheets delivery](https://github.com/Surpd/my-island/actions/runs/45635860914) · [✓ Publication receipts](https://github.com/Surpd/my-island/actions/runs/45635860865) |
+| 5. Совместная работа | [#59](https://github.com/Surpd/my-island/pull/59) · [документация](https://github.com/Surpd/my-island/blob/codex/admin-live-editing/docs/ADMIN_LIVE_EDITING.md) | `codex/directory-revisions` · #49 | [c7ece8599](https://github.com/Surpd/my-island/commit/c7ece8599647fa6a607e1631b69ea9c95f98777e) | [✓ School directory revisions](https://github.com/Surpd/my-island/actions/runs/45636373785) |
+| 7. Сегодня | [#54](https://github.com/Surpd/my-island/pull/54) · [документация](https://github.com/Surpd/my-island/blob/codex/operational-day/docs/SCHEDULE_ARCHITECTURE.md) | `codex/published-week` · #48 | [7e800d76a](https://github.com/Surpd/my-island/commit/7e800d76ab15f770476b3f9b707871e3345a896d) | [✓ Published week contract](https://github.com/Surpd/my-island/actions/runs/45633450660) |
+| 8. Нагрузка преподавателей | [#53](https://github.com/Surpd/my-island/pull/53) · [документация](https://github.com/Surpd/my-island/blob/codex/teacher-load/docs/TEACHER_LOAD_ANALYTICS.md) | `codex/published-week` · #48 + #52 | [5e7947af9](https://github.com/Surpd/my-island/commit/5e7947af9f4a770093b216e459874b8bb3a32b89) | [✓ Published week contract](https://github.com/Surpd/my-island/actions/runs/45636583936) |
+| 9. Аналитика классов | [#56](https://github.com/Surpd/my-island/pull/56) · [документация](https://github.com/Surpd/my-island/blob/codex/class-load/docs/CLASS_LOAD_ANALYTICS.md) | `codex/teacher-load` · #53 | [c4f73ceeb](https://github.com/Surpd/my-island/commit/c4f73ceeb65befd8de6654fb62cf4452920d966d) | Запуск на этом SHA пока отсутствует |
+| 10. Журналы | [#50](https://github.com/Surpd/my-island/pull/50) · [документация](https://github.com/Surpd/my-island/blob/codex/journal-analytics/docs/JOURNAL_ANALYTICS.md) | `main` | [58095dd24](https://github.com/Surpd/my-island/commit/58095dd245bff39086844fd73d5a102bc2dd66fa) | [in_progress Journal analytics](https://github.com/Surpd/my-island/actions/runs/45637430050) |
+| 10б. История ячеек | [#58](https://github.com/Surpd/my-island/pull/58) · [документация](https://github.com/Surpd/my-island/blob/codex/journal-cell-events/docs/JOURNAL_CELL_ACTIVITY.md) | `codex/journal-analytics` · #50 | [685412389](https://github.com/Surpd/my-island/commit/6854123896724dbe9788692ef9700ff4c7561d82) | [✓ Journal analytics](https://github.com/Surpd/my-island/actions/runs/45636438582) |
+| 12. Персональные виджеты | [#60](https://github.com/Surpd/my-island/pull/60) · [документация](https://github.com/Surpd/my-island/blob/codex/personal-workspace/docs/PERSONAL_WORKSPACE.md) | `codex/operational-day` · #54, источник #53, клиент #59 | [3aef70661](https://github.com/Surpd/my-island/commit/3aef706611446934733d3a6570d99548041a448f) | [✓ Published week contract](https://github.com/Surpd/my-island/actions/runs/45636858183) · [✓ Personal workspace](https://github.com/Surpd/my-island/actions/runs/45636858302) |
 
-- Для чтения недели используем существующие canonical_schedule и constructor_publication. Административные черновики остаются отдельным источником данных. Основание и границы совместимости описаны в [архитектуре чтения](README.md).
-- Исправление диапазона преподавателя поставляется отдельно и обязательно для пункта 8.
-- Надёжность блокировок проверяем на изолированном PostgreSQL 17. SQLite покрывает совместимость локального режима.
-- Для функциональных веток базой служит main либо ветка прямой зависимости. Результаты проверок фиксируются рядом с реализацией. Слияние и выпуск требуют решения владельца.
+## Внешние зависимости по дизайну
 
-## Проверки и открытые вопросы
+| Пункт | Ответственный поток | Условие перехода |
+|---|---|---|
+| 6. Административная дизайн-система | [Варианты А/Б и визуальные эталоны, PR 51](https://github.com/Surpd/my-island/pull/51) | Владелец выбирает направление для новых разделов. |
+| 11. Вложенные сценарии | Дизайнерская ветка, зависит от пункта 6 | Сохранение поведения сетки конструктора, закреплений таблиц и боковой навигации при отдельной визуальной приёмке. |
 
-- PR 48: 105 тестов canonical/publication и браузерная проверка административного preview. [CI](https://github.com/Surpd/my-island/actions/runs/45632109769).
-- PR 49: проверена проекция справочника SQLite. Полные результаты и ограничения обновляются в ветке PR.
-- PR 50: 39 тестов импорта, периодов, прав и матрицы. [Контракт](https://github.com/Surpd/my-island/blob/codex/journal-analytics/docs/JOURNAL_ANALYTICS.md).
-- PR 52: 19 целевых тестов диапазона и доступа. [Контракт](https://github.com/Surpd/my-island/blob/codex/teacher-range/docs/SCHEDULE_TEACHER_RANGE_CONTRACT.md).
-- PR 54: три интеграционных сценария первой серверной выборки дня. [Контракт](https://github.com/Surpd/my-island/blob/codex/operational-day/docs/SCHEDULE_ARCHITECTURE.md).
-- PR 55: две одновременные транзакции PostgreSQL 17.11 вернули одну квитанцию. SQLite проверил подмену параметров и изоляцию автора. [Контракт](https://github.com/Surpd/my-island/blob/codex/publication-receipt/docs/PUBLICATION_RECEIPTS.md).
+## Доказательства приёмки
 
- До отдельного решения владельца сохраняются действующие правила видимости и частичной публикации. Для аналитики остаются открытыми правила официальной нагрузки, эталон кабинетов и трактовка категорий контрольных работ. Полные формулировки приведены в [решениях владельца](plan.md).
+- **Опубликованная неделя (#48).** 105 backend-тестов и Chromium. Обе роли получают опубликованную редакцию, повреждённый указатель диагностируется.
+- **Справочник (#49).** 30 backend-тестов, SQLite и PostgreSQL 17, пять E2E. Конфликт версий, атомарность связанных правок и история полей.
+- **Диапазон преподавателя (#52).** Несколько недель, пропуск публикации, граница года, совместные занятия и фильтр личности.
+- **Квитанция публикации (#55).** 91 тест SQLite, 6 PostgreSQL 17.11, 2 Chromium. Повтор после потери ответа возвращает исходную квитанцию.
+- **Постоянная вкладка Sheets (#57).** 6 сценариев fake Google, 25 регрессий экспорта, два воркера PostgreSQL 17 и Chromium. Проверка на реальной тестовой книге остаётся открытой.
+- **Совместная работа (#59).** Оповещение о внешних правках, сохранение незавершённого ввода, разрешение конфликтов с учётом автора.
+- **Сегодня (#54).** Серверная выборка дня, частичная публикация, переход к записи и права проверены SQLite и Chromium.
+- **Нагрузка преподавателей (#53).** Роли ведущего и ответственного, длительность и окна, фильтры, покрытие и HTTP-права. Учёт нагрузки ограничен плановыми интервалами.
+- **Аналитика классов (#56).** Общие и параллельные интервалы, траектории, длительность дня и окна, ролевой HTTP-доступ.
+- **Журналы (#50).** 40 тестов. Один запрос сравнивает источники и периоды. Сверка со строками журнала, нулевые оценки, статусы, категории и итоги.
+- **История ячеек (#58).** 29 тестов, включая PostgreSQL 17.11. Повторная синхронизация не создаёт события, проверены очистка и восстановление нуля.
+- **Персональные виджеты (#60).** Серверный каталог и раскладки. Изоляция пользователей, конфликт с двух соединений PostgreSQL 17.11 и HTTP-права. Оформление ожидает выбора дизайна.
+
+Дополнительно проверена пара №50 и №58. На проверочной ревизии GitHub `5c9c36a` прошёл 41 тест API, фильтрации, импорта и периодов.
+
+## Архитектурные решения и границы приёмки
+
+- Контракт недели фиксирует источник, ревизию и покрытие. Черновик и план по шаблону самостоятельны. Действующие ограничения для школьных ролей сохраняются.
+- Квитанция и архив публикации записываются в одной транзакции. Доставка в Sheets имеет свою очередь, версию и статус. Для ручной проверки внешней интеграции нужна выделенная тестовая книга. У одновременной ручной правки управляемых ячеек в Google есть ограничение между чтением и записью.
+- Для справочника и личных настроек обновление принимает ожидаемую ревизию. Старая версия формы учитывается в порядке выпуска. Для конкурентных изменений использовался отдельный PostgreSQL 17, локальные сценарии также проверялись на SQLite.
+- Аналитика расписания описывает плановые занятия. Фактическое проведение требует отдельного источника. Для официальной нагрузки остаются открыты школьные правила совместного преподавания и ответственности. Кабинеты без подтверждённого каталога и классификацию контрольных работ раскрываем с указанием доступного покрытия.
+- История журнала отсчитывается от включения миграции. Дата работы, дата обнаружения изменения при импорте и неизвестное фактическое время ввода имеют разный смысл.
+- Пункты 6 и 11 относятся к [отдельному дизайнерскому PR №51](https://github.com/Surpd/my-island/pull/51). Серверные разделы готовы к независимой проверке. Окончательная компоновка экранов, адаптивное перемещение виджетов и визуальная приёмка ждут выбора направления.
+- Разрешение на выпуск запрашивается отдельно. До выпуска проверяются полная связка зависимостей, порядок миграций 054–058, совместимость открытых клиентов и условия отката. [Вопросы владельца](plan.md) и [путь публикации проекта](https://github.com/Surpd/my-island/blob/main/.project-identity.json).
