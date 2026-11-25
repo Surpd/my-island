@@ -108,6 +108,22 @@ class PublishedWeekSheetsTests(TestCase):
             return dict(self.database.execute(conn, """SELECT j.*,b.sheet_id FROM published_week_sheet_jobs j
                 JOIN published_week_sheet_bindings b USING(target_id,week_start) WHERE publication_id=?""", (publication["publication_id"],)).fetchone())
 
+    def test_retries_google_readback_with_integer_rgb_channels(self):
+        first = self.start()
+        self.client.after_apply = True
+        self.tick(100)
+        self.assertEqual(self.job(first)["state"], "retry")
+        sid = self.job(first)["sheet_id"]
+        heading = self.client.rows[sid][0]["values"][0]["userEnteredFormat"]["textFormat"]
+        self.assertEqual(heading.pop("foregroundColor"), {"red": 1.0, "green": 1.0, "blue": 1.0})
+        heading["foregroundColorStyle"] = {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
+        lesson = self.client.rows[sid][2]["values"][1]["userEnteredFormat"]["textFormat"]
+        self.assertEqual(lesson.pop("foregroundColor"), {"red": 0.0, "green": 0.0, "blue": 0.0})
+        lesson["foregroundColorStyle"] = {"rgbColor": {}}
+        self.tick(105)
+        self.assertEqual(self.job(first)["state"], "delivered")
+        self.assertEqual(len(self.client.history), 1)
+
     def test_lost_response_retry_and_republish_preserve_gid_user_tab_and_cells(self):
         first = self.start()
         self.assertTrue(first["sheet_delivery_queued"])
