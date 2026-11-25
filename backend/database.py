@@ -1071,6 +1071,8 @@ class Database:
             connection.execute(
                 "INSERT OR IGNORE INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_at) SELECT id, identity_id, 'confirmed', 'legacy_backfill', 'users.identity_id', created_at FROM users WHERE identity_id IS NOT NULL"
             )
+            from backend.services.directory_revisions import initialize_sqlite
+            initialize_sqlite(connection)
         from backend.services.schedule_activities import seed_activities
         seed_activities(self)
 
@@ -1916,7 +1918,7 @@ class Database:
         with self.connection() as connection:
             identities = self.execute(
                 connection,
-                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
+                f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note, i.revision FROM identities i WHERE {' AND '.join(clauses)} ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
                 params,
             ).fetchall()
             result: list[dict[str, Any]] = []
@@ -2123,7 +2125,7 @@ class Database:
                 dict(row)
                 for row in self.execute(
                     connection,
-                    f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note "
+                    f"SELECT i.id, i.kind, i.display_name, i.class_name, i.status, i.origin, i.source_ref, i.admin_note, i.revision "
                     f"FROM identities i WHERE {' AND '.join(clauses)} "
                     "ORDER BY CASE WHEN i.kind = 'student' THEN 0 ELSE 1 END, i.display_name",
                     tuple(params),
@@ -3072,7 +3074,7 @@ class Database:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
+                """SELECT g.id, g.revision, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
                           g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref, g.admin_note,
                           (SELECT ta.teacher_identity_id FROM teacher_assignments ta WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE ORDER BY ta.id DESC LIMIT 1) AS default_teacher_identity_id,
                           (SELECT ti.display_name FROM teacher_assignments ta JOIN identities ti ON ti.id = ta.teacher_identity_id WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE AND ti.status = 'active' ORDER BY ta.id DESC LIMIT 1) AS default_teacher_name,
@@ -3146,7 +3148,7 @@ class Database:
         with self.connection() as connection:
             rows = self.execute(
                 connection,
-                """SELECT g.id, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
+                """SELECT g.id, g.revision, g.name, g.display_name, g.group_type, g.role, g.semantic_dimension, g.subject, g.base_class_name,
                           g.subject_subgroup, g.exam_track, g.provenance_source, g.provenance_ref, g.admin_note,
                           (SELECT ta.teacher_identity_id FROM teacher_assignments ta WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE ORDER BY ta.id DESC LIMIT 1) AS default_teacher_identity_id,
                           (SELECT ti.display_name FROM teacher_assignments ta JOIN identities ti ON ti.id = ta.teacher_identity_id WHERE ta.group_id = g.id AND ta.subject = COALESCE(g.subject, '') AND ta.source = 'admin_override' AND ta.active IS TRUE AND ti.status = 'active' ORDER BY ta.id DESC LIMIT 1) AS default_teacher_name,

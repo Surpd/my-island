@@ -21,6 +21,7 @@ from uuid import UUID
 from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
 
+from backend.services.directory_revisions import directory_edit, directory_history
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
 from backend.services.auth import AuthError, resolve_auth
@@ -131,6 +132,7 @@ class GroupPayload(BaseModel):
 
 
 class MembershipPayload(BaseModel):
+    expected_revision: int | None = None
     group_id: str
     identity_id: str
     source: str = "admin_override"
@@ -139,6 +141,7 @@ class MembershipPayload(BaseModel):
 
 
 class MembershipTransferPayload(BaseModel):
+    expected_revision: int | None = None
     identity_id: str
     from_group_id: str | None = None
     to_group_id: str | None = None
@@ -146,6 +149,7 @@ class MembershipTransferPayload(BaseModel):
 
 
 class ArchiveGroupPayload(BaseModel):
+    expected_revision: int | None = None
     confirm_used: bool = False
 
 
@@ -164,6 +168,7 @@ class PreviewPayload(BaseModel):
 
 
 class MembershipOverridePayload(BaseModel):
+    expected_revision: int | None = None
     identity_id: str
     group_id: str
     member_role: str = "student"
@@ -172,6 +177,7 @@ class MembershipOverridePayload(BaseModel):
 
 
 class TeacherAssignmentPayload(BaseModel):
+    expected_revision: int | None = None
     teacher_identity_id: str
     group_id: str | None = None
     assignment_id: str | None = None
@@ -1016,17 +1022,18 @@ def create_router(database: Database) -> APIRouter:
     def update_admin_person(identity_id: str, payload: dict, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        try:
-            allowed = {"display_name", "class_name", "status", "subjects", "comment"}
-            if set(payload) - allowed:
-                raise ValueError("Unsupported person fields were supplied")
-            person = database.update_admin_identity(identity_id, payload, actor["id"])
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        if not person:
-            raise HTTPException(status_code=404, detail="Person was not found")
-        person_data = dict(person)
-        return {"id": person_data["id"], "kind": person_data["kind"], "display_name": person_data["display_name"], "class_name": person_data["class_name"], "status": person_data["status"], "subjects": database.list_teacher_subjects(identity_id) if person_data["kind"] == "teacher" else [], "comment": person_data.get("admin_note")}
+        with directory_edit(database, "identities", identity_id, payload.pop("expected_revision", None), actor["id"]) as edit_db:
+            try:
+                allowed = {"display_name", "class_name", "status", "subjects", "comment"}
+                if set(payload) - allowed:
+                    raise ValueError("Unsupported person fields were supplied")
+                person = edit_db.update_admin_identity(identity_id, payload, actor["id"])
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            if not person:
+                raise HTTPException(status_code=404, detail="Person was not found")
+            person_data = dict(person)
+            return {"revision": edit_db.get_identity(identity_id)["revision"], "id": person_data["id"], "kind": person_data["kind"], "display_name": person_data["display_name"], "class_name": person_data["class_name"], "status": person_data["status"], "subjects": edit_db.list_teacher_subjects(identity_id) if person_data["kind"] == "teacher" else [], "comment": person_data.get("admin_note")}
 
     @router.get("/admin/overview")
     def admin_overview(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1162,22 +1169,24 @@ def create_router(database: Database) -> APIRouter:
     def archive_group(group_id: str, payload: ArchiveGroupPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        try:
-            group = database.archive_admin_group(group_id, actor["id"], confirm_used=payload.confirm_used)
-        except ValueError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        return {"id": str(group["id"]), "archived": True}
+        with directory_edit(database, "groups", group_id, payload.expected_revision, actor["id"]) as edit_db:
+            try:
+                group = edit_db.archive_admin_group(group_id, actor["id"], confirm_used=payload.confirm_used)
+            except ValueError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if not group:
+                raise HTTPException(status_code=404, detail="Group was not found")
+            return {"revision": edit_db.get_group(group_id)["revision"], "id": str(group["id"]), "archived": True}
 
     @router.post("/admin/groups/{group_id}/restore")
-    def restore_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def restore_group(group_id: str, payload: ArchiveGroupPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        group = database.restore_admin_group(group_id, actor["id"])
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        return {"id": str(group["id"]), "archived": False}
+        with directory_edit(database, "groups", group_id, payload.expected_revision, actor["id"]) as edit_db:
+            group = edit_db.restore_admin_group(group_id, actor["id"])
+            if not group:
+                raise HTTPException(status_code=404, detail="Group was not found")
+            return {"revision": edit_db.get_group(group_id)["revision"], "id": str(group["id"]), "archived": False}
 
     @router.get("/admin/groups/{group_id}")
     def admin_group_detail(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -1187,6 +1196,11 @@ def create_router(database: Database) -> APIRouter:
         if not group:
             raise HTTPException(status_code=404, detail="Group was not found")
         return group
+
+    @router.get("/admin/directory/history/{entity_type}/{entity_id}")
+    def edit_history(entity_type: str, entity_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return directory_history(database, entity_type, entity_id)
 
     @router.get("/admin/audit")
     def admin_audit(limit: int = 50, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
@@ -2483,94 +2497,99 @@ def create_router(database: Database) -> APIRouter:
     def update_admin_group(group_id: str, payload: dict, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        try:
-            allowed = {"name", "display_name", "group_type", "subject", "base_class_name", "subject_subgroup", "exam_track", "default_teacher_identity_id", "comment"}
-            if set(payload) - allowed:
-                raise ValueError("Unsupported group fields were supplied")
-            group = database.update_admin_group(group_id, payload, actor["id"])
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        group_data = dict(group)
-        return {**group_data, "comment": group_data.get("admin_note"), "active": bool(group_data.get("canonical"))}
+        with directory_edit(database, "groups", group_id, payload.pop("expected_revision", None), actor["id"]) as edit_db:
+            try:
+                allowed = {"name", "display_name", "group_type", "subject", "base_class_name", "subject_subgroup", "exam_track", "default_teacher_identity_id", "comment"}
+                if set(payload) - allowed:
+                    raise ValueError("Unsupported group fields were supplied")
+                group = edit_db.update_admin_group(group_id, payload, actor["id"])
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            if not group:
+                raise HTTPException(status_code=404, detail="Group was not found")
+            group_data = dict(group)
+            return {**group_data, "comment": group_data.get("admin_note"), "active": bool(group_data.get("canonical"))}
 
     @router.post("/admin/memberships/transfer")
     def transfer_student_membership(payload: MembershipTransferPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        try:
-            result = database.update_student_memberships(payload.identity_id, payload.from_group_id, payload.to_group_id, actor["id"], payload.reason)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return result
+        with directory_edit(database, "identities", payload.identity_id, payload.expected_revision, actor["id"]) as edit_db:
+            try:
+                result = edit_db.update_student_memberships(payload.identity_id, payload.from_group_id, payload.to_group_id, actor["id"], payload.reason)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {**result, "revision": edit_db.get_identity(payload.identity_id)["revision"]}
 
     @router.post("/admin/memberships")
     def create_student_membership(payload: MembershipPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        try:
-            membership = add_membership(database, payload.group_id, payload.identity_id, "admin_override", payload.member_role, payload.source_ref or "admin_editor", actor["id"])
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": membership["id"], "group_id": membership["group_id"], "identity_id": membership["identity_id"], "member_role": membership["member_role"], "active": membership["active"]}
+        with directory_edit(database, "identities", payload.identity_id, payload.expected_revision, actor["id"]) as edit_db:
+            try:
+                membership = add_membership(edit_db, payload.group_id, payload.identity_id, "admin_override", payload.member_role, payload.source_ref or "admin_editor", actor["id"])
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"revision": edit_db.get_identity(payload.identity_id)["revision"], "id": membership["id"], "group_id": membership["group_id"], "identity_id": membership["identity_id"], "member_role": membership["member_role"], "active": membership["active"]}
 
     @router.post("/admin/membership-overrides")
     def create_membership_override(payload: MembershipOverridePayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        if payload.member_role != "student" or payload.action not in {"include", "exclude"} or not payload.reason.strip():
-            raise HTTPException(status_code=400, detail="A student membership action and reason are required")
-        try:
-            result = database.update_student_memberships(payload.identity_id, None if payload.action == "include" else payload.group_id, payload.group_id if payload.action == "include" else None, actor["id"], payload.reason)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"identity_id": result["identity_id"], "group_id": payload.group_id, "action": payload.action, "active": True}
+        with directory_edit(database, "identities", payload.identity_id, payload.expected_revision, actor["id"]) as edit_db:
+            if payload.member_role != "student" or payload.action not in {"include", "exclude"} or not payload.reason.strip():
+                raise HTTPException(status_code=400, detail="A student membership action and reason are required")
+            try:
+                result = edit_db.update_student_memberships(payload.identity_id, None if payload.action == "include" else payload.group_id, payload.group_id if payload.action == "include" else None, actor["id"], payload.reason)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"identity_id": result["identity_id"], "group_id": payload.group_id, "action": payload.action, "active": True}
 
     @router.post("/admin/teacher-assignments")
     def create_teacher_assignment(payload: TeacherAssignmentPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        try:
-            if payload.grade_level and not database.teacher_grade_assignment_schema_ready():
-                raise HTTPException(status_code=409, detail="Grade-wide teacher assignments require migration 036")
-            if payload.assignment_id:
-                if payload.active and payload.group_id and not payload.grade_level:
-                    dimensions = {name: getattr(payload, name) for name in ("base_class_name", "subject_subgroup", "classroom_course_id", "exam_track") if name in payload.model_fields_set}
-                    item = database.replace_teacher_assignment(payload.assignment_id, payload.teacher_identity_id,
-                        payload.group_id, payload.subject, actor["id"], **dimensions)
-                elif payload.active and payload.grade_level and not payload.group_id:
+        with directory_edit(database, "identities", payload.teacher_identity_id, payload.expected_revision, actor["id"]) as edit_db:
+            try:
+                if payload.grade_level and not edit_db.teacher_grade_assignment_schema_ready():
+                    raise HTTPException(status_code=409, detail="Grade-wide teacher assignments require migration 036")
+                if payload.assignment_id:
+                    if payload.active and payload.group_id and not payload.grade_level:
+                        dimensions = {name: getattr(payload, name) for name in ("base_class_name", "subject_subgroup", "classroom_course_id", "exam_track") if name in payload.model_fields_set}
+                        item = edit_db.replace_teacher_assignment(payload.assignment_id, payload.teacher_identity_id,
+                            payload.group_id, payload.subject, actor["id"], **dimensions)
+                    elif payload.active and payload.grade_level and not payload.group_id:
+                        dimensions = {name: getattr(payload, name) for name in ("exam_track", "classroom_course_id") if name in payload.model_fields_set}
+                        item = edit_db.replace_teacher_grade_assignment(payload.assignment_id, payload.teacher_identity_id,
+                            payload.grade_level, payload.subject, actor["id"], **dimensions)
+                    elif not payload.active and not payload.group_id and not payload.grade_level:
+                        item = edit_db.deactivate_teacher_assignment(payload.assignment_id, payload.teacher_identity_id, actor["id"])
+                    else:
+                        raise ValueError("Assignment update requires assignment_id with either a canonical group or active=false")
+                    if not item:
+                        raise HTTPException(status_code=404, detail="Teacher assignment was not found")
+                    return {"revision": edit_db.get_identity(payload.teacher_identity_id)["revision"], "id": str(item["id"]), "active": bool(item["active"])}
+                if bool(payload.group_id) == bool(payload.grade_level):
+                    raise ValueError("Provide exactly one of group_id or grade_level")
+                if payload.grade_level:
                     dimensions = {name: getattr(payload, name) for name in ("exam_track", "classroom_course_id") if name in payload.model_fields_set}
-                    item = database.replace_teacher_grade_assignment(payload.assignment_id, payload.teacher_identity_id,
-                        payload.grade_level, payload.subject, actor["id"], **dimensions)
-                elif not payload.active and not payload.group_id and not payload.grade_level:
-                    item = database.deactivate_teacher_assignment(payload.assignment_id, payload.teacher_identity_id, actor["id"])
-                else:
-                    raise ValueError("Assignment update requires assignment_id with either a canonical group or active=false")
-                if not item:
-                    raise HTTPException(status_code=404, detail="Teacher assignment was not found")
-                return {"id": str(item["id"]), "active": bool(item["active"])}
-            if bool(payload.group_id) == bool(payload.grade_level):
-                raise ValueError("Provide exactly one of group_id or grade_level")
-            if payload.grade_level:
-                dimensions = {name: getattr(payload, name) for name in ("exam_track", "classroom_course_id") if name in payload.model_fields_set}
-                items = database.set_teacher_grade_assignments(payload.teacher_identity_id, payload.grade_level, payload.subject, payload.active, actor["id"], **dimensions)
-                return {"items": [{"id": item["id"], "group_id": None, "grade_level": item["grade_level"], "active": item["active"]} for item in items]}
-            item = assign_teacher(
-                database,
-                payload.teacher_identity_id,
-                payload.group_id,
-                payload.subject,
-                payload.active,
-                actor["id"],
-                base_class_name=payload.base_class_name,
-                subject_subgroup=payload.subject_subgroup,
-                classroom_course_id=payload.classroom_course_id,
-                exam_track=payload.exam_track,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": item["id"], "active": item["active"]}
+                    items = edit_db.set_teacher_grade_assignments(payload.teacher_identity_id, payload.grade_level, payload.subject, payload.active, actor["id"], **dimensions)
+                    return {"revision": edit_db.get_identity(payload.teacher_identity_id)["revision"], "items": [{"id": item["id"], "group_id": None, "grade_level": item["grade_level"], "active": item["active"]} for item in items]}
+                item = assign_teacher(
+                    edit_db,
+                    payload.teacher_identity_id,
+                    payload.group_id,
+                    payload.subject,
+                    payload.active,
+                    actor["id"],
+                    base_class_name=payload.base_class_name,
+                    subject_subgroup=payload.subject_subgroup,
+                    classroom_course_id=payload.classroom_course_id,
+                    exam_track=payload.exam_track,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"revision": edit_db.get_identity(payload.teacher_identity_id)["revision"], "id": item["id"], "active": item["active"]}
 
     @router.post("/admin/homeroom-assignments")
     def create_homeroom_assignment(payload: HomeroomAssignmentPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
