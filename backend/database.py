@@ -2743,7 +2743,8 @@ class Database:
             if "groups" not in tables:
                 return None
             archived_select = "archived_at" if "archived_at" in tables["groups"] else "NULL AS archived_at"
-            group = self.execute(connection, f"SELECT id, canonical, {archived_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
+            revision_select = "revision" if "revision" in tables["groups"] else "NULL AS revision"
+            group = self.execute(connection, f"SELECT id, canonical, {archived_select}, {revision_select} FROM groups WHERE id = ?", (group_id,)).fetchone()
             if not group:
                 return None
 
@@ -2860,7 +2861,7 @@ class Database:
                 if n:
                     unknown_references.append({"table": table, "count": n})
             all_counts = sum(counts.values()) + sum(item["count"] for item in unknown_references)
-            return {"group_id": gid, "archived": bool(group["archived_at"]), "counts": counts,
+            return {"group_id": gid, "revision": group["revision"], "archived": bool(group["archived_at"]), "counts": counts,
                     "unknown_references": unknown_references,
                     "safe_to_archive": all_counts == 0 and not unknown_references}
 
@@ -2955,9 +2956,15 @@ class Database:
                         cleaned_subjects.setdefault(cleaned.casefold(), cleaned)
             normalized_subjects = sorted(cleaned_subjects.values(), key=str.casefold)
             if subjects_supplied:
-                self.execute(connection, "UPDATE teacher_subjects SET active = FALSE WHERE teacher_identity_id = ? AND source = 'admin_override' AND active IS TRUE", (identity_id,))
-                existing_subjects = self.execute(connection, "SELECT subject FROM teacher_subjects WHERE teacher_identity_id = ? AND active IS TRUE", (identity_id,)).fetchall()
-                existing_keys = {" ".join(str(row["subject"]).split()).casefold() for row in existing_subjects}
+                active_subjects = self.execute(connection, """SELECT id,subject,source FROM teacher_subjects
+                    WHERE teacher_identity_id=? AND active IS TRUE""", (identity_id,)).fetchall()
+                existing_keys = set()
+                for row in active_subjects:
+                    key = " ".join(str(row["subject"]).split()).casefold()
+                    if row["source"] == "admin_override" and cleaned_subjects.get(key) != row["subject"]:
+                        self.execute(connection, "UPDATE teacher_subjects SET active=FALSE WHERE id=?", (row["id"],))
+                    else:
+                        existing_keys.add(key)
                 for subject in normalized_subjects:
                     if subject.casefold() in existing_keys:
                         continue

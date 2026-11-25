@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from backend.config import get_settings
-from backend.services.directory_revisions import directory_edit, directory_history
+from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction
 from backend.database import Database
 from backend.handlers.api import (
     GroupPayload, IdentityPayload, MembershipTransferPayload,
@@ -198,26 +198,33 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
     def add_group(payload: GroupPayload, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        try:
-            group = create_group(database, payload.name, payload.group_type,
-                display_name=payload.display_name, subject=payload.subject,
-                base_class_name=payload.base_class_name, subject_subgroup=payload.subject_subgroup,
-                exam_track=payload.exam_track, default_teacher_identity_id=payload.default_teacher_identity_id,
-                comment=payload.comment, actor_user_id=actor_id)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": str(group["id"])}
+        with directory_transaction(database, actor_id) as edit_db:
+            try:
+                group = create_group(edit_db, payload.name, payload.group_type,
+                    display_name=payload.display_name, subject=payload.subject,
+                    base_class_name=payload.base_class_name, subject_subgroup=payload.subject_subgroup,
+                    exam_track=payload.exam_track, default_teacher_identity_id=payload.default_teacher_identity_id,
+                    comment=payload.comment, actor_user_id=actor_id)
+                add_group_members(edit_db, group["id"], payload.add_members, actor_id)
+                group = edit_db.get_group(group["id"])
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"id": str(group["id"]), "revision": group["revision"]}
 
     @router.patch("/groups/{group_id}")
     def edit_group(group_id: str, payload: dict, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
         with directory_edit(database, "groups", group_id, payload.pop("expected_revision", None), actor_id) as edit_db:
+            members = payload.pop("add_members", [])
             allowed = {"name", "display_name", "group_type", "subject", "base_class_name", "subject_subgroup", "exam_track", "default_teacher_identity_id", "comment"}
             if set(payload) - allowed:
                 raise HTTPException(status_code=400, detail="Unsupported group fields were supplied")
             try:
-                group = edit_db.update_admin_group(group_id, payload, actor_id)
+                if payload or not members:
+                    edit_db.update_admin_group(group_id, payload, actor_id)
+                add_group_members(edit_db, group_id, members, actor_id)
+                group = edit_db.get_group(group_id)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
             if not group:
@@ -228,12 +235,13 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
     def add_identity(payload: IdentityPayload, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        try:
-            identity = create_identity(database, payload.display_name, payload.class_name,
-                payload.kind, actor_id, payload.subjects, payload.comment, payload.status)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": str(identity["id"])}
+        with directory_transaction(database, actor_id) as edit_db:
+            try:
+                identity = create_identity(edit_db, payload.display_name, payload.class_name,
+                    payload.kind, actor_id, payload.subjects, payload.comment, payload.status)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"id": str(identity["id"]), "revision": identity["revision"]}
 
     @router.patch("/people/{identity_id}")
     def edit_identity(identity_id: str, payload: dict, x_school_admin_session: str | None = Header(default=None)):

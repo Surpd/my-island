@@ -233,7 +233,7 @@ async function schoolApi<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${schoolPath}`, { ...init, headers, credentials: 'omit' });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    const error = new Error(String(body.detail || `Запрос к школьной базе завершился ошибкой (${response.status}).`)) as ApiError;
+    const error = new Error(String((typeof body.detail === 'object' && body.detail !== null ? (body.detail as Record<string, unknown>).message : body.detail) || `Запрос к школьной базе завершился ошибкой (${response.status}).`)) as ApiError;
     error.status = response.status;
     throw error;
   }

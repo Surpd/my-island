@@ -60,3 +60,6 @@ CREATE OR REPLACE TRIGGER directory_revision AFTER INSERT OR UPDATE OR DELETE ON
 FOR EACH ROW EXECUTE FUNCTION public.directory_track_revision('teacher_identity_id','assignments');
 CREATE OR REPLACE TRIGGER directory_revision AFTER INSERT OR UPDATE OR DELETE ON public.teacher_subjects
 FOR EACH ROW EXECUTE FUNCTION public.directory_track_revision('teacher_identity_id','subjects');
+
+GRANT EXECUTE ON FUNCTION public.directory_bump_revision(text,text[],jsonb) TO service_role;
+GRANT INSERT, SELECT ON public.directory_edit_history TO service_role;
