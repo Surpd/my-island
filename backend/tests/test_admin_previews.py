@@ -85,7 +85,7 @@ class AdminPreviewRoutesTests(unittest.TestCase):
         response = self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers=self.headers)
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
-        self.assertEqual(payload["teachers"][0]["scheduled_minutes"], 45)
+        self.assertEqual(payload["teachers"][0]["observed_scheduled_minutes"], 45)
         self.assertIn(self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers={"X-Dev-Auth": "student:1"}).status_code, {401, 403})
 
     def test_preview_people_directory_search_is_unicode_case_insensitive(self):

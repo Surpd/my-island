@@ -8,6 +8,8 @@ on:
       - 'backend/tests/test_canonical_schedule.py'
       - 'backend/tests/test_constructor_publication.py'
       - 'backend/services/teacher_load_analytics.py'
+      - 'backend/services/workload_intervals.py'
+      - 'backend/tests/test_teacher_workload_regressions.py'
       - 'backend/tests/test_admin_previews.py'
       - '.github/workflows/published-week.yml'
 permissions:
@@ -22,4 +24,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
-      - run: python -m unittest backend.tests.test_constructor_publication backend.tests.test_canonical_schedule backend.tests.test_admin_previews -q
+      - run: python -m unittest backend.tests.test_constructor_publication backend.tests.test_canonical_schedule backend.tests.test_admin_previews backend.tests.test_teacher_workload_regressions -q

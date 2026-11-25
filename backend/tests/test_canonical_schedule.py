@@ -253,9 +253,9 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         result = teacher_load_analytics(self.database, "2026-09-07", "2026-09-13")
         summary = result["teachers"][0]
         self.assertEqual(result["status"], "published")
-        self.assertEqual(summary["scheduled_minutes"], 45)
-        self.assertEqual(summary["lead_minutes"], 45)
-        self.assertEqual(summary["joint_minutes"], 45)
+        self.assertEqual(summary["observed_scheduled_minutes"], 45)
+        self.assertEqual(summary["observed_lead_minutes"], 45)
+        self.assertEqual(summary["observed_joint_minutes"], 45)
         self.assertEqual(summary["items"][0]["duration_minutes"], 45)
         self.assertEqual(summary["items"][0]["provenance"]["joint_activity_id"], "joint-1")
 
@@ -270,27 +270,27 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         materialize_effective_week(self.database, artifact["version_id"], "2026-09-07")
 
         summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
-        self.assertEqual(summary["lead_minutes"], 0)
-        self.assertEqual(summary["responsible_minutes"], 45)
+        self.assertEqual(summary["observed_lead_minutes"], 0)
+        self.assertEqual(summary["observed_responsible_minutes"], 45)
         self.assertEqual(summary["items"][0]["role"], "responsible")
 
     def test_teacher_load_missing_period_uses_null_totals(self):
         summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
         self.assertEqual(summary["coverage_status"], "unavailable")
-        self.assertIsNone(summary["scheduled_minutes"])
-        self.assertIsNone(summary["lesson_count"])
-        self.assertIsNone(summary["lead_minutes"])
+        self.assertIsNone(summary["observed_scheduled_minutes"])
+        self.assertIsNone(summary["observed_lesson_count"])
+        self.assertIsNone(summary["observed_lead_minutes"])
 
-    def test_teacher_load_complete_known_zero_is_not_null(self):
+    def test_teacher_load_legacy_cancelled_zero_is_observed(self):
         import_canonical_artifact(self.database, self.artifact())
         materialize_effective_week(self.database, self.version_id, "2026-09-07", patches=[{
             "block_key": self.block_key,
             "change_kind": "cancelled",
         }], overlay_source_snapshot_id="zero-week-snapshot")
         summary = teacher_load_analytics(self.database, "2026-09-07")["teachers"][0]
-        self.assertEqual(summary["coverage_status"], "complete")
-        self.assertEqual(summary["scheduled_minutes"], 0)
-        self.assertEqual(summary["lesson_count"], 0)
+        self.assertEqual(summary["coverage_status"], "partial")
+        self.assertEqual(summary["observed_scheduled_minutes"], 0)
+        self.assertEqual(summary["observed_lesson_count"], 0)
 
     def test_teacher_load_partial_period_exposes_observed_values(self):
         import_canonical_artifact(self.database, self.artifact())
