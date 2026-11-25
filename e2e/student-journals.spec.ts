@@ -340,14 +340,16 @@ for (const width of [390, 1440]) test(`Campus reads the twice-imported synthetic
   await expect(detail.locator('.student-assessment')).toHaveCount(13);
   await page.goto('/admin/journals?role=admin');
   await page.getByRole('button', { name: /Биология/ }).first().click();
-  const list = page.locator('.journal-work-list');
-  await expect(list.locator('details')).toHaveCount(8);
-  await list.locator('summary').first().click();
-  await expect(list.locator('details').first()).toContainText('Тестовый ученик');
-  await list.scrollIntoViewIfNeeded();
+  await page.getByRole('tab', { name: 'По работам', exact: true }).click();
+  const list = page.getByRole('navigation', { name: 'Работы', exact: true });
+  await expect(list.getByRole('button')).toHaveCount(13);
+  await list.getByRole('button').filter({ has: page.getByText('Проверочная', { exact: true }) }).click();
+  const work = page.locator('.modern-journal__work');
+  await expect(work).toContainText('Тестовый ученик');
+  await expect(work).toContainText('Другой участник');
+  await expect(work).toContainText('вес 2');
+  await work.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath(`admin-work-${width}.png`) });
-  await list.getByRole('button', { name: /Показать ещё/ }).click();
-  await expect(list.locator('details')).toHaveCount(13);
 });
 
 test('empty second term keeps first-term results behind explicit selection', async ({ page }) => {
