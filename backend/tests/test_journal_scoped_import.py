@@ -53,6 +53,22 @@ class ScopedImportTests(unittest.TestCase):
         counts = {row["change_kind"]: row["cell_count"] for row in self.db.journal_cell_activity(source_id)["items"]}
         self.assertEqual(counts, {"added": 3, "changed": 1, "removed": 1})
 
+    def test_failed_refresh_does_not_leave_cell_activity_or_replace_last_snapshot(self):
+        self.source(1, "Алгебра")
+        source_id = self.db.journal_status()[0]["id"]
+        baseline = self.db.journal_detail(source_id)
+        activity = self.db.journal_cell_activity(source_id)
+        changed = [row.copy() for row in FIRST]
+        changed[-1][1] = 0
+        with patch.object(self.db, "_infer_journal_groups", side_effect=RuntimeError("synthetic write failure")):
+            with self.assertRaisesRegex(RuntimeError, "synthetic write failure"):
+                self.source(1, "Алгебра", changed)
+        self.assertEqual(self.db.journal_cell_activity(source_id), activity)
+        self.assertEqual(self.db.journal_detail(source_id), baseline)
+        self.source(1, "Алгебра", changed)
+        self.assertEqual({row["change_kind"] for row in self.db.journal_cell_activity(source_id)["items"]},
+                         {"added", "changed"})
+
     def refresh(self, **kwargs):
         return refresh_grade_journal(self.db, object(), 6, spreadsheet_id=BOOK, **kwargs)
 
