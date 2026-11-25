@@ -86,7 +86,7 @@ function standardPreview() {
       { field: 'room', label: 'Кабинет', impact: 'Меняется место проведения занятия.', before: '101', after: '203' },
     ] }],
     settings_changes: [{ field: 'grade_modes', label: 'Режимы дней по параллелям', impact: 'Меняется режим обучения учеников.', before: 'Обычный режим', after: '9 класс, Пн: Онлайн' }],
-    problems: [{ lesson_id: 'lesson-conflict', details: ['Конфликт преподавателя'] }],
+    problems: [{ lesson_id: changedAfter.id, details: ['Конфликт преподавателя: Преподаватель'] }],
     requires_explicit_problem_acknowledgement: true, has_semantic_changes: true,
   };
 }
@@ -99,20 +99,25 @@ test('compact template review keeps the footer visible and explains a stale conf
   await expect(dialog.getByText('Удалено', { exact: true })).toBeVisible();
   await expect(dialog.getByText('Изменено', { exact: true })).toBeVisible();
   await expect(dialog.getByText('Календарь', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('Конфликты', { exact: true })).toBeVisible();
+  const overlaps = dialog.locator('details').filter({ hasText: 'Эвристические совпадения времени · 1' });
+  await expect(overlaps.getByText('Конфликт преподавателя: Преподаватель')).toBeVisible();
   const addDetails = dialog.locator('details').filter({ hasText: 'Добавленные занятия · 1' });
   await expect(addDetails.locator('article')).toBeHidden();
   await addDetails.locator('summary').click();
   await expect(addDetails.getByText('Добавлено · Физика')).toBeVisible();
   const confirm = dialog.getByRole('button', { name: 'Подтвердить основным' });
   await expect(confirm).toBeDisabled();
-  await dialog.getByLabel('Я просмотрел проблемы и подтверждаю шаблон с ними.').check();
+  await dialog.getByLabel('Я просмотрел старые пометки и эвристические совпадения перед выбором основной ревизии.').check();
   await expect(confirm).toBeEnabled();
   const footerBox = await dialog.locator('footer').boundingBox();
   expect(footerBox).not.toBeNull();
   expect(footerBox!.y + footerBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   await page.screenshot({ path: resolve(output, 'compact-dialog-desktop.png'), fullPage: true });
+  const selection = page.waitForRequest(request =>
+    request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/select-primary'),
+  );
   await confirm.click();
+  expect((await selection).postDataJSON()).toMatchObject({ acknowledge_problems: true });
   await expect(dialog.getByRole('alert')).toContainText('Шаблон изменился с момента сравнения');
 });
 
