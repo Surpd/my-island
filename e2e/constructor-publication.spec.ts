@@ -125,6 +125,10 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
       return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
     }
+    if (path === '/api/admin/schedule/constructor/publication/publication-fixture/sheet-retry' && route.request().method() === 'POST') {
+      historyItems = historyItems.map(item => ({...item, sheet_delivery: {state: 'pending'}}));
+      return route.fulfill({json: {state: 'pending'}});
+    }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publications`) return route.fulfill({ json: { items: historyItems, heads: {} } });
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/preview` && route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as { scope_kind: 'template' | 'week'; week_start?: string };
@@ -140,7 +144,7 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       const publishedWeek = typeof publishPayload.week_start === 'string' ? publishPayload.week_start : '';
       const historyPreview = preview('history');
       historyItems = [{
-        id: 'publication-fixture', scope_kind: scope, scope_key: scope === 'week' ? `week:${publishedWeek}` : 'template',
+        id: 'publication-fixture', ...(scope === 'week' ? {sheet_delivery: {state: 'retry'}} : {}), scope_kind: scope, scope_key: scope === 'week' ? `week:${publishedWeek}` : 'template',
         created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
         runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
         diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
@@ -274,6 +278,10 @@ test('changing publication scope clears confirmation and publish uses the latest
   await page.locator('.constructor-draft-menu > summary').click();
   await page.getByRole('button', { name: 'История публикаций', exact: true }).click();
   const history = page.getByRole('dialog', { name: 'История публикаций' });
+  await expect(history.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
+  await expect(history.getByText(/Google Sheets · ожидает повторной попытки/)).toBeVisible();
+  await history.getByRole('button', {name: 'Повторить выгрузку'}).click();
+  await expect(history.getByText(/Google Sheets · ожидает выгрузки/)).toBeVisible();
   await expect(history.getByText(`Версия недели: ${PUBLISHED_ID}`)).toBeVisible();
 });
 

@@ -1,6 +1,7 @@
 """One owned worksheet per week. Render only the immutable, released lessons."""
 from __future__ import annotations
 
+from datetime import date
 import hashlib
 import json
 import os
@@ -9,7 +10,7 @@ import time
 from uuid import uuid4
 
 from backend.services.schedule_sheet_export import build_sheet_plan, column_name, freeze_week, sheets_requests
-from backend.services.schedule_sheet_publishing import TEST_EXPORT_TARGET, _spreadsheet_url, _target
+from backend.services.schedule_sheet_publishing import TEST_EXPORT_TARGET, _presentation_teacher_colors, _spreadsheet_url, _target
 
 
 SCHEMA = (
@@ -37,13 +38,16 @@ def enqueue(database, connection, week, publication_id):
     # OAuth, rendering and remote I/O happen only after the publication commits.
     target = os.getenv("GOOGLE_SCHEDULE_EXPORT_SPREADSHEET_ID", TEST_EXPORT_TARGET).strip()
     revision = database.execute(connection, "SELECT revision FROM schedule_publication_heads WHERE scope_key=?", ("week:" + week,)).fetchone()["revision"]
-    digest = hashlib.sha256(f"my-island:published:{target}:{week}".encode()).hexdigest()
-    sid = int(digest[:8], 16) % 2_000_000_000 + 1
+    sid = 1_850_000_000 + date.fromisoformat(week).toordinal()
     database.execute(connection, """INSERT INTO published_week_sheet_bindings(target_id,week_start,sheet_id) VALUES(?,?,?)
         ON CONFLICT(target_id,week_start) DO NOTHING""", (target, week, sid))
     groups = database.execute(connection, "SELECT id,name,display_name,group_type,base_class_name,subject,subject_subgroup,semantic_dimension FROM groups ORDER BY id").fetchall()
     teachers = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' ORDER BY id").fetchall()
     directory = {"groups": [dict(g) for g in groups], "teachers": [dict(t) for t in teachers]}
+    colors = _presentation_teacher_colors(database) or {}
+    for teacher in directory["teachers"]:
+        if str(teacher["id"]) in colors:
+            teacher["ui_color"] = colors[str(teacher["id"])]
     database.execute(connection, """INSERT INTO published_week_sheet_jobs(target_id,publication_id,week_start,head_revision,directory_json,state)
         VALUES(?,?,?,?,?,'pending') ON CONFLICT(target_id,publication_id) DO NOTHING""",
         (target, publication_id, week, revision, json.dumps(directory, ensure_ascii=False, default=str)))
