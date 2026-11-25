@@ -37,6 +37,22 @@ class ScopedImportTests(unittest.TestCase):
         return sync_journal_values(self.db, values, spreadsheet_id=BOOK, spreadsheet_title="Synthetic", grade=6,
                                    subject=title, sheet_title=title, sheet_id=tab_id)
 
+    def test_activity_only_tracks_observed_value_changes(self):
+        values = [row.copy() for row in FIRST]
+        values.append(["Second Fixture", 5])
+        self.source(11, "Алгебра", values)
+        source_id = self.db.journal_status()[0]["id"]
+        self.source(11, "Алгебра", values)
+        values[-2][1] = 0
+        self.source(11, "Алгебра", values)
+        values[-2][1] = ""
+        self.source(11, "Алгебра", values)
+        self.source(11, "Алгебра", values)
+        values[-2][1] = 0
+        self.source(11, "Алгебра", values)
+        counts = {row["change_kind"]: row["cell_count"] for row in self.db.journal_cell_activity(source_id)["items"]}
+        self.assertEqual(counts, {"added": 3, "changed": 1, "removed": 1})
+
     def refresh(self, **kwargs):
         return refresh_grade_journal(self.db, object(), 6, spreadsheet_id=BOOK, **kwargs)
 

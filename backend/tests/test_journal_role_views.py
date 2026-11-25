@@ -167,6 +167,9 @@ class JournalRoleViewTests(unittest.TestCase):
         path = f"/api/admin/journals/{source_id}/analytics"
         for role in ("student-auth", "teacher-auth"):
             self.assertEqual(self.client.get(path, headers={"X-Dev-Auth": role}).status_code, 403)
+        activity = f"/api/admin/journals/{source_id}/cell-activity"
+        self.assertEqual(self.client.get(activity, headers={"X-Dev-Auth": "teacher-auth"}).status_code, 403)
+        self.assertEqual(self.client.get(activity, headers=headers).json()["items"], [])
         self.assertEqual(self.client.get(path, headers=headers, params={"group_marker": "missing"}).status_code, 404)
         self.assertEqual(self.client.get(path, headers=headers, params={"start": "2027-01-01", "end": "2026-01-01"}).status_code, 422)
         with self.database.connection() as connection:
