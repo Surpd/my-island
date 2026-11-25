@@ -23,6 +23,7 @@ from psycopg import OperationalError as PostgresOperationalError
 
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
+from backend.services.personal_workspace import LayoutUpdate, read_layout, save_layout
 from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.admin import (
@@ -1597,6 +1598,24 @@ def create_router(database: Database) -> APIRouter:
         return {"week_start": monday, "manual_publication_active": bool(head),
                 "review_required": bool(head), "source_checked": False,
                 "automatic_application_enabled": False}
+
+    @router.get("/admin/workspace/layout")
+    def admin_workspace_layout(response: Response, init_data: str | None = None, x_dev_auth: str | None = Header(default=None),
+                              x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        user = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        response.headers["Cache-Control"] = "private, no-store"
+        return read_layout(database, user["id"], school_day()[0])
+
+    @router.put("/admin/workspace/layout")
+    def save_admin_workspace_layout(payload: LayoutUpdate, response: Response, init_data: str | None = None,
+                                   x_dev_auth: str | None = Header(default=None),
+                                   x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        user = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        response.headers["Cache-Control"] = "private, no-store"
+        saved, layout = save_layout(database, user["id"], payload, school_day()[0])
+        if not saved:
+            raise HTTPException(409, {"code": "layout_changed", "current": layout}, headers={"Cache-Control": "no-store"})
+        return layout
 
     @router.get("/admin/operations/day")
     def admin_operational_day(day: date | None = None, edition: str | None = None, record: str | None = None,
