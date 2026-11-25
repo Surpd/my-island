@@ -19,6 +19,7 @@ RELATIONS = {
     "memberships": ("identity_id", "memberships"),
     "membership_overrides": ("identity_id", "memberships"),
     "teacher_assignments": ("teacher_identity_id", "assignments"),
+    "homeroom_assignments": ("teacher_identity_id", "homeroom_assignments"),
     "teacher_subjects": ("teacher_identity_id", "subjects"),
 }
 
@@ -28,6 +29,8 @@ def initialize_history(connection):
         entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, revision INTEGER NOT NULL,
         changed_fields TEXT NOT NULL, actor_id TEXT, changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(entity_type,entity_id,revision))""")
+    if "field_values" not in {row[1] for row in connection.execute("PRAGMA table_info(directory_edit_history)")}:
+        connection.execute("ALTER TABLE directory_edit_history ADD COLUMN field_values TEXT NOT NULL DEFAULT '{}'")
 
 
 def initialize_sqlite(connection):
@@ -40,7 +43,13 @@ def initialize_sqlite(connection):
             connection.execute(f"ALTER TABLE {table} ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
         condition = " OR ".join(f"NEW.{f} IS NOT OLD.{f}" for f in fields)
         changed = " UNION ALL ".join(f"SELECT '{f}' AS field WHERE NEW.{f} IS NOT OLD.{f}" for f in fields)
-        bump = _sqlite_bump(table, "id=NEW.id", f"(SELECT json_group_array(field) FROM ({changed}))")
+        safe = [f for f in fields if f in {"kind", "status", "group_type", "canonical"}]
+        deltas = " UNION ALL ".join(
+            f"SELECT '{f}' AS field,json_object('before',OLD.{f},'after',NEW.{f}) AS delta WHERE NEW.{f} IS NOT OLD.{f}"
+            for f in safe)
+        values = f"(SELECT json_group_object(field,json(delta)) FROM ({deltas}))"
+        connection.execute(f"DROP TRIGGER IF EXISTS directory_{table}_revision")
+        bump = _sqlite_bump(table, "id=NEW.id", f"(SELECT json_group_array(field) FROM ({changed}))", values)
         connection.execute(f"""CREATE TRIGGER IF NOT EXISTS directory_{table}_revision AFTER UPDATE OF {','.join(fields)}
             ON {table} WHEN {condition} BEGIN {bump} END""")
 
@@ -52,18 +61,24 @@ def initialize_sqlite(connection):
                          if event == "UPDATE" else "")
             owners = [("identities", owner)]
             if table != "teacher_subjects":
-                owners.append(("groups", "group_id"))
+                owners.append(("groups", "class_group_id" if table == "homeroom_assignments" else "group_id"))
+            values = "'{}'"
+            if "active" in columns:
+                before = "OLD.active" if event != "INSERT" else "NULL"
+                after = "NEW.active" if event != "DELETE" else "NULL"
+                values = f"json_object('active',json_object('before',{before},'after',{after}))"
+            connection.execute(f"DROP TRIGGER IF EXISTS directory_{table}_{event}")
             body = ""
             for root, foreign_key in owners:
                 keys = ",".join(f"{ref}.{foreign_key}" for ref in refs)
-                body += _sqlite_bump(root, f"id IN ({keys})", f"json_array('{field}')")
+                body += _sqlite_bump(root, f"id IN ({keys})", f"json_array('{field}')", values)
             connection.execute(f"CREATE TRIGGER IF NOT EXISTS directory_{table}_{event} AFTER {event} ON {table}{condition} BEGIN {body} END")
 
 
-def _sqlite_bump(table, predicate, fields):
+def _sqlite_bump(table, predicate, fields, values):
     return f"""UPDATE {table} SET revision=revision+1 WHERE {predicate};
-        INSERT INTO directory_edit_history(entity_type,entity_id,revision,changed_fields,actor_id)
-        SELECT '{table}',CAST(id AS TEXT),revision,{fields},(SELECT actor_id FROM directory_edit_actor WHERE id=1)
+        INSERT INTO directory_edit_history(entity_type,entity_id,revision,changed_fields,field_values,actor_id)
+        SELECT '{table}',CAST(id AS TEXT),revision,{fields},{values},(SELECT actor_id FROM directory_edit_actor WHERE id=1)
         FROM {table} WHERE {predicate};"""
 
 
@@ -135,11 +150,16 @@ def directory_history(database, table, entity_id):
     if table not in ROOT_FIELDS:
         raise HTTPException(404, "Unknown directory entity")
     with database.connection() as connection:
-        rows = database.execute(connection, """SELECT revision,actor_id,changed_at,changed_fields
+        rows = database.execute(connection, """SELECT revision,actor_id,changed_at,changed_fields,field_values
             FROM directory_edit_history WHERE entity_type=? AND entity_id=?
             ORDER BY revision DESC LIMIT 100""", (table, str(entity_id))).fetchall()
-    return {"items": [{**dict(row), "changed_fields": json.loads(row["changed_fields"])
-                       if isinstance(row["changed_fields"], str) else row["changed_fields"]} for row in rows]}
+    items = [dict(row) for row in rows]
+    for item in items:
+        for key in ("changed_fields", "field_values"):
+            if isinstance(item[key], str):
+                item[key] = json.loads(item[key])
+    return {"items": items}
+
 
 def directory_version(database):
     """A token for exactly the directory rows, including inserts and removals."""

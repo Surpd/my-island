@@ -13,7 +13,11 @@ type Props = {
 };
 
 const equal = (left: unknown, right: unknown) => JSON.stringify(left ?? '') === JSON.stringify(right ?? '');
-const display = (value: unknown) => (Array.isArray(value) ? value.join(', ') : String(value ?? '')) || 'Пусто';
+function display(value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'Пусто';
+  if (Array.isArray(value)) return value.map(display).join(', ') || 'Пусто';
+  return typeof value === 'string' ? value : JSON.stringify(value) ?? 'Пусто';
+}
 
 export function DirectoryConflict({ api, historyPath, base, draft, remote, fields, apply }: Props) {
   const [choices, setChoices] = useState<Record<string, 'local' | 'remote'>>({});

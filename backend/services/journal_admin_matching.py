@@ -1,11 +1,13 @@
 """Admin previews and atomic creation/alias confirmation for journal rows."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hmac
 import json
 import re
 from typing import Any
 
+from backend.services.directory_revisions import check_revision, directory_transaction
 from backend.services.journal_matching import belongs_to_grade, normalized_name, preview_fingerprint, suggestion_reason
 
 
@@ -88,7 +90,7 @@ def creation_preview(database, connection, payload):
         or suggestion_reason(display_name, row['display_name'])]
     archive_filter = ' AND archived_at IS NULL' if database._group_archive_column_available(connection) else ''
     groups = [dict(row) for row in database.execute(connection,
-        "SELECT id,name,display_name,base_class_name FROM groups WHERE group_type='class' AND canonical IS TRUE" + archive_filter).fetchall()
+        "SELECT id,name,display_name,base_class_name,revision FROM groups WHERE group_type='class' AND canonical IS TRUE" + archive_filter).fetchall()
         if belongs_to_grade(dict(row, class_name=row['base_class_name'] or row['name']), int(payload['grade']))]
     if len(groups) != 1:
         raise ValueError('Базовый класс неоднозначен. Сначала проверьте канонические группы класса.')
@@ -105,7 +107,8 @@ def creation_preview(database, connection, payload):
 
 
 def create_student(database, payload: dict, actor_id=None, confirm=False):
-    with database.connection() as connection:
+    scope = directory_transaction(database, actor_id) if confirm else nullcontext(database)
+    with scope as database, database.connection() as connection:
         if confirm:
             database._journal_mapping_lock(connection, payload['spreadsheet_id'])
             # Serialize journal-assisted People creation across workbooks as well.
@@ -115,6 +118,7 @@ def create_student(database, payload: dict, actor_id=None, confirm=False):
         if confirm:
             if not preview['can_confirm'] or not hmac.compare_digest(payload.get('preview_token',''), preview['preview_token']):
                 raise ValueError('Найден возможный дубль или данные изменились. Повторите предпросмотр.')
+            check_revision(database, 'groups', preview['_group']['id'], preview['_group']['revision'])
             identity = database.execute(connection, """INSERT INTO identities(kind,display_name,class_name,status,origin,source_ref,admin_note)
                 VALUES ('student',?,?,'active','admin_override','journal_matching',?) RETURNING id""",
                 (preview['display_name'],preview['class_name'],payload.get('comment','').strip() or None)).fetchone()

@@ -27,6 +27,27 @@ class RevisionContract:
     def revision(self, entity=None):
         return self.db.get_identity(entity or self.teacher)["revision"]
 
+    def test_history_records_safe_values_without_private_text(self):
+        with directory_edit(self.db, "identities", self.teacher, self.revision(), self.actor) as db:
+            with db.connection() as connection:
+                db.execute(connection, "UPDATE identities SET status='inactive',admin_note=? WHERE id=?", ("private fixture note", self.teacher))
+        item = directory_history(self.db, "identities", self.teacher)["items"][0]
+        self.assertEqual(item["field_values"], {"status": {"before": "active", "after": "inactive"}})
+        self.assertNotIn("private fixture note", str(item))
+
+    def test_homeroom_relation_invalidates_teacher_and_class(self):
+        group = self.db.create_group("C " + self.suffix, "class")
+        before = self.revision()
+        with directory_edit(self.db, "identities", self.teacher, before, self.actor) as db:
+            db.set_homeroom_assignment(self.teacher, group["id"], True, self.actor)
+        self.assertGreater(self.revision(), before)
+        self.assertGreater(self.db.get_group(group["id"])["revision"], group["revision"])
+        row = directory_history(self.db, "groups", group["id"])["items"][0]
+        self.assertEqual(row["actor_id"], str(self.actor))
+        self.assertEqual(row["changed_fields"], ["homeroom_assignments"])
+        self.assertIsNone(row["field_values"]["active"]["before"])
+        self.assertTrue(row["field_values"]["active"]["after"])
+
     def test_concurrent_subject_replacement_has_one_winner_and_stale_retry(self):
         start = Barrier(2)
         rev = self.revision()
@@ -60,14 +81,15 @@ class RevisionContract:
         )
         db = Database(database_url=self.db.database_url, autocommit=True) if self.db.database_url else self.db
         draft = create_experiment(db, name="History " + self.suffix, source="empty")
-        lesson = {"id": "fixture-lesson", "room": "Private fixture value", "subject": "Private title"}
+        lesson = {"id": "fixture-lesson", "day": 1, "room": "Private fixture value", "subject": "Private title"}
         first = _write_experiment_revision(db, draft["id"], draft["revision"], {**draft["payload"], "lessons": [lesson]},
                                            actor_user_id=self.actor)
-        second_payload = {**first["payload"], "lessons": [{**lesson, "room": "Second private value"}]}
+        second_payload = {**first["payload"], "lessons": [{**lesson, "day": 3, "room": "Second private value"}]}
         second = _write_experiment_revision(db, draft["id"], first["revision"], second_payload, actor_user_id=self.actor)
         history = experiment_change_history(db, draft["id"], draft["revision"])["items"]
         self.assertEqual(history[0]["actor_id"], str(self.actor))
-        self.assertEqual(history[0]["changed_fields"], [{"lesson_id": "fixture-lesson", "operation": "edited", "fields": ["room"]}])
+        self.assertEqual(history[0]["changed_fields"], [{"lesson_id": "fixture-lesson", "operation": "edited", "fields": ["day", "room"]}])
+        self.assertEqual(history[0]["field_values"], {"fixture-lesson": {"day": {"before": 1, "after": 3}}})
         self.assertEqual(history[1]["changed_fields"][0]["operation"], "added")
         self.assertNotIn("Private", str(history))
         with self.assertRaises(ExperimentConflict):
@@ -132,6 +154,13 @@ class SQLiteDirectoryTests(RevisionContract, unittest.TestCase):
         app.include_router(create_router(self.db))
         client = TestClient(app)
         headers = {"X-Dev-Auth": f"browser:{token}"}
+        homeroom = "/api/admin/homeroom-assignments"
+        group = self.db.create_group("Class " + self.suffix, "class")
+        payload = {"teacher_identity_id": str(self.teacher), "group_id": str(group["id"])}
+        self.assertEqual(client.post(homeroom, headers=headers, json=payload).status_code, 428)
+        payload.update(expected_revision=self.revision(), expected_group_revision=group["revision"])
+        self.assertEqual(client.post(homeroom, headers=headers, json=payload).status_code, 200)
+        self.assertEqual(client.post(homeroom, headers=headers, json=payload).status_code, 409)
         path = f"/api/admin/people/{self.teacher}"
         history = f"/api/admin/directory/history/identities/{self.teacher}"
         self.assertIn(client.get(history).status_code, (401, 403))
