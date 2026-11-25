@@ -1015,14 +1015,15 @@ def create_router(database: Database) -> APIRouter:
                          x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         require_role(telegram_user, "admin")
+        if not canonical_admin_backend_enabled():
+            raise HTTPException(503, "Published schedule backend is disabled")
         try:
-            date.fromisoformat(start_day)
-            if end_day:
-                date.fromisoformat(end_day)
             return class_load_analytics(database, start_day, end_day, group_id=group_id,
                                         group_type=group_type, trajectory=trajectory)
         except ValueError as error:
-            raise HTTPException(status_code=400, detail="start_day and end_day must be ISO dates") from error
+            raise HTTPException(400, "Use valid ISO dates in order, up to 366 days inclusive") from error
+        except (sqlite3.OperationalError, PostgresOperationalError) as error:
+            raise HTTPException(503, "Published class schedule is temporarily unavailable") from error
 
     @router.get("/admin/people/{identity_id}/schedule")
     def admin_person_schedule(identity_id: str, start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):

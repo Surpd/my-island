@@ -3,7 +3,6 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
@@ -15,7 +14,6 @@ from backend.services.canonical_schedule import (
     schedule_admin_observability,
 )
 from backend.services.teacher_load_analytics import teacher_load_analytics
-from backend.services.class_load_analytics import class_load_analytics
 
 
 class CanonicalScheduleRuntimeTests(unittest.TestCase):
@@ -275,52 +273,6 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["responsible_minutes"], 45)
         self.assertEqual(summary["items"][0]["role"], "responsible")
 
-    def test_class_load_deduplicates_co_teaching_interval(self):
-        second_teacher = self.database.create_identity("teacher", "Teacher Two")
-        artifact = self.artifact()
-        assignment = artifact["blocks"][self.block_key]["assignments"][0]
-        assignment["teacher_ids"] = [str(self.teacher["id"]), str(second_teacher["id"])]
-        import_canonical_artifact(self.database, artifact)
-        materialize_effective_week(self.database, self.version_id, "2026-09-07")
-
-        result = class_load_analytics(self.database, "2026-09-07")
-        group = next(item for item in result["groups"] if str(self.math_group["id"]) == item["group_id"])
-        self.assertEqual(group["scheduled_minutes"], 45)
-        self.assertEqual(group["lesson_count"], 1)
-
-    def test_class_load_reports_trajectory_and_merges_overlapping_windows(self):
-        artifact = self.artifact()
-        artifact["blocks"][self.block_key]["assignments"][0]["teacher_ids"] = [str(self.teacher["id"])]
-        artifact["blocks"][self.block_key]["assignments"][0]["activity"] = "Первая часть"
-        artifact["blocks"]["2026-09-07|1|09:15|9A"] = {
-            "weekday": 0, "slot": {"start": "09:15", "end": "10:00"}, "grade_scope": "9",
-            "status": "resolved", "mode": "SINGLE", "assignments": [{
-                "activity": "Вторая часть", "role": "primary",
-                "audience": {"type": "canonical_groups", "canonical_group_ids": [str(self.math_group["id"])]},
-                "teacher_ids": [str(self.teacher["id"])], "source_cells": ["C3"],
-            }],
-        }
-        import_canonical_artifact(self.database, artifact)
-        materialize_effective_week(self.database, self.version_id, "2026-09-07")
-        result = class_load_analytics(self.database, "2026-09-07", group_type="instructional")
-        group = next(item for item in result["groups"] if item["group_id"] == str(self.math_group["id"]))
-        self.assertEqual(group["trajectory"], "")
-        self.assertEqual(group["scheduled_minutes"], 60)
-        self.assertEqual(group["day_summaries"][0]["window_minutes"], 60)
-        self.assertEqual(group["day_summaries"][0]["gap_minutes"], 0)
-
-    def test_class_load_batch_query_count_does_not_scale_with_teacher_roster(self):
-        import_canonical_artifact(self.database, self.artifact())
-        materialize_effective_week(self.database, self.version_id, "2026-09-07")
-        with patch.object(self.database, "execute", wraps=self.database.execute) as execute:
-            class_load_analytics(self.database, "2026-09-07")
-            small_roster_calls = execute.call_count
-        for index in range(40):
-            self.database.create_identity("teacher", f"Class Unassigned {index}")
-        with patch.object(self.database, "execute", wraps=self.database.execute) as execute:
-            class_load_analytics(self.database, "2026-09-07")
-            large_roster_calls = execute.call_count
-        self.assertLessEqual(large_roster_calls, small_roster_calls + 1)
     def test_teacher_load_batch_query_count_does_not_scale_with_roster(self):
         import_canonical_artifact(self.database, self.artifact())
         materialize_effective_week(self.database, self.version_id, "2026-09-07")

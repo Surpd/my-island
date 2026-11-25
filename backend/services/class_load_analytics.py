@@ -1,150 +1,190 @@
-"""Class workload summaries derived from published canonical teacher intervals."""
+"""Class and instructional-group workload from pinned published assignments."""
 from __future__ import annotations
 
-from collections import Counter
-from datetime import date, datetime
+from collections import Counter, defaultdict
+from datetime import date, timedelta
 from typing import Any
 
 from backend.database import Database
-from backend.services.canonical_schedule import PUBLISHED_STATUSES
-from backend.services.teacher_load_analytics import _batch_teacher_projections
+from backend.services import canonical_schedule as canonical
 
 
-def _duration(start_time: Any, end_time: Any) -> int | None:
-    try:
-        start = datetime.strptime(str(start_time), "%H:%M")
-        end = datetime.strptime(str(end_time), "%H:%M")
-    except (TypeError, ValueError):
-        return None
-    value = int((end - start).total_seconds() // 60)
-    return value if value > 0 else None
+def _union(intervals):
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def _minutes(intervals):
+    return sum(end - start for start, end in _union(intervals))
+
+
+def _day_summary(day, items, pauses):
+    intervals = [(x["start_minute"], x["end_minute"]) for x in items if x["duration_minutes"] is not None]
+    result = {"date": day, "first_start": None, "last_end": None, "occupied_minutes": None,
+              "window_minutes": None, "gap_minutes": None, "excluded_pause_minutes": None}
+    if not intervals:
+        return result
+    start, end = min(x[0] for x in intervals), max(x[1] for x in intervals)
+    occupied = _minutes(intervals)
+    breaks = [(max(start,a), min(end,b)) for a,b in pauses if a < end and b > start]
+    occupied_or_break = _minutes(intervals + breaks)
+    result.update(first_start=f"{start//60:02}:{start%60:02}", last_end=f"{end//60:02}:{end%60:02}",
+                  occupied_minutes=occupied, window_minutes=end-start,
+                  gap_minutes=end-start-occupied_or_break, excluded_pause_minutes=occupied_or_break-occupied)
+    return result
+
+
+def _group_summary(group, trajectory, occurrences, pauses):
+    # Optional clubs have a separate denominator and cannot stretch a compulsory day.
+    lessons = sorted(occurrences, key=lambda x: (x["date"], x["start_minute"] is None, x["start_minute"] or 0, x["occurrence_id"]))
+    required = [x for x in lessons if x["activity_type"] != "club"]
+    clubs = [x for x in lessons if x["activity_type"] == "club"]
+    by_day = defaultdict(list)
+    for item in required:
+        by_day[item["date"]].append(item)
+    days = [_day_summary(day, items, pauses.get(day, [])) for day, items in sorted(by_day.items())]
+    valid = [x for x in required if x["duration_minutes"] is not None]
+    subject, formats, activities = Counter(), Counter(), Counter()
+    for item in valid:
+        subject[item["activity"] or "unknown"] += item["duration_minutes"]
+        formats[item["activity_format"] or item["delivery_mode"]] += item["duration_minutes"]
+        activities[item["activity_type"]] += item["duration_minutes"]
+    minutes = sum(x["duration_minutes"] for x in valid)
+    return {"group_id": str(group["id"]), "group_name": group["display_name"] or group["name"],
+            "group_type": group["group_type"], "trajectory": trajectory, "days": list(sorted(by_day)), "day_summaries": days,
+            "lesson_count": len(required), "scheduled_minutes": (sum(x["occupied_minutes"] or 0 for x in days)
+                                                                  if valid or not required else None),
+            "assignment_minutes": minutes if valid or not required else None, "known_duration_count": len(valid),
+            "mean_lesson_minutes": minutes/len(valid) if valid else None, "unknown_duration_items": len(required)-len(valid),
+            "optional_lesson_count": len(clubs),
+            "optional_minutes": (sum(x["duration_minutes"] or 0 for x in clubs)
+                                 if not clubs or any(x["duration_minutes"] is not None for x in clubs) else None),
+            "optional_unknown_duration_items": sum(x["duration_minutes"] is None for x in clubs),
+            "activity_minutes": dict(activities), "subject_minutes": dict(subject), "format_minutes": dict(formats),
+            "items": [{k:v for k,v in item.items() if k not in {"start_minute","end_minute"}} for item in lessons]}
+
+
+def _directory(database):
+    with database.connection() as conn:
+        groups = {str(row["id"]): dict(row) for row in database.execute(conn,
+            """SELECT id,name,display_name,group_type,base_class_name,subject,subject_subgroup,exam_track
+               FROM groups WHERE canonical IS TRUE ORDER BY id""").fetchall()}
+    classes_by_label, classes_by_grade = defaultdict(set), defaultdict(set)
+    for gid, group in groups.items():
+        if group["group_type"] == "class":
+            for label in (group["name"], group["display_name"], group["base_class_name"]):
+                if label:
+                    classes_by_label[str(label).strip().casefold()].add(gid)
+            grade = canonical.canonical_group_grade(group)
+            if grade:
+                classes_by_grade[grade].add(gid)
+    parent, children = {}, defaultdict(set)
+    for gid, group in groups.items():
+        if group["group_type"] != "class" and group["base_class_name"]:
+            candidates = classes_by_label[str(group["base_class_name"]).strip().casefold()]
+            if len(candidates) == 1:
+                parent[gid] = next(iter(candidates))
+                children[parent[gid]].add(gid)
+    return groups, classes_by_grade, parent, children
 
 
 def class_load_analytics(database: Database, start_day: str, end_day: str | None = None, *,
                          group_id: str | None = None, group_type: str | None = None,
                          trajectory: str | None = None) -> dict[str, Any]:
-    """Group published teacher intervals by canonical audience group.
-
-    A class receives one interval per canonical group even when multiple
-    teachers co-teach it. Explicit joint activities are deduplicated by their
-    provenance ID, so parallel teacher streams do not inflate class duration.
-    """
-    finish = end_day or start_day
-    first, last = date.fromisoformat(start_day), date.fromisoformat(finish)
-    if last < first:
-        raise ValueError("end_day must not precede start_day")
-    with database.connection() as connection:
-        groups = {str(row["id"]): dict(row) for row in database.execute(
-            connection, "SELECT id,name,display_name,group_type,subject,base_class_name,subject_subgroup,exam_track FROM groups WHERE canonical IS TRUE ORDER BY id"
-        ).fetchall()}
-        teachers = [dict(row) for row in database.execute(
-            connection, "SELECT id FROM identities WHERE kind='teacher' AND status='active' ORDER BY id"
-        ).fetchall()]
-
-    grouped: dict[str, dict[str, Any]] = {}
-    seen: set[tuple[str, str, str, str, str, str]] = set()
-    published_weeks = 0
-    publication_coverage: dict[str, dict[str, Any]] = {}
-    projections = _batch_teacher_projections(database, [str(teacher["id"]) for teacher in teachers], start_day, finish)
-    for teacher in teachers:
-        projection = projections[str(teacher["id"])]
-        for metadata in projection.get("publications") or []:
-            publication_coverage[str(metadata.get("week_start"))] = metadata
-        if projection.get("status") not in PUBLISHED_STATUSES:
-            continue
-        published_weeks += 1
-        for item in projection.get("items") or []:
-            duration = _duration(item.get("start_time"), item.get("end_time"))
-            day = str(item.get("date") or "")
-            provenance = item.get("provenance") or {}
-            joint_id = str(provenance.get("joint_activity_id") or "")
-            group_ids = [str(value) for value in item.get("audience_group_ids") or []]
-            for audience_group_id in group_ids:
-                if audience_group_id not in groups:
-                    continue
-                group = groups[audience_group_id]
-                if group_id and group_id != str(group["id"]):
-                    continue
-                if group_type and str(group.get("group_type") or "") != group_type:
-                    continue
-                trajectory_value = "/".join(str(group.get(key) or "") for key in ("base_class_name", "subject", "subject_subgroup", "exam_track") if group.get(key))
-                if trajectory and trajectory_value != trajectory:
-                    continue
-                signature = (audience_group_id, str(item.get("date") or ""), str(item.get("start_time") or ""),
-                             str(item.get("end_time") or ""), str(item.get("activity") or ""), joint_id)
-                if signature in seen:
-                    continue
-                seen.add(signature)
-                summary = grouped.setdefault(audience_group_id, {
-                    "group_id": audience_group_id,
-                    "group_name": group.get("display_name") or group.get("name"),
-                    "group_type": group.get("group_type"),
-                    "trajectory": trajectory_value,
-                    "lesson_count": 0,
-                    "scheduled_minutes": 0,
-                    "unknown_duration_items": 0,
-                    "days": set(),
-                    "activity_minutes": Counter(),
-                    "items": [],
-                    "day_intervals": {},
-                })
-                if duration is None:
-                    summary["unknown_duration_items"] += 1
-                else:
-                    summary["scheduled_minutes"] += duration
-                    summary["activity_minutes"][str(item.get("activity_type") or "lesson")] += duration
-                    summary["day_intervals"].setdefault(day, []).append((item.get("start_time"), item.get("end_time")))
-                if day:
-                    summary["days"].add(day)
-                summary["items"].append({
-                    "date": day, "start_time": item.get("start_time"), "end_time": item.get("end_time"),
-                    "activity": item.get("activity"), "activity_type": item.get("activity_type", "lesson"),
-                    "duration_minutes": duration, "joint_activity_id": joint_id or None,
-                })
-    output = []
-    for summary in grouped.values():
-        summary["lesson_count"] = len(summary["items"])
-        summary["days"] = sorted(summary["days"])
-        summary["activity_minutes"] = dict(sorted(summary["activity_minutes"].items()))
-        summary["day_summaries"] = _day_summaries(summary.pop("day_intervals"))
-        summary["scheduled_minutes"] = sum(item["occupied_minutes"] for item in summary["day_summaries"])
-        output.append(summary)
-    output.sort(key=lambda item: (str(item["group_name"]), item["group_id"]))
-    return {
-        "status": "published" if published_weeks else "canonical_not_materialized",
-        "start_day": start_day,
-        "end_day": finish,
-        "groups": output,
-        "coverage": {"group_count": len(output), "published_teacher_projections": published_weeks,
-                     "weeks": [publication_coverage[key] for key in sorted(publication_coverage)]},
-        "source": "canonical_teacher_projection",
-    }
-
-
-def _clock(value: str) -> int:
-    parsed = datetime.strptime(value, "%H:%M")
-    return parsed.hour * 60 + parsed.minute
-
-
-def _day_summaries(day_intervals: dict[str, list[tuple[Any, Any]]]) -> list[dict[str, Any]]:
-    result = []
-    for day, raw_intervals in sorted(day_intervals.items()):
-        intervals = sorted((_clock(str(start)), _clock(str(end))) for start, end in raw_intervals if start and end)
-        merged: list[list[int]] = []
-        for start, end in intervals:
-            if end <= start:
+    first, last = date.fromisoformat(start_day), date.fromisoformat(end_day or start_day)
+    if last < first or (last-first).days >= 366:
+        raise ValueError("Select between 1 and 366 calendar days")
+    groups, grades, parents, children = _directory(database)
+    items, pauses = defaultdict(dict), defaultdict(lambda: defaultdict(list))
+    weeks, unknown_audience = [], 0
+    monday = first - timedelta(days=first.weekday())
+    while monday <= last:
+        edition = canonical.resolve_published_week(database, monday.isoformat())
+        weeks.append(edition.metadata)
+        blocks = canonical._block_rows(database, edition.metadata["effective_week_id"]) if edition.effective else []
+        for block in blocks:
+            if block["change_kind"] == "cancelled" or block["weekday"] not in range(7):
                 continue
-            if merged and start <= merged[-1][1]:
-                merged[-1][1] = max(merged[-1][1], end)
-            else:
-                merged.append([start, end])
-        if not merged:
-            result.append({"date": day, "first_start": None, "last_end": None, "occupied_minutes": 0, "window_minutes": None, "gap_minutes": None})
+            # Compare offsets before adding, including the last representable year.
+            offset = int(block["weekday"])
+            if not (first-monday).days <= offset <= (last-monday).days:
+                continue
+            day = (monday + timedelta(days=offset)).isoformat()
+            start, end = block["start_time"], block["end_time"]
+            a,b = canonical._clock_minutes(start),canonical._clock_minutes(end)
+            duration = b-a if a is not None and b is not None and b>a else None
+            for i, assignment in enumerate(canonical._assignments(database, block["canonical_block_id"], block["patch"])):
+                meta = assignment.get("metadata") or {}
+                kind, mark = meta.get("activity_type") or "lesson", meta.get("special_mark")
+                if mark == "no_lesson" or assignment.get("activity") == "NO_LESSON":
+                    continue
+                rule = canonical._assignment_audience_rule(assignment)
+                direct = set(canonical._assignment_group_ids(assignment)) | set(map(str,rule.get("group_ids") or []))
+                if rule.get("kind") == "whole_grade":
+                    direct.update(grades.get(str(rule.get("grade")), set()))
+                # A residual audience covers part of this class. Its individual
+                # subgroup assignment is unknown and must not be propagated.
+                partial = rule.get("kind") in {"remaining", "available_slot", "students"}
+                if rule.get("class_group_id"):
+                    direct.add(str(rule["class_group_id"]))
+                scope = direct.intersection(groups)
+                pause = kind in {"lunch", "break"} or mark in {"lunch", "break"}
+                for gid in tuple(scope):
+                    if gid in parents and not pause:
+                        scope.add(parents[gid])
+                    if not partial:
+                        scope.update(children[gid])
+                if not scope:
+                    unknown_audience += 1
+                    continue
+                if pause:
+                    if duration is not None:
+                        for gid in scope:
+                            pauses[gid][day].append((a,b))
+                    continue
+                joint = meta.get("joint_activity_id") if meta.get("audience_coverage") == "explicit" else None
+                identity = (["joint", str(joint), day, str(start), str(end)] if joint else
+                            ["assignment", block["block_key"], canonical._assignment_id(block,assignment,i)])
+                occurrence = canonical._hash([edition.metadata["effective_week_id"], *identity])
+                origin = {"block_key": block["block_key"], "assignment_id": canonical._assignment_id(block,assignment,i),
+                          "lesson_id": meta.get("constructor_lesson_id")}
+                for gid in scope:
+                    if occurrence in items[gid]:
+                        items[gid][occurrence]["provenance"]["sources"].append(origin)
+                        continue
+                    items[gid][occurrence] = {"occurrence_id": occurrence, "date": day, "start_time": start, "end_time": end,
+                        "start_minute": a, "end_minute": b, "duration_minutes": duration, "activity": assignment.get("activity"),
+                        "activity_type": kind, "activity_format": meta.get("activity_format"),
+                        "delivery_mode": meta.get("day_plan_mode") or "normal", "joint_activity_id": joint,
+                        "provenance": {"effective_week_id": edition.metadata["effective_week_id"],
+                                       "publication_id": edition.metadata["publication_id"], "sources": [origin]}}
+        if (last-monday).days < 7:
+            break
+        monday += timedelta(days=7)
+    published = sum(w["published"] for w in weeks)
+    partial_weeks = sum(w["coverage"] in {"partial","with_exceptions"} for w in weeks)
+    broken = any(w["origin"] == "broken_head" for w in weeks)
+    status = ("partial" if published and (published != len(weeks) or partial_weeks) else "published" if published
+              else "broken_publication" if broken else "canonical_not_materialized")
+    result = []
+    # A specific existing group's empty interval is measurable in an approved
+    # week. An unpublished range carries its coverage without a synthetic zero.
+    candidates = set(items)
+    if group_id in groups and published and published == len(weeks) and not partial_weeks and not unknown_audience:
+        candidates.add(group_id)
+    for gid in candidates:
+        group = groups[gid]
+        path = "/".join(str(group[k]) for k in ("base_class_name","subject","subject_subgroup","exam_track") if group[k])
+        if (group_id and gid != group_id) or (group_type and group["group_type"] != group_type) or (trajectory and trajectory != path):
             continue
-        occupied = sum(end - start for start, end in merged)
-        window = merged[-1][1] - merged[0][0]
-        fmt = lambda value: f"{value // 60:02d}:{value % 60:02d}"
-        result.append({"date": day, "first_start": fmt(merged[0][0]), "last_end": fmt(merged[-1][1]),
-                       "occupied_minutes": occupied, "window_minutes": window,
-                       "gap_minutes": max(0, window - occupied)})
-    return result
+        result.append(_group_summary(group,path,items[gid].values(),pauses[gid]))
+    result.sort(key=lambda x: (str(x["group_name"]), x["group_id"]))
+    return {"status": status, "source": "published_canonical_assignments",
+            "start_day": first.isoformat(), "end_day": last.isoformat(), "groups": result,
+            "coverage": {"weeks": weeks, "group_count": len(result), "published_weeks": published,
+                         "unknown_audience_items": unknown_audience, "partial_weeks": partial_weeks}}

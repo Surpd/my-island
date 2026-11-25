@@ -1,27 +1,16 @@
-# Class workload analytics contract
+# Нагрузка классов и учебных групп
 
-`GET /api/admin/analytics/classes?start_day=YYYY-MM-DD&end_day=YYYY-MM-DD`
-groups published canonical teacher intervals by canonical audience group. It
-depends on the teacher-load PR (#53) and therefore transitively on the
-multi-week range contract in PR #52; this branch is based on
-`codex/teacher-load`.
+`GET /api/admin/analytics/classes?start_day=2026-12-28&end_day=2027-01-03`. Параметры фильтра — group_id, group_type, trajectory. Доступ имеет администратор при включённом canonical или canonical_shadow. Обе границы включены. Допустимый диапазон от 1 до 366 дней. Неверные даты дают 400, недоступность источника — 503. Миграций нет.
 
-Each group reports scheduled minutes, interval count, activity-type minutes,
-unknown-duration count, dates, and source interval details. Co-teaching does
-not multiply class duration: identical group/date/slot/activity intervals are
-deduplicated across teachers. Explicit joint activities include their
-provenance ID, so parallel streams do not create a false longer school day.
-Cancelled, lunch, no-lesson, draft, superseded, and unmaterialized weeks do
-not become zero-valued lessons. No student roster or membership data is
-returned.
+Каждая неделя выбирается один раз через resolve_published_week. Строки строятся непосредственно из блоков и назначений выбранного effective_week_id. Наличие или статус преподавателя не влияют на занятие класса. В coverage.weeks перечислены реальные источники, включая отсутствие, только шаблон, частичный выпуск и повреждённую ссылку. Значения отчёта по частично опубликованному периоду описывают доступную часть. Для отсутствующего выпуска группы с искусственными нулями не создаются.
 
-Acceptance: a class with two teachers has one 45-minute interval; separate
-groups in a joint activity each retain their own audience bucket; sparse and
-historical ranges remain date-bounded; unknown time values are reported rather
-than silently treated as zero. The implementation now exposes trajectory
-dimensions, group-type/trajectory filters, daily first/last interval windows,
-occupied minutes, and gap minutes computed from a union of overlapping
-intervals. This avoids the audit's false-window failure mode. A remaining
-scale risk is one canonical projection per active teacher; a future measured
-batch resolver should replace that fan-out before very large schools are
-enabled.
+Класс получает объединение периодов своих подтверждённых подгрупп. Однозначная связь подгруппы с классом определяется по её base_class_name и каноническому справочнику. Общеклассный урок входит в соответствующие траектории, занятия подгрупп остаются различимы. Составы учеников и имена в отчёт не передаются. Неоднозначная историческая привязка не достраивается догадкой, неподтверждённая аудитория отмечается в unknown_audience_items. Привязка по справочнику описывает его нынешнее состояние, если исторический снимок недоступен.
+
+- scheduled_minutes — объединение интервалов обязательных назначений. assignment_minutes — сумма известных длительностей самих назначений. Одновременные независимые уроки различаются по источнику. Подтверждённое совместное занятие считается один раз за интервал.
+- mean_lesson_minutes — сумма длительностей всех известных назначений / их количество по всему диапазону. Веса определяются числом занятий, независимо от числа преподавателей и учеников. При отсутствии известных длительностей среднее равно null.
+- day_summaries отделяют размах, занятость и окна. Обед и явно обозначенные перерывы, относящиеся к аудитории, исключаются из окон. Факультативные кружки имеют отдельные счётчики, поздний кружок не удлиняет обязательный день.
+- subject_minutes, format_minutes, activity_minutes отражают сумму известных минут назначений. unknown_duration_items указывает покрытие измерений. Каждый item содержит идентификатор и provenance с редакцией, блоком и назначением. Данные характеризуют расписание, сведения о фактическом проведении отсутствуют.
+
+Проверки: золотой сценарий трёх потоков одного класса, общий урок, совместное занятие, обед, факультатив, архивный преподаватель, занятие без преподавателя и две календарные недели с повреждённой/отсутствующей публикацией. HTTP-тесты проверяют авторизацию, даты и отказ источника. CI запускает SQLite и изолированный PostgreSQL 17 с 120 синтетическими назначениями. PostgreSQL-тест выводит число SQL-вызовов и время выполнения на runner, без экстраполяции на production.
+
+[Функциональный PR #56](https://github.com/Surpd/my-island/pull/56) зависит от [#53](https://github.com/Surpd/my-island/pull/53), [#52](https://github.com/Surpd/my-island/pull/52) и [#48](https://github.com/Surpd/my-island/pull/48).

@@ -86,10 +86,25 @@ class AdminPreviewRoutesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertEqual(payload["teachers"][0]["scheduled_minutes"], 45)
-        class_response = self.client.get("/api/admin/analytics/classes?start_day=2026-09-07", headers=self.headers)
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            class_response = self.client.get("/api/admin/analytics/classes?start_day=2026-09-07", headers=self.headers)
         self.assertEqual(class_response.status_code, 200, class_response.text)
         self.assertEqual(class_response.json()["groups"][0]["scheduled_minutes"], 45)
         self.assertIn(self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers={"X-Dev-Auth": "student:1"}).status_code, {401, 403})
+
+    def test_class_report_access_errors_and_date_boundaries(self):
+        import sqlite3
+        path = "/api/admin/analytics/classes?start_day=2026-01-01"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        with patch("backend.handlers.api.resolve_auth", return_value={"id": 88002}):
+            self.assertEqual(self.client.get(path).status_code, 403)
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "disabled"}):
+            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 503)
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            for end in ("2025-12-31", "2027-01-02", "2026-02-30"):
+                self.assertEqual(self.client.get(path+"&end_day="+end, headers=self.headers).status_code, 400)
+            with patch("backend.handlers.api.class_load_analytics", side_effect=sqlite3.OperationalError()):
+                self.assertEqual(self.client.get(path, headers=self.headers).status_code, 503)
 
     def test_preview_people_directory_search_is_unicode_case_insensitive(self):
         target = self.database.create_identity("student", "ТЕСТовый ученик", actor_user_id=self.admin_id)

@@ -28,7 +28,9 @@ details by canonical audience.
 Audit comparison: covered are published provenance, exact intervals, 30/45/90
 minute durations, historical/sparse ranges, role separation, joint/online and
 activity-format fields, admin permission, HTTP coverage, and date/day-window
-summaries. This MVP does not yet provide a true batch SQL read across all
-teachers: it performs one canonical projection per selected teacher. Query
-count/latency measurement is therefore an explicit follow-up before large
-school roll-out, and class trajectory/window aggregation belongs to PR #56.
+summaries. The reader resolves each distinct published week once, then fans
+out canonical blocks in memory to the selected teachers. A synthetic roster
+regression keeps query count effectively constant when 40 unassigned teachers
+are added. The remaining operational follow-up is a PostgreSQL latency and
+isolation benchmark on a production-sized roster; class trajectory/window
+aggregation belongs to PR #56.

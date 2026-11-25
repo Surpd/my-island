@@ -1,29 +1,12 @@
-# Analytics acceptance registry
+# Проверка аналитики расписания
 
-This registry records the audit criteria for PRs #52, #53, and #56. It is
-deliberately explicit about remaining scale work; passing unit tests is not
-treated as proof of production performance.
+| PR | Что служит доказательством |
+|---|---|
+| [#48](https://github.com/Surpd/my-island/pull/48) | Общий resolver возвращает точную ручную либо историческую редакцию, покрытие и диагностическое состояние повреждённой ссылки. |
+| [#52](https://github.com/Surpd/my-island/pull/52) | Диапазон преподавателя охватывает разные недели, исторические издания и разрывы, с метаданными каждой недели. |
+| [#53](https://github.com/Surpd/my-island/pull/53) | Выборка блоков по неделям и разбор назначений в памяти. У ролей ведущего и ответственного отдельные минуты. Сохранены опубликованные редакции, включая исторические. Регрессия query count добавляет 40 преподавателей. |
+| [#56](https://github.com/Surpd/my-island/pull/56) | Классы читают назначения вне зависимости от занятости/наличия преподавателей. Параллельные траектории считаются отдельно, длительность дня класса вычисляется объединением интервалов. Тесты подтверждают provenance, частичные периоды, 401/403/400/503, обед, кружок и известный знаменатель среднего. |
 
-| Criterion | #52 teacher range | #53 teacher analytics | #56 class analytics |
-|---|---|---|---|
-| Historical/sparse weeks | covered | inherited | inherited |
-| Provenance and exact intervals | covered | covered in details | covered in details |
-| Lead vs responsible roles | inherited | covered | retained per source interval |
-| 30/45/90-minute values | regression coverage | aggregation covered | aggregation covered |
-| Categories/formats/online | source fields retained | filters + detail fields | activity distribution + trajectory |
-| Joint/co-teaching dedup | source projection | joint provenance | class interval union/dedup |
-| Daily windows/gaps | n/a | teacher day summaries | covered; overlapping intervals unioned |
-| Admin permissions/HTTP | existing route contract | targeted HTTP test | route follows same admin guard |
-| Batch/query-count proof | n/a | not yet measured; per-teacher projection fan-out | same remaining risk |
+В golden-сценарии #56 у класса три одновременных учебных потока, общий и подтверждённый совместный урок. Результат — 5 обязательных занятий, 105 минут занятости, 195 минут назначений и 39 минут в среднем за занятие. Из окна исключены 15 минут обеда. Кружок отражается отдельно как 90 минут. Данные и БД синтетические. Браузерный дизайн разделов ожидает утверждения, API проверяется напрямую. Число запросов и время выполнения PostgreSQL-фикстуры видны в job postgres.
 
-Direct artifacts: [teacher range contract](../../../SCHEDULE_TEACHER_RANGE_CONTRACT.md),
-[teacher analytics contract](../../../TEACHER_LOAD_ANALYTICS.md), and
-[class analytics contract](../../../CLASS_LOAD_ANALYTICS.md). Draft PRs:
-[#52](https://github.com/Surpd/my-island/pull/52),
-[#53](https://github.com/Surpd/my-island/pull/53),
-[#56](https://github.com/Surpd/my-island/pull/56).
-
-The missing batch/query-count measurement is a release blocker for large
-schools, not hidden behind the MVP acceptance claim. Real HTTP coverage exists
-for the teacher route; class HTTP coverage and PostgreSQL latency/isolation
-checks remain follow-up work.
+[Контракт диапазона](../../../SCHEDULE_TEACHER_RANGE_CONTRACT.md) · [Нагрузка преподавателя](../../../TEACHER_LOAD_ANALYTICS.md) · [Нагрузка класса](../../../CLASS_LOAD_ANALYTICS.md).
