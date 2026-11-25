@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.database import Database
 from backend.services.canonical_schedule import (
@@ -271,6 +272,19 @@ class CanonicalScheduleRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["lead_minutes"], 0)
         self.assertEqual(summary["responsible_minutes"], 45)
         self.assertEqual(summary["items"][0]["role"], "responsible")
+
+    def test_teacher_load_batch_query_count_does_not_scale_with_roster(self):
+        import_canonical_artifact(self.database, self.artifact())
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        with patch.object(self.database, "execute", wraps=self.database.execute) as execute:
+            teacher_load_analytics(self.database, "2026-09-07")
+            small_roster_calls = execute.call_count
+        for index in range(40):
+            self.database.create_identity("teacher", f"Unassigned {index}")
+        with patch.object(self.database, "execute", wraps=self.database.execute) as execute:
+            teacher_load_analytics(self.database, "2026-09-07")
+            large_roster_calls = execute.call_count
+        self.assertLessEqual(large_roster_calls, small_roster_calls + 1)
 
     def test_teacher_range_accumulates_published_weeks_and_skips_unmaterialized_week(self):
         for version_id, week_start, activity in (
