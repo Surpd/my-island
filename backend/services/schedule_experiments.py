@@ -1747,13 +1747,14 @@ def _changed_lesson_fields(before, after):
         return {str(row.get("id") or f"index:{index}"): row for index, row in enumerate(payload.get("lessons", []))
                 if isinstance(row, Mapping)}
     previous, current = keyed(before), keyed(after)
+    missing = object()
     changes = []
     for key in sorted(previous.keys() | current.keys()):
         old, new = previous.get(key), current.get(key)
         if old == new:
             continue
         fields = sorted(name for name in (old or {}).keys() | (new or {}).keys()
-                        if (old or {}).get(name) != (new or {}).get(name))
+                        if (old or {}).get(name, missing) != (new or {}).get(name, missing))
         changes.append({"lesson_id": key, "operation": "added" if old is None else "removed" if new is None else "edited",
                         "fields": fields})
     return changes
