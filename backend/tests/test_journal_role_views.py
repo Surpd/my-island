@@ -160,6 +160,30 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual(filtered.json()["source_count"], 1)
         self.assertIsNone(filtered.json()["items"][0]["numeric_coverage"])
 
+    def test_no_snapshot_and_failed_refresh_do_not_look_like_a_complete_matrix(self):
+        admin = self._create_user("snapshot-admin", "admin", None)
+        headers = {"X-Dev-Auth": "snapshot-admin"}
+        source = self.source_ids[0]
+        with self.database.connection() as conn:
+            waiting = self.database.execute(conn, """INSERT INTO journal_sources
+                (spreadsheet_id,spreadsheet_title,grade,subject,sheet_title,status,last_error_code)
+                VALUES ('synthetic-waiting','Fixture',9,'Science','Fixture','error','network')
+                RETURNING id""").fetchone()["id"]
+            self.database.execute(conn, """UPDATE journal_sources
+                SET status='error',last_error_code='network',last_synced_at=CURRENT_TIMESTAMP WHERE id=?""", (source,))
+            self.database.execute(conn, """UPDATE journal_assessments
+                SET weight=2,max_score=5,raw_source='{"category":"П"}' WHERE source_id=?""", (source,))
+        def detail(key):
+            return self.client.get(f"/api/admin/journals/{key}/analytics", headers=headers).json()
+        missing = detail(waiting)
+        self.assertEqual(missing["source"]["snapshot_state"], "unavailable")
+        self.assertIsNone(missing["totals"]["numeric_results"])
+        old = detail(source)
+        self.assertEqual(old["source"]["snapshot_state"], "last_success")
+        self.assertGreater(old["totals"]["numeric_results"], 0)
+        self.assertEqual({(row["category"], row["weight"], row["max_score"]) for row in old["works"]}, {("П", 2, 5)})
+        self.assertEqual(old["roster"]["team_rows"], 1)
+
     def test_admin_snapshot_analytics_respects_period_marker_and_role(self):
         self._create_user("analytics-admin", "admin", None)
         headers = {"X-Dev-Auth": "analytics-admin"}

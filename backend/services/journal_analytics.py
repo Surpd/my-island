@@ -3,9 +3,16 @@ from collections import Counter
 from datetime import date
 
 
+def _snapshot_state(source):
+    if source["status"] in {"ready", "empty"} and not source.get("last_error_code"):
+        return "current"
+    return "last_success" if source["last_synced_at"] else "unavailable"
+
+
 def journal_analytics(detail: dict, start: date | None, end: date | None) -> dict:
     source = detail["source"]
     students = detail["students"]
+    snapshot_state = _snapshot_state(source)
     works = []
     undated = 0
     for assessment in detail["assessments"]:
@@ -30,6 +37,7 @@ def journal_analytics(detail: dict, start: date | None, end: date | None) -> dic
                 counts["empty_cells"] += 1
         works.append({
             "assessment_id": assessment["id"], "assessed_on": day or None,
+            "title": assessment["title"], "weight": assessment["weight"], "max_score": assessment["max_score"],
             "category": assessment["category"] or None, "group_marker": assessment["group_marker"],
             **{k: counts[k] for k in ("eligible_cells", "numeric_results", "status_only", "empty_cells")},
         })
@@ -39,9 +47,10 @@ def journal_analytics(detail: dict, start: date | None, end: date | None) -> dic
     eligible = totals["eligible_cells"]
     summaries = Counter(item["summary_type"] for student in students for item in student["summaries"]
                         if item["numeric_value"] is not None or item["text_value"])
+    source_fields = ("id", "grade", "subject", "academic_year", "term_number",
+                     "period_status", "status", "last_synced_at", "last_error_code")
     return {
-        "source": {k: source[k] for k in ("id", "grade", "subject", "academic_year", "term_number",
-                                           "period_status", "status", "last_synced_at", "last_error_code")},
+        "source": {**{key: source[key] for key in source_fields}, "snapshot_state": snapshot_state},
         "roster": {
             "total_rows": len(students),
             "team_rows": sum(s["entry_kind"] == "team" for s in students),
@@ -50,7 +59,8 @@ def journal_analytics(detail: dict, start: date | None, end: date | None) -> dic
         },
         "period_summary_cells": dict(summaries),
         "undated_assessments": undated,
-        "totals": {**totals, "numeric_coverage": totals["numeric_results"] / eligible if eligible else None},
+        "totals": {**{key: value if snapshot_state != "unavailable" else None for key, value in totals.items()},
+                   "numeric_coverage": totals["numeric_results"] / eligible if eligible and snapshot_state != "unavailable" else None},
         "works": works,
     }
 
@@ -114,7 +124,8 @@ def journal_overview(database, *, grade=None, subject=None, term_number=None, ac
     items = []
     for row in rows:
         item = dict(row)
-        observed = bool(item["last_synced_at"] or item["status"] in {"ready", "empty"})
+        item["snapshot_state"] = _snapshot_state(item)
+        observed = item["snapshot_state"] != "unavailable"
         cells = int(item.pop("cells") or 0)
         scores = int(item["numeric_results"] or 0)
         statuses = int(item["status_only"] or 0)
