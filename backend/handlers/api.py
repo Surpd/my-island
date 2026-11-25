@@ -21,6 +21,7 @@ from uuid import UUID
 from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
 
+from backend.services.schedule_experiments import experiment_change_history
 from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction, directory_version
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
@@ -2248,16 +2249,18 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=503, detail="Школьный справочник временно недоступен для расчёта аудитории") from error
 
     @router.get("/admin/schedule/experiments/school/{experiment_id}")
-    def admin_school_get(experiment_id: str, revision_only: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
+    def admin_school_get(experiment_id: str, revision_only: bool = False, lesson_changes_since: int | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         viewer = require_real_school_admin(x_school_admin_session, principal)
         _, store = school_stores()
         try:
-            if revision_only:
+            if revision_only or lesson_changes_since is not None:
                 with store.connection() as connection:
                     row = store.execute(connection, "SELECT revision FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
                 if not row:
                     raise ExperimentNotFound(experiment_id)
+                if lesson_changes_since is not None:
+                    return experiment_change_history(store, experiment_id, lesson_changes_since)
                 return {"revision": row["revision"], "actor": viewer}
             return {**get_experiment(store, experiment_id), "viewer_id": viewer}
         except ExperimentNotFound as error:
@@ -2357,14 +2360,16 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/admin/schedule/experiments/{experiment_id}")
-    def admin_schedule_get_experiment(experiment_id: str, revision_only: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def admin_schedule_get_experiment(experiment_id: str, revision_only: bool = False, lesson_changes_since: int | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
-            if revision_only:
+            if revision_only or lesson_changes_since is not None:
                 with database.connection() as connection:
                     row = database.execute(connection, "SELECT revision FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
                 if not row:
                     raise ExperimentNotFound(experiment_id)
+                if lesson_changes_since is not None:
+                    return experiment_change_history(database, experiment_id, lesson_changes_since)
                 return {"revision": row["revision"], "actor": str(principal["id"])}
             return {**get_experiment(database, experiment_id), "viewer_id": str(principal["id"])}
         except ExperimentNotFound as error:

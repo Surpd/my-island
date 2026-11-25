@@ -23,11 +23,15 @@ RELATIONS = {
 }
 
 
-def initialize_sqlite(connection):
+def initialize_history(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS directory_edit_history (
         entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, revision INTEGER NOT NULL,
         changed_fields TEXT NOT NULL, actor_id TEXT, changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(entity_type,entity_id,revision))""")
+
+
+def initialize_sqlite(connection):
+    initialize_history(connection)
     # SQLite serializes writers. The actor exists only inside the editing
     # transaction, including when a nested membership/assignment write occurs.
     connection.execute("CREATE TABLE IF NOT EXISTS directory_edit_actor (id INTEGER PRIMARY KEY CHECK(id=1), actor_id TEXT)")
