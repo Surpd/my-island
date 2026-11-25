@@ -1,7 +1,9 @@
 /* oxlint-disable typescript/no-explicit-any, typescript/no-base-to-string, react/react-compiler, react-hooks/exhaustive-deps, jsx-a11y/prefer-tag-over-role */
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLiveRevision } from './use-live-revision';
+import { DirectoryConflict } from './directory-conflict';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CalendarDays, ChevronRight, ExternalLink, Plus, RefreshCw, Search, ShieldAlert, UserRound, Users } from 'lucide-react';
 import { audienceGrade, audienceGrades, audienceLabel, audienceShortLabel, classLabel as formatClassLabel, lessonLabel, subjectLabel } from './school-audience';
 import { formatLessonTimeRange } from './lesson-time';
@@ -11,7 +13,7 @@ import { useSchoolTeacherColors } from './use-school-teacher-colors';
 
 type Row = Record<string, any>;
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
-type Props = { api: Api; schoolMode?: boolean; connectionLabel?: string; navigate: (href: string) => void };
+type Props = { api: Api; schoolMode?: boolean; live?: boolean; connectionLabel?: string; navigate: (href: string) => void };
 type Directory = { groups: Row[]; students: Row[]; teachers: Row[]; write_ready?: boolean; read_only?: boolean; grade_assignment_ready?: boolean };
 type TeacherTab = 'main' | 'assignments' | 'schedule' | 'availability';
 type ScheduleResult = { status?: string; source?: string; week_start?: string; available_weeks?: string[]; items?: Row[]; issues?: Row[] };
@@ -33,7 +35,7 @@ const dayNames = ['Понедельник', 'Вторник', 'Среда', 'Ч�
 
 const assignmentContext = (row: Row) => [normalize(subjectLabel(row.subject)), normalize(row.subject_subgroup), normalize(row.exam_track), normalize(row.capability || 'teach'), String(row.classroom_course_id || ''), String(row.valid_from || ''), String(row.valid_until || '')].join('|');
 
-export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel = 'Локальная база', navigate }: Props) {
+export function TeacherDirectoryAdmin({ api, schoolMode = false, live = true, connectionLabel = 'Локальная база', navigate }: Props) {
   const [directory, setDirectory] = useState<Directory>({ groups: [], students: [], teachers: [] });
   const [selectedId, setSelectedId] = useState('');
   const [tab, setTab] = useState<TeacherTab>('main');
@@ -45,6 +47,7 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
   const [classFilter, setClassFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
   const [listView, setListView] = useState<'table' | 'cards'>('table');
+  const [accessLost, setAccessLost] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -64,31 +67,41 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
   const [schoolCode, setSchoolCode] = useState('');
   const [authError, setAuthError] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
+  const readSequence = useRef(0);
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const sequence = ++readSequence.current;
+    if (!signal) { setLoading(true); setError(''); }
     try {
       let next: Directory;
       if (schoolMode) {
-        const result = await api<Directory>('/api/admin/school/directory');
+        const result = await api<Directory>('/api/admin/school/directory', { signal });
         next = { groups: result.groups || [], students: result.students || [], teachers: result.teachers || [], write_ready: result.write_ready, read_only: result.read_only, grade_assignment_ready: result.grade_assignment_ready };
       } else {
         const [groups, teachers, system] = await Promise.all([
-          api<{ items: Row[] }>('/api/admin/groups'),
-          api<{ items: Row[] }>('/api/admin/people?kind=teacher&include_inactive=true'),
-          api<Row>('/api/admin/system').catch(() => ({} as Row)),
+          api<{ items: Row[] }>('/api/admin/groups', { signal }),
+          api<{ items: Row[] }>('/api/admin/people?kind=teacher&include_inactive=true', { signal }),
+          api<Row>('/api/admin/system', { signal }).catch(() => ({} as Row)),
         ]);
         next = { groups: groups.items || [], teachers: teachers.items || [], students: [], write_ready: system.health?.environment === 'local_sqlite' || system.settings?.database_configured === false };
       }
+      if (signal?.aborted || sequence !== readSequence.current) return false as const;
       setDirectory(next);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось загрузить преподавателей.'); }
-    finally { setLoading(false); }
+    } catch (cause) { if (signal?.aborted || sequence !== readSequence.current) return false as const; if (signal) throw cause; setError(cause instanceof Error ? cause.message : 'Не удалось загрузить преподавателей.'); }
+    finally { if (!signal?.aborted && sequence === readSequence.current) setLoading(false); }
   }, [api, schoolMode]);
 
+  useLiveRevision({
+    enabled: live && schoolSession && !accessLost,
+    api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
+    refresh: (_marker, signal) => load(signal),
+    unavailable: () => { void load(); },
+    revoke: () => { readSequence.current++; setAccessLost(true); },
+  });
   useEffect(() => {
     if (!schoolMode) return;
     void api('/api/admin/school/auth/session').then(() => setSchoolSession(true)).catch(() => setSchoolSession(false)).finally(() => setAuthChecking(false));
   }, [api, schoolMode]);
-  useEffect(() => { if (schoolSession) void load(); }, [load, schoolSession]);
+  useEffect(() => { if (schoolSession && !live) void load(); }, [live, load, schoolSession]);
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 3600); return () => window.clearTimeout(timer); }, [notice]);
 
   const teachers = directory.teachers || [];
@@ -196,10 +209,11 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
   }, [api, schoolMode, selected, selectedId, selectedWeek]);
 
   if (schoolMode && authChecking) return <div className="admin-panel">Проверяем доступ к школьному справочнику…</div>;
+  if (accessLost) return <p role="alert">Доступ администратора изменился. Обновите страницу для нового входа.</p>;
   if (schoolMode && !schoolSession) return <section className="admin-panel school-editor-auth"><h2>Вход в школьный справочник</h2><p>Параметр role=admin сам по себе не даёт доступ к настоящей базе. Получите одноразовый код командой /admincode в школьном Telegram-боте.</p><form onSubmit={async (event) => { event.preventDefault(); setAuthError(''); try { const result = await api<{ browser_session_token: string }>('/api/admin/school/auth/exchange', { method: 'POST', body: JSON.stringify({ code: schoolCode.trim() }) }); window.sessionStorage.setItem('my_island_school_admin_session', result.browser_session_token); setSchoolCode(''); setSchoolSession(true); } catch (cause) { setAuthError(cause instanceof Error ? cause.message : 'Код не принят.'); } }}><label className="school-field">Одноразовый код<input value={schoolCode} onChange={(event) => setSchoolCode(event.target.value)} autoComplete="one-time-code" /></label><button className="admin-button admin-button--primary" disabled={!schoolCode.trim()}>Войти</button></form>{authError ? <p role="alert" className="admin-error-text">{authError}</p> : null}</section>;
   if (loading && !teachers.length) return <div className="admin-panel">Загружаем преподавателей…</div>;
-  if (selected || creating) {
-    const teacher = draft || selected || {};
+  if (selected || creating || (editing && draft)) {
+    const teacher = (editing || creating ? draft : selected) || {};
     const assignments: Row[] = assignmentRows(selected || teacher);
     const activeAssignments = assignments.filter((item: Row) => assignmentIsActive(item));
     const mergeAnalysis = analyzeAssignmentMerges(assignments, directory.teachers, directory.groups, directory.students);
@@ -224,7 +238,7 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
     const scheduleHasData = Boolean(schedule?.status && !['canonical_not_imported', 'canonical_backend_disabled', 'canonical_not_materialized', 'week_not_available', 'teacher_not_found'].includes(schedule.status));
     return <div className="admin-stack teacher-workspace">
       <button className="teacher-back" onClick={() => { setSelectedId(''); setDraft(null); setEditing(false); setCreating(false); setAssignmentOpen(false); setError(''); }}><ArrowLeft size={16} /> К списку преподавателей</button>
-      <header className="teacher-profile-header"><div className="teacher-avatar" style={selected ? { background: teacherColors.color(String(selected.id)), color: teacherColors.accent(String(selected.id)) } : undefined}><UserRound size={24} /></div><div className="teacher-profile-title"><p className="admin-eyebrow">Карточка преподавателя</p><h2>{personName(teacher) || 'Новый преподаватель'}</h2><div className="teacher-subtitle">{(teacher.subjects || []).join(' · ') || 'Предметы не указаны'} <span className={`teacher-status ${teacher.status === 'inactive' ? 'is-inactive' : ''}`}>{teacher.status === 'inactive' ? 'Неактивен' : 'Активен'}</span></div></div>{!editing && !creating ? <button className="admin-button admin-button--quiet" onClick={() => { setDraft({ ...selected, comment: selected?.comment ?? selected?.admin_note ?? '' }); setEditing(true); }} disabled={schoolMode && !directory.write_ready}>Редактировать основное</button> : null}</header>{selected && !creating ? <button className="admin-button" onClick={() => navigate(`/admin/preview?identity_id=${encodeURIComponent(String(selected.id))}&kind=teacher`)}>Посмотреть приложение</button> : null}
+      <header className="teacher-profile-header"><div className="teacher-avatar" style={selected ? { background: teacherColors.color(String(selected.id)), color: teacherColors.accent(String(selected.id)) } : undefined}><UserRound size={24} /></div><div className="teacher-profile-title"><p className="admin-eyebrow">Карточка преподавателя</p><h2>{personName(teacher) || 'Новый преподаватель'}</h2><div className="teacher-subtitle">{(teacher.subjects || []).join(' · ') || 'Предметы не указаны'} <span className={`teacher-status ${teacher.status === 'inactive' ? 'is-inactive' : ''}`}>{teacher.status === 'inactive' ? 'Неактивен' : 'Активен'}</span></div></div>{!editing && !creating ? <button className="admin-button admin-button--quiet" onClick={() => { const base = { ...selected, comment: selected?.comment ?? selected?.admin_note ?? '' }; setDraft({ ...base, _base: base }); setEditing(true); }} disabled={schoolMode && !directory.write_ready}>Редактировать основное</button> : null}</header>{selected && !creating ? <button className="admin-button" onClick={() => navigate(`/admin/preview?identity_id=${encodeURIComponent(String(selected.id))}&kind=teacher`)}>Посмотреть приложение</button> : null}
       {notice ? <p className="teacher-toast" role="status">{notice}</p> : null}{error ? <p className="admin-error-text" role="alert">{error}</p> : null}
       <div className="teacher-summary-grid"><div><strong>{activeAssignments.length}</strong><span>активных назначений</span></div><div><strong>{scheduleHasData ? activeScheduled.length : '—'}</strong><span>занятий за выбранную неделю</span></div><div><strong>{scheduleHasData ? `${activeScheduled.length} уроков` : 'Нет данных'}</strong><span>недельная нагрузка · по расписанию</span></div><div><strong>{(teacher.availability || []).length ? 'Есть' : 'Не заданы'}</strong><span>ограничения по времени</span></div></div>
       <nav className="teacher-tabs" aria-label="Карточка преподавателя">{([['main', 'Основное'], ['assignments', 'Группы и назначения'], ['schedule', 'Расписание'], ['availability', 'Ограничения']] as [TeacherTab, string][]).map(([key, label]) => <button key={key} className={tab === key ? 'is-active' : ''} onClick={() => { setTab(key); if (key === 'schedule') setSelectedWeek('template'); }}>{label}</button>)}</nav>
@@ -234,6 +248,13 @@ export function TeacherDirectoryAdmin({ api, schoolMode = false, connectionLabel
           <div className="teacher-subject-editor"><label className="school-field">Предметы школы<input disabled={!editing} value={subjectSearch} onChange={(event) => setSubjectSearch(event.target.value)} placeholder="Найти предмет" /></label><div className="teacher-subject-options">{subjectSearchResults.map((item) => <label key={normalize(item)}><input type="checkbox" disabled={!editing} checked={currentTeacherSubjects.some((value) => normalize(value) === normalize(item))} onChange={() => { const included = currentTeacherSubjects.some((value) => normalize(value) === normalize(item)); const used = assignments.some((row: Row) => normalize(row.subject) === normalize(item)); if (included && used && !window.confirm(`Предмет «${item}» используется в назначениях. Список предметов изменится, назначения сохранятся. Продолжить?`)) return; setDraft({ ...teacher, subjects: included ? currentTeacherSubjects.filter((value) => normalize(value) !== normalize(item)) : [...currentTeacherSubjects, item] }); }} /><span>{item}</span></label>)}{!subjectSearchResults.some((item) => normalize(item) === normalize(subjectSearch)) && subjectSearch.trim() ? <button className="teacher-add-subject" disabled={!editing} onClick={() => { const value = subjectSearch.trim().replace(/\s+/gu, ' '); if (!currentTeacherSubjects.some((item) => normalize(item) === normalize(value))) setDraft({ ...teacher, subjects: [...currentTeacherSubjects, value] }); setSubjectSearch(''); }}>Добавить новое название «{subjectSearch.trim()}»</button> : null}</div><div className="teacher-chip-list">{currentTeacherSubjects.map((item) => <button type="button" key={normalize(item)} disabled={!editing} onClick={() => { const used = assignments.some((row: Row) => normalize(row.subject) === normalize(item)); if (used && !window.confirm(`Предмет «${item}» используется в назначениях. Назначения сохранятся. Удалить предмет из списка преподавателя?`)) return; setDraft({ ...teacher, subjects: currentTeacherSubjects.filter((value) => normalize(value) !== normalize(item)) }); }}>{item}{editing ? <span aria-hidden="true">×</span> : null}</button>)}</div><small>Назначения и их источники сохраняются, даже если предмет удалён из списка преподавателя.</small></div>
           <label className="school-field teacher-comment">Комментарий<textarea disabled={!editing} value={teacher.comment || ''} onChange={(event) => setDraft({ ...teacher, comment: event.target.value })} placeholder="Необязательно" /></label>
         </div>
+        {editing && !creating && !selected && <p role="alert">Запись удалена. Введённые значения остаются в форме для копирования.</p>}
+        {editing && draft?._base && selected && draft.revision !== selected.revision &&
+          <DirectoryConflict key={String(selected.revision)} api={api}
+            historyPath={`${schoolMode ? '/api/admin/school' : '/api/admin'}/directory/history/identities/${selectedId}`}
+            base={draft._base} draft={draft} remote={{ ...selected, comment: selected.comment ?? selected.admin_note ?? '' }}
+            fields={{ display_name: 'ФИО', status: 'Статус', subjects: 'Предметы', comment: 'Комментарий' }}
+            apply={(merged) => { setError(''); setDraft({ ...merged, _base: { ...selected, comment: selected.comment ?? selected.admin_note ?? '' } }); }} />}
         {editing ? <div className="teacher-actions"><button className="admin-button admin-button--primary" disabled={busy || !teacher.display_name?.trim() || (schoolMode && !directory.write_ready)} onClick={() => void saveTeacher()}>{busy ? 'Сохраняем…' : creating ? 'Создать преподавателя' : 'Сохранить'}</button><button className="admin-button admin-button--quiet" onClick={() => { if (creating) { setCreating(false); setDraft(null); } else { setEditing(false); setDraft(selected); } }}>Отмена</button></div> : null}
       </section> : null}
       {tab === 'assignments' ? <section className="admin-panel teacher-panel"><div className="teacher-section-heading"><div><h3>Группы и назначения</h3><p>Назначение задаёт преподавателя по умолчанию. Уроки в расписании можно назначить другому учителю.</p></div><button className="admin-button admin-button--primary" disabled={!selectedId || (schoolMode && !directory.write_ready)} onClick={() => { setAssignment({ subject: currentTeacherSubjects[0] || '', audience: schoolMode && !directory.grade_assignment_ready ? 'group' : 'parallel', targetId: '', grade: parallels[0] || '', course: '' }); setAssignmentRevision(selected?.revision); setAssignmentOpen((value) => !value); }}><Plus size={15} /> Добавить назначение</button></div>

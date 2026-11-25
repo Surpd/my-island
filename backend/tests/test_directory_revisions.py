@@ -5,6 +5,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
+from unittest.mock import patch
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -87,6 +88,35 @@ class RevisionContract:
         with directory_edit(self.db, "identities", self.teacher, current, self.actor) as db:
             db.update_admin_identity(self.teacher, {"subjects": [results[0][1]]}, self.actor)
         self.assertEqual(current, self.revision())
+
+    def test_lesson_field_history_commits_with_cas_and_rolls_back_on_history_failure(self):
+        from backend.services.schedule_experiments import (
+            ExperimentConflict, _write_experiment_revision, create_experiment, experiment_change_history, get_experiment,
+        )
+        db = Database(database_url=self.db.database_url, autocommit=True) if self.db.database_url else self.db
+        draft = create_experiment(db, name="History " + self.suffix, source="empty")
+        lesson = {"id": "fixture-lesson", "day": 1, "room": "Private fixture value", "subject": "Private title"}
+        first = _write_experiment_revision(db, draft["id"], draft["revision"], {**draft["payload"], "lessons": [lesson]},
+                                           actor_user_id=self.actor)
+        second_payload = {**first["payload"], "lessons": [{**lesson, "day": 3, "room": "Second private value"}]}
+        second = _write_experiment_revision(db, draft["id"], first["revision"], second_payload, actor_user_id=self.actor)
+        history = experiment_change_history(db, draft["id"], draft["revision"])["items"]
+        self.assertEqual(history[0]["actor_id"], str(self.actor))
+        self.assertEqual(history[0]["changed_fields"], [{"lesson_id": "fixture-lesson", "operation": "edited", "fields": ["day", "room"]}])
+        self.assertEqual(history[0]["field_values"], {"fixture-lesson": {"day": {"before": 1, "after": 3}}})
+        self.assertEqual(history[1]["changed_fields"][0]["operation"], "added")
+        self.assertNotIn("Private", str(history))
+        with self.assertRaises(ExperimentConflict):
+            _write_experiment_revision(db, draft["id"], first["revision"], draft["payload"], actor_user_id=self.actor)
+        execute = db.execute
+        def fail_history(connection, statement, params=()):
+            if "INSERT INTO directory_edit_history" in statement:
+                raise RuntimeError("fixture history failure")
+            return execute(connection, statement, params)
+        with patch.object(db, "execute", side_effect=fail_history), self.assertRaisesRegex(RuntimeError, "fixture history"):
+            _write_experiment_revision(db, draft["id"], second["revision"], draft["payload"], actor_user_id=self.actor)
+        self.assertEqual(get_experiment(db, draft["id"])["revision"], second["revision"])
+        self.assertEqual(experiment_change_history(db, draft["id"], second["revision"])["items"], [])
 
     def test_related_assignment_invalidates_both_cards_and_rolls_back(self):
         before = self.revision()

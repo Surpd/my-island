@@ -124,7 +124,9 @@ test('available-slot roster stays factual until recalculation is confirmed, then
   await recalculation.getByRole('button', { name: 'Показать изменения' }).click();
   await recalculation.getByRole('button', { name: 'Подтвердить проверенные составы' }).click();
   await expect(recalculation).not.toBeVisible();
-  await expect(page.getByRole('button', { name: 'Сохранить черновик', exact: true })).toBeDisabled();
+  const saveControls = page.getByRole('button', { name: 'Сохранить черновик', exact: true });
+  await expect(saveControls).toHaveCount(2);
+  for (const control of await saveControls.all()) await expect(control).toBeDisabled();
 
   const readSavedRoster = async () => {
     const response = await page.request.get(`${API}/api/admin/schedule/experiments/${draftId}`, { headers: ADMIN });

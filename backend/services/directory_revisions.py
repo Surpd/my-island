@@ -1,6 +1,7 @@
 """Transactional optimistic editing of school directory aggregates."""
 from contextlib import contextmanager, nullcontext
 from copy import copy
+import hashlib
 import json
 
 from fastapi import HTTPException
@@ -23,13 +24,17 @@ RELATIONS = {
 }
 
 
-def initialize_sqlite(connection):
+def initialize_history(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS directory_edit_history (
         entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, revision INTEGER NOT NULL,
         changed_fields TEXT NOT NULL, actor_id TEXT, changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(entity_type,entity_id,revision))""")
     if "field_values" not in {row[1] for row in connection.execute("PRAGMA table_info(directory_edit_history)")}:
         connection.execute("ALTER TABLE directory_edit_history ADD COLUMN field_values TEXT NOT NULL DEFAULT '{}'")
+
+
+def initialize_sqlite(connection):
+    initialize_history(connection)
     # SQLite serializes writers. The actor exists only inside the editing
     # transaction, including when a nested membership/assignment write occurs.
     connection.execute("CREATE TABLE IF NOT EXISTS directory_edit_actor (id INTEGER PRIMARY KEY CHECK(id=1), actor_id TEXT)")
@@ -167,3 +172,14 @@ def directory_history(database, table, entity_id):
             if isinstance(item[key], str):
                 item[key] = json.loads(item[key])
     return {"items": items}
+
+
+def directory_version(database):
+    """A token for exactly the directory rows, including inserts and removals."""
+    digest = hashlib.sha256()
+    with database.connection() as connection:
+        rows = database.execute(connection, """SELECT 'g' AS kind, CAST(id AS TEXT) AS key, revision FROM groups
+            UNION ALL SELECT 'i', CAST(id AS TEXT), revision FROM identities ORDER BY 1,2""")
+        for row in rows:
+            digest.update(f'{row["kind"]}/{row["key"]}/{row["revision"]}\n'.encode())
+    return digest.hexdigest()

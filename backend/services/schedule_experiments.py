@@ -9,6 +9,7 @@ from typing import Any
 import re
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from threading import Lock
+from contextlib import nullcontext
 
 from backend.database import Database
 from backend.services.schedule_rooms import display_room
@@ -1649,7 +1650,7 @@ def save_experiment(database: Database, experiment_id: str, *, expected_revision
         if field in current["payload"]:
             clean[field] = current["payload"][field]
     saved = _write_experiment_revision(database, experiment_id, expected_revision, clean,
-                                       normalized_name=normalized_name, actor_user_id=actor_user_id)
+                                       normalized_name=normalized_name, actor_user_id=actor_user_id, previous_payload=current["payload"])
     if editor_feedback:
         saved["editor_validation"] = editor_feedback
     return saved
@@ -1741,21 +1742,82 @@ def _validate_ordinary_editor_changes(database, payload, previous_by_key, resolv
     return feedback
 
 
+def _changed_lesson_fields(before, after):
+    def keyed(payload):
+        return {str(row.get("id") or f"index:{index}"): row for index, row in enumerate(payload.get("lessons", []))
+                if isinstance(row, Mapping)}
+    previous, current = keyed(before), keyed(after)
+    missing = object()
+    changes = []
+    values = {}
+    for key in sorted(previous.keys() | current.keys()):
+        old, new = previous.get(key), current.get(key)
+        if old == new:
+            continue
+        fields = sorted(name for name in (old or {}).keys() | (new or {}).keys()
+                        if (old or {}).get(name, missing) != (new or {}).get(name, missing))
+        changes.append({"lesson_id": key, "operation": "added" if old is None else "removed" if new is None else "edited",
+                        "fields": fields})
+        # Only numeric timetable coordinates can be retained as values.
+        coordinates = {}
+        for name, maximum in (("day", 7), ("weekday", 7), ("period", 99)):
+            if name not in fields:
+                continue
+            prior, following = (old or {}).get(name), (new or {}).get(name)
+            if all(v is None or (type(v) is int and 0 <= v <= maximum) for v in (prior, following)):
+                coordinates[name] = {"before": prior, "after": following}
+        if coordinates:
+            values[key] = coordinates
+    return changes, values
+
+
+def experiment_change_history(database, experiment_id, since_revision):
+    with database.connection() as connection:
+        rows = database.execute(connection, """SELECT revision,actor_id,changed_at,changed_fields,field_values FROM directory_edit_history
+            WHERE entity_type='schedule_lessons' AND entity_id=? AND revision>? ORDER BY revision DESC LIMIT 100""",
+            (experiment_id, since_revision)).fetchall()
+    items = [dict(row) for row in rows]
+    for item in items:
+        for key in ("changed_fields", "field_values"):
+            if isinstance(item[key], str):
+                item[key] = json.loads(item[key])
+    return {"items": items}
+
+
 def _write_experiment_revision(database: Database, experiment_id: str, expected_revision: int,
                                payload: Mapping[str, Any], *, normalized_name: str | None = None,
-                               actor_user_id: Any = None) -> dict[str, Any]:
+                               actor_user_id: Any = None, previous_payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     encoded_sql = "?::jsonb" if database.database_url else "?"
     now = datetime.now(timezone.utc).isoformat()
     archived = "payload->'draft_archive' IS NULL" if database.database_url else "json_extract(payload, '$.draft_archive') IS NULL"
     with database.connection() as connection:
-        row = database.execute(connection, f"""UPDATE schedule_experiment_drafts
-            SET payload={encoded_sql},name=COALESCE(?,name),revision=revision+1,updated_by=?,updated_at=?
-            WHERE id=? AND revision=? AND {archived} RETURNING *""",
-            (encoded, normalized_name, _draft_actor_id(database, actor_user_id), now, experiment_id, expected_revision)).fetchone()
-        if row:
-            return _item(row)
-        current = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
+        if not database.database_url and not connection.in_transaction:
+            connection.execute("BEGIN IMMEDIATE")
+        with connection.transaction() if database.database_url else nullcontext():
+            if previous_payload is None:
+                lock = " FOR UPDATE" if database.database_url else ""
+                previous = database.execute(connection, f"SELECT * FROM schedule_experiment_drafts WHERE id=?{lock}",
+                                            (experiment_id,)).fetchone()
+                if not previous:
+                    raise ExperimentNotFound(experiment_id)
+                if previous["revision"] != expected_revision:
+                    raise ExperimentConflict(_item(previous))
+                previous_payload = _payload(previous["payload"])
+            row = database.execute(connection, f"""UPDATE schedule_experiment_drafts
+                SET payload={encoded_sql},name=COALESCE(?,name),revision=revision+1,updated_by=?,updated_at=?
+                WHERE id=? AND revision=? AND {archived} RETURNING *""",
+                (encoded, normalized_name, _draft_actor_id(database, actor_user_id), now, experiment_id, expected_revision)).fetchone()
+            if row:
+                changes, values = _changed_lesson_fields(previous_payload, payload)
+                if changes:
+                    database.execute(connection, f"""INSERT INTO directory_edit_history
+                        (entity_type,entity_id,revision,changed_fields,field_values,actor_id,changed_at)
+                        VALUES ('schedule_lessons',?,?,{encoded_sql},{encoded_sql},?,?)""",
+                        (experiment_id, row["revision"], json.dumps(changes, ensure_ascii=False), json.dumps(values),
+                         str(actor_user_id) if actor_user_id is not None else None, now))
+                return _item(row)
+            current = database.execute(connection, "SELECT * FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
     if current:
         item = _item(current)
         if item["revision"] == expected_revision and item["payload"].get("draft_archive"):
