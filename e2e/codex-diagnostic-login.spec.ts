@@ -56,7 +56,7 @@ test('diagnostic login loads the existing admin shell, never borrowing the human
   await expect(page.getByRole('heading', { name: 'Backend и школьная база' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Переподключить Google' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Журналы и оценки', exact: true }).click();
-  await page.getByRole('button', { name: /^9 класс/ }).click();
+  await page.getByRole('tablist', { name: 'Класс', exact: true }).getByRole('tab', { name: /^9 класс/ }).click();
   await expect(page.getByRole('rowheader', { name: 'Диагностический предмет' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Диагностический предмет', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Подключить таблицу', exact: true })).toHaveCount(0);
