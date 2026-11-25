@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from backend.database import Database
-from backend.services.canonical_schedule import PUBLISHED_STATUSES, project_teacher_range
+from backend.services.canonical_schedule import (
+    PUBLISHED_STATUSES, _NO_LESSON, _assignments, _block_rows, _effective_week,
+    _week_start, display_room,
+)
 
 
 def _minutes(start_time: Any, end_time: Any) -> int | None:
@@ -50,8 +53,9 @@ def teacher_load_analytics(database: Database, start_day: str, end_day: str | No
     rows = _teacher_rows(database, str(teacher_id) if teacher_id is not None else None)
     teachers: list[dict[str, Any]] = []
     published_teacher_count = 0
+    projections = _batch_teacher_projections(database, [str(row["id"]) for row in rows], start_day, finish)
     for row in rows:
-        projection = project_teacher_range(database, row["id"], start_day, finish)
+        projection = projections[str(row["id"])]
         status = projection.get("status")
         if status in PUBLISHED_STATUSES:
             published_teacher_count += 1
@@ -125,6 +129,78 @@ def teacher_load_analytics(database: Database, start_day: str, end_day: str | No
         "coverage": {"teacher_count": len(teachers), "published_teacher_count": published_teacher_count},
         "source": "canonical_teacher_projection",
     }
+
+
+def _batch_teacher_projections(database: Database, teacher_ids: list[str], start_day: str,
+                               end_day: str) -> dict[str, dict[str, Any]]:
+    """Read shared published weeks once, then fan out rows in memory.
+
+    This is intentionally a workload-specific reader: its query count depends
+    on published weeks/blocks, not on the number of teachers in the roster.
+    """
+    first, last = date.fromisoformat(start_day), date.fromisoformat(end_day)
+    with database.connection() as connection:
+        group_rows = database.execute(connection, "SELECT id,name,display_name FROM groups WHERE canonical IS TRUE ORDER BY id").fetchall()
+        teacher_rows = database.execute(connection, "SELECT id,display_name FROM identities WHERE kind='teacher' AND id IN ({})".format(",".join("?" for _ in teacher_ids)), tuple(teacher_ids)).fetchall() if teacher_ids else []
+    groups = {str(row["id"]): str(row["display_name"] or row["name"]) for row in group_rows}
+    names = {str(row["id"]): str(row["display_name"]) for row in teacher_rows}
+    result = {teacher_id: {"status": "canonical_not_materialized", "items": []} for teacher_id in teacher_ids}
+    seen_weeks: set[str] = set()
+    cursor = first
+    while cursor <= last:
+        week_start = _week_start(cursor.isoformat())
+        if week_start in seen_weeks:
+            cursor += timedelta(days=1)
+            continue
+        seen_weeks.add(week_start)
+        effective = _effective_week(database, None, week_start)
+        if effective and effective.get("canonical_status") in PUBLISHED_STATUSES:
+            blocks = _block_rows(database, effective["effective_week_id"])
+            per_teacher: dict[str, list[dict[str, Any]]] = {teacher_id: [] for teacher_id in teacher_ids}
+            per_seen: dict[str, set[tuple[Any, ...]]] = {teacher_id: set() for teacher_id in teacher_ids}
+            per_joint: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {teacher_id: {} for teacher_id in teacher_ids}
+            week_start_date = date.fromisoformat(week_start)
+            for block in blocks:
+                if block.get("weekday") is None or block.get("change_kind") == "cancelled":
+                    continue
+                day = (week_start_date + timedelta(days=int(block["weekday"]))).isoformat()
+                for assignment in _assignments(database, block.get("canonical_block_id"), block.get("patch") or {}):
+                    metadata = assignment.get("metadata") if isinstance(assignment.get("metadata"), dict) else {}
+                    if (metadata.get("day_plan_mode") == "sdep" or metadata.get("special_mark") in {"lunch", "no_lesson"}
+                            or metadata.get("activity_type") == "lunch" or assignment.get("activity") == _NO_LESSON):
+                        continue
+                    teacher_values = [str(value) for value in assignment.get("teacher_ids") or []]
+                    responsible = [str(value) for value in metadata.get("responsible_teacher_ids") or []] if metadata.get("activity_format") == "independent_practice" else []
+                    group_ids = [str(value) for value in assignment.get("canonical_group_ids") or []]
+                    for teacher_id in teacher_ids:
+                        if teacher_id not in teacher_values and teacher_id not in responsible:
+                            continue
+                        signature = (day, str(block.get("start_time") or ""), str(block.get("end_time") or ""), str(assignment.get("activity") or ""), display_room(metadata.get("room")) or "", tuple(sorted(group_ids)))
+                        if signature in per_seen[teacher_id]:
+                            continue
+                        per_seen[teacher_id].add(signature)
+                        item = {"date": day, "weekday": int(block["weekday"]), "start_time": block.get("start_time"), "end_time": block.get("end_time"), "activity": assignment.get("activity"), "audience_group_ids": group_ids, "audiences": [groups.get(group_id, group_id) for group_id in group_ids], "grade_scope": block.get("grade_scope"), "teacher_ids": teacher_values, "teacher_names": metadata.get("teachers") or [names.get(value, value) for value in teacher_values], "room": display_room(metadata.get("room")), "provenance": {"block_key": block["block_key"], "source_provenance": block.get("source_provenance") or {}}}
+                        item["activity_type"] = metadata.get("activity_type", "lesson")
+                        if metadata.get("day_plan_mode") == "online":
+                            item.update(delivery_mode="online", room="", connection_info=(metadata.get("constructor_details") or {}).get("connectionInfo", ""))
+                        if metadata.get("activity_format") == "independent_practice":
+                            item.update(activity_format="independent_practice", responsible_teacher_ids=responsible, responsible_teachers=metadata.get("responsible_teachers") or [], physical_presence=teacher_id in teacher_values)
+                        joint_id = metadata.get("joint_activity_id") if metadata.get("audience_coverage") == "explicit" else None
+                        if joint_id:
+                            item["provenance"]["joint_activity_id"] = str(joint_id)
+                            joint_key = (day, str(block.get("start_time")), str(block.get("end_time")), str(joint_id))
+                            previous = per_joint[teacher_id].get(joint_key)
+                            if previous:
+                                previous["audience_group_ids"] = sorted(set(previous["audience_group_ids"]) | set(group_ids))
+                                previous["audiences"] = [groups.get(value, value) for value in previous["audience_group_ids"]]
+                                continue
+                            per_joint[teacher_id][joint_key] = item
+                        per_teacher[teacher_id].append(item)
+            for teacher_id in teacher_ids:
+                result[teacher_id]["status"] = effective.get("canonical_status")
+                result[teacher_id]["items"].extend(per_teacher[teacher_id])
+        cursor += timedelta(days=1)
+    return result
 
 
 def _day_summaries(day_items: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
