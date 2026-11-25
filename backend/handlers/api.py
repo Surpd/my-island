@@ -23,6 +23,7 @@ from psycopg import OperationalError as PostgresOperationalError
 
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
+from backend.services.journal_analytics import journal_analytics
 from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.admin import (
@@ -1460,6 +1461,21 @@ def create_router(database: Database) -> APIRouter:
         if not detail:
             raise HTTPException(status_code=404, detail="Журнал не найден")
         return detail
+
+    @router.get("/admin/journals/{source_id}/analytics")
+    def admin_journal_analytics(
+        source_id: str, group_marker: str | None = None, start: date | None = None,
+        end: date | None = None, init_data: str | None = None,
+        x_dev_auth: str | None = Header(default=None),
+        x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+    ):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if start and end and start > end:
+            raise HTTPException(status_code=422, detail="Некорректный диапазон дат")
+        detail = database.journal_detail(source_id, group_marker)
+        if not detail or (group_marker and group_marker not in detail["groups"]):
+            raise HTTPException(status_code=404, detail="Журнал или группа не найдены")
+        return journal_analytics(detail, start, end)
 
     @router.get("/admin/journals/{source_id}/sync-history")
     def admin_journal_sync_history(source_id: str, limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
