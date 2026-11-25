@@ -1477,6 +1477,18 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=404, detail="Журнал или группа не найдены")
         return journal_analytics(detail, start, end)
 
+    @router.get("/admin/journals/{source_id}/cell-activity")
+    def admin_journal_cell_activity(
+        source_id: str, group_marker: str | None = None, init_data: str | None = None,
+        x_dev_auth: str | None = Header(default=None),
+        x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+    ):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        result = database.journal_cell_activity(source_id, group_marker)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Журнал не найден")
+        return result
+
     @router.get("/admin/journals/{source_id}/sync-history")
     def admin_journal_sync_history(source_id: str, limit: int = 20, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)

@@ -736,6 +736,16 @@ CREATE TABLE IF NOT EXISTS journal_results (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(assessment_id, source_coordinate)
 );
+CREATE TABLE IF NOT EXISTS journal_cell_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES journal_sources(id) ON DELETE CASCADE,
+  assessment_id INTEGER NOT NULL,
+  journal_student_id INTEGER NOT NULL,
+  group_marker TEXT NOT NULL,
+  change_kind TEXT NOT NULL CHECK(change_kind IN ('added','changed','removed')),
+  observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS journal_cell_events_source_time ON journal_cell_events(source_id, observed_at);
 CREATE TABLE IF NOT EXISTS journal_result_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   result_id INTEGER NOT NULL,
@@ -4353,6 +4363,11 @@ class Database:
                 student_identities[row['id']] = identity_id
                 linked_students += int(identity_id is not None)
             mapped = 0
+            def record_cell_change(assessment_id, student_id, marker, kind):
+                self.execute(connection, """INSERT INTO journal_cell_events
+                    (source_id, assessment_id, journal_student_id, group_marker, change_kind)
+                    VALUES (?,?,?,?,?)""", (source_id, assessment_id, student_id, marker, kind))
+
             existing_results = {(row['assessment_id'], row['journal_student_id']): dict(row) for row in self.execute(connection,
                 "SELECT result.* FROM journal_results result JOIN journal_assessments assessment ON assessment.id=result.assessment_id WHERE assessment.source_id = ?", (source_id,)).fetchall()}
             self.execute(connection, f"UPDATE journal_results SET source_coordinate = 'sync_pending:' || CAST(id AS TEXT) || ':' || source_coordinate, is_current = {boolean_false} WHERE is_current = {boolean_true} AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", (source_id,))
@@ -4366,6 +4381,10 @@ class Database:
                     current = existing_results.get((assessment_id, student_id))
                     raw_result = json.dumps(item.get("raw_source"), ensure_ascii=False)
                     values = (item.get("numeric_score"), item.get("status"), item["source_coordinate"], raw_result, item["student_name"], item["group_marker"], identity_id)
+                    if not current or not current["is_current"]:
+                        record_cell_change(assessment_id, student_id, item["group_marker"], "added")
+                    elif (numeric_key(current["numeric_score"]), current["status"]) != (numeric_key(values[0]), values[1]):
+                        record_cell_change(assessment_id, student_id, item["group_marker"], "changed")
                     if current:
                         previous_coordinate = str(current["source_coordinate"] or "")
                         if previous_coordinate.startswith("sync_pending:"):
@@ -4393,8 +4412,9 @@ class Database:
                     self.execute(connection, f"UPDATE journal_student_summaries SET numeric_value = ?, text_value = ?, source_coordinate = ?, raw_source = {raw_value}, summary_type = ?, is_current = {boolean_true}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (*current_values, summary["id"]))
                 else:
                     self.execute(connection, f"INSERT INTO journal_student_summaries(journal_student_id, label, summary_type, numeric_value, text_value, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, ?, ?, {raw_value}, {boolean_true})", (student_id, item["label"], summary_type, item.get("numeric_value"), item.get("text_value"), item["source_coordinate"], raw_summary))
-            removed = self.execute(connection, f"SELECT id, numeric_score, status, source_coordinate, raw_source, is_current FROM journal_results WHERE is_current = {boolean_false} AND source_coordinate LIKE ? AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", ('sync_pending:%', source_id)).fetchall()
+            removed = self.execute(connection, f"SELECT assessment_id, journal_student_id, group_marker, id, numeric_score, status, source_coordinate, raw_source, is_current FROM journal_results WHERE is_current = {boolean_false} AND source_coordinate LIKE ? AND assessment_id IN (SELECT id FROM journal_assessments WHERE source_id = ?)", ('sync_pending:%', source_id)).fetchall()
             for row in removed:
+                record_cell_change(row["assessment_id"], row["journal_student_id"], row["group_marker"], "removed")
                 coordinate = str(row["source_coordinate"] or "").split(":", 2)[2]
                 self.execute(connection, f"INSERT INTO journal_result_history(result_id, numeric_score, status, source_coordinate, raw_source, is_current) VALUES (?, ?, ?, ?, {raw_value}, ?)", (row["id"], row["numeric_score"], row["status"], coordinate, encoded_json(row["raw_source"]), True))
                 self.execute(connection, "UPDATE journal_results SET source_coordinate = ? WHERE id = ?", (f"removed:{row['id']}:{coordinate}", row["id"]))
@@ -4948,6 +4968,18 @@ class Database:
                 self.execute(connection, "UPDATE journal_sources SET term_number=?,period_status=? WHERE id=?",
                              (term_number, "current" if term_number == current_term else "archived", source_id))
             return True
+
+    def journal_cell_activity(self, source_id, group_marker=None):
+        day = "CAST(observed_at AT TIME ZONE 'UTC' AS DATE)" if self.database_url else "date(observed_at)"
+        marker_filter = " AND group_marker=?" if group_marker else ""
+        params = (source_id, group_marker) if group_marker else (source_id,)
+        with self.connection() as connection:
+            if not self.execute(connection, "SELECT 1 FROM journal_sources WHERE id=?", (source_id,)).fetchone():
+                return None
+            rows = self.execute(connection, f"""SELECT {day} AS observed_day, change_kind, count(*) AS cell_count
+                FROM journal_cell_events WHERE source_id=?{marker_filter}
+                GROUP BY {day}, change_kind ORDER BY observed_day, change_kind""", params).fetchall()
+        return {"source_id": str(source_id), "time_basis": "import_observed_utc", "items": [dict(row) for row in rows]}
 
     def journal_detail(self, source_id: Any, group_marker: str | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
