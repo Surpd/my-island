@@ -104,6 +104,20 @@ class OperationalDayTests(TestCase):
         self.assertEqual({item["change"]: item["block_keys"] for item in report["items"]},
                          {"cancelled": ["a"], "unchanged": ["b"]})
 
+    def test_added_block_matches_cancelled_origin_of_moved_lesson(self):
+        original = block("09:00", "09:45")
+        original["assignments"][0]["metadata"]["constructor_lesson_id"] = "fixture-move"
+        canonical.import_canonical_artifact(self.db, {"version_id": "cross-block", "source_snapshot": {"id": "s", "fingerprint": "f"},
+                                           "blocks": {"old-block": original}}, status="approved_baseline")
+        canonical.materialize_effective_week(self.db, "cross-block", MONDAY.isoformat(), [
+            {"block_key": "old-block", "change_kind": "cancelled"},
+            {"block_key": "new-block", "change_kind": "added", "weekday": 2,
+             "slot": {"start": "12:00", "end": "13:00"}, "assignments": original["assignments"]},
+        ])
+        moved = operational_day(self.db, date(2026, 12, 30), "Europe/Moscow")["items"][0]
+        self.assertEqual(moved["change"], "moved")
+        self.assertEqual(moved["previous_interval"], {"day": MONDAY.isoformat(), "start": "09:00", "end": "09:45"})
+
     def test_admin_link_is_scoped_to_edition_and_role_and_handles_source_failure(self):
         self.materialize()
         admin = self.db.get_or_create_user(901001, "admin")
