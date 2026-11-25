@@ -60,6 +60,7 @@ class JournalImportPostgresTests(unittest.TestCase):
         "journal_students",
         "journal_results",
         "journal_result_history",
+        "journal_cell_events",
         "journal_student_summaries",
         "journal_summary_history",
         "journal_sync_runs",
@@ -176,7 +177,7 @@ class JournalImportPostgresTests(unittest.TestCase):
     def setUp(self):
         self.database = IsolatedPostgresDatabase(DATABASE_URL, self.schema)
         with self.database.connection() as connection:
-            connection.execute("TRUNCATE audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_term_settings, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
+            connection.execute("TRUNCATE journal_cell_events, audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_term_settings, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
             connection.execute(
                 "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', %s, '9-А', 'active')",
                 ("Иванов Иван",),
@@ -351,11 +352,15 @@ class JournalImportPostgresTests(unittest.TestCase):
         self.assertTrue(self._rows("SELECT 1 FROM school_sources WHERE source_type = 'journal' AND configuration ? 'grade'"))
         self.assertTrue(self._rows("SELECT 1 FROM journal_assessments WHERE jsonb_typeof(raw_source) = 'object' LIMIT 1"))
 
+        initial_events = self._rows("SELECT change_kind FROM journal_cell_events")
+        self.assertEqual(len(initial_events), first["results"])
+        self.assertTrue(all(row["change_kind"] == "added" for row in initial_events))
         repeated = sync_journal_values(
             self.database, self.VALUES, spreadsheet_id="synthetic-journal",
             spreadsheet_title="Synthetic journal", grade=9, subject="Математика",
             sheet_title="Математика", sheet_id=904,
         )
+        self.assertEqual(self._rows("SELECT change_kind FROM journal_cell_events"), initial_events)
         self.assertEqual(repeated["results"], 6)
         self.assertEqual(len(self._rows("SELECT id FROM journal_results WHERE is_current IS TRUE")), 6)
         self.assertFalse(self._rows("SELECT id FROM journal_result_history"))

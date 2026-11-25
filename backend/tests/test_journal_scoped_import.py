@@ -37,6 +37,38 @@ class ScopedImportTests(unittest.TestCase):
         return sync_journal_values(self.db, values, spreadsheet_id=BOOK, spreadsheet_title="Synthetic", grade=6,
                                    subject=title, sheet_title=title, sheet_id=tab_id)
 
+    def test_activity_only_tracks_observed_value_changes(self):
+        values = [row.copy() for row in FIRST]
+        values.append(["Second Fixture", 5])
+        self.source(11, "Алгебра", values)
+        source_id = self.db.journal_status()[0]["id"]
+        self.source(11, "Алгебра", values)
+        values[-2][1] = 0
+        self.source(11, "Алгебра", values)
+        values[-2][1] = ""
+        self.source(11, "Алгебра", values)
+        self.source(11, "Алгебра", values)
+        values[-2][1] = 0
+        self.source(11, "Алгебра", values)
+        counts = {row["change_kind"]: row["cell_count"] for row in self.db.journal_cell_activity(source_id)["items"]}
+        self.assertEqual(counts, {"added": 3, "changed": 1, "removed": 1})
+
+    def test_failed_refresh_does_not_leave_cell_activity_or_replace_last_snapshot(self):
+        self.source(1, "Алгебра")
+        source_id = self.db.journal_status()[0]["id"]
+        baseline = self.db.journal_detail(source_id)
+        activity = self.db.journal_cell_activity(source_id)
+        changed = [row.copy() for row in FIRST]
+        changed[-1][1] = 0
+        with patch.object(self.db, "_infer_journal_groups", side_effect=RuntimeError("synthetic write failure")):
+            with self.assertRaisesRegex(RuntimeError, "synthetic write failure"):
+                self.source(1, "Алгебра", changed)
+        self.assertEqual(self.db.journal_cell_activity(source_id), activity)
+        self.assertEqual(self.db.journal_detail(source_id), baseline)
+        self.source(1, "Алгебра", changed)
+        self.assertEqual({row["change_kind"] for row in self.db.journal_cell_activity(source_id)["items"]},
+                         {"added", "changed"})
+
     def refresh(self, **kwargs):
         return refresh_grade_journal(self.db, object(), 6, spreadsheet_id=BOOK, **kwargs)
 
