@@ -114,6 +114,21 @@ class PartialPublicationPostgresTests(unittest.TestCase):
             **overrides,
         }
 
+    def test_two_connections_replay_one_successful_receipt(self):
+        draft = self.draft([self.lesson("receipt")])
+        preview = self.preview(draft)
+
+        def confirm():
+            return self.confirm(draft, preview, operation_id="shared-command")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(confirm) for _ in range(2)]
+            first, second = [future.result() for future in futures]
+        self.assertEqual(first, second)
+        self.assertEqual(len(list_publications(self.database)["items"]), 1)
+        with self.assertRaises(PublicationConflict):
+            self.confirm(draft, preview, operation_id="different-command")
+
     def test_admin_week_history_parameterizes_percent_pattern(self):
         from backend.services.canonical_schedule import _admin_week_history
 

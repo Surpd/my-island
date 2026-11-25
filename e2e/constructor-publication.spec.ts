@@ -229,6 +229,28 @@ test('read-only preview remains available and cannot publish', async ({ page }) 
   await expect(dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ })).toHaveCount(0);
 });
 
+test('recovers a committed publication after the POST response is lost', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  let operationId = '';
+  let writes = 0;
+  await page.route(`${API}/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`, async route => {
+    operationId = route.request().postDataJSON().operation_id;
+    writes += 1;
+    await route.abort('connectionreset');
+  });
+  await page.route(`${API}/api/admin/schedule/constructor/publication/receipts/*`, async route => {
+    expect(operationId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(route.request().url()).toMatch(new RegExp(operationId + '$'));
+    await route.fulfill({json: {operation_id: operationId, published_id: PUBLISHED_ID,
+      runtime_readback: {verified: true, block_count: 1, assignment_count: 1}}});
+  });
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
+  await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
+  await expect(dialog.getByText(/Проверка после публикации пройдена/)).toBeVisible();
+  expect(writes).toBe(1);
+});
+
 test('changing publication scope clears confirmation and publish uses the latest exact preview token', async ({ page }) => {
   const { dialog, getPublishPayload } = await openPublicationPanel(page);
   await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();

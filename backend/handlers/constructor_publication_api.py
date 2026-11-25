@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from backend.services.constructor_publication import (
     PublicationBlocked, PublicationConflict, preview_publication,
-    publish_publication, list_publications, restore_publication, preview_restore,
+    publish_publication, list_publications, restore_publication, preview_restore, publication_receipt,
 )
 from backend.services.schedule_experiments import ExperimentNotFound, ExperimentConflict
 
@@ -23,6 +23,7 @@ class PreviewBody(BaseModel):
 class PublishBody(PreviewBody):
     preview_token: str
     confirmed: bool = False
+    operation_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class RestorePreviewBody(BaseModel):
@@ -33,6 +34,7 @@ class RestorePreviewBody(BaseModel):
 class RestoreBody(RestorePreviewBody):
     preview_token: str
     confirmed: bool = False
+    operation_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ResolutionBody(BaseModel):
@@ -173,6 +175,14 @@ def create_constructor_publication_router(
     def history(draft_id: str, x_school_admin_session: str | None = Header(default=None)):
         database, _ = admin(x_school_admin_session, preview_only=True)
         return call(list_publications, database, draft_id)
+
+    @router.get("/publication/receipts/{operation_id}")
+    def receipt(operation_id: str, x_school_admin_session: str | None = Header(default=None)):
+        database, actor = admin(x_school_admin_session)
+        result = call(publication_receipt, database, operation_id, actor)
+        if result is None:
+            raise HTTPException(404, "Publication receipt not found")
+        return result
 
     @router.post("/publication/restore")
     def restore(body: RestoreBody, x_school_admin_session: str | None = Header(default=None)):
