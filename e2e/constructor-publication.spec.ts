@@ -94,6 +94,10 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === '/api/admin/schedule/experiments/school/audience-preview') return route.fulfill({json:{lessons:{}}});
     if (path === '/api/admin/school/teacher-ui-colors') return route.fulfill({json:{items:[]}});
     if (path === '/api/admin/schedule/observability') return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [], canonical: { version_id: 'base-version-hidden-in-ui', status: 'authoritative' } } });
+    if (path === '/api/admin/schedule/constructor/publication/publication-fixture/sheet-retry' && route.request().method() === 'POST') {
+      historyItems = historyItems.map(item => ({...item, sheet_delivery: {state: 'pending'}}));
+      return route.fulfill({json: {state: 'pending'}});
+    }
     if (path.startsWith('/api/admin/schedule/activities')) return route.fulfill({ json: { items: [] } });
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}`) {
       const lessons = ['lesson-info', 'lesson-conflict', 'lesson-related', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
@@ -125,9 +129,8 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
       return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
     }
-    if (path === '/api/admin/schedule/constructor/publication/publication-fixture/sheet-retry' && route.request().method() === 'POST') {
-      historyItems = historyItems.map(item => ({...item, sheet_delivery: {state: 'pending'}}));
-      return route.fulfill({json: {state: 'pending'}});
+    if (path === '/api/admin/schedule/constructor/publication/recovery-context') {
+      return route.fulfill({json: {owner: 'fixture-admin-owner'}});
     }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publications`) return route.fulfill({ json: { items: historyItems, heads: {} } });
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/preview` && route.request().method() === 'POST') {
@@ -143,13 +146,25 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
       const scope = publishPayload.scope_kind === 'week' ? 'week' : 'template';
       const publishedWeek = typeof publishPayload.week_start === 'string' ? publishPayload.week_start : '';
       const historyPreview = preview('history');
+      if (scope === 'week') {
+        historyItems = [{
+          id: 'publication-fixture', sheet_delivery: {state: 'retry'}, scope_kind: scope, scope_key: `week:${publishedWeek}`,
+          created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
+          runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
+          diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
+        }];
+        return route.fulfill({json: {status: 'published', operation_id: publishPayload.operation_id,
+          sheet_delivery_queued: true, published_id: PUBLISHED_ID, version_id: VERSION_ID,
+          created_at: '2026-10-27T09:15:00Z', week_start: publishedWeek, summary: historyItems[0].summary,
+          runtime_readback: { verified: true, block_count: 7, assignment_count: 4 }}});
+      }
       historyItems = [{
-        id: 'publication-fixture', ...(scope === 'week' ? {sheet_delivery: {state: 'retry'}} : {}), scope_kind: scope, scope_key: scope === 'week' ? `week:${publishedWeek}` : 'template',
+        id: 'publication-fixture', scope_kind: scope, scope_key: 'template',
         created_at: '2026-10-27T09:15:00Z', published_id: PUBLISHED_ID, version_id: VERSION_ID,
         runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
         diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
       }];
-      return route.fulfill({ json: { status: 'published', sheet_delivery_queued: scope === 'week', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
+      return route.fulfill({ json: { status: 'published', operation_id: publishPayload.operation_id, published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
     }
     return route.continue();
   });
@@ -253,6 +268,57 @@ test('recovers a committed publication after the POST response is lost', async (
   await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
   await expect(dialog.getByText(/Проверка после публикации пройдена/)).toBeVisible();
   expect(writes).toBe(1);
+});
+
+test('reopening after reload checks the saved receipt without issuing a new command', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  let operationId = '';
+  let writes = 0;
+  let reloaded = false;
+  await page.route(`${API}/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`, async route => {
+    operationId = route.request().postDataJSON().operation_id;
+    writes += 1;
+    await route.abort('connectionreset');
+  });
+  await page.route(`${API}/api/admin/schedule/constructor/publication/receipts/*`, async route => {
+    expect(route.request().url()).toContain(operationId);
+    if (!reloaded) return route.fulfill({status: 503});
+    return route.fulfill({json: {operation_id: operationId, published_id: PUBLISHED_ID,
+      runtime_readback: {verified: true, block_count: 1, assignment_count: 1}}});
+  });
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
+  await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
+  await expect(dialog.getByRole('button', {name: 'Проверить квитанцию'})).toBeEnabled();
+  reloaded = true;
+  await page.reload();
+  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
+  await expect(dialog.getByText(/Найдена квитанция/)).toBeVisible();
+  expect(writes).toBe(1);
+});
+
+test('a missing receipt only allows retrying the original confirmed request', async ({ page }) => {
+  const { dialog } = await openPublicationPanel(page);
+  const commands: unknown[] = [];
+  await page.route(`${API}/api/admin/schedule/constructor/${DRAFT_ID}/publication/publish`, async route => {
+    const body = route.request().postDataJSON();
+    commands.push(body);
+    if (commands.length === 1) return route.abort('connectionreset');
+    return route.fulfill({json: {operation_id: body.operation_id, published_id: PUBLISHED_ID,
+      runtime_readback: {verified: true, block_count: 1, assignment_count: 1}}});
+  });
+  await page.route(`${API}/api/admin/schedule/constructor/publication/receipts/*`, route => route.fulfill({status: 404}));
+  await dialog.getByRole('button', { name: 'Публикация', exact: true }).click();
+  await dialog.getByRole('checkbox', { name: /Подтверждаю публикацию/ }).check();
+  await dialog.getByRole('button', { name: /Опубликовать с замечаниями шаблон/ }).click();
+  await expect(dialog.getByRole('button', {name: 'Проверить квитанцию'})).toBeEnabled();
+  await page.reload();
+  await page.getByRole('button', { name: 'Проверить расписание', exact: true }).click();
+  expect(commands).toHaveLength(1);
+  await dialog.getByRole('button', {name: 'Повторить исходную команду'}).click();
+  await expect(dialog.getByText(/Найдена квитанция/)).toBeVisible();
+  expect(commands).toHaveLength(2);
+  expect(commands[0]).toEqual(commands[1]);
 });
 
 test('changing publication scope clears confirmation and publish uses the latest exact preview token', async ({ page }) => {

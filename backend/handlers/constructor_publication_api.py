@@ -1,10 +1,11 @@
 """School-only explicit constructor publication, disabled unless opted in."""
 from __future__ import annotations
 
+import hashlib
 import os
 from typing import Any, Callable
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.services.constructor_publication import (
@@ -24,6 +25,7 @@ class PublishBody(PreviewBody):
     preview_token: str
     confirmed: bool = False
     operation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    recovery_owner: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class RestorePreviewBody(BaseModel):
@@ -35,6 +37,7 @@ class RestoreBody(RestorePreviewBody):
     preview_token: str
     confirmed: bool = False
     operation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    recovery_owner: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ResolutionBody(BaseModel):
@@ -166,15 +169,50 @@ def create_constructor_publication_router(
         database,_=admin(x_school_admin_session,preview_only=True)
         return call(get_published_source,database,publication_id)
 
+    def recovery_owner(actor) -> str:
+        if actor is None:
+            raise HTTPException(403, "School administrator identity required")
+        return hashlib.sha256(f"my-island:publication-recovery:v1:{actor}".encode()).hexdigest()
+
+    def command_payload(body: PublishBody | RestoreBody, actor):
+        if body.recovery_owner is not None and body.recovery_owner != recovery_owner(actor):
+            raise HTTPException(403, "Publication request belongs to another administrator")
+        return body.model_dump(exclude={"recovery_owner"})
+
+    @router.get("/publication/recovery-context")
+    def recovery_context(response: Response, x_school_admin_session: str | None = Header(default=None)):
+        _, actor = admin(x_school_admin_session)
+        response.headers["Cache-Control"] = "private, no-store"
+        return {"owner": recovery_owner(actor)}
+
     @router.post("/{draft_id}/publication/publish")
     def publish(draft_id: str, body: PublishBody, x_school_admin_session: str | None = Header(default=None)):
         database, actor = admin(x_school_admin_session)
-        return call(publish_publication, database, draft_id, actor_user_id=actor, **body.model_dump())
+        return call(publish_publication, database, draft_id, actor_user_id=actor, **command_payload(body, actor))
 
     @router.get("/{draft_id}/publications")
     def history(draft_id: str, x_school_admin_session: str | None = Header(default=None)):
         database, _ = admin(x_school_admin_session, preview_only=True)
         return call(list_publications, database, draft_id)
+
+    @router.get("/publication/receipts/{operation_id}")
+    def receipt(operation_id: str, response: Response, x_school_admin_session: str | None = Header(default=None)):
+        database, actor = admin(x_school_admin_session)
+        result = call(publication_receipt, database, operation_id, actor)
+        if result is None:
+            raise HTTPException(404, "Publication receipt not found", headers={"Cache-Control": "private, no-store"})
+        response.headers["Cache-Control"] = "private, no-store"
+        return result
+
+    @router.post("/publication/restore")
+    def restore(body: RestoreBody, x_school_admin_session: str | None = Header(default=None)):
+        database, actor = admin(x_school_admin_session)
+        return call(restore_publication, database, actor_user_id=actor, **command_payload(body, actor))
+
+    @router.post("/publication/restore/preview")
+    def restore_preview(body: RestorePreviewBody, x_school_admin_session: str | None = Header(default=None)):
+        database, _ = admin(x_school_admin_session)
+        return call(preview_restore, database, **body.model_dump())
 
     @router.post("/publication/{publication_id}/sheet-retry")
     def retry_week_sheet(publication_id: str, x_school_admin_session: str | None = Header(default=None)):
@@ -190,23 +228,5 @@ def create_constructor_publication_router(
         if not row:
             raise HTTPException(409, "Only a current failed delivery can be retried")
         return {"state": row["state"]}
-
-    @router.get("/publication/receipts/{operation_id}")
-    def receipt(operation_id: str, x_school_admin_session: str | None = Header(default=None)):
-        database, actor = admin(x_school_admin_session)
-        result = call(publication_receipt, database, operation_id, actor)
-        if result is None:
-            raise HTTPException(404, "Publication receipt not found")
-        return result
-
-    @router.post("/publication/restore")
-    def restore(body: RestoreBody, x_school_admin_session: str | None = Header(default=None)):
-        database, actor = admin(x_school_admin_session)
-        return call(restore_publication, database, actor_user_id=actor, **body.model_dump())
-
-    @router.post("/publication/restore/preview")
-    def restore_preview(body: RestorePreviewBody, x_school_admin_session: str | None = Header(default=None)):
-        database, _ = admin(x_school_admin_session)
-        return call(preview_restore, database, **body.model_dump())
 
     return router
