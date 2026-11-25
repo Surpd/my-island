@@ -1,0 +1,22 @@
+name: Journal analytics
+on:
+  pull_request:
+    paths:
+      - 'backend/services/journal_analytics.py'
+      - 'backend/handlers/api.py'
+      - 'backend/database.py'
+      - 'backend/tests/test_journal*.py'
+      - '.github/workflows/journal-analytics.yml'
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: python -m unittest backend.tests.test_journal_role_views backend.tests.test_journal_import_parser backend.tests.test_journal_scoped_import backend.tests.test_journal_modernization
