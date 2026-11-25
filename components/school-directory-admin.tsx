@@ -1,6 +1,7 @@
 /* oxlint-disable typescript/no-explicit-any -- Existing admin API accepts extensible directory rows. */
 'use client';
 
+import { useLiveRevision } from './use-live-revision';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GripVertical, Plus, RefreshCw, Search, X, ChevronRight } from 'lucide-react';
 import { audienceGrades, audienceKind, audienceLabel, classLabel as formatClassLabel, subjectLabel, studentMemberships } from './school-audience';
@@ -9,7 +10,7 @@ import { assignmentIsActive } from './teacher-directory-logic';
 
 type Row = Record<string, any>;
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
-type Props = { api: Api; section: 'groups' | 'teachers'; schoolMode?: boolean; connectionLabel?: string; initialGroupId?: string; navigate?: (href: string) => void };
+type Props = { api: Api; section: 'groups' | 'teachers'; schoolMode?: boolean; live?: boolean; connectionLabel?: string; initialGroupId?: string; navigate?: (href: string) => void };
 type Directory = { groups: Row[]; students: Row[]; teachers: Row[]; write_ready?: boolean; read_only?: boolean; archive_ready?: boolean };
 
 const title = (item: Row) => String(item.display_name || item.name || '');
@@ -18,7 +19,7 @@ const membershipRows = studentMemberships;
 const groupIdOf = (item: Row) => String(item.group_id || item.id || '');
 const subjectOf = (group: Row) => subjectLabel(group.subject || '');
 
-export function SchoolDirectoryAdmin({ api, section, schoolMode = false, connectionLabel = 'Локальная база', initialGroupId, navigate }: Props) {
+export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = true, connectionLabel = 'Локальная база', initialGroupId, navigate }: Props) {
   const [data, setData] = useState<Directory>({ groups: [], students: [], teachers: [] });
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -84,11 +85,12 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, connect
     setPickedStudents([]);
   }, [api, schoolMode]);
 
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
+  const load = useCallback(async (signal?: AbortSignal) => {
+    if (!signal) { setLoading(true); setError(''); }
     try {
       if (schoolMode) {
         const directory = await api<Directory>('/api/admin/school/directory');
+        if (signal?.aborted) return;
         setConnectionLost(false);
         teachersRef.current = directory.teachers || [];
         setData(directory);
@@ -110,6 +112,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, connect
         api<{ items: Row[] }>('/api/admin/people?kind=teacher&include_inactive=true'),
         api<Row>('/api/admin/system').catch(() => ({} as Row)),
       ]);
+      if (signal?.aborted) return;
       teachersRef.current = teachers.items || [];
       setData({ groups: groups.items || [], students: students.items || [], teachers: teachers.items || [] });
       if (initialGroupId && !initialGroupOpened.current) {
@@ -117,10 +120,16 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, connect
         if (group) { initialGroupOpened.current = true; editGroup(group); }
       }
       setSourceMode(system.health?.environment === 'local_sqlite' || system.settings?.database_configured === false ? 'Изолированная локальная база API. Сохранения доступны для ручной проверки, изменения не попадут в школьную базу.' : 'Источник: активная база, подключённая к административному API.');
-    } catch (e) { if (schoolMode) setConnectionLost(true); setError(e instanceof Error ? e.message : 'Не удалось загрузить школьный справочник.'); }
-    finally { setLoading(false); }
+    } catch (e) { if (signal) throw e; if (schoolMode) setConnectionLost(true); setError(e instanceof Error ? e.message : 'Не удалось загрузить школьный справочник.'); }
+    finally { if (!signal?.aborted) setLoading(false); }
   }, [api, editGroup, initialGroupId, schoolMode]);
-  useEffect(() => { if (schoolSession) void Promise.resolve().then(load); }, [load, schoolSession]);
+  useLiveRevision({
+    enabled: live && schoolSession,
+    api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
+    refresh: async (_marker, signal) => { await load(signal); },
+    revoke: () => window.location.reload(),
+  });
+  useEffect(() => { if (schoolSession) void load(); }, [load, schoolSession]);
 
   const classes = useMemo(() => data.groups.filter((g) => !g.archived_at && String(g.group_type || '').toLocaleLowerCase('ru') === 'class').sort((a, b) => classLabel(a).localeCompare(classLabel(b), 'ru', { numeric: true })), [data.groups]);
   const classNames = useMemo(() => classes.map(classLabel).filter(Boolean), [classes]);

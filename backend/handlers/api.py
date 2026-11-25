@@ -21,7 +21,7 @@ from uuid import UUID
 from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
 
-from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction
+from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction, directory_version
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
 from backend.services.auth import AuthError, resolve_auth
@@ -1219,6 +1219,11 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=404, detail="Group was not found")
         return group
 
+    @router.get("/admin/directory/version")
+    def edit_version(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return {"actor": str(actor["id"]), "version": directory_version(database)}
+
     @router.get("/admin/directory/history/{entity_type}/{entity_id}")
     def edit_history(entity_type: str, entity_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
@@ -2243,11 +2248,17 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=503, detail="Школьный справочник временно недоступен для расчёта аудитории") from error
 
     @router.get("/admin/schedule/experiments/school/{experiment_id}")
-    def admin_school_get(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
+    def admin_school_get(experiment_id: str, revision_only: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         require_real_school_admin(x_school_admin_session, principal)
         _, store = school_stores()
         try:
+            if revision_only:
+                with store.connection() as connection:
+                    row = store.execute(connection, "SELECT revision FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
+                if not row:
+                    raise ExperimentNotFound(experiment_id)
+                return {"revision": row["revision"], "actor": str(principal["id"])}
             return get_experiment(store, experiment_id)
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -2346,9 +2357,15 @@ def create_router(database: Database) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/admin/schedule/experiments/{experiment_id}")
-    def admin_schedule_get_experiment(experiment_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+    def admin_schedule_get_experiment(experiment_id: str, revision_only: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
         try:
+            if revision_only:
+                with database.connection() as connection:
+                    row = database.execute(connection, "SELECT revision FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
+                if not row:
+                    raise ExperimentNotFound(experiment_id)
+                return {"revision": row["revision"], "actor": str(principal["id"])}
             return get_experiment(database, experiment_id)
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

@@ -1,6 +1,7 @@
 /* oxlint-disable typescript/no-explicit-any, react/react-compiler, react-hooks/exhaustive-deps, jsx-a11y/prefer-tag-over-role, jsx-a11y/control-has-associated-label, jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 'use client';
 
+import { useLiveRevision } from './use-live-revision';
 import {
   Fragment,
   useEffect,
@@ -1266,6 +1267,34 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     setFuture((items) => items.slice(0, -1));
     setDirty(true);
   };
+  useLiveRevision({
+    enabled: Boolean(draft?.id) && !diagnostic,
+    path: schedulePath(`/${encodeURIComponent(draft?.id || '')}?revision_only=true`),
+    api,
+    refresh: async (marker, signal) => {
+      const current = draftRef.current;
+      if (!current || current.id !== draft?.id || marker.revision === revision.current) return;
+      // Buffered inspector fields are applied by their existing blur/save handlers.
+      if (savingRef.current || versionConflict || attendanceReasons.current.size
+        || document.activeElement?.matches('input, textarea, [contenteditable=true]')) return false;
+      const server = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`), { signal });
+      if (signal.aborted || savingRef.current || draftRef.current !== current) return false;
+      const base = baseDraftRef.current;
+      const merged = dirty ? mergeScheduleDrafts(base || unknownConflictBase(server), current, server) : null;
+      if (merged?.conflicts.length) {
+        setConflictChoices({}); setVersionConflict({ base, local: current, server, conflicts: merged.conflicts });
+        setStatus('Другой администратор изменил тот же урок. Выберите версию в окне конфликта.');
+        return;
+      }
+      const next = merged ? { ...server, name: merged.draft.name, payload: merged.draft.payload } : server;
+      revision.current = server.revision; baseDraftRef.current = server;
+      setDraft(next); setDirty(!sameDraftContent(next, server));
+      setHistory([]); setFuture([]);
+      setStatus('Получена новая версия черновика.');
+    },
+    revoke: () => window.location.reload(),
+  });
+
   const save = async () => {
     if (diagnostic) return !dirty;
     const current = draftRef.current;

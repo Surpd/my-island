@@ -473,8 +473,8 @@ function AppContent({ path, navigate, diagnostic = false }: { path: string; navi
   if (diagnostic && path === '/admin/schedule/published') return <ResponsiveSchedule request={request} diagnostic />;
 
   if (path === '/admin/preview') return <MiniappPreview key={`${routeQuery().get('identity_id') || ''}:${routeQuery().get('kind') || ''}`} api={request} sourceLabel={dataSourceLabel} initialIdentity={diagnostic ? '' : routeQuery().get('identity_id') || ''} initialKind={routeQuery().get('kind') || 'student'} initialDay={routeQuery().get('day') || ''} localAdmin={!diagnostic && Boolean(localDevAuth())} />;
-  if (path === '/admin/teachers') return <TeacherDirectoryAdmin connectionLabel={dataSourceLabel} api={directoryRequest} schoolMode={directorySchoolMode} navigate={navigate} />;
-  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={directoryRequest} section="groups" navigate={navigate} schoolMode={directorySchoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
+  if (path === '/admin/teachers') return <TeacherDirectoryAdmin live={!diagnostic} connectionLabel={dataSourceLabel} api={directoryRequest} schoolMode={directorySchoolMode} navigate={navigate} />;
+  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin live={!diagnostic} connectionLabel={dataSourceLabel} api={directoryRequest} section="groups" navigate={navigate} schoolMode={directorySchoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
   if (path === '/admin/schedule/published') return <MobilePublishedSchedule api={request} initialWeekStart={routeQuery().get('week_start') || undefined} />;
   if (path === '/admin/schedule/constructor') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
   if (path === '/admin/schedule') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
