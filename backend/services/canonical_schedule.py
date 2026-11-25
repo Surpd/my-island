@@ -2303,6 +2303,10 @@ def project_teacher_range(database: Database, identity_id: Any, start_day: str, 
     if any("publications" in value for value in projections.values()):
         result["publications"] = [publication for value in projections.values()
                                    for publication in (value.get("publications") or [])]
+    single_publications = [value.get("publication") for value in projections.values() if value.get("publication")]
+    if single_publications:
+        result["publication"] = single_publications[0]
+        result.setdefault("publications", []).extend(single_publications)
     return result
 
 
