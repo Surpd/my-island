@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from backend.services.directory_revisions import directory_import_connection
 from backend.config import Settings
 from backend.database import Database
 from backend.services.student_membership_manual_resolutions import load_manual_resolutions
@@ -283,7 +284,7 @@ def apply_reviewed_plan(database: Database, settings: Settings, reviewed: Mappin
         raise StudentMembershipApplyBlocked(f"Unexpected pre-apply materialized CREATE count: {preview_payload['summary'].get('CREATE')}")
     teacher_before: dict[str, list[tuple[Any, ...]]]
     mutations = {"identities_created": [], "groups_created": [], "source_mappings_created_or_updated": 0, "memberships_created": [], "memberships_deactivated": [], "protected_memberships": [item for item in reviewed.get("assignments", []) if item.get("action") == "PROTECTED"]}
-    with database.connection() as connection:
+    with directory_import_connection(database) as connection:
         active_count = database.execute(connection, "SELECT COUNT(*) AS count FROM memberships WHERE member_role = 'student' AND active IS TRUE").fetchone()["count"]
         if int(active_count) != REVIEWED_CURRENT:
             raise StudentMembershipApplyBlocked(f"Pre-apply active membership drift: {active_count} != {REVIEWED_CURRENT}")
