@@ -12,6 +12,8 @@ on:
       - 'backend/services/school_experiment_workspace.py'
       - 'backend/tests/test*directory*.py'
       - 'components/*directory*.tsx'
+      - 'components/use-live-revision.ts'
+      - 'components/schedule-constructor.tsx'
       - 'e2e/*directory*'
 
 permissions:
@@ -56,7 +58,7 @@ jobs:
           done
       - name: Verify SQLite and PostgreSQL transactions and administrative APIs
         run: >-
-          python -m unittest backend.tests.test_directory_revisions
+          python -m unittest backend.tests.test_directory_live backend.tests.test_directory_revisions
           backend.tests.test_admin_console backend.tests.test_school_directory_api
           backend.tests.test_school_directory_admin_projection -v
       - uses: actions/setup-node@v4
@@ -67,4 +69,4 @@ jobs:
       - run: npx --no-install tsc --noEmit
       - run: npx --no-install playwright install --with-deps chromium
       - name: Verify school directory forms in Chromium
-        run: npx --no-install playwright test e2e/directory-editor.spec.ts e2e/teacher-directory.spec.ts
+        run: npx --no-install playwright test e2e/directory-editor.spec.ts e2e/teacher-directory.spec.ts e2e/directory-live.spec.ts

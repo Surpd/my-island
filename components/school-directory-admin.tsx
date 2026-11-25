@@ -2,6 +2,7 @@
 'use client';
 
 import { useLiveRevision } from './use-live-revision';
+import { DirectoryConflict } from './directory-conflict';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GripVertical, Plus, RefreshCw, Search, X, ChevronRight } from 'lucide-react';
 import { audienceGrades, audienceKind, audienceLabel, classLabel as formatClassLabel, subjectLabel, studentMemberships } from './school-audience';
@@ -21,6 +22,7 @@ const subjectOf = (group: Row) => subjectLabel(group.subject || '');
 
 export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = true, connectionLabel = 'Локальная база', initialGroupId, navigate }: Props) {
   const [data, setData] = useState<Directory>({ groups: [], students: [], teachers: [] });
+  const [accessLost, setAccessLost] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -81,16 +83,19 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
     const matchingTeachers = teachersRef.current.filter((t) => (t.teacher_assignments || []).some((a: Row) => String(a.group_id) === String(group.id) && assignmentIsActive(a) && subjectLabel(a.subject) === subjectOf(group)));
     const defaultTeacher = String(group.default_teacher_identity_id || (matchingTeachers.length === 1 ? matchingTeachers[0].id : '') || '');
     setGroupMenuId('');
-    setGroupDraft({ ...group, display_name: audienceLabel(group), _original_subject: group.subject || '', comment: group.comment ?? group.admin_note ?? '', default_teacher_identity_id: defaultTeacher, _original_default_teacher_identity_id: defaultTeacher });
-    setPickedStudents([]);
-  }, [api, schoolMode]);
+    const base = { ...group, display_name: audienceLabel(group), _original_subject: group.subject || '', comment: group.comment ?? group.admin_note ?? '', default_teacher_identity_id: defaultTeacher, _original_default_teacher_identity_id: defaultTeacher };
+    setGroupDraft({ ...base, _base: base });
+    setPickedStudents([]); pickedRevisions.current.clear();
+  }, []);
 
+  const readSequence = useRef(0);
   const load = useCallback(async (signal?: AbortSignal) => {
+    const sequence = ++readSequence.current;
     if (!signal) { setLoading(true); setError(''); }
     try {
       if (schoolMode) {
-        const directory = await api<Directory>('/api/admin/school/directory');
-        if (signal?.aborted) return;
+        const directory = await api<Directory>('/api/admin/school/directory', { signal });
+        if (signal?.aborted || sequence !== readSequence.current) return;
         setConnectionLost(false);
         teachersRef.current = directory.teachers || [];
         setData(directory);
@@ -107,12 +112,12 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
         return;
       }
       const [groups, students, teachers, system] = await Promise.all([
-        api<{ items: Row[] }>('/api/admin/groups?include_archived=true'),
-        api<{ items: Row[] }>('/api/admin/people?kind=student'),
-        api<{ items: Row[] }>('/api/admin/people?kind=teacher&include_inactive=true'),
-        api<Row>('/api/admin/system').catch(() => ({} as Row)),
+        api<{ items: Row[] }>('/api/admin/groups?include_archived=true', { signal }),
+        api<{ items: Row[] }>('/api/admin/people?kind=student', { signal }),
+        api<{ items: Row[] }>('/api/admin/people?kind=teacher&include_inactive=true', { signal }),
+        api<Row>('/api/admin/system', { signal }).catch(() => ({} as Row)),
       ]);
-      if (signal?.aborted) return;
+      if (signal?.aborted || sequence !== readSequence.current) return;
       teachersRef.current = teachers.items || [];
       setData({ groups: groups.items || [], students: students.items || [], teachers: teachers.items || [] });
       if (initialGroupId && !initialGroupOpened.current) {
@@ -121,15 +126,16 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
       }
       setSourceMode(system.health?.environment === 'local_sqlite' || system.settings?.database_configured === false ? 'Изолированная локальная база API. Сохранения доступны для ручной проверки, изменения не попадут в школьную базу.' : 'Источник: активная база, подключённая к административному API.');
     } catch (e) { if (signal) throw e; if (schoolMode) setConnectionLost(true); setError(e instanceof Error ? e.message : 'Не удалось загрузить школьный справочник.'); }
-    finally { if (!signal?.aborted) setLoading(false); }
+    finally { if (!signal?.aborted && sequence === readSequence.current) setLoading(false); }
   }, [api, editGroup, initialGroupId, schoolMode]);
   useLiveRevision({
-    enabled: live && schoolSession,
+    enabled: live && schoolSession && !accessLost,
     api, path: schoolMode ? '/api/admin/school/directory/version' : '/api/admin/directory/version',
     refresh: async (_marker, signal) => { await load(signal); },
-    revoke: () => window.location.reload(),
+    unavailable: () => { void load(); },
+    revoke: () => setAccessLost(true),
   });
-  useEffect(() => { if (schoolSession) void load(); }, [load, schoolSession]);
+  useEffect(() => { if (schoolSession && !live) void load(); }, [live, load, schoolSession]);
 
   const classes = useMemo(() => data.groups.filter((g) => !g.archived_at && String(g.group_type || '').toLocaleLowerCase('ru') === 'class').sort((a, b) => classLabel(a).localeCompare(classLabel(b), 'ru', { numeric: true })), [data.groups]);
   const classNames = useMemo(() => classes.map(classLabel).filter(Boolean), [classes]);
@@ -235,6 +241,19 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось создать ученика.'); }
     finally { setBusy(false); }
   };
+  const groupServer = groupDraft?.id ? data.groups.find((row) => String(row.id) === String(groupDraft.id)) : null;
+  const remoteGroup: Row | null = groupServer ? { ...groupServer, display_name: audienceLabel(groupServer),
+    comment: groupServer.comment ?? groupServer.admin_note ?? '',
+    default_teacher_identity_id: String(groupServer.default_teacher_identity_id || '') } : null;
+  const pickedRevisions = useRef(new Map<string, number>());
+  const pickMembers = (ids: string[]) => {
+    const kept = new Map<string, number>();
+    for (const id of ids) {
+      const version = pickedRevisions.current.get(id) ?? data.students.find((row) => String(row.id) === id)?.revision;
+      if (version !== undefined) kept.set(id, version);
+    }
+    pickedRevisions.current = kept; setPickedStudents(ids);
+  };
   const saveGroup = async (membersOnly: boolean) => {
     if (!groupDraft) return;
     if (!membersOnly && groupDraft.id && subjectLabel(groupDraft.subject) !== subjectLabel(groupDraft._original_subject)
@@ -246,7 +265,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
       ...(groupDraft.id && String(groupDraft.default_teacher_identity_id || '') === String(groupDraft._original_default_teacher_identity_id || '') ? {} : { default_teacher_identity_id: groupDraft.default_teacher_identity_id || null }),
     };
     const add_members = pickedStudents.map((id) => ({
-      identity_id: id, expected_revision: data.students.find((student) => String(student.id) === id)?.revision,
+      identity_id: id, expected_revision: pickedRevisions.current.get(id),
     }));
     setBusy(true); setError('');
     try {
@@ -254,7 +273,7 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
         method: groupDraft.id ? 'PATCH' : 'POST',
         body: JSON.stringify({ ...fields, expected_revision: groupDraft.revision, add_members }),
       });
-      setNotice('Изменения сохранены.'); setGroupDraft(null); setPickedStudents([]);
+      setNotice('Изменения сохранены.'); setGroupDraft(null); setPickedStudents([]); pickedRevisions.current.clear();
       window.dispatchEvent(new Event('school-directory-updated')); await load();
     } catch (cause) {
       if ((cause as { status?: number })?.status === 409) await load();
@@ -346,8 +365,9 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
     finally { setBusy(false); }
   };
   if (schoolMode && authChecking) return <div className="admin-panel">Проверяем доступ к школьному справочнику…</div>;
+  if (accessLost) return <p role="alert">Доступ администратора изменился. Обновите страницу для нового входа.</p>;
   if (schoolMode && !schoolSession) return <section className="admin-panel school-editor-auth"><h2>Вход в школьный справочник</h2><p>Тестовый параметр role=admin не даёт доступа к настоящей базе. Получите одноразовый код командой /admincode в школьном Telegram-боте.</p><form onSubmit={async (event) => { event.preventDefault(); setAuthError(''); try { const result = await api<{ browser_session_token: string }>('/api/admin/school/auth/exchange', { method: 'POST', body: JSON.stringify({ code: schoolCode.trim() }) }); window.sessionStorage.setItem('my_island_school_admin_session', result.browser_session_token); setSchoolCode(''); setSchoolSession(true); } catch (e) { setAuthError(e instanceof Error ? e.message : 'Код не принят.'); } }}><label className="school-field">Одноразовый код<input value={schoolCode} onChange={(event) => setSchoolCode(event.target.value)} autoComplete="one-time-code" /></label><button className="admin-button admin-button--primary" disabled={!schoolCode.trim()}>Войти</button></form>{authError ? <p role="alert" className="admin-error-text">{authError}</p> : null}</section>;
-  if (loading) return <div className="admin-panel">Загружаем школьный справочник…</div>;
+  if (loading && !data.groups.length && !data.students.length) return <div className="admin-panel">Загружаем школьный справочник…</div>;
   if (error && !data.groups.length && !data.students.length) return <section className="admin-panel"><p role="alert" className="admin-error-text">{error}</p><button className="admin-button" onClick={() => void load()}>Повторить</button></section>;
 
   if (section === 'teachers') return <div className="admin-stack school-editor">
@@ -392,9 +412,17 @@ export function SchoolDirectoryAdmin({ api, section, schoolMode = false, live = 
       {schoolMode && !schoolWritable ? <p className="school-source-note">Школьный справочник открыт только для чтения. Настройки можно просмотреть.</p> : null}
       <label className="school-field">Название<input value={groupDraft.display_name ?? groupDraft.name ?? ''} onChange={(e) => setGroupDraft({ ...groupDraft, display_name: e.target.value, name: groupDraft.id ? groupDraft.name : e.target.value })} placeholder="Например, Английский B" /></label><label className="school-field">Предмет или направление<input value={groupDraft.subject || ''} onChange={(e) => setGroupDraft({ ...groupDraft, subject: e.target.value })} placeholder="Математика, Английский…" /></label>{groupDraft.id && subjectLabel(groupDraft.subject) !== subjectLabel(groupDraft._original_subject) ? <p className="school-group-warning" role="alert">Изменение основного предмета влияет на классификацию группы. Предметы существующих занятий и назначений останутся прежними.</p> : null}{!groupDraft._addOnly ? <><label className="school-field">Преподаватель по умолчанию<select value={groupDraft.default_teacher_identity_id || ''} onChange={(e) => setGroupDraft({ ...groupDraft, default_teacher_identity_id: e.target.value })}><option value="">Не назначен</option>{data.teachers.filter((t) => t.status !== "inactive").map((t) => <option key={t.id} value={t.id}>{title(t)}</option>)}</select></label><label className="school-field">Комментарий<textarea value={groupDraft.comment || ''} onChange={(e) => setGroupDraft({ ...groupDraft, comment: e.target.value })} placeholder="Необязательно" /></label></> : null}
       {!groupDraft.id ? <label className="school-field">Тип группы<select value={groupDraft.group_type} onChange={(e) => setGroupDraft({ ...groupDraft, group_type: e.target.value })}><option value="instructional">Учебная группа</option><option value="class">Административный класс</option><option value="exam_track">Экзаменационная группа</option></select></label> : null}
-      {!groupDraft._addOnly && !groupDraft.id ? <label className="school-field">Добавить учеников (необязательно)<select multiple value={pickedStudents} onChange={(e) => setPickedStudents(Array.from(e.target.selectedOptions).map((o) => o.value))}>{data.students.map((p) => <option key={p.id} value={p.id}>{title(p)} · {p.class_name || 'класс не указан'}</option>)}</select></label> : null}
-      {groupDraft._addOnly ? <label className="school-field">Ученик<select value={pickedStudents[0] || ''} onChange={(e) => setPickedStudents(e.target.value ? [e.target.value] : [])}><option value="">Выберите ученика любой параллели</option>{data.students.map((p) => <option key={p.id} value={p.id}>{title(p)} · {p.class_name || 'класс не указан'}</option>)}</select></label> : null}
+      {!groupDraft._addOnly && !groupDraft.id ? <label className="school-field">Добавить учеников (необязательно)<select multiple value={pickedStudents} onChange={(e) => pickMembers(Array.from(e.target.selectedOptions).map((o) => o.value))}>{data.students.map((p) => <option key={p.id} value={p.id}>{title(p)} · {p.class_name || 'класс не указан'}</option>)}</select></label> : null}
+      {groupDraft._addOnly ? <label className="school-field">Ученик<select value={pickedStudents[0] || ''} onChange={(e) => pickMembers(e.target.value ? [e.target.value] : [])}><option value="">Выберите ученика любой параллели</option>{data.students.map((p) => <option key={p.id} value={p.id}>{title(p)} · {p.class_name || 'класс не указан'}</option>)}</select></label> : null}
       {groupDraft.id && !groupDraft._addOnly ? <button className="admin-button admin-button--quiet" disabled={busy} onClick={() => void prepareArchive(groupDraft)}>{groupDraft.archived_at ? 'Связи архивной группы' : 'Архивировать…'}</button> : null}
+      {groupDraft._base && remoteGroup && groupDraft.revision !== remoteGroup.revision &&
+        <DirectoryConflict key={String(remoteGroup.revision)} api={api}
+          historyPath={`${schoolMode ? '/api/admin/school' : '/api/admin'}/directory/history/groups/${groupDraft.id}`}
+          base={groupDraft._base} draft={groupDraft} remote={remoteGroup}
+          fields={{ display_name: 'Название', subject: 'Предмет', comment: 'Комментарий', default_teacher_identity_id: 'Преподаватель' }}
+          apply={(merged) => { setError(''); setGroupDraft({ ...merged, _base: remoteGroup, _original_subject: remoteGroup.subject,
+            _original_default_teacher_identity_id: remoteGroup.default_teacher_identity_id }); }} />}
+      {groupDraft.id && !remoteGroup && <p role="alert">Запись удалена. Введённые значения остаются в форме для копирования.</p>}
       {error ? <p role="alert" className="admin-error-text">{error}</p> : null}
       <footer><button className="admin-button admin-button--primary" disabled={busy || (schoolMode && !schoolWritable) || (groupDraft._addOnly ? !pickedStudents.length : !String(groupDraft.display_name || groupDraft.name || '').trim())} onClick={() => void saveGroup(Boolean(groupDraft._addOnly))}>{busy ? 'Сохраняем…' : groupDraft._addOnly ? 'Добавить ученика' : groupDraft.id ? 'Сохранить группу' : 'Создать группу'}</button>{!groupDraft._addOnly && groupDraft.id && pickedStudents.length ? <button className="admin-button" disabled={busy} onClick={() => void saveGroup(true)}>Добавить выбранных ({pickedStudents.length})</button> : null}<button className="admin-button admin-button--quiet" onClick={() => setGroupDraft(null)}>Отмена</button></footer>
     </dialog></div> : null}

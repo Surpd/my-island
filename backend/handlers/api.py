@@ -1744,15 +1744,14 @@ def create_router(database: Database) -> APIRouter:
     def local_school_workspace_enabled() -> bool:
         return os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") == "1" and os.getenv("MY_ISLAND_TEST_PROFILE") != "e2e"
 
-    def require_real_school_admin(token: str | None, authenticated_principal: dict | None = None) -> None:
+    def require_real_school_admin(token: str | None, authenticated_principal: dict | None = None) -> str:
         if isolated_consolidation_enabled():
-            require_consolidated_admin(database, token)
-            return
+            return require_consolidated_admin(database, token)[1]
         if not local_school_workspace_enabled():
             # Every production caller has already passed require_role(..., "admin") against
             # this same database, whether authenticated through Telegram or browser session.
             if database.database_url and not get_settings().local_test_mode and authenticated_principal:
-                return
+                return str(authenticated_principal["id"])
             raise HTTPException(status_code=404, detail="School workspace is disabled")
         if not token:
             raise HTTPException(status_code=401, detail="Real school administrator login is required")
@@ -1762,7 +1761,7 @@ def create_router(database: Database) -> APIRouter:
         # check for Telegram-authenticated callers.
         verified_token = (authenticated_principal or {}).get("browser_session_token")
         if (authenticated_principal or {}).get("browser_session") and verified_token and hmac.compare_digest(str(token), str(verified_token)):
-            return
+            return str(authenticated_principal["id"])
         try:
             source = school_source()
         except (RuntimeError, ValueError) as error:
@@ -1771,6 +1770,7 @@ def create_router(database: Database) -> APIRouter:
         session = school.get_admin_browser_session(token)
         if not session or not school.user_has_role(session["user_id"], "admin"):
             raise HTTPException(status_code=401, detail="School administrator session is invalid or expired")
+        return str(session["user_id"])
 
     def activity_store(workspace: str, token: str | None, principal: dict | None = None) -> Database:
         if workspace == "school":
@@ -2250,7 +2250,7 @@ def create_router(database: Database) -> APIRouter:
     @router.get("/admin/schedule/experiments/school/{experiment_id}")
     def admin_school_get(experiment_id: str, revision_only: bool = False, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_school_admin_session: str | None = Header(default=None)):
         principal = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
-        require_real_school_admin(x_school_admin_session, principal)
+        viewer = require_real_school_admin(x_school_admin_session, principal)
         _, store = school_stores()
         try:
             if revision_only:
@@ -2258,8 +2258,8 @@ def create_router(database: Database) -> APIRouter:
                     row = store.execute(connection, "SELECT revision FROM schedule_experiment_drafts WHERE id=?", (experiment_id,)).fetchone()
                 if not row:
                     raise ExperimentNotFound(experiment_id)
-                return {"revision": row["revision"], "actor": str(principal["id"])}
-            return get_experiment(store, experiment_id)
+                return {"revision": row["revision"], "actor": viewer}
+            return {**get_experiment(store, experiment_id), "viewer_id": viewer}
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -2366,7 +2366,7 @@ def create_router(database: Database) -> APIRouter:
                 if not row:
                     raise ExperimentNotFound(experiment_id)
                 return {"revision": row["revision"], "actor": str(principal["id"])}
-            return get_experiment(database, experiment_id)
+            return {**get_experiment(database, experiment_id), "viewer_id": str(principal["id"])}
         except ExperimentNotFound as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
