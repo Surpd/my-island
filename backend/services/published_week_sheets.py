@@ -121,8 +121,11 @@ def _normalize_format(value):
             result[field + "Style"] = style
         elif style or field in result:
             color = style["rgbColor"] if style else result[field]
-            result[field] = [round(color.get(part, default), 6)
-                             for part, default in (("red", 0), ("green", 0), ("blue", 0), ("alpha", 1))]
+            # Sheets can return whole RGB channels as JSON integers. The
+            # renderer used floats in V2 markers, even for black and white.
+            alpha = round(float(color.get("alpha", 1)), 6)
+            result[field] = [round(float(color.get(part, 0)), 6) for part in ("red", "green", "blue")]
+            result[field].append(1 if alpha == 1 else alpha)
     return {key: _normalize_format(item) for key, item in result.items()
             if item is not False and item is not None and item != {}}
 
