@@ -32,6 +32,24 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(auth.stop)
         self.path = "/api/admin/workspace/layout"
 
+    def test_catalog_only_advertises_registered_sources_and_keeps_existing_instance(self):
+        admin = {"X-Dev-Auth": "1"}
+        teacher = {"instance_id": "load", "type": "teacher_load", "filters": {"start_day": "2026-12-28"}}
+        with self.db.connection() as conn:
+            import json
+            self.db.execute(conn, "INSERT INTO admin_widget_layouts (user_id,revision,widgets_json) VALUES (1,1,?)",
+                            (json.dumps([teacher]),))
+        response = self.client.get(self.path, headers=admin)
+        self.assertEqual(response.status_code, 200)
+        layout = response.json()
+        self.assertEqual(layout["widgets"][0]["instance_id"], "load")
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            for request in layout["requests"]:
+                self.assertEqual(self.client.get(request, headers=admin).status_code, 200, request)
+        if "teacher_load" not in layout["catalog"]:
+            self.assertEqual(layout["requests"], {})
+            self.assertEqual(layout["unavailable_instances"], ["load"])
+
     def test_two_users_multiple_instances_and_reset(self):
         admin = {"X-Dev-Auth": "1"}
         first = self.client.get(self.path, headers=admin)
