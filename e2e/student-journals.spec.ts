@@ -295,14 +295,14 @@ test('student journals show a compact results table and preserve chronological d
   const period = page.getByLabel('Период');
   await expect(period).toHaveValue('current');
   const currentPeriodLabel = await period.locator('option:checked').textContent();
-  expect(currentPeriodLabel).toMatch(/II триместр/);
+  expect(currentPeriodLabel).toMatch(/II полугодие/);
   expect(currentPeriodLabel).toContain('2026/27');
   await period.selectOption('archived');
   await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(1);
   await expect(page.getByText('Последняя контрольная')).toHaveCount(0);
   await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true }).locator('.student-subject-results')).toHaveText('5');
-  await expect(page.getByRole('heading', { name: /^I триместр.*2026/, level: 3 })).toBeVisible();
-  const termOption = (await page.locator('select[aria-label="Период"] option').allTextContents()).find(label => /^I триместр(?:\s|·|$)/.test(label));
+  await expect(page.getByRole('heading', { name: /^I полугодие.*2026/, level: 3 })).toBeVisible();
+  const termOption = (await page.locator('select[aria-label="Период"] option').allTextContents()).find(label => /^I полугодие(?:\s|·|$)/.test(label));
   expect(termOption).toBeTruthy();
   await period.selectOption({ label: termOption! });
   await expect(page.getByRole('button', { name: `Открыть журнал: ${SUBJECT}`, exact: true })).toHaveCount(1);
@@ -322,7 +322,7 @@ for (const width of [390, 1440]) test(`Campus reads the twice-imported synthetic
     env: { ...process.env, PYTHONPATH: '.', MY_ISLAND_TEST_PROFILE: 'e2e' },
   });
   await openGrades(page);
-  const subject = page.locator('.student-subject-row').filter({ hasText: 'Математика' });
+  const subject = page.locator('.student-subject-row').filter({ hasText: 'Биология' });
   await expect(subject).toHaveCount(1);
   await expect(subject).toContainText('Итог · 4');
   await expect(page.locator('.student-subject-row').filter({ hasText: 'История' })).not.toContainText('Итог');
@@ -339,7 +339,7 @@ for (const width of [390, 1440]) test(`Campus reads the twice-imported synthetic
   await detail.getByRole('button', { name: /Показать ещё/ }).click();
   await expect(detail.locator('.student-assessment')).toHaveCount(13);
   await page.goto('/admin/journals?role=admin');
-  await page.getByRole('button', { name: /Математика/ }).first().click();
+  await page.getByRole('button', { name: /Биология/ }).first().click();
   const list = page.locator('.journal-work-list');
   await expect(list.locator('details')).toHaveCount(8);
   await list.locator('summary').first().click();
@@ -351,7 +351,9 @@ for (const width of [390, 1440]) test(`Campus reads the twice-imported synthetic
 });
 
 test('empty second term keeps first-term results behind explicit selection', async ({ page }) => {
-  await installStudentApi(page, { items: [journal('old', 'current', 1, 'A', 'История')] });
+  const archived = journal('old', 'current', 1, 'A', 'История');
+  archived.source.grade = 7;
+  await installStudentApi(page, { items: [archived] });
   await openGrades(page);
   await expect(page.getByLabel('Период').locator('option:checked')).toContainText('II триместр');
   await expect(page.locator('.student-subject-row')).toHaveCount(0);
