@@ -16,6 +16,45 @@ import {
 
 type Api = <T>(path:string, init?:RequestInit)=>Promise<T>;
 type ApiError = Error & {status?:number};
+
+const publicationPath = '/api/admin/schedule/constructor/publication';
+type PublicationCommand = {
+  id: string;
+  draftId: string;
+  kind: 'publish' | 'restore';
+  payload: {preview_token: string; confirmed: true} & Record<string, unknown>;
+};
+type PublicationResult = {
+  operation_id: string;
+  published_id: string;
+  week_start?: string;
+  created_at?: string;
+  summary?: Partial<Summary>;
+  runtime_readback: {verified: boolean};
+};
+
+function readPendingCommand(key: string): PublicationCommand | null {
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return null;
+  const value: PublicationCommand = JSON.parse(raw);
+  if (!value || !/^[a-f0-9-]{36}$/i.test(value.id) || typeof value.draftId !== 'string' ||
+      (value.kind !== 'publish' && value.kind !== 'restore') ||
+      !value.payload || value.payload.confirmed !== true || typeof value.payload.preview_token !== 'string') {
+    throw new Error('Invalid publication command');
+  }
+  return value;
+}
+
+function clearPendingCommand(key: string, id: string) {
+  if (readPendingCommand(key)?.id === id) window.localStorage.removeItem(key);
+}
+
+async function loadPublicationReceipt(api: Api, id: string, signal?: AbortSignal) {
+  const result = await api<PublicationResult>(`${publicationPath}/receipts/${encodeURIComponent(id)}`, {signal, cache: 'no-store'});
+  if (result.operation_id !== id || !result.runtime_readback) throw new Error('Invalid publication receipt');
+  return result;
+}
+
 type SemanticBlock = {weekday:number;start:string;end:string;grade:string;assignments:{activity:string;teachers:string[];groups:string[];metadata?:{room?:string}}[]};
 type LessonContext = {
   day?: string | number;
@@ -313,6 +352,13 @@ export function ConstructorPublicationPanel({
   const rosterRequest = useRef<AbortController | null>(null);
   const automaticRevision = useRef<number | null>(null);
   const [message,setMessage] = useState('');
+  const [receiptOwner, setReceiptOwner] = useState('');
+  const [pendingCommand, setPendingCommand] = useState<PublicationCommand | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState('');
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
+  const [recoveryAttempt, setRecoveryAttempt] = useState(0);
+  const storageKey = receiptOwner ? `my-island-publication-v1:${receiptOwner}` : '';
+
   const [deliveryStudentId, setDeliveryStudentId] = useState('');
   const [sessionExpired,setSessionExpired] = useState(false);
   const [published,setPublished] = useState(false);
@@ -703,29 +749,134 @@ export function ConstructorPublicationPanel({
       setBusy(false);
     }
   };
-  const pendingCommand = useRef<{token: string; id: string} | null>(null);
-  async function submitCommand<T>(path: string, payload: {preview_token: string} & Record<string, unknown>): Promise<T> {
-    if (pendingCommand.current?.token !== payload.preview_token) {
-      pendingCommand.current = {token: payload.preview_token, id: crypto.randomUUID()};
+  useEffect(() => {
+    if (!publicationEnabled || readOnly) return;
+    const abort = new AbortController();
+    setReceiptOwner('');
+    setRecoveryFailed(false);
+    setRecoveryNotice('');
+    async function recoverOnOpen() {
+      const {owner} = await api<{owner: string}>(`${publicationPath}/recovery-context`, {signal: abort.signal, cache: 'no-store'});
+      if (abort.signal.aborted) return;
+      if (!owner) throw new Error('Missing publication recovery context');
+      const key = `my-island-publication-v1:${owner}`;
+      const command = readPendingCommand(key);
+      setPendingCommand(command);
+      setReceiptOwner(owner);
+      if (!command) return;
+      try {
+        const result = await loadPublicationReceipt(api, command.id, abort.signal);
+        if (abort.signal.aborted || readPendingCommand(key)?.id !== command.id) return;
+        clearPendingCommand(key, command.id);
+        setPendingCommand(null);
+        setRecoveryNotice(`Найдена квитанция. Версия расписания: ${result.published_id}.`);
+        if (command.draftId === draftId) {
+          setPublished(true);
+          setPreview(null);
+          setConfirmed(false);
+        }
+      } catch {
+        if (!abort.signal.aborted) setRecoveryNotice('Исход команды пока не подтверждён.');
+      }
     }
-    const operationId = pendingCommand.current.id;
+    void recoverOnOpen().catch(() => { if (!abort.signal.aborted) setRecoveryFailed(true); });
+    return () => abort.abort();
+  }, [api, draftId, publicationEnabled, readOnly, recoveryAttempt]);
+
+  async function sendCommand(command: PublicationCommand) {
+    const path = command.kind === 'restore' ? `${publicationPath}/restore`
+      : `/api/admin/schedule/constructor/${encodeURIComponent(command.draftId)}/publication/publish`;
+    const result = await api<PublicationResult>(path, {
+      method: 'POST',
+      body: JSON.stringify({...command.payload, operation_id: command.id, recovery_owner: receiptOwner}),
+    });
+    if (result.operation_id !== command.id || !result.runtime_readback) throw new Error('Invalid publication response');
+    return result;
+  }
+
+  function resolvePending(command: PublicationCommand) {
+    clearPendingCommand(storageKey, command.id);
+    setPendingCommand(readPendingCommand(storageKey));
+  }
+
+  async function submitCommand(kind: PublicationCommand['kind'], payload: PublicationCommand['payload']) {
+    const saved = readPendingCommand(storageKey);
+    if (saved) {
+      setPendingCommand(saved);
+      throw new Error('Resolve the existing publication request first');
+    }
+    const command = {id: crypto.randomUUID(), draftId, kind, payload};
+    // Save the confirmation before transmitting it so reloads cannot turn
+    // an ambiguous outcome into a fresh publication with a different key.
+    window.localStorage.setItem(storageKey, JSON.stringify(command));
     try {
-      return await api<T>(path, {method: 'POST', body: JSON.stringify({...payload, operation_id: operationId})});
+      const result = await sendCommand(command);
+      resolvePending(command);
+      return result;
     } catch (error) {
       const status = (error as ApiError | null)?.status;
-      if (status && status < 500 && status !== 408) throw error;
+      if (status === 409 || status === 412 || status === 422) {
+        resolvePending(command);
+        throw error;
+      }
+      setPendingCommand(command);
       try {
-        return await api<T>(`/api/admin/schedule/constructor/publication/receipts/${operationId}`);
+        const result = await loadPublicationReceipt(api, command.id);
+        resolvePending(command);
+        return result;
       } catch {
         throw error;
       }
     }
   }
+
+  async function checkPending(command: PublicationCommand, retry: boolean) {
+    if (busy || !storageKey || readPendingCommand(storageKey)?.id !== command.id) return;
+    setBusy(true);
+    setRecoveryNotice('');
+    let attemptedRetry = false;
+    try {
+      let result: PublicationResult;
+      try {
+        result = await loadPublicationReceipt(api, command.id);
+      } catch (error) {
+        if (!retry || (error as ApiError | null)?.status !== 404) throw error;
+        attemptedRetry = true;
+        result = await sendCommand(command);
+      }
+      resolvePending(command);
+      setRecoveryNotice(`Найдена квитанция. Версия расписания: ${result.published_id}.`);
+      if (command.draftId === draftId) {
+        setPublished(true);
+        setPreview(null);
+        setConfirmed(false);
+        setRestore(null);
+        setRestoreConfirmed(false);
+        if (!dirty) await onPublished();
+        if (historyOnly) await loadHistory();
+      }
+    } catch (error) {
+      const status = (error as ApiError | null)?.status;
+      if (attemptedRetry && (status === 409 || status === 412 || status === 422)) {
+        resolvePending(command);
+        resetPublicationPreview();
+        setRestore(null);
+        setRestoreConfirmed(false);
+        setRecoveryNotice('Сервер отклонил исходную команду. Откройте свежую версию и повторите проверку.');
+      } else {
+        setRecoveryNotice(status === 404 ? 'Квитанция пока не найдена. Можно повторить исходную команду.'
+          : 'Исход команды пока не подтверждён. Проверьте вход и подключение.');
+        setSessionExpired(status === 401);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
   const publish = async()=>{
-    if(!activePreview?.can_publish || !confirmed || dirty || checking || busy || readOnly || activePreview.publication_available===false)return;
+    if(!storageKey || pendingCommand || !activePreview?.can_publish || !confirmed || dirty || checking || busy || readOnly || activePreview.publication_available===false)return;
     setBusy(true);setMessage('');setSessionExpired(false);
     try {
-      const result = await submitCommand<{published_id:string;scope_key?:string;version_id?:string;week_start?:string;created_at?:string;summary?:Partial<Summary>;runtime_readback:{verified:boolean;block_count:number;assignment_count:number}}>(`${prefix}/publication/publish`,{...body,preview_token:activePreview.preview_token,confirmed:true});
+      const result = await submitCommand('publish',{...body,preview_token:activePreview.preview_token,confirmed:true});
       const publishedWhen=result.created_at?new Date(result.created_at).toLocaleString('ru-RU'):'сейчас';
       const where=result.week_start?` · неделя с ${result.week_start}`:scope==='week'?` · неделя с ${week}`:' · школьный шаблон';
       const resultSummary={...emptySummary,...(result.summary||activePreview.summary)};
@@ -744,10 +895,10 @@ export function ConstructorPublicationPanel({
     }catch(error){showError(error);}finally{setBusy(false);}
   };
   const confirmRestore = async()=>{
-    if(!restore || !restoreConfirmed)return;
+    if(!storageKey || pendingCommand || !restore || !restoreConfirmed)return;
     setBusy(true);setMessage('');setSessionExpired(false);
     try {
-      const result = await submitCommand<{published_id:string;runtime_readback:{verified:boolean}}>('/api/admin/schedule/constructor/publication/restore',{publication_id:restore.publication.id,expected_head_revision:restore.expected_head_revision,preview_token:restore.preview.preview_token,confirmed:true});
+      const result = await submitCommand('restore',{publication_id:restore.publication.id,expected_head_revision:restore.expected_head_revision,preview_token:restore.preview.preview_token,confirmed:true});
       setMessage(`Создана новая восстановленная версия расписания. Чтение: ${result.runtime_readback.verified?'подтверждено':'не подтверждено'}. Для дальнейшей работы откройте конструктор.`);setRestore(null);setRestoreConfirmed(false);await loadHistory();await onPublished();
     }catch(error){showError(error);if ((error as ApiError)?.status === 409) setRestore(null);}finally{setBusy(false);}
   };
@@ -811,6 +962,15 @@ export function ConstructorPublicationPanel({
         {sessionExpired ? <section role="alert" className="constructor-publication-session-help">
           <p>Срок входа мог истечь. Перепроверьте вход, чтобы продолжить.</p>
           <button type="button" className="admin-button" disabled={busy} onClick={() => window.location.reload()}>Перепроверить вход</button>
+        </section> : null}
+        {publicationEnabled && !readOnly && recoveryFailed ? <p role="status">
+          Не удалось проверить незавершённую публикацию. <button type="button" onClick={() => setRecoveryAttempt(value => value + 1)}>Повторить проверку квитанций</button>
+        </p> : null}
+        {recoveryNotice ? <p role="status">{recoveryNotice}</p> : null}
+        {pendingCommand ? <section aria-label="Незавершённая публикация">
+          <p>Требуется проверить исход предыдущей команды.</p>
+          <button type="button" disabled={busy} onClick={() => void checkPending(pendingCommand, false)}>Проверить квитанцию</button>
+          <button type="button" disabled={busy || dirty} onClick={() => void checkPending(pendingCommand, true)}>Повторить исходную команду</button>
         </section> : null}
         {!historyOnly && section === 'issues' ? <section className="constructor-review-issues" aria-labelledby="constructor-review-issues-title">
           <div className="constructor-review-list-heading">
@@ -1036,14 +1196,14 @@ export function ConstructorPublicationPanel({
           <Link href={publishedHref} onClick={close}>Открыть опубликованное расписание</Link>
           <button type="button" onClick={close}>К оставшимся записям черновика</button>
         </nav> : null}
-    {restore ? <section aria-label="Проверка восстановления"><h3>Восстановление отдельной новой версией</h3><p>Версия от {new Date(restore.publication.created_at).toLocaleString('ru-RU')}. Добавить: {restore.preview.diff.added}; изменить: {restore.preview.diff.changed}; удалить: {restore.preview.diff.removed}.</p>{restore.preview.blockers.map((item,index)=><p key={index} role="alert">{item.message}</p>)}<label className="constructor-publication-confirm"><input type="checkbox" checked={restoreConfirmed} onChange={event=>setRestoreConfirmed(event.target.checked)}/>Подтверждаю замену текущей публикации новой восстановленной версией.</label><button disabled={busy||!restore.preview.can_restore||!restoreConfirmed} onClick={()=>void confirmRestore()}>Подтвердить восстановление</button><button disabled={busy} onClick={()=>setRestore(null)}>Отмена</button></section> : null}
+    {restore ? <section aria-label="Проверка восстановления"><h3>Восстановление отдельной новой версией</h3><p>Версия от {new Date(restore.publication.created_at).toLocaleString('ru-RU')}. Добавить: {restore.preview.diff.added}; изменить: {restore.preview.diff.changed}; удалить: {restore.preview.diff.removed}.</p>{restore.preview.blockers.map((item,index)=><p key={index} role="alert">{item.message}</p>)}<label className="constructor-publication-confirm"><input type="checkbox" checked={restoreConfirmed} onChange={event=>setRestoreConfirmed(event.target.checked)}/>Подтверждаю замену текущей публикации новой восстановленной версией.</label><button disabled={busy||!storageKey||Boolean(pendingCommand)||!restore.preview.can_restore||!restoreConfirmed} onClick={()=>void confirmRestore()}>Подтвердить восстановление</button><button disabled={busy} onClick={()=>setRestore(null)}>Отмена</button></section> : null}
     {historyOnly ? <ReviewDisclosure title="Журнал публикаций этого черновика" count={history.items.length} initiallyOpen>{historyPending ? <output>Загружаем публикации…</output> : !history.items.length ? <p>У этого черновика ещё нет публикаций.</p> : history.items.map(item=>{const itemDiagnostics=storedDiagnostics(item);const itemDeferred=storedDeferred(item);const recordedSummary=item.summary||item.preview?.summary||item.preview_metadata?.summary||item.metadata?.summary;const itemSummary={...emptySummary,...recordedSummary};return <article key={item.id}><strong>{item.scope_kind==='template'?'Школьный шаблон':item.scope_key.startsWith('week:')?`Неделя с ${item.scope_key.slice(5)}`:'Отдельная неделя'}</strong><p>{new Date(item.created_at).toLocaleString('ru-RU')} · {item.runtime_readback.block_count} блоков · {item.runtime_readback.verified?'чтение подтверждено':'не подтверждено'}{item.restored_from?' · восстановленная версия':''}</p><p className="constructor-publication-history-summary">{recordedSummary ? `${itemSummary.ready_lessons} готово · ${itemSummary.deferred_lessons} отложено · ${itemDiagnostics.length} замечаний` : `Опубликовано ${item.runtime_readback.block_count} блоков; сводные количества этой версии не записаны`}</p><ReviewDisclosure title="Сведения о проверке" secondary>{itemDiagnostics.length?<ul>{itemDiagnostics.map((diagnostic,index)=><li key={`${diagnostic.code}-${index}`}><strong>{diagnostic.severity==='critical'?'Критично':diagnostic.severity==='conflict'?'Конфликт':'Подсказка'}</strong> · {diagnosticText(diagnostic).title}{readableContext(diagnostic.context,teacherNames,groupNames)?<small>{readableContext(diagnostic.context,teacherNames,groupNames)}</small>:null}</li>)}</ul>:<p>Для этой публикации замечаний не сохранено.</p>}{itemDeferred.length?<ul>{itemDeferred.map((deferred,index)=><li key={`${deferred.lesson_id}-${index}`}>{readableContext(deferred.context,teacherNames,groupNames)||'Занятие из черновика'} · {deferredOutcome(deferred.action)}</li>)}</ul>:null}</ReviewDisclosure><p className="constructor-publication-version">{item.scope_kind==='template'?'Версия шаблона':'Версия недели'}: <code>{item.published_id}</code></p>{item.scope_kind==='week' ? <small>Шаблон: {item.version_id}</small> : null}<small>Публикация расписания</small>{!readOnly && !dirty && history.heads?.[item.scope_key] ? <button disabled={busy} onClick={()=>void reviewRestore(item)}>Проверить восстановление</button> : null}</article>})}</ReviewDisclosure> : null}
     </div>
     <footer>
       <button type="button" disabled={busy} onClick={close}>К конструктору</button>
       {!historyOnly && dirty ? <button type="button" className="is-primary" disabled={busy} onClick={() => void saveForReview()}>{busy ? 'Сохраняем…' : 'Сохранить все правки и проверить'}</button> : null}
       {!historyOnly && section === 'publication' && activePreview && !published && activePreview.publication_available !== false && !readOnly ?
-        <button type="button" className="is-primary" disabled={controlsBusy || !activePreview.can_publish || !confirmed} onClick={() => void publish()}>{activePreview.can_publish
+        <button type="button" className="is-primary" disabled={controlsBusy || !storageKey || Boolean(pendingCommand) || !activePreview.can_publish || !confirmed} onClick={() => void publish()}>{activePreview.can_publish
           ? `${counts.info || counts.warning || counts.conflict || counts.deferred ? 'Опубликовать с замечаниями' : 'Опубликовать'} ${scope === 'week' ? 'неделю' : 'шаблон'}`
           : 'Опубликовать после исправления'}</button> : null}
     </footer>

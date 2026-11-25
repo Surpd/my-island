@@ -1353,9 +1353,12 @@ def _run_command(database, operation_id, actor, request, execute):
             result = execute(bound)
             if operation_id:
                 result["operation_id"] = operation_id
-                bound.execute(bound._connection, """INSERT INTO schedule_publication_receipts
-                    (operation_id, actor_key, request_hash, result_json) VALUES (?,?,?,?)""",
-                    (operation_id, actor_key, fingerprint, json.dumps(result, default=str)))
+                receipt = bound.execute(bound._connection, """INSERT INTO schedule_publication_receipts
+                    (operation_id, actor_key, request_hash, result_json) VALUES (?,?,?,?)
+                    ON CONFLICT(operation_id) DO NOTHING RETURNING operation_id""",
+                    (operation_id, actor_key, fingerprint, json.dumps(result, default=str))).fetchone()
+                if receipt is None:
+                    raise PublicationConflict("Operation ID already used for another request")
             return result
     except PublicationConflict:
         # A SERIALIZABLE snapshot may predate the winner's commit. Read the
