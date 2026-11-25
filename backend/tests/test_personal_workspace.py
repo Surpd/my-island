@@ -51,6 +51,18 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(reset["widgets"], first.json()["widgets"])
         self.assertEqual(reset["revision"], 2)
 
+    def test_future_schema_survives_a_stale_client(self):
+        headers = {"X-Dev-Auth": "1"}
+        with self.db.connection() as conn:
+            self.db.execute(conn, """INSERT INTO admin_widget_layouts (user_id,revision,schema_version,widgets_json)
+                VALUES (1,5,2,'{}')""")
+        layout = self.client.get(self.path, headers=headers).json()
+        self.assertTrue(layout["read_only"])
+        self.assertEqual(layout["schema_version"], 2)
+        response = self.client.put(self.path, headers=headers, json={"expected_revision": 5, "widgets": []})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"]["current"], layout)
+
     def test_filters_roles_and_concurrent_first_write(self):
         for role in ("3", "4"):
             self.assertEqual(self.client.get(self.path, headers={"X-Dev-Auth": role}).status_code, 403)

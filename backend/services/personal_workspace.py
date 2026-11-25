@@ -52,6 +52,9 @@ DEFAULTS = [{"instance_id": "today", "type": "operational_day", "size": "wide", 
 
 
 def layout_view(row, today):
+    if row and row["schema_version"] != 1:
+        return {"schema_version": row["schema_version"], "revision": row["revision"], "read_only": True,
+                "widgets": [], "requests": {}, "catalog": REGISTRY, "sizes": ["compact", "wide"]}
     stored = json.loads(row["widgets_json"]) if row else None
     widgets = DEFAULTS if stored is None else stored
     requests = {}
@@ -75,7 +78,7 @@ def layout_view(row, today):
 
 def read_layout(db, user_id, today):
     with db.connection() as conn:
-        row = db.execute(conn, "SELECT revision, widgets_json FROM admin_widget_layouts WHERE user_id=?", (user_id,)).fetchone()
+        row = db.execute(conn, "SELECT schema_version, revision, widgets_json FROM admin_widget_layouts WHERE user_id=?", (user_id,)).fetchone()
     return layout_view(row, today)
 
 
@@ -85,13 +88,13 @@ def save_layout(db, user_id, change, today):
     with db.connection() as conn:
         if change.expected_revision == 0:
             row = db.execute(conn, """INSERT INTO admin_widget_layouts (user_id, revision, widgets_json)
-                VALUES (?,1,?) ON CONFLICT(user_id) DO NOTHING RETURNING revision, widgets_json""",
+                VALUES (?,1,?) ON CONFLICT(user_id) DO NOTHING RETURNING schema_version, revision, widgets_json""",
                 (user_id, payload)).fetchone()
         else:
             row = db.execute(conn, """UPDATE admin_widget_layouts SET revision=revision+1, widgets_json=?
-                WHERE user_id=? AND revision=? RETURNING revision, widgets_json""",
+                WHERE user_id=? AND revision=? AND schema_version=1 RETURNING schema_version, revision, widgets_json""",
                 (payload, user_id, change.expected_revision)).fetchone()
         if row is None:
-            current = db.execute(conn, "SELECT revision, widgets_json FROM admin_widget_layouts WHERE user_id=?", (user_id,)).fetchone()
+            current = db.execute(conn, "SELECT schema_version, revision, widgets_json FROM admin_widget_layouts WHERE user_id=?", (user_id,)).fetchone()
             return False, layout_view(current, today)
     return True, layout_view(row, today)
