@@ -60,14 +60,15 @@ class RevisionContract:
         )
         db = Database(database_url=self.db.database_url, autocommit=True) if self.db.database_url else self.db
         draft = create_experiment(db, name="History " + self.suffix, source="empty")
-        lesson = {"id": "fixture-lesson", "room": "Private fixture value", "subject": "Private title"}
+        lesson = {"id": "fixture-lesson", "day": 1, "room": "Private fixture value", "subject": "Private title"}
         first = _write_experiment_revision(db, draft["id"], draft["revision"], {**draft["payload"], "lessons": [lesson]},
                                            actor_user_id=self.actor)
-        second_payload = {**first["payload"], "lessons": [{**lesson, "room": "Second private value"}]}
+        second_payload = {**first["payload"], "lessons": [{**lesson, "day": 3, "room": "Second private value"}]}
         second = _write_experiment_revision(db, draft["id"], first["revision"], second_payload, actor_user_id=self.actor)
         history = experiment_change_history(db, draft["id"], draft["revision"])["items"]
         self.assertEqual(history[0]["actor_id"], str(self.actor))
-        self.assertEqual(history[0]["changed_fields"], [{"lesson_id": "fixture-lesson", "operation": "edited", "fields": ["room"]}])
+        self.assertEqual(history[0]["changed_fields"], [{"lesson_id": "fixture-lesson", "operation": "edited", "fields": ["day", "room"]}])
+        self.assertEqual(history[0]["field_values"], {"fixture-lesson": {"day": {"before": 1, "after": 3}}})
         self.assertEqual(history[1]["changed_fields"][0]["operation"], "added")
         self.assertNotIn("Private", str(history))
         with self.assertRaises(ExperimentConflict):
