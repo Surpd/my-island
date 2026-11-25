@@ -1,0 +1,31 @@
+name: Publication receipts
+on:
+  pull_request:
+    paths:
+      - 'backend/services/constructor_publication.py'
+      - 'backend/handlers/constructor_publication_api.py'
+      - 'backend/tests/test_constructor_publication.py'
+      - 'components/constructor-publication-panel.tsx'
+      - 'e2e/constructor-publication.spec.ts'
+      - '.github/workflows/publication-receipts.yml'
+permissions:
+  contents: read
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: python -m unittest backend.tests.test_constructor_publication backend.tests.test_constructor_routes -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install tsc --noEmit
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npx --no-install playwright test e2e/constructor-publication.spec.ts -g 'recovers a committed publication|changing publication scope'
