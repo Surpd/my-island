@@ -15,7 +15,7 @@ export type SchoolWeekIndex = { effective_weeks?: EffectiveWeekSummary[]; week_p
 type WeekHistoryAssignment = { activity?: string; groups?: string[]; teachers?: string[]; room?: string | null };
 type WeekHistoryBlock = { block_key: string; weekday: number; start_time: string; end_time: string; change_kind?: string; grade_scope?: string | null; effective_assignments?: WeekHistoryAssignment[] };
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
-type SelectionPreview = {
+export type SelectionPreview = {
   current: { id: string; name: string; revision: number; draft_revision?: number; has_unreviewed_changes?: boolean; snapshot_available?: boolean } | null;
   candidate: { id: string; name: string; revision: number };
   current_hash: string | null; candidate_hash: string;
@@ -198,6 +198,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
   };
   const confirmTemplateSelection = async () => {
     if (readOnly || !selectionPreview || selectionBusy) return;
+    const appliesExistingPrimary = selectionPreview.current?.id === selectionPreview.candidate.id;
     setSelectionBusy(true); setSelectionError('');
     try {
       await api('/api/admin/schedule/experiments/school/' + encodeURIComponent(selectionPreview.candidate.id) + '/select-primary', {
@@ -210,7 +211,9 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
         }),
       });
       setSelectionPreview(null);
-      setMessage('Основной шаблон переключён. Уже созданные недели не изменены.');
+      setMessage(appliesExistingPrimary
+        ? `Ревизия ${selectionPreview.candidate.revision} применена для новых недель. Уже созданные недели не изменены.`
+        : 'Основной шаблон переключён. Уже созданные недели не изменены.');
       window.dispatchEvent(new Event('school-directory-updated'));
     } catch (error) { setSelectionError((error as Error).message); } finally { setSelectionBusy(false); }
   };
@@ -302,8 +305,8 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
             {primary.updated_at ? <div><dt>Последнее сохранение</dt><dd>{changedAt(primary.updated_at)}</dd></div> : null}
           </dl>
           {primary.selection_stale ? <div className="schedule-start-notice">
-            <p>Сохранена ревизия {primary.revision}. Подтвердите её, чтобы создавать из неё новые недели.</p>
-            <button className="schedule-start-button" disabled={readOnly || selectionBusy} onClick={() => void previewTemplateSelection(primary)}>Сравнить правки и подтвердить новую ревизию</button>
+            <p>Сохранена ревизия {primary.revision}. Сейчас новые недели создаются из ревизии {primary.selected_revision ?? '—'}.</p>
+            <button className="schedule-start-button" disabled={readOnly || selectionBusy} onClick={() => void previewTemplateSelection(primary)}>Применить для новых недель</button>
           </div> : null}
           <div className="schedule-start-actions">
             <button className="schedule-start-button is-primary" onClick={() => void onOpen(primary.id)}>Открыть расписание <ArrowRight size={15} aria-hidden="true" /></button>
@@ -400,6 +403,7 @@ export function ConstructorSchoolStart({ api, drafts, index, hiddenIds, readOnly
         void onReview(id);
       }}
       onConfirm={() => void confirmTemplateSelection()}
+      confirmLabel={selectionPreview.current?.id === selectionPreview.candidate.id ? 'Применить для новых недель' : undefined}
       onApproveBaseline={() => void approveLegacyBaseline()}
     /> : null}
   </section>;

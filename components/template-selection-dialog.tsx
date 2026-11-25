@@ -23,8 +23,9 @@ const labels: Record<string, string> = { lesson: 'Урок', club: 'Клуб', e
 const valueText = (value: string | string[] | number | boolean | null) => Array.isArray(value) ? value.join(', ') || 'нет' : value === null || value === '' ? 'нет' : typeof value === 'boolean' ? value ? 'да' : 'нет' : String(value);
 const lessonTitle = (item: Lesson) => `${item.subject || 'Без названия'} · ${item.start || 'время не указано'}–${item.end || ''}`;
 
-export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, acknowledgeProblems, acknowledgeBaseline, onAcknowledgeProblems, onAcknowledgeBaseline, onCancel, onReview, onConfirm, onApproveBaseline }: {
+export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, acknowledgeProblems, acknowledgeBaseline, confirmLabel, onAcknowledgeProblems, onAcknowledgeBaseline, onCancel, onReview, onConfirm, onApproveBaseline }: {
   preview: Preview; busy: boolean; readOnly: boolean; actionError?: string; acknowledgeProblems: boolean; acknowledgeBaseline: boolean;
+  confirmLabel?: string;
   onAcknowledgeProblems: (value: boolean) => void; onAcknowledgeBaseline: (value: boolean) => void;
   onCancel: () => void; onReview: () => void; onConfirm: () => void; onApproveBaseline: () => void;
 }) {
@@ -83,7 +84,7 @@ export function TemplateSelectionDialog({ preview, busy, readOnly, actionError, 
         </div>
         <div className="constructor-selection-actions"><button disabled={busy} onClick={onCancel}>Отмена</button>
           <button disabled={busy} onClick={onReview}>Проверить расписание этой ревизии</button>
-          {recoveryRequired ? <button className="is-primary" disabled={busy || readOnly || !acknowledgeBaseline || Boolean(preview.baseline_recovery?.problems?.length && !acknowledgeProblems)} onClick={onApproveBaseline}>{busy ? 'Сохраняем…' : 'Утвердить новую базовую версию'}</button> : <button className="is-primary" disabled={busy || readOnly || Boolean(preview.problems.length && !acknowledgeProblems)} onClick={onConfirm}>{busy ? 'Сохраняем…' : 'Подтвердить основным'}</button>}
+          {recoveryRequired ? <button className="is-primary" disabled={busy || readOnly || !acknowledgeBaseline || Boolean(preview.baseline_recovery?.problems?.length && !acknowledgeProblems)} onClick={onApproveBaseline}>{busy ? 'Сохраняем…' : 'Утвердить новую базовую версию'}</button> : <button className="is-primary" disabled={busy || readOnly || Boolean(preview.problems.length && !acknowledgeProblems)} onClick={onConfirm}>{busy ? (confirmLabel ? 'Применяем…' : 'Сохраняем…') : confirmLabel || 'Подтвердить основным'}</button>}
         </div>
       </footer>
     </dialog>

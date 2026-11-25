@@ -51,7 +51,8 @@ import { ConstructorTermComparison, type TermComparisonChoice, type TermComparis
 import { normalizeRoomKey, normalizeRoomDisplay, normalizeRoomInput, isVirtualRoom } from './schedule-rooms';
 import { ConstructorResolutionPanel } from './constructor-resolution-panel';
 import { formatLessonTimeRange } from './lesson-time';
-import { ConstructorSchoolStart, type SchoolWeekIndex } from './constructor-school-start';
+import { ConstructorSchoolStart, type SchoolWeekIndex, type SelectionPreview } from './constructor-school-start';
+import { TemplateSelectionDialog } from './template-selection-dialog';
 import { TeacherColorPanel } from './teacher-color-panel';
 import { minutes, addMinutes, lessonTimes, focusedAudienceLessonIds, relocatedTimes, schedulePlacementClassIds, linkedInstructionalGroupsForColumn, isWholeClassAudience, remapPastedLessonAudience, groupClassIds, groupCourseContext, mergeScheduleDrafts, parseQuick, rankTeachersForAudience, sameScheduleMeaning, shouldWarnMissingTeacher, shortSubject, shortTeacher, confirmedClassLunchMarker, displayedClarificationReason, effectiveClubReviewNote, isTypedScheduleClub, needsSingleLessonAudienceReview, type ScheduleMergeConflict, canonicalGradeOfGroup, dayModeForGrade, allLessonClassesHaveMode, isSdepIndependentLesson, lessonOnline, lessonNeedsPhysicalRoom, displayedDayModeWarning, type DayModeState } from './schedule-constructor-logic';
 import { LaboratoryPanel, type LaboratoryBlueprint, type LaboratoryPreview } from './schedule-laboratory-panel';
@@ -59,6 +60,7 @@ import { ParticipantsPicker, type AudienceRule, type AudiencePreview } from './p
 import { audienceRequestMessage, audienceRequestState, prepareAudienceRequest, sameExclusionRosterContext, scopedAudienceKey } from './schedule-audience-request';
 import { audienceGrade, audienceLabel, audienceShortLabel, subjectLabel, studentMemberships } from './school-audience';
 import { assignmentIsActive } from './teacher-directory-logic';
+import { primaryRevisionActionState } from './template-selection-problems';
 
 const environmentReadOnlySchoolWorkspace = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_READ_ONLY_SCHOOL_WORKSPACE || '') === 'true';
 const scheduleDataSourceLabel = String((import.meta as ImportMeta & { env?: Record<string, string | boolean> }).env?.VITE_DATA_SOURCE_LABEL || '');
@@ -153,6 +155,8 @@ type Payload = {
   lessons: Lesson[];
   reference_date?: string;
   week_start?: string;
+  draft_kind?: 'demo' | 'test' | 'user' | 'unclassified' | 'school';
+  source_template?: { id?: string; revision?: number } | null;
   laboratory_blueprints?: LaboratoryBlueprint[];
   laboratory_meetings?: Record<string, unknown>;
   column_widths?: Record<string, number>;
@@ -260,6 +264,8 @@ type DraftSummary = Omit<Draft, 'payload'> & {
   created_at?: string;
   week_start?: string | null;
   is_primary_template?: boolean;
+  selection_stale?: boolean;
+  selected_revision?: number;
   source_template?: { id?: string; revision?: number } | null;
   draft_kind: 'demo' | 'test' | 'user' | 'unclassified';
   lesson_count: number;
@@ -731,6 +737,10 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const comparisonFromReview = useRef(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [comparisonFocus, setComparisonFocus] = useState<{ draftId: string; key: string } | null>(null);
+  const [applyPreview, setApplyPreview] = useState<SelectionPreview | null>(null);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyError, setApplyError] = useState('');
+  const [applyAcknowledged, setApplyAcknowledged] = useState(false);
   const [newWeekStart, setNewWeekStart] = useState('');
   useEffect(() => {
     try { const saved = JSON.parse(window.localStorage.getItem('my-island-hidden-school-drafts:v1') || '[]'); setHiddenSchoolDrafts(Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : []); }
@@ -1546,6 +1556,74 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     return () => window.removeEventListener('beforeunload', before);
   }, [dirty]);
   const payload = draft?.payload;
+  const openSchoolSummary = draft && workspace === 'school'
+    ? schoolDrafts.find(item => item.id === draft.id) : undefined;
+  const primaryRevisionAction = primaryRevisionActionState({
+    primary: Boolean(openSchoolSummary?.is_primary_template),
+    schoolTemplate: Boolean(draft && draft.payload.draft_kind === 'school'
+      && !draft.payload.week_start && !draft.payload.source_template),
+    selectionStale: Boolean(openSchoolSummary?.selection_stale),
+    draftRevision: draft?.revision ?? -1,
+    summaryRevision: openSchoolSummary?.revision ?? -2,
+    editorRevision: revision.current,
+    dirty, saving, readOnly: readOnlySchoolWorkspace,
+  });
+
+  const previewPrimaryRevision = async () => {
+    const current = draftRef.current;
+    const summary = current ? schoolDrafts.find(item => item.id === current.id) : undefined;
+    if (!current || !summary?.is_primary_template || !summary.selection_stale
+        || current.payload.draft_kind !== 'school' || current.payload.week_start || current.payload.source_template
+        || dirty || savingRef.current || readOnlySchoolWorkspace) return;
+    if (summary.revision !== current.revision || revision.current !== current.revision) {
+      setStatus('Сохранённая ревизия изменилась. Обновите черновик перед применением для новых недель.');
+      return;
+    }
+    setApplyBusy(true); setApplyError(''); setApplyAcknowledged(false);
+    try {
+      const preview = await api<SelectionPreview>(`/api/admin/schedule/experiments/school/${encodeURIComponent(current.id)}/selection-preview`, { method: 'POST' });
+      if (preview.candidate.id !== current.id || preview.candidate.revision !== current.revision
+          || draftRef.current?.id !== current.id || draftRef.current.revision !== current.revision || dirty) {
+        setStatus('Ревизия изменилась во время сравнения. Повторите после обновления черновика.');
+        return;
+      }
+      setApplyPreview(preview);
+    } catch (error) {
+      setApplyError(String((error as Error).message || error));
+      setStatus(`Не удалось сравнить сохранённую ревизию: ${String((error as Error).message || error)}`);
+    } finally { setApplyBusy(false); }
+  };
+
+  const confirmPrimaryRevision = async () => {
+    const preview = applyPreview;
+    const current = draftRef.current;
+    const summary = current ? schoolDrafts.find(item => item.id === current.id) : undefined;
+    if (!preview || !current || !summary?.is_primary_template || !summary.selection_stale
+        || dirty || savingRef.current || readOnlySchoolWorkspace || applyBusy
+        || current.id !== preview.candidate.id || current.revision !== preview.candidate.revision
+        || summary.revision !== current.revision || revision.current !== current.revision
+        || preview.problems.length > 0 && !applyAcknowledged) {
+      setApplyError('Черновик или его ревизия изменились. Закройте сравнение и повторите после сохранения.');
+      return;
+    }
+    setApplyBusy(true); setApplyError('');
+    try {
+      await api(`/api/admin/schedule/experiments/school/${encodeURIComponent(current.id)}/select-primary`, {
+        method: 'POST', body: JSON.stringify({
+          expected_revision: preview.candidate.revision,
+          expected_current_id: preview.current?.id || null,
+          expected_current_revision: preview.current?.revision || null,
+          expected_candidate_hash: preview.candidate_hash,
+          acknowledge_problems: applyAcknowledged,
+        }),
+      });
+      setApplyPreview(null);
+      await refreshDrafts();
+      setStatus(`Ревизия ${current.revision} применена для новых недель. Уже созданные недели не изменены.`);
+    } catch (error) {
+      setApplyError(String((error as Error).message || error));
+    } finally { setApplyBusy(false); }
+  };
   const colorPairs = useMemo(() => {
     const slots = new Map<string, Set<string>>();
     for (const lesson of payload?.lessons || []) {
@@ -2935,8 +3013,14 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                 {saving ? 'Сохраняется' : dirty ? saveFailed ? 'Ошибка сохранения' : 'Есть несохранённые изменения' : schoolReview ? 'Черновик сохранён' : 'Сохранено'}
               </output>
               <button aria-label="Сохранить черновик" onClick={() => void save()} disabled={!dirty || saving}>
-                <Save size={16} />Сохранить
+                <Save size={16} />Сохранить черновик
               </button>
+              {primaryRevisionAction.visible ? <button type="button" className="constructor-apply-template"
+                disabled={!primaryRevisionAction.enabled || applyBusy}
+                title={!primaryRevisionAction.revisionsMatch ? 'Список ревизий обновляется. Повторите после синхронизации.' : dirty ? 'Сначала сохраните черновик' : readOnlySchoolWorkspace ? 'Недостаточно прав' : 'Сравнить и применить эту ревизию только для новых недель'}
+                onClick={() => void previewPrimaryRevision()}>
+                <BookOpenCheck size={16} />{applyBusy ? 'Сравниваем…' : 'Применить для новых недель'}
+              </button> : null}
               <ScheduleExportLink api={api} path={schedulePath(`/${encodeURIComponent(draft.id)}/export`)}
                 revision={draft.revision} dirty={dirty} refresh={exportOpen} />
               <button type="button" disabled={dirty || saving} onClick={() => setExportOpen(true)}>Экспортировать</button>
@@ -3085,6 +3169,14 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
         <p>Изменения каталога не переписывают занятия уже созданных недель. Кружки не назначаются ученикам.</p>
         <footer>{activityEditor.item ? <button disabled={catalogSaving} onClick={async () => { await archiveActivity(activityEditor.item!); setActivityEditor(null); }}>{activityEditor.item.status === 'active' ? 'В архив' : 'Восстановить'}</button> : null}<button disabled={catalogSaving} onClick={() => setActivityEditor(null)}>Отмена</button><button className="is-primary" disabled={catalogSaving || !activityEditor.name.trim()} onClick={() => void saveActivityEditor()}>{catalogSaving ? 'Сохраняем…' : 'Сохранить запись'}</button></footer>
       </dialog></div> : null}
+      {applyPreview ? <TemplateSelectionDialog preview={applyPreview} busy={applyBusy}
+        readOnly={readOnlySchoolWorkspace} actionError={applyError}
+        acknowledgeProblems={applyAcknowledged} acknowledgeBaseline={false}
+        confirmLabel="Применить для новых недель"
+        onAcknowledgeProblems={setApplyAcknowledged} onAcknowledgeBaseline={() => undefined}
+        onCancel={() => { setApplyPreview(null); setApplyError(''); }}
+        onReview={() => { setApplyPreview(null); setReviewFilter('all'); setReviewMode('review'); }}
+        onConfirm={() => void confirmPrimaryRevision()} onApproveBaseline={() => undefined} /> : null}
       {versionConflict ? (
         <div className="constructor-conflict-backdrop">
           <section className="constructor-conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="constructor-conflict-title">
@@ -4318,7 +4410,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                 <button type="button" onClick={() => setPanelOpen(false)}>К сетке</button>
                 <span>{structuredCreation ? '' : saving ? 'Сохраняется' : dirty ? 'При сохранении запишутся все правки черновика' : 'Сохранено'}</span>
                 {structuredCreation ? <button type="button" onClick={addFromEditor}><Plus size={15} aria-hidden="true" /> {addLabel}</button>
-                  : <button type="button" onClick={() => void save()} disabled={!dirty || saving}><Save size={15} aria-hidden="true" /> Сохранить правку</button>}
+                  : <button type="button" onClick={() => void save()} disabled={!dirty || saving}><Save size={15} aria-hidden="true" /> Сохранить черновик</button>}
               </div>
             </ConstructorInspectorShell>
             <button

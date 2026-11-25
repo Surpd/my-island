@@ -29,3 +29,24 @@ export function groupSelectionProblems(items: SelectionProblem[]) {
     unknown: items.filter(item => selectionProblemKind(item) === 'unknown'),
   };
 }
+
+export function primaryRevisionActionState(value: {
+  primary: boolean;
+  schoolTemplate: boolean;
+  selectionStale: boolean;
+  draftRevision: number;
+  summaryRevision: number;
+  editorRevision: number;
+  dirty: boolean;
+  saving: boolean;
+  readOnly: boolean;
+}) {
+  const visible = value.primary && value.schoolTemplate && value.selectionStale;
+  const revisionsMatch = value.draftRevision === value.summaryRevision
+    && value.draftRevision === value.editorRevision;
+  return {
+    visible,
+    revisionsMatch,
+    enabled: visible && revisionsMatch && !value.dirty && !value.saving && !value.readOnly,
+  };
+}
