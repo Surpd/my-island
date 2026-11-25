@@ -11,6 +11,18 @@ class ClassLoadTests(TestCase):
     tearDown = fixtures.CanonicalScheduleRuntimeTests.tearDown
     artifact = fixtures.CanonicalScheduleRuntimeTests.artifact
 
+    def known_report(self, *args, **kwargs):
+        from backend.services.canonical_schedule import resolve_published_week
+
+        def resolve(database, day):
+            edition = resolve_published_week(database, day)
+            if edition.effective:
+                edition.metadata["coverage"] = "complete"
+            return edition
+
+        with patch("backend.services.class_load_analytics.canonical.resolve_published_week", side_effect=resolve):
+            return class_load_analytics(self.database, *args, **kwargs)
+
     def test_class_load_deduplicates_co_teaching_interval(self):
         second_teacher = self.database.create_identity("teacher", "Teacher Two")
         artifact = self.artifact()
@@ -19,7 +31,7 @@ class ClassLoadTests(TestCase):
         import_canonical_artifact(self.database, artifact)
         materialize_effective_week(self.database, self.version_id, "2026-09-07")
 
-        result = class_load_analytics(self.database, "2026-09-07")
+        result = self.known_report("2026-09-07")
         group = next(item for item in result["groups"] if str(self.math_group["id"]) == item["group_id"])
         self.assertEqual(group["scheduled_minutes"], 45)
         self.assertEqual(group["lesson_count"], 1)
@@ -38,7 +50,7 @@ class ClassLoadTests(TestCase):
         }
         import_canonical_artifact(self.database, artifact)
         materialize_effective_week(self.database, self.version_id, "2026-09-07")
-        result = class_load_analytics(self.database, "2026-09-07", group_type="instructional")
+        result = self.known_report("2026-09-07", group_type="instructional")
         group = next(item for item in result["groups"] if item["group_id"] == str(self.math_group["id"]))
         self.assertEqual(group["trajectory"], "")
         self.assertEqual(group["scheduled_minutes"], 60)
@@ -68,6 +80,8 @@ class ClassLoadTests(TestCase):
         artifact["blocks"] = {}
         def add(key, start, end, targets, *, teacher=None, kind="lesson", joint=None):
             metadata = {"activity_type": kind}
+            if klass not in targets:
+                metadata["audience_rule"] = {"kind": "groups", "class_group_id": klass}
             if joint:
                 metadata.update(audience_coverage="explicit", joint_activity_id=joint)
             artifact["blocks"][key] = {"weekday": 0, "grade_scope": "9", "status": "resolved",
@@ -83,7 +97,7 @@ class ClassLoadTests(TestCase):
         add("club","16:00","17:30",[klass],kind="club")
         import_canonical_artifact(self.database, artifact)
         materialize_effective_week(self.database, self.version_id, "2026-12-28")
-        result = class_load_analytics(self.database, "2026-12-28","2027-01-03")
+        result = self.known_report("2026-12-28","2027-01-03")
         by_id = {g["group_id"]:g for g in result["groups"]}
         summary = by_id[klass]
         self.assertEqual(summary["lesson_count"],5)
@@ -122,6 +136,39 @@ class ClassLoadTests(TestCase):
         self.assertIsNone(partial["lesson_count"])
         self.assertIsNone(partial["scheduled_minutes"])
         self.assertEqual(partial["observed_scheduled_minutes"], 45)
-        empty = class_load_analytics(self.database,"2027-01-03",group_id=str(self.base_group["id"]))
+        empty = self.known_report("2027-01-03",group_id=str(self.base_group["id"]))
         self.assertEqual(empty["groups"][0]["coverage_status"], "complete")
         self.assertEqual(empty["groups"][0]["scheduled_minutes"], 0)
+
+    def test_historical_parent_comes_from_dated_membership_not_current_label(self):
+        old_class = str(self.base_group["id"])
+        new_class = str(self.database.create_group("9B", "class", base_class_name="9B")["id"])
+        group = str(self.math_group["id"])
+        with self.database.connection() as conn:
+            conn.execute("UPDATE groups SET base_class_name='9B' WHERE id=?", (group,))
+            conn.execute("DELETE FROM memberships")
+            for group_id, start, end in ((group, "2026-09-01", "2026-09-30"),
+                                         (old_class, "2026-09-01", "2026-09-30"),
+                                         (new_class, "2026-10-01", "2026-12-31")):
+                conn.execute("""INSERT INTO memberships (group_id,identity_id,member_role,source,active,valid_from,valid_until)
+                    VALUES (?,?,'student','admin_override',1,?,?)""", (group_id, self.student["id"], start, end))
+        artifact = self.artifact()
+        artifact["blocks"] = {self.block_key: artifact["blocks"][self.block_key]}
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        materialize_effective_week(self.database, self.version_id, "2026-10-05")
+        result = class_load_analytics(self.database, "2026-09-07")
+        self.assertIn(old_class, [entry["group_id"] for entry in result["groups"]])
+        self.assertNotIn(new_class, [entry["group_id"] for entry in result["groups"]])
+        unavailable = class_load_analytics(self.database, "2026-10-05")
+        self.assertEqual(unavailable["coverage"]["unknown_parent_items"], 1)
+        self.assertEqual([row["group_id"] for row in unavailable["groups"]], [group])
+
+    def test_sdep_plan_is_not_counted_as_a_class_lesson(self):
+        artifact = self.artifact()
+        artifact["blocks"] = {self.block_key: artifact["blocks"][self.block_key]}
+        artifact["blocks"][self.block_key]["assignments"][0]["metadata"] = {"day_plan_mode": "sdep"}
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, self.version_id, "2026-09-07")
+        result = class_load_analytics(self.database, "2026-09-07")
+        self.assertEqual(result["groups"], [])
