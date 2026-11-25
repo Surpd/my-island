@@ -142,6 +142,24 @@ class JournalRoleViewTests(unittest.TestCase):
                 self.database.execute(connection, """INSERT INTO memberships(group_id, identity_id, member_role, source, source_ref)
                     VALUES (?, ?, 'student', 'test_fixture', ?)""", (group_a, student, f"term-{term_number}"))
 
+    def test_journal_overview_reconciles_archive_and_current_source_with_detail(self):
+        self._create_user("overview-admin", "admin", None)
+        headers = {"X-Dev-Auth": "overview-admin"}
+        path = "/api/admin/analytics/journals"
+        self.assertEqual(self.client.get(path, headers={"X-Dev-Auth": "student-auth"}).status_code, 403)
+        params = {"group_marker": "A", "grade": 9, "subject": "Math", "academic_year": "2026/27"}
+        response = self.client.get(path, params=params, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["source_count"], 2)
+        for item in response.json()["items"]:
+            detail = self.client.get(f"/api/admin/journals/{item['id']}/analytics",
+                                     params={"group_marker": "A"}, headers=headers).json()
+            for field, value in detail["totals"].items():
+                self.assertEqual(item[field], value)
+        filtered = self.client.get(path, params={**params, "term_number": 2, "start": "2027-01-01"}, headers=headers)
+        self.assertEqual(filtered.json()["source_count"], 1)
+        self.assertIsNone(filtered.json()["items"][0]["numeric_coverage"])
+
     def test_admin_snapshot_analytics_respects_period_marker_and_role(self):
         self._create_user("analytics-admin", "admin", None)
         headers = {"X-Dev-Auth": "analytics-admin"}

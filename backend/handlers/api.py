@@ -23,7 +23,7 @@ from psycopg import OperationalError as PostgresOperationalError
 
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
-from backend.services.journal_analytics import journal_analytics
+from backend.services.journal_analytics import journal_analytics, journal_overview
 from backend.services.auth import AuthError, resolve_auth
 from backend.services.identity import claim_identity, review_identity_claim
 from backend.services.admin import (
@@ -1461,6 +1461,19 @@ def create_router(database: Database) -> APIRouter:
         if not detail:
             raise HTTPException(status_code=404, detail="Журнал не найден")
         return detail
+
+    @router.get("/admin/analytics/journals")
+    def admin_journal_overview(
+        grade: int | None = None, subject: str | None = None, academic_year: str | None = None,
+        term_number: int | None = None, group_marker: str | None = None,
+        start: date | None = None, end: date | None = None, init_data: str | None = None,
+        x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"),
+    ):
+        require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if start and end and start > end:
+            raise HTTPException(422, "Некорректный диапазон дат")
+        return journal_overview(database, grade=grade, subject=subject, academic_year=academic_year,
+                                term_number=term_number, group_marker=group_marker, start=start, end=end)
 
     @router.get("/admin/journals/{source_id}/analytics")
     def admin_journal_analytics(
