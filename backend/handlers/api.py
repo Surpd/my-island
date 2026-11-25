@@ -21,7 +21,7 @@ from uuid import UUID
 from urllib.parse import urlparse
 from psycopg import OperationalError as PostgresOperationalError
 
-from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction
+from backend.services.directory_revisions import add_group_members, check_revision, directory_edit, directory_history, directory_transaction
 from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
 from backend.services.auth import AuthError, resolve_auth
@@ -192,6 +192,8 @@ class TeacherAssignmentPayload(BaseModel):
 
 
 class HomeroomAssignmentPayload(BaseModel):
+    expected_revision: int | None = None
+    expected_group_revision: int | None = None
     teacher_identity_id: str
     group_id: str
     active: bool = True
@@ -2605,10 +2607,12 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
         try:
-            item = assign_homeroom(database, payload.teacher_identity_id, payload.group_id, payload.active, actor["id"])
+            with directory_edit(database, "identities", payload.teacher_identity_id, payload.expected_revision, actor["id"]) as db:
+                check_revision(db, "groups", payload.group_id, payload.expected_group_revision)
+                item = assign_homeroom(db, payload.teacher_identity_id, payload.group_id, payload.active, actor["id"])
+                db.record_audit_event("homeroom_assignment.updated", "homeroom_assignment", {"teacher_identity_id": payload.teacher_identity_id, "group_id": payload.group_id, "active": payload.active}, actor["id"])
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        database.record_audit_event("homeroom_assignment.updated", "homeroom_assignment", {"teacher_identity_id": payload.teacher_identity_id, "group_id": payload.group_id, "active": payload.active}, actor["id"])
         return {"id": item["id"], "active": item["active"]}
 
     @router.post("/admin/schedule-scopes")
