@@ -126,6 +126,23 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect(frame.getByRole('button', { name: 'Расписание', exact: true }).first()).toBeVisible();
     await expandSchedule(frame);
     await expect(frame.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
+    const adminWeek = await page.request.get(`${PREVIEW_API}/api/admin/schedule/published-view?week_start=${FIXTURE_MONDAY}`, { headers: ADMIN_HEADERS });
+    expect(adminWeek.ok()).toBeTruthy();
+    const { publication } = await adminWeek.json();
+    expect(publication).toMatchObject({ published: true, origin: 'approved_materialization', week_start: FIXTURE_MONDAY });
+    async function expectSameEdition(role: 'student' | 'teacher', previewId: string) {
+      const response = await page.request.get(`${PREVIEW_API}/api/${role}/schedule`, {
+        params: { start_day: FIXTURE_MONDAY, end_day: FIXTURE_SUNDAY },
+        headers: { ...ADMIN_HEADERS, 'X-Preview-Id': previewId },
+      });
+      expect(response.ok()).toBeTruthy();
+      expect((await response.json()).publications).toEqual([publication]);
+      const denied = await page.request.get(`${PREVIEW_API}/api/admin/schedule/published-view?week_start=${FIXTURE_MONDAY}`, {
+        headers: { 'X-Dev-Auth': `${role}:1` },
+      });
+      expect(denied.status()).toBe(403);
+    }
+    await expectSameEdition('student', studentPreview);
     const campusShots = resolve(process.cwd(), 'artifacts/canonical-campus-proof');
     mkdirSync(campusShots, { recursive: true });
     await page.getByTitle('Предпросмотр My Island').screenshot({ path: resolve(campusShots, 'student-campus-published.png') });
@@ -169,6 +186,7 @@ test('preview shows isolated journal scores, a published lesson, teacher schedul
     await expect(teacherFrame.getByText('09:00 · Математика', { exact: true })).toBeVisible();
     await expandSchedule(teacherFrame, true);
     await expect(teacherFrame.locator('strong:visible').filter({ hasText: /^Математика$/ }).first()).toBeVisible();
+    await expectSameEdition('teacher', teacherPreview);
     await page.getByTitle('Предпросмотр My Island').screenshot({ path: resolve(campusShots, 'teacher-campus-published.png') });
 
     for (const width of ['360', '390', '430']) {
