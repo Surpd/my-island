@@ -98,6 +98,11 @@ def initialize_publication_schema(database: Any) -> None:
         from backend.services.published_week_sheets import SCHEMA as sheet_schema
         for statement in (*PUBLICATION_SCHEMA, *sheet_schema):
             database.execute(connection, statement)
+        if not database.database_url:
+            columns = database.execute(connection, "PRAGMA table_info(published_week_sheet_bindings)").fetchall()
+            if not any(row["name"] == "delivered_fingerprint" for row in columns):
+                database.execute(connection, "ALTER TABLE published_week_sheet_bindings ADD COLUMN delivered_fingerprint TEXT")
+
 
 
 def _hash(value: Any) -> str:

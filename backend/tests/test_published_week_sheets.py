@@ -51,6 +51,13 @@ class FakeSheets:
                         for row in self.rows[rect["sheetId"]][:rect["endRowIndex"]]:
                             for cell in row["values"][:rect["endColumnIndex"]]:
                                 cell.clear()
+                elif kind == "mergeCells":
+                    rect = action["range"]
+                    self.sheets[rect["sheetId"]].setdefault("merges", []).append(rect)
+                elif kind == "unmergeCells":
+                    rect = action["range"]
+                    self.sheets[rect["sheetId"]]["merges"] = [
+                        item for item in self.sheets[rect["sheetId"]].get("merges", []) if not delivery._intersects(rect, item)]
                 elif kind == "addNamedRange":
                     self.markers.append({**action["namedRange"], "namedRangeId": f"range-{len(self.history)}"})
                 elif kind == "deleteNamedRange":
@@ -131,7 +138,7 @@ class PublishedWeekSheetsTests(TestCase):
         self.tick()
         second = self.release("Second")
         job = self.job(second)
-        delayed = delivery._batch(job, delivery._plan(self.database, job), self.client.weekly_spreadsheet(job["target_id"]), self.client)
+        delayed, _ = delivery._batch(job, delivery._plan(self.database, job), self.client.weekly_spreadsheet(job["target_id"]), self.client)
         third = self.release("Third")
         self.tick()
         self.assertEqual(self.job(second)["state"], "superseded")
@@ -160,6 +167,62 @@ class PublishedWeekSheetsTests(TestCase):
         self.tick(300)
         self.assertEqual(self.job(third)["error_code"], "ownership_mismatch")
         self.assertEqual(len(self.client.history), 1)
+
+    def test_manual_format_edit_in_managed_cells_blocks_replacement(self):
+        first = self.start()
+        self.tick()
+        sid = self.job(first)["sheet_id"]
+        self.client.rows[sid][0]["values"][0]["userEnteredFormat"]["numberFormat"] = {"type": "NUMBER"}
+        second = self.release("Should not overwrite")
+        self.tick(110)
+        self.assertEqual(self.job(second)["error_code"], "managed_cells_edited")
+        self.assertEqual(len(self.client.history), 1)
+
+    def test_manual_border_edit_after_delivery_blocks_replacement(self):
+        first = self.start()
+        self.tick()
+        sid = self.job(first)["sheet_id"]
+        self.client.rows[sid][0]["values"][0]["userEnteredFormat"]["borders"] = {"top": {"style": "DASHED"}}
+        second = self.release("Should not overwrite")
+        self.tick(110)
+        self.assertEqual(self.job(second)["error_code"], "managed_cells_edited")
+        self.assertEqual(len(self.client.history), 1)
+
+    def test_restore_updates_the_same_weekly_gid_and_keeps_unrelated_tabs(self):
+        first = self.start()
+        self.tick()
+        second = self.release("Second")
+        self.tick(110)
+        from backend.services.constructor_publication import preview_restore, restore_publication
+        review = preview_restore(self.database, first["publication_id"], expected_head_revision=2)
+        third = restore_publication(self.database, first["publication_id"], expected_head_revision=2,
+                                    preview_token=review["preview_token"], confirmed=True)
+        self.tick(120)
+        self.assertEqual(self.job(third)["state"], "delivered")
+        sid = self.job(first)["sheet_id"]
+        self.assertEqual(self.job(second)["sheet_id"], sid)
+        self.assertEqual(self.job(third)["sheet_id"], sid)
+        self.assertEqual(set(self.client.sheets), {7, sid})
+        self.assertIn("Released first", str(self.client.rows[sid]))
+
+    def test_matching_title_keeps_history_and_foreign_gid_blocks(self):
+        first = self.start()
+        sid = self.job(first)["sheet_id"]
+        historical = self.client.sheets[7]["properties"]
+        historical["title"] = "Неделя " + self.week
+        self.client.sheets[sid] = {"properties": {**historical, "sheetId": sid, "title": "Чужие данные"}}
+        self.client.rows[sid] = [{"values": [{"userEnteredValue": {"stringValue": "Private template"}}]}]
+        self.tick()
+        self.assertEqual(self.job(first)["error_code"], "ownership_mismatch")
+        self.assertEqual(self.client.history, [])
+        del self.client.sheets[sid]
+        del self.client.rows[sid]
+        second = self.release("Safe new tab")
+        self.tick(110)
+        self.assertEqual(self.job(second)["state"], "delivered")
+        self.assertEqual(historical["title"], "Неделя " + self.week)
+        self.assertEqual(self.client.rows[7][0]["values"][0]["userEnteredValue"]["stringValue"], "Keep")
+        self.assertNotEqual(self.client.sheets[sid]["properties"]["title"], historical["title"])
 
     def test_broken_publication_pointer_prevents_delivery(self):
         first = self.start()

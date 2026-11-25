@@ -16,7 +16,7 @@ from backend.services.schedule_sheet_publishing import TEST_EXPORT_TARGET, _pres
 SCHEMA = (
     """CREATE TABLE IF NOT EXISTS published_week_sheet_bindings(
         target_id TEXT NOT NULL, week_start TEXT NOT NULL, sheet_id INTEGER NOT NULL,
-        delivered_revision INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(target_id,week_start), UNIQUE(target_id,sheet_id))""",
+        delivered_revision INTEGER NOT NULL DEFAULT 0, delivered_fingerprint TEXT, PRIMARY KEY(target_id,week_start), UNIQUE(target_id,sheet_id))""",
     """CREATE TABLE IF NOT EXISTS published_week_sheet_jobs(
         target_id TEXT NOT NULL, publication_id TEXT NOT NULL, week_start TEXT NOT NULL,
         head_revision INTEGER NOT NULL, directory_json TEXT NOT NULL, state TEXT NOT NULL,
@@ -84,7 +84,11 @@ def _plan(database, job):
     if set(published) != approved:
         raise DeliveryConflict("published_lesson_mapping_mismatch")
     payload = {**archived["payload"], "lessons": [published[key] for key in authored if key in published]}
-    if job["target_id"] != _target(payload.get("school_source")):
+    try:
+        target = _target(payload.get("school_source"))
+    except ValueError as exc:
+        raise DeliveryConflict("target_unavailable") from exc
+    if job["target_id"] != target:
         raise DeliveryConflict("target_changed")
     source = {"draft_id": job["publication_id"], "name": "Опубликованная неделя", "revision": job["head_revision"]}
     snapshot = freeze_week({"source": source, "payload": payload, **json.loads(job["directory_json"])}, job["week_start"])
@@ -102,6 +106,45 @@ def _contents(rows):
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def _normalize_format(value):
+    """Collapse equivalent ColorStyle and Color representations returned by Sheets."""
+    if isinstance(value, float):
+        return round(value, 6)
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    for field in ("backgroundColor", "foregroundColor", "color"):
+        style = result.pop(field + "Style", None)
+        if style and "rgbColor" not in style:
+            result[field + "Style"] = style
+        elif style or field in result:
+            color = style["rgbColor"] if style else result[field]
+            result[field] = [round(color.get(part, default), 6)
+                             for part, default in (("red", 0), ("green", 0), ("blue", 0), ("alpha", 1))]
+    return {key: _normalize_format(item) for key, item in result.items()
+            if item is not False and item is not None and item != {}}
+
+
+def _intersects(rect, other):
+    return (rect["startRowIndex"] < other["endRowIndex"] and other.get("startRowIndex", 0) < rect["endRowIndex"]
+            and rect["startColumnIndex"] < other["endColumnIndex"] and other.get("startColumnIndex", 0) < rect["endColumnIndex"])
+
+
+def _layout_contents(rows, merges, rect, *, include_borders=False):
+    styles = []
+    for y, row in enumerate(rows):
+        for x, cell in enumerate(row.get("values", [])):
+            fmt = _normalize_format({key: value for key, value in (cell.get("userEnteredFormat") or {}).items()
+                                     if include_borders or key != "borders"})
+            if fmt:
+                styles.append([y, x, fmt])
+    managed_merges = sorted(tuple(item.get(key, 0) for key in
+                                  ("startRowIndex", "startColumnIndex", "endRowIndex", "endColumnIndex"))
+                            for item in merges if _intersects(rect, item))
+    return hashlib.sha256(json.dumps([_contents(rows), styles, managed_merges],
+                                     ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
 def _batch(job, plan, book, client):
     target, sid = job["target_id"], job["sheet_id"]
     title = plan["title"]
@@ -109,33 +152,42 @@ def _batch(job, plan, book, client):
     old = props.get(sid)
     titles = {p["title"] for p in props.values()}
     if not old and title in titles:
-        title = f"{title} · My Island {sid}"
+        base_title = f"{title} · My Island {sid}"
+        title = base_title
+        suffix = 2
+        while title in titles:
+            title = f"{base_title} ({suffix})"
+            suffix += 1
     raw = sheets_requests({**plan, "title": title}, spreadsheet_url=_spreadsheet_url(target))
     # Only the visible planner belongs to weekly delivery. Historical draft
     # exports keep their original two-tab layout, snapshots and identifiers.
     writes = [r for r in raw[2:] if r.get("updateCells", {}).get("start", {}).get("sheetId") != 0]
     main_cells = next(r["updateCells"]["rows"] for r in writes if "updateCells" in r)
     prefix = "MI_WEEK_" + job["week_start"].replace("-", "") + "_"
-    digest = _contents(main_cells)
-    name = f"{prefix}R{job['head_revision']}_{digest}"
     owned = [r for r in book.get("namedRanges", []) if r.get("name", "").startswith(prefix)]
     rect = {"sheetId": sid, "startRowIndex": 0, "startColumnIndex": 0, "endRowIndex": plan["rows"], "endColumnIndex": plan["columns"]}
+    merges = [r["mergeCells"]["range"] for r in writes if "mergeCells" in r]
+    digest = _layout_contents(main_cells, merges, rect)
+    name = f"{prefix}R{job['head_revision']}_V2_{digest}"
     add_marker = {"addNamedRange": {"namedRange": {"name": name, "range": rect}}}
     if not old:
         if owned:
             raise DeliveryConflict("missing_owned_sheet")
-        return [raw[0], *writes, add_marker]
+        return [raw[0], *writes, add_marker], None
     if len(owned) != 1 or owned[0]["range"].get("sheetId") != sid:
         raise DeliveryConflict("ownership_mismatch")
     marker = owned[0]
-    match = re.fullmatch(re.escape(prefix) + r"R(\d+)_([a-f0-9]{64})", marker["name"])
+    match = re.fullmatch(re.escape(prefix) + r"R(\d+)_(V2_)?([a-f0-9]{64})", marker["name"])
     if not match or not marker.get("namedRangeId") or marker["range"].get("startRowIndex", 0) or marker["range"].get("startColumnIndex", 0):
         raise DeliveryConflict("ownership_mismatch")
     previous_revision = int(match[1])
     if previous_revision > job["head_revision"]:
         raise DeliveryConflict("newer_remote_revision")
     grid = old["gridProperties"]
-    old_rect = marker["range"]
+    old_rect = {"startRowIndex": 0, "startColumnIndex": 0, **marker["range"]}
+    if not (0 < old_rect.get("endRowIndex", 0) <= grid["rowCount"]
+            and 0 < old_rect.get("endColumnIndex", 0) <= grid["columnCount"]):
+        raise DeliveryConflict("ownership_mismatch")
     visible_rows = min(grid["rowCount"], max(old_rect["endRowIndex"], plan["rows"]))
     visible_cols = min(grid["columnCount"], max(old_rect["endColumnIndex"], plan["columns"]))
     inspected = client.sheet_grid_range(target, old["title"], f"A1:{column_name(visible_cols-1)}{visible_rows}")
@@ -144,16 +196,30 @@ def _batch(job, plan, book, client):
         raise DeliveryConflict("ownership_mismatch")
     rows = (data.get("data") or [{}])[0].get("rowData") or []
     previous = [{"values": row.get("values", [])[:old_rect["endColumnIndex"]]} for row in rows[:old_rect["endRowIndex"]]]
-    if _contents(previous) != match[2]:
-        raise DeliveryConflict("managed_cells_edited")
+    remote_merges = data.get("merges", [])
+    previous_layout = _layout_contents(previous, remote_merges, old_rect)
+    observed_format = _layout_contents(previous, remote_merges, old_rect, include_borders=True)
+    if previous_revision == job.get("delivered_revision") and job.get("delivered_fingerprint"):
+        if observed_format != job["delivered_fingerprint"]:
+            raise DeliveryConflict("managed_cells_edited")
+    if match[2]:
+        if previous_layout != match[3]:
+            raise DeliveryConflict("managed_cells_edited")
+    elif _contents(previous) != match[3] or previous_revision != job["head_revision"] or previous_layout != digest:
+        raise DeliveryConflict("unverified_legacy_layout")
     for y, row in enumerate(rows[:plan["rows"]]):
         for x, cell in enumerate(row.get("values", [])[:plan["columns"]]):
-            if (x >= old_rect["endColumnIndex"] or y >= old_rect["endRowIndex"]) and (cell.get("userEnteredValue") or cell.get("note")):
+            outside_managed = x >= old_rect["endColumnIndex"] or y >= old_rect["endRowIndex"]
+            if outside_managed and any(cell.get(key) for key in ("userEnteredValue", "note", "userEnteredFormat")):
                 raise DeliveryConflict("occupied_expansion")
+    if any(_intersects(rect, item) and not _intersects(old_rect, item) for item in remote_merges):
+        raise DeliveryConflict("occupied_expansion")
     if previous_revision == job["head_revision"]:
-        if marker["name"] != name:
+        if previous_layout != digest:
             raise DeliveryConflict("revision_content_mismatch")
-        return []
+        if not match[2]:
+            return [{"deleteNamedRange": {"namedRangeId": marker["namedRangeId"]}}, add_marker], None
+        return [], observed_format
     # Consuming Google's previous namedRangeId fences a delayed batch. A stale
     # delete fails validation, so no cell in that atomic batch is changed.
     changes = [{"deleteNamedRange": {"namedRangeId": marker["namedRangeId"]}}]
@@ -163,7 +229,7 @@ def _batch(job, plan, book, client):
             changes.append({"appendDimension": {"sheetId": sid, "dimension": "ROWS" if key == "rowCount" else "COLUMNS", "length": needed-grid[key]}})
     changes.extend([{"unmergeCells": {"range": old_rect}},
                     {"updateCells": {"range": old_rect, "fields": "userEnteredValue,userEnteredFormat,note"}}])
-    return [*changes, *writes, add_marker]
+    return [*changes, *writes, add_marker], None
 
 
 def deliver_one(database, client_factory, now=None):
@@ -171,7 +237,7 @@ def deliver_one(database, client_factory, now=None):
     token = uuid4().hex
     with database.connection() as conn:
         due = """((state IN ('pending','retry') AND next_attempt<=?) OR (state='working' AND lease_until<=?))"""
-        job = database.execute(conn, f"""SELECT j.*,b.sheet_id FROM published_week_sheet_jobs j
+        job = database.execute(conn, f"""SELECT j.*,b.sheet_id,b.delivered_revision,b.delivered_fingerprint FROM published_week_sheet_jobs j
             JOIN published_week_sheet_bindings b USING(target_id,week_start) WHERE {due}
             ORDER BY next_attempt,head_revision DESC LIMIT 1""", (now, now)).fetchone()
         if not job:
@@ -182,7 +248,7 @@ def deliver_one(database, client_factory, now=None):
             lease_until=?,lease_token=? WHERE target_id=? AND publication_id=? AND {due}""", (now+120, token, *key, now, now))
         if not locked.rowcount:
             return False
-    state, error = "delivered", None
+    state, error, fingerprint = "delivered", None, None
     try:
         def current():
             with database.connection() as conn:
@@ -192,13 +258,15 @@ def deliver_one(database, client_factory, now=None):
         if current():
             plan = _plan(database, job)
             client = client_factory()
-            batch = _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client)
+            batch, fingerprint = _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client)
             if batch and current():
                 client.batch_update_spreadsheet(job["target_id"], batch)
             if not current():
                 state = "superseded"
-            elif _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client):
-                raise RuntimeError("delivery_not_confirmed")
+            elif batch:
+                remaining, fingerprint = _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client)
+                if remaining or not fingerprint:
+                    raise RuntimeError("delivery_not_confirmed")
         else:
             state = "superseded"
     except DeliveryConflict as exc:
@@ -211,7 +279,7 @@ def deliver_one(database, client_factory, now=None):
             lease_token=NULL,lease_until=0 WHERE target_id=? AND publication_id=? AND lease_token=?""",
             (state, error, now + min(3600, 5 * 2 ** min(job["attempts"], 10)), *key, token))
         if updated.rowcount and state == "delivered":
-            database.execute(conn, """UPDATE published_week_sheet_bindings SET delivered_revision=?
-                WHERE target_id=? AND week_start=? AND delivered_revision<?""",
-                (job["head_revision"], job["target_id"], job["week_start"], job["head_revision"]))
+            database.execute(conn, """UPDATE published_week_sheet_bindings SET delivered_revision=?,delivered_fingerprint=?
+                WHERE target_id=? AND week_start=? AND delivered_revision<=?""",
+                (job["head_revision"], fingerprint, job["target_id"], job["week_start"], job["head_revision"]))
     return True

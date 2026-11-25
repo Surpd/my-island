@@ -31,7 +31,7 @@ class SheetLeasePostgresTests(TestCase):
             conn.execute("""CREATE TABLE IF NOT EXISTS schedule_publication_heads(
                 scope_key TEXT PRIMARY KEY, revision INTEGER NOT NULL)""")
             conn.execute("INSERT INTO schedule_publication_heads VALUES(%s,1)", ("week:"+monday,))
-            conn.execute("INSERT INTO published_week_sheet_bindings VALUES(%s,%s,101,0)", (target,monday))
+            conn.execute("INSERT INTO published_week_sheet_bindings(target_id,week_start,sheet_id,delivered_revision) VALUES(%s,%s,101,0)", (target,monday))
             conn.execute("""INSERT INTO published_week_sheet_jobs(target_id,publication_id,week_start,head_revision,directory_json,state)
                 VALUES(%s,%s,%s,1,'{}','working')""", (target,ident,monday))
             conn.execute("UPDATE published_week_sheet_jobs SET lease_until=100,lease_token='expired' WHERE publication_id=%s", (ident,))

@@ -94,6 +94,10 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === '/api/admin/schedule/experiments/school/audience-preview') return route.fulfill({json:{lessons:{}}});
     if (path === '/api/admin/school/teacher-ui-colors') return route.fulfill({json:{items:[]}});
     if (path === '/api/admin/schedule/observability') return route.fulfill({ json: { blocks: [], weeks: [], effective_weeks: [], week_publications: [], canonical: { version_id: 'base-version-hidden-in-ui', status: 'authoritative' } } });
+    if (path === '/api/admin/schedule/constructor/publication/publication-fixture/sheet-retry' && route.request().method() === 'POST') {
+      historyItems = historyItems.map(item => ({...item, sheet_delivery: {state: 'pending'}}));
+      return route.fulfill({json: {state: 'pending'}});
+    }
     if (path.startsWith('/api/admin/schedule/activities')) return route.fulfill({ json: { items: [] } });
     if (path === `/api/admin/schedule/experiments/school/${DRAFT_ID}`) {
       const lessons = ['lesson-info', 'lesson-conflict', 'lesson-related', 'lesson-critical', 'lesson-preserved', 'lesson-excluded'].map(id => ({
@@ -125,10 +129,6 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/audiences/preview`) {
       return route.fulfill({ json: { revision: 1, summary: { selected_count: 0 }, lessons: [] } });
     }
-    if (path === '/api/admin/schedule/constructor/publication/publication-fixture/sheet-retry' && route.request().method() === 'POST') {
-      historyItems = historyItems.map(item => ({...item, sheet_delivery: {state: 'pending'}}));
-      return route.fulfill({json: {state: 'pending'}});
-    }
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publications`) return route.fulfill({ json: { items: historyItems, heads: {} } });
     if (path === `/api/admin/schedule/constructor/${DRAFT_ID}/publication/preview` && route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as { scope_kind: 'template' | 'week'; week_start?: string };
@@ -149,7 +149,13 @@ async function openPublicationPanel(page: import('@playwright/test').Page, optio
         runtime_readback: { verified: true, block_count: 7 }, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 },
         diagnostics: historyPreview.diagnostics.filter((item) => item.severity !== 'critical'), deferred: historyPreview.deferred,
       }];
-      return route.fulfill({ json: { status: 'published', sheet_delivery_queued: scope === 'week', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
+      if (scope === 'week') {
+        return route.fulfill({json: {status: 'published', operation_id: publishPayload.operation_id,
+          sheet_delivery_queued: true, published_id: PUBLISHED_ID, version_id: VERSION_ID,
+          created_at: '2026-10-27T09:15:00Z', week_start: publishedWeek, summary: historyItems[0].summary,
+          runtime_readback: { verified: true, block_count: 7, assignment_count: 4 }}});
+      }
+      return route.fulfill({ json: { status: 'published', published_id: PUBLISHED_ID, version_id: VERSION_ID, created_at: '2026-10-27T09:15:00Z', week_start: (publishPayload.week_start as string | undefined) || null, summary: { ready_lessons: 4, deferred_lessons: 2, deferred_blocks: 1 }, runtime_readback: { verified: true, block_count: 7, assignment_count: 4 } } });
     }
     return route.continue();
   });
