@@ -1,6 +1,6 @@
 # My Island · архитектурный и продуктовый аудит
 
-[Реестр реализации и проверки](implementation.md)
+[Реестр реализации и проверки](implementation.md) · [Архитектурный кандидат и порядок выпуска](release-candidate.md)
 
 25 ноября 2026 · [проверенная версия исходников](https://github.com/Surpd/my-island/tree/6eda54a79e8606021bfda7385004c8d0e8294218) · [UX-аудит и карта экранов](visual.md) · [схема целевого потока](publication-flow.html)
 
