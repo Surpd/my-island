@@ -5,6 +5,8 @@ on:
       - 'backend/services/canonical_schedule.py'
       - 'backend/services/constructor_publication.py'
       - 'backend/handlers/api.py'
+      - 'backend/services/operational_day.py'
+      - 'backend/tests/test_operational_day.py'
       - 'backend/tests/test_canonical_schedule.py'
       - 'backend/tests/test_constructor_publication.py'
       - '.github/workflows/published-week.yml'
@@ -20,4 +22,4 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
-      - run: python -m unittest backend.tests.test_constructor_publication backend.tests.test_canonical_schedule -q
+      - run: python -m unittest backend.tests.test_constructor_publication backend.tests.test_canonical_schedule backend.tests.test_operational_day -q
