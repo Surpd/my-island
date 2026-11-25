@@ -2255,15 +2255,54 @@ def project_teacher_range(database: Database, identity_id: Any, start_day: str, 
     first, last = date.fromisoformat(start_day), date.fromisoformat(finish)
     if last < first:
         raise ValueError("end_day must not precede start_day")
-    projection = project_teacher(database, identity_id, _week_start(start_day))
-    if projection["status"] in {"draft", "superseded"}:
-        return {**projection, "status": "not_published", "items": [], "issues": [], "start_day": start_day, "end_day": finish}
-    projection["start_day"] = start_day
-    projection["end_day"] = finish
-    projection["items"] = [item for item in projection.get("items", []) if start_day <= str(item.get("date")) <= finish]
-    projection["issues"] = [issue for issue in projection.get("issues", []) if start_day <= str(issue.get("date", start_day)) <= finish]
-    projection["day_modes"] = [item for item in projection.get("day_modes", []) if start_day <= str(item.get("date")) <= finish]
-    return projection
+    # A range can cross month/year boundaries and can contain weeks that have
+    # no materialized overlay. Resolve every Monday in the range instead of
+    # assuming the first week's effective publication applies to all dates.
+    projections: dict[str, dict[str, Any]] = {}
+    cursor = first
+    while cursor <= last:
+        week_start = _week_start(cursor.isoformat())
+        if week_start not in projections:
+            projections[week_start] = project_teacher(database, identity_id, week_start)
+        cursor += timedelta(days=1)
+
+    approved = {"approved_baseline", "approved_with_exceptions", "authoritative"}
+    published = [value for value in projections.values() if value.get("status") in approved]
+    items = [item for value in published for item in value.get("items", [])
+             if start_day <= str(item.get("date")) <= finish]
+    issues = [issue for value in published for issue in value.get("issues", [])
+              if start_day <= str(issue.get("date", start_day)) <= finish]
+    day_modes = [item for value in published for item in value.get("day_modes", [])
+                 if start_day <= str(item.get("date")) <= finish]
+
+    statuses = [value.get("status") for value in projections.values()]
+    # An unmaterialized week is an expected sparse-range state. It must not
+    # hide approved weeks; only an explicitly unpublished week suppresses the
+    # aggregate, matching the single-week publication contract.
+    status = next((value for value in statuses if value in {"draft", "superseded"}), None)
+    if status in {"draft", "superseded"}:
+        status = "not_published"
+        items, issues, day_modes = [], [], []
+    elif published:
+        status = published[0].get("status")
+    else:
+        status = statuses[0] if statuses else "canonical_not_materialized"
+    result = dict(next(iter(projections.values()), {}))
+    result.update({
+        "identity_id": str(identity_id),
+        "start_day": start_day,
+        "end_day": finish,
+        "status": status,
+        "items": items,
+        "issues": issues,
+        "day_modes": day_modes,
+    })
+    # Keep publication metadata added by the single-week projection.  Older
+    # projections do not expose it, so absence remains backward compatible.
+    if any("publications" in value for value in projections.values()):
+        result["publications"] = [publication for value in projections.values()
+                                   for publication in (value.get("publications") or [])]
+    return result
 
 
 def effective_blocks(database: Database, week_start: str) -> dict[str, Any]:
