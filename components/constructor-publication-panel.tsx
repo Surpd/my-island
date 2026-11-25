@@ -703,18 +703,36 @@ export function ConstructorPublicationPanel({
       setBusy(false);
     }
   };
+  const pendingCommand = useRef<{token: string; id: string} | null>(null);
+  async function submitCommand<T>(path: string, payload: {preview_token: string} & Record<string, unknown>): Promise<T> {
+    if (pendingCommand.current?.token !== payload.preview_token) {
+      pendingCommand.current = {token: payload.preview_token, id: crypto.randomUUID()};
+    }
+    const operationId = pendingCommand.current.id;
+    try {
+      return await api<T>(path, {method: 'POST', body: JSON.stringify({...payload, operation_id: operationId})});
+    } catch (error) {
+      const status = (error as ApiError | null)?.status;
+      if (status && status < 500 && status !== 408) throw error;
+      try {
+        return await api<T>(`/api/admin/schedule/constructor/publication/receipts/${operationId}`);
+      } catch {
+        throw error;
+      }
+    }
+  }
   const publish = async()=>{
     if(!activePreview?.can_publish || !confirmed || dirty || checking || busy || readOnly || activePreview.publication_available===false)return;
     setBusy(true);setMessage('');setSessionExpired(false);
     try {
-      const result = await api<{published_id:string;scope_key?:string;version_id?:string;week_start?:string;created_at?:string;summary?:Partial<Summary>;runtime_readback:{verified:boolean;block_count:number;assignment_count:number}}>(`${prefix}/publication/publish`,{method:'POST',body:JSON.stringify({...body,preview_token:activePreview.preview_token,confirmed:true})});
+      const result = await submitCommand<{published_id:string;scope_key?:string;version_id?:string;week_start?:string;created_at?:string;summary?:Partial<Summary>;runtime_readback:{verified:boolean;block_count:number;assignment_count:number}}>(`${prefix}/publication/publish`,{...body,preview_token:activePreview.preview_token,confirmed:true});
       const publishedWhen=result.created_at?new Date(result.created_at).toLocaleString('ru-RU'):'сейчас';
       const where=result.week_start?` · неделя с ${result.week_start}`:scope==='week'?` · неделя с ${week}`:' · школьный шаблон';
       const resultSummary={...emptySummary,...(result.summary||activePreview.summary)};
       const totals=`В Campus доступны ${resultSummary.campus_lessons??resultSummary.ready_lessons} занятий. Требуют уточнения ${resultSummary.admin_only_lessons??resultSummary.deferred_lessons} записей.`;
       setMessage(`Опубликовано${where} (${publishedWhen}). ${totals} ${result.runtime_readback.verified ? 'Проверка после публикации пройдена.' : 'Проверка после публикации ещё не пройдена.'}`);
       setPublished(true);setPreview(null);setConfirmed(false);await onPublished();
-    } catch(error){showError(error);setPreview(null);setConfirmed(false);}finally{setBusy(false);}
+    } catch(error){showError(error);if ((error as ApiError)?.status === 409) {setPreview(null);setConfirmed(false);}}finally{setBusy(false);}
   };
   const reviewRestore = async(publication:Publication)=>{
     const head = history.heads?.[publication.scope_key];
@@ -729,9 +747,9 @@ export function ConstructorPublicationPanel({
     if(!restore || !restoreConfirmed)return;
     setBusy(true);setMessage('');setSessionExpired(false);
     try {
-      const result = await api<{published_id:string;runtime_readback:{verified:boolean}}>('/api/admin/schedule/constructor/publication/restore',{method:'POST',body:JSON.stringify({publication_id:restore.publication.id,expected_head_revision:restore.expected_head_revision,preview_token:restore.preview.preview_token,confirmed:true})});
+      const result = await submitCommand<{published_id:string;runtime_readback:{verified:boolean}}>('/api/admin/schedule/constructor/publication/restore',{publication_id:restore.publication.id,expected_head_revision:restore.expected_head_revision,preview_token:restore.preview.preview_token,confirmed:true});
       setMessage(`Создана новая восстановленная версия расписания. Чтение: ${result.runtime_readback.verified?'подтверждено':'не подтверждено'}. Для дальнейшей работы откройте конструктор.`);setRestore(null);setRestoreConfirmed(false);await loadHistory();await onPublished();
-    }catch(error){showError(error);setRestore(null);}finally{setBusy(false);}
+    }catch(error){showError(error);if ((error as ApiError)?.status === 409) setRestore(null);}finally{setBusy(false);}
   };
   const openLesson = (id: string, issue?: ReturnType<typeof toDisplayIssue>) => {
     const relatedIds = issue?.targets.filter(target => target.available).map(target => target.id) || [];
