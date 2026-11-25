@@ -103,6 +103,7 @@ class PublishedWeekSheetsTests(TestCase):
 
     def test_lost_response_retry_and_republish_preserve_gid_user_tab_and_cells(self):
         first = self.start()
+        self.assertTrue(first["sheet_delivery_queued"])
         self.client.after_apply = True
         self.assertTrue(self.tick())
         self.assertEqual(self.job(first)["state"], "retry")

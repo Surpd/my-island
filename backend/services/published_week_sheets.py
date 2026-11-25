@@ -195,7 +195,9 @@ def deliver_one(database, client_factory, now=None):
             batch = _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client)
             if batch and current():
                 client.batch_update_spreadsheet(job["target_id"], batch)
-            if current() and _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client):
+            if not current():
+                state = "superseded"
+            elif _batch(job, plan, client.weekly_spreadsheet(job["target_id"]), client):
                 raise RuntimeError("delivery_not_confirmed")
         else:
             state = "superseded"
