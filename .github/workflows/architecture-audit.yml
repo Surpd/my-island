@@ -1,0 +1,30 @@
+name: Architecture audit references
+on:
+  pull_request:
+    paths:
+      - 'docs/reports/architecture-audit-2026-11-25/**'
+      - '.github/workflows/architecture-audit.yml'
+permissions:
+  contents: read
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check relative links in the audit, plan and screenshot gallery
+        run: |
+          python - <<'PY'
+          import pathlib, re, urllib.parse
+          root = pathlib.Path("docs/reports/architecture-audit-2026-11-25")
+          missing = []
+          for path in sorted([*root.glob("*.md"), *root.glob("*.html")]):
+              pattern = r'\]\(([^)]+)\)' if path.suffix == ".md" else r'(?:href|src)="([^"]+)"'
+              for target in re.findall(pattern, path.read_text(encoding="utf-8")):
+                  url = urllib.parse.urlsplit(target)
+                  if url.scheme or url.netloc or not url.path:
+                      continue
+                  if not (path.parent / urllib.parse.unquote(url.path)).is_file():
+                      missing.append(f"{path}: {target}")
+          if missing:
+              raise SystemExit("\n".join(missing))
+          PY

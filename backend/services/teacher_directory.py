@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from backend.services.directory_revisions import directory_import_connection
 from .school_data import stable_fingerprint
 
 
@@ -306,7 +307,7 @@ def build_assignment_candidates(rows: Sequence[TeacherRow], groups: Mapping[str,
 def sync_teacher_directory(database: Any, rows: Sequence[Sequence[Any]], *, spreadsheet_id: str, spreadsheet_title: str, apply: bool = True) -> dict[str, Any]:
     """Stage and apply one deterministic teacher snapshot transactionally."""
     parsed_rows, parse_issues = parse_teacher_rows(rows)
-    with database.connection() as connection:
+    with directory_import_connection(database) as connection:
         raw_source = json.dumps({"sheet": SHEET_NAME, "rows": [list(row) for row in rows]}, ensure_ascii=False, sort_keys=True)
         source_key = f"google:{spreadsheet_id}:{SHEET_NAME}"
         source = database.execute(connection, """INSERT INTO school_sources(source_type, external_key, display_name, location_ref, authority_status, configuration)

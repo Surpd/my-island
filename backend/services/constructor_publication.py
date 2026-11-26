@@ -49,6 +49,9 @@ PUBLICATION_SCHEMA = (
         published_id TEXT NOT NULL, version_id TEXT NOT NULL,
         payload_fingerprint TEXT NOT NULL, actor_user_id TEXT,
         created_at TEXT NOT NULL, metadata TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS schedule_publication_receipts (
+        operation_id TEXT PRIMARY KEY, actor_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL)""",
     "CREATE INDEX IF NOT EXISTS constructor_publications_scope_idx ON schedule_constructor_publications(scope_key,created_at)",
 )
 
@@ -92,8 +95,14 @@ def _requires_physical_teacher(lesson: Mapping[str, Any], independent_practice: 
 def initialize_publication_schema(database: Any) -> None:
     """Explicit local fixture setup; production migrations must be approved."""
     with database.connection() as connection:
-        for statement in PUBLICATION_SCHEMA:
+        from backend.services.published_week_sheets import SCHEMA as sheet_schema
+        for statement in (*PUBLICATION_SCHEMA, *sheet_schema):
             database.execute(connection, statement)
+        if not database.database_url:
+            columns = database.execute(connection, "PRAGMA table_info(published_week_sheet_bindings)").fetchall()
+            if not any(row["name"] == "delivered_fingerprint" for row in columns):
+                database.execute(connection, "ALTER TABLE published_week_sheet_bindings ADD COLUMN delivered_fingerprint TEXT")
+
 
 
 def _hash(value: Any) -> str:
@@ -1293,7 +1302,11 @@ def _persist(database: Any, preview: dict[str, Any], blocks: Mapping[str, Any], 
         if archived and (_hash(archived["payload"]) != archived["payload_fingerprint"] or
                          len(archived["records"]) != len(archived["payload"].get("lessons") or [])):
             raise RuntimeError("Published source integrity failed; transaction rolled back")
-    return {"status": "published", "publication_id": publication_id, "scope_kind": preview["scope_kind"],
+        from backend.services.published_week_sheets import enabled, enqueue
+        sheet_delivery_queued = enabled() and preview["scope_kind"] == "week"
+        if sheet_delivery_queued:
+            enqueue(database, connection, preview["week_start"], publication_id)
+    return {"status": "published", "sheet_delivery_queued": sheet_delivery_queued, "publication_id": publication_id, "scope_kind": preview["scope_kind"],
             "published_id": published_id, "previous_published_id": preview["previous_published_id"],
             "runtime_readback": readback_result, "deferred": preview["deferred"],
             "summary": preview.get("summary"), "version_id": version_id, "created_at": now,
@@ -1320,12 +1333,62 @@ def _transaction(database: Any):
         raise
 
 
+def _receipt(database, connection, operation_id, actor_key, request_hash):
+    row = database.execute(connection, """SELECT actor_key, request_hash, result_json
+        FROM schedule_publication_receipts WHERE operation_id=?""", (operation_id,)).fetchone()
+    if row is None:
+        return None
+    if actor_key != row["actor_key"] or request_hash != row["request_hash"]:
+        raise PublicationConflict("Operation ID already used for another request")
+    return json.loads(row["result_json"])
+
+
+def publication_receipt(database, operation_id, actor):
+    with database.connection() as connection:
+        row = database.execute(connection, """SELECT result_json FROM schedule_publication_receipts
+            WHERE operation_id=? AND actor_key=?""",
+            (operation_id, str(actor) if actor is not None else "")).fetchone()
+    return json.loads(row["result_json"]) if row else None
+
+
+def _run_command(database, operation_id, actor, request, execute):
+    actor_key = str(actor) if actor is not None else ""
+    fingerprint = _hash(request)
+    try:
+        with _transaction(database) as bound:
+            if operation_id:
+                existing = _receipt(bound, bound._connection, operation_id, actor_key, fingerprint)
+                if existing is not None:
+                    return existing
+            result = execute(bound)
+            if operation_id:
+                result["operation_id"] = operation_id
+                receipt = bound.execute(bound._connection, """INSERT INTO schedule_publication_receipts
+                    (operation_id, actor_key, request_hash, result_json) VALUES (?,?,?,?)
+                    ON CONFLICT(operation_id) DO NOTHING RETURNING operation_id""",
+                    (operation_id, actor_key, fingerprint, json.dumps(result, default=str))).fetchone()
+                if receipt is None:
+                    raise PublicationConflict("Operation ID already used for another request")
+            return result
+    except PublicationConflict:
+        # A SERIALIZABLE snapshot may predate the winner's commit. Read the
+        # receipt on a fresh connection only after this transaction rolled back.
+        if operation_id:
+            with database.connection() as connection:
+                existing = _receipt(database, connection, operation_id, actor_key, fingerprint)
+                if existing is not None:
+                    return existing
+        raise
+
+
 def publish_publication(database: Any, draft_id: str, *, scope_kind: str, expected_revision: int,
                         preview_token: str, confirmed: bool = False, week_start: str | None = None,
-                        actor_user_id: Any = None) -> dict[str, Any]:
+                        actor_user_id: Any = None, operation_id: str | None = None) -> dict[str, Any]:
     if confirmed is not True or not preview_token:
         raise ValueError("Explicit confirmation and preview_token are required")
-    with _transaction(database) as bound:
+    request = ("publish", draft_id, scope_kind, expected_revision, week_start, preview_token)
+
+    def execute(bound):
         # Lock the actual saved revision against simultaneous constructor saves.
         if database.database_url:
             database.execute(bound._connection, "SELECT id FROM schedule_experiment_drafts WHERE id=? FOR UPDATE", (draft_id,))
@@ -1365,6 +1428,8 @@ def publish_publication(database: Any, draft_id: str, *, scope_kind: str, expect
             result["base_version_id"] = preview["base_version_id"]
         return result
 
+    return _run_command(database, operation_id, actor_user_id, request, execute)
+
 
 def list_publications(database: Any, draft_id: str | None = None) -> dict[str, Any]:
     with database.connection() as connection:
@@ -1373,10 +1438,22 @@ def list_publications(database: Any, draft_id: str | None = None) -> dict[str, A
                                 (draft_id,) if draft_id else ()).fetchall()
         heads = {row["scope_key"]: dict(row) for row in database.execute(connection,
             "SELECT * FROM schedule_publication_heads ORDER BY scope_key").fetchall()}
+        from backend.services.published_week_sheets import enabled
+        deliveries = {}
+        if rows and enabled():
+            ids = [r["id"] for r in rows]
+            params = ",".join("?" for _ in ids)
+            for job in database.execute(connection, f"""SELECT j.publication_id,j.state,j.attempts,j.error_code,
+                    j.head_revision,b.delivered_revision FROM published_week_sheet_jobs j
+                    JOIN published_week_sheet_bindings b USING(target_id,week_start)
+                    WHERE j.publication_id IN ({params})""", tuple(ids)).fetchall():
+                deliveries[job["publication_id"]] = dict(job)
     result = []
     for row in rows:
         item = dict(row)
         metadata = json.loads(item.pop("metadata"))
+        if item["id"] in deliveries:
+            item["sheet_delivery"] = deliveries[item["id"]]
         item["runtime_readback"] = metadata["runtime_readback"]
         item["restored_from"] = metadata.get("restored_from")
         item["diagnostics"] = metadata.get("preview", {}).get("diagnostics", [])
@@ -1507,11 +1584,14 @@ def preview_restore(database: Any, publication_id: str, *, expected_head_revisio
 
 
 def restore_publication(database: Any, publication_id: str, *, expected_head_revision: int,
-                        preview_token: str, confirmed: bool = False, actor_user_id: Any = None) -> dict[str, Any]:
+                        preview_token: str, confirmed: bool = False, actor_user_id: Any = None,
+                        operation_id: str | None = None) -> dict[str, Any]:
     """Restore as a NEW immutable artifact with a current-head CAS guard."""
     if confirmed is not True or not preview_token:
         raise ValueError("Explicit restore confirmation is required")
-    with _transaction(database) as bound:
+    request = ("restore", publication_id, expected_head_revision, preview_token)
+
+    def execute(bound):
         row = database.execute(bound._connection, "SELECT * FROM schedule_constructor_publications WHERE id=?", (publication_id,)).fetchone()
         if not row:
             raise ValueError("Publication not found")
@@ -1530,3 +1610,5 @@ def restore_publication(database: Any, publication_id: str, *, expected_head_rev
         if item["scope_kind"] == "template":
             preview["base_version_id"] = head["version_id"]
         return _persist(bound, preview, metadata["blocks"], actor_user_id, restored_from=publication_id)
+
+    return _run_command(database, operation_id, actor_user_id, request, execute)

@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, type Page } from '@playwright/test';
@@ -60,7 +61,7 @@ async function addStudentToClass(page: Page, classId: string, className: string,
   const studentId = String((await identity.json()).id);
   const membership = await page.request.post(`${API}/api/admin/memberships`, {
     headers: ADMIN,
-    data: { group_id: classId, identity_id: studentId },
+    data: { expected_revision: await personRevision(page, studentId), group_id: classId, identity_id: studentId },
   });
   expect(membership.ok()).toBeTruthy();
   return studentId;
@@ -69,7 +70,7 @@ async function addStudentToClass(page: Page, classId: string, className: string,
 async function addMembership(page: Page, groupId: string, studentId: string) {
   const membership = await page.request.post(`${API}/api/admin/memberships`, {
     headers: ADMIN,
-    data: { group_id: groupId, identity_id: studentId },
+    data: { expected_revision: await personRevision(page, studentId), group_id: groupId, identity_id: studentId },
   });
   expect(membership.ok()).toBeTruthy();
 }
@@ -162,7 +163,8 @@ test('constructor repair: sliding inspector, room labels, rename popover and who
 
   const roomField = inspector.getByLabel('Кабинет', { exact: true });
   await roomField.fill('каб. 9');
-  await expect(inspector).toContainText('Есть изменения');
+  await expect(inspector.locator('.constructor-editor-actions')).toContainText('При сохранении запишутся все правки черновика');
+  await expect(inspector.getByRole('button', { name: 'Сохранить черновик', exact: true })).toBeEnabled();
   const gridWrap = page.locator('.constructor-grid-wrap');
   const scrollBeforeClose = await gridWrap.evaluate((element) => ({ top: element.scrollTop, left: element.scrollLeft }));
   await page.getByRole('button', { name: 'Закрыть редактор расписания' }).click();
@@ -520,7 +522,12 @@ test('constructor repair: grade nine all-others audience displays a live class s
 });
 
 test('вид занятия и онлайн сохраняются через обычную форму', async ({page}) => {
+  const classId = await createClass(page, '7-Д · E2E онлайн-практикум');
+  const createdResponse = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/admin/schedule/experiments');
   await openEmptyWeek(page);
+  const created = await (await createdResponse).json();
+  await filterClass(page, classId);
   await page.locator('[data-cell="0:0"]').click();
   await openScheduleInspector(page);
   await page.getByRole('button', {name: 'Форма', exact: true}).click();
@@ -557,6 +564,7 @@ test('вид занятия и онлайн сохраняются через о
   await expect(page.getByLabel('Кабинет нового занятия')).toHaveValue(/15/);
   await online.check();
   await expect(connection).toHaveValue('Школьная видеокомната');
+  await expect(page.getByLabel('Название активности')).toHaveValue('Самостоятельное чтение');
   await page.getByRole('button', {name: 'Добавить практикум', exact: true}).click();
   const card = page.locator('.constructor-card').filter({hasText: 'Самостоятельное чтение'});
   await expect(card).toContainText('Практикум');
@@ -568,6 +576,16 @@ test('вид занятия и онлайн сохраняются через о
   await expect(connection).toHaveValue('Школьная видеокомната');
   await expect(page.getByLabel('Кабинет', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', {name: 'Настроить подключение', exact: true})).toHaveCount(0);
+
+  const savedResponse = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname === `/api/admin/schedule/experiments/${created.id}`);
+  await page.getByRole('complementary', { name: 'Редактор занятия' })
+    .getByRole('button', { name: 'Сохранить черновик', exact: true }).click();
+  const saved = await savedResponse;
+  expect(saved.ok()).toBeTruthy();
+  expect((await saved.json()).payload.lessons).toEqual([
+    expect.objectContaining({ activityType: 'practice', format: 'online', connectionInfo: 'Школьная видеокомната', room: '' }),
+  ]);
 });
 
 for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
@@ -649,7 +667,7 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
     }
     const savedResponse = page.waitForResponse(response => response.request().method() === 'PUT'
       && new URL(response.url()).pathname === `/api/admin/schedule/experiments/${created.id}`);
-    await inspector.getByRole('button', { name: 'Сохранить правку' }).click();
+    await inspector.getByRole('button', { name: 'Сохранить черновик' }).click();
     const saved = await savedResponse;
     expect(saved.ok()).toBeTruthy();
     const { payload } = await saved.json();
@@ -694,7 +712,7 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 
       } else {
         await expect(online).toBeChecked();
       }
-      await capture(`edit-${item.type}`, 'Сохранить правку');
+      await capture(`edit-${item.type}`, 'Сохранить черновик');
     }
     if (viewport.width === 1366) {
       await inspector.getByRole('button', { name: 'Закрыть панель' }).click();
@@ -780,7 +798,7 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await editor.getByRole('button', { name: 'Закрыть панель' }).click();
   await page.locator('.constructor-card[data-lesson-id="group-lesson"]').dblclick();
   await expect(editor.getByRole('heading', { name: 'Английский язык' })).toBeVisible();
-  await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
+  await expect(editor.getByRole('button', { name: 'Сохранить черновик' })).toBeDisabled();
   const exceptions = editor.getByRole('button', { name: 'Кто не идёт на это занятие? · 1' });
   await expect(exceptions).toHaveAttribute('aria-expanded', 'false');
   await expect(editor.getByLabel('Причина (необязательно)', { exact: true })).toBeHidden();
@@ -797,7 +815,7 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await availability.press('Enter');
   await expect(editor.getByText(/Занятые кабинеты/)).toBeVisible();
   await availability.press('Space');
-  await expect(editor.getByRole('button', { name: 'Сохранить правку' })).toBeDisabled();
+  await expect(editor.getByRole('button', { name: 'Сохранить черновик' })).toBeDisabled();
 
   await page.route('**/api/admin/schedule/experiments/audience-preview', async route => {
     await new Promise(resolve => setTimeout(resolve, 1_200));
@@ -829,7 +847,7 @@ test('Issue 21 type changes preserve confirmed groups, exceptions and catalogue 
   await editor.getByRole('combobox', { name: 'Кабинет', exact: true }).fill('18');
   const savedResponse = page.waitForResponse(response => response.request().method() === 'PUT'
     && new URL(response.url()).pathname === `/api/admin/schedule/experiments/${draft.id}`);
-  await editor.getByRole('button', { name: 'Сохранить правку' }).click();
+  await editor.getByRole('button', { name: 'Сохранить черновик' }).click();
   const saved = await savedResponse;
   expect(saved.ok()).toBeTruthy();
   const { payload } = await saved.json();

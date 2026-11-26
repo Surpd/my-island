@@ -11,6 +11,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from backend.config import get_settings
+from backend.services.directory_revisions import add_group_members, directory_edit, directory_history, directory_transaction, directory_version
 from backend.database import Database
 from backend.handlers.api import (
     GroupPayload, IdentityPayload, MembershipTransferPayload,
@@ -25,6 +26,7 @@ class SchoolCodePayload(BaseModel):
 
 
 class ArchiveGroupPayload(BaseModel):
+    expected_revision: int | None = None
     confirm_used: bool = False
 
 
@@ -77,11 +79,11 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
             return False  # This fixture exercises schedule APIs, not directory editing.
         with database.connection() as connection:
             columns = database.execute(connection, """SELECT table_name, column_name FROM information_schema.columns
-                WHERE table_schema = 'public' AND ((table_name = 'groups' AND column_name = 'admin_note')
-                OR (table_name = 'identities' AND column_name = 'admin_note'))""").fetchall()
+                WHERE table_schema = 'public' AND ((table_name = 'groups' AND column_name IN ('admin_note','revision'))
+                OR (table_name = 'identities' AND column_name IN ('admin_note','revision')))""").fetchall()
             tables = database.execute(connection, """SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_name = 'teacher_subjects'""").fetchall()
-        return len(columns) == 2 and len(tables) == 1
+        return len(columns) == 4 and len(tables) == 1
 
     def grade_assignment_schema_ready(database: Database) -> bool:
         return database.teacher_grade_assignment_schema_ready()
@@ -94,8 +96,10 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
             return any(row[1] == "archived_at" for row in connection.execute("PRAGMA table_info(groups)").fetchall())
 
     def require_editor_schema(database: Database) -> None:
+        if os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1":
+            raise HTTPException(status_code=409, detail="School workspace is read-only")
         if not editor_schema_ready(database):
-            raise HTTPException(status_code=409, detail="School editor schema is pending migrations 034 and 035")
+            raise HTTPException(status_code=409, detail="School editor schema is pending migrations 034, 035 and 054")
 
     @router.post("/auth/exchange")
     def exchange_code(payload: SchoolCodePayload):
@@ -122,6 +126,16 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
         database, _ = require_school_admin(x_school_admin_session)
         database.revoke_admin_browser_session(x_school_admin_session)
         return {"state": "logged_out"}
+
+    @router.get("/directory/version")
+    def edit_version(x_school_admin_session: str | None = Header(default=None)):
+        database, actor = require_school_admin(x_school_admin_session)
+        return {"actor": str(actor), "version": directory_version(database)}
+
+    @router.get("/directory/history/{entity_type}/{entity_id}")
+    def edit_history(entity_type: str, entity_id: str, x_school_admin_session: str | None = Header(default=None)):
+        database, _ = require_school_admin(x_school_admin_session)
+        return directory_history(database, entity_type, entity_id)
 
     @router.get("/directory")
     def directory(x_school_admin_session: str | None = Header(default=None)):
@@ -156,25 +170,27 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
             raise HTTPException(status_code=409, detail="School workspace is read-only")
         if not archive_schema_ready(database):
             raise HTTPException(status_code=409, detail="Group archive requires migration 037")
-        try:
-            group = database.archive_admin_group(group_id, actor_id, confirm_used=payload.confirm_used)
-        except ValueError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        return {"id": str(group["id"]), "archived": True}
+        with directory_edit(database, "groups", group_id, payload.expected_revision, actor_id) as edit_db:
+            try:
+                group = edit_db.archive_admin_group(group_id, actor_id, confirm_used=payload.confirm_used)
+            except ValueError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if not group:
+                raise HTTPException(status_code=404, detail="Group was not found")
+            return {"revision": edit_db.get_group(group_id)["revision"], "id": str(group["id"]), "archived": True}
 
     @router.post("/groups/{group_id}/restore")
-    def restore_group(group_id: str, x_school_admin_session: str | None = Header(default=None)):
+    def restore_group(group_id: str, payload: ArchiveGroupPayload, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         if os.getenv("MY_ISLAND_READ_ONLY_SCHOOL_WORKSPACE") == "1":
             raise HTTPException(status_code=409, detail="School workspace is read-only")
         if not archive_schema_ready(database):
             raise HTTPException(status_code=409, detail="Group archive requires migration 037")
-        group = database.restore_admin_group(group_id, actor_id)
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        return {"id": str(group["id"]), "archived": False}
+        with directory_edit(database, "groups", group_id, payload.expected_revision, actor_id) as edit_db:
+            group = edit_db.restore_admin_group(group_id, actor_id)
+            if not group:
+                raise HTTPException(status_code=404, detail="Group was not found")
+            return {"revision": edit_db.get_group(group_id)["revision"], "id": str(group["id"]), "archived": False}
 
     @router.get("/teachers/{teacher_id}/schedule")
     def teacher_schedule(teacher_id: str, week_start: str | None = None,
@@ -187,65 +203,77 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
     def add_group(payload: GroupPayload, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        try:
-            group = create_group(database, payload.name, payload.group_type,
-                display_name=payload.display_name, subject=payload.subject,
-                base_class_name=payload.base_class_name, subject_subgroup=payload.subject_subgroup,
-                exam_track=payload.exam_track, default_teacher_identity_id=payload.default_teacher_identity_id,
-                comment=payload.comment, actor_user_id=actor_id)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": str(group["id"])}
+        with directory_transaction(database, actor_id) as edit_db:
+            try:
+                group = create_group(edit_db, payload.name, payload.group_type,
+                    display_name=payload.display_name, subject=payload.subject,
+                    base_class_name=payload.base_class_name, subject_subgroup=payload.subject_subgroup,
+                    exam_track=payload.exam_track, default_teacher_identity_id=payload.default_teacher_identity_id,
+                    comment=payload.comment, actor_user_id=actor_id)
+                add_group_members(edit_db, group["id"], payload.add_members, actor_id)
+                group = edit_db.get_group(group["id"])
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"id": str(group["id"]), "revision": group["revision"]}
 
     @router.patch("/groups/{group_id}")
     def edit_group(group_id: str, payload: dict, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        allowed = {"name", "display_name", "group_type", "subject", "base_class_name", "subject_subgroup", "exam_track", "default_teacher_identity_id", "comment"}
-        if set(payload) - allowed:
-            raise HTTPException(status_code=400, detail="Unsupported group fields were supplied")
-        try:
-            group = database.update_admin_group(group_id, payload, actor_id)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        if not group:
-            raise HTTPException(status_code=404, detail="Group was not found")
-        return {"id": str(group["id"])}
+        with directory_edit(database, "groups", group_id, payload.pop("expected_revision", None), actor_id) as edit_db:
+            members = payload.pop("add_members", [])
+            allowed = {"name", "display_name", "group_type", "subject", "base_class_name", "subject_subgroup", "exam_track", "default_teacher_identity_id", "comment"}
+            if set(payload) - allowed:
+                raise HTTPException(status_code=400, detail="Unsupported group fields were supplied")
+            try:
+                if payload or not members:
+                    edit_db.update_admin_group(group_id, payload, actor_id)
+                add_group_members(edit_db, group_id, members, actor_id)
+                group = edit_db.get_group(group_id)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            if not group:
+                raise HTTPException(status_code=404, detail="Group was not found")
+            return {"revision": edit_db.get_group(group_id)["revision"], "id": str(group["id"])}
 
     @router.post("/identities")
     def add_identity(payload: IdentityPayload, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        try:
-            identity = create_identity(database, payload.display_name, payload.class_name,
-                payload.kind, actor_id, payload.subjects, payload.comment, payload.status)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": str(identity["id"])}
+        with directory_transaction(database, actor_id) as edit_db:
+            try:
+                identity = create_identity(edit_db, payload.display_name, payload.class_name,
+                    payload.kind, actor_id, payload.subjects, payload.comment, payload.status)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"id": str(identity["id"]), "revision": identity["revision"]}
 
     @router.patch("/people/{identity_id}")
     def edit_identity(identity_id: str, payload: dict, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        if set(payload) - {"display_name", "class_name", "status", "subjects", "comment"}:
-            raise HTTPException(status_code=400, detail="Unsupported person fields were supplied")
-        try:
-            identity = database.update_admin_identity(identity_id, payload, actor_id)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        if not identity:
-            raise HTTPException(status_code=404, detail="Person was not found")
-        return {"id": str(identity["id"])}
+        with directory_edit(database, "identities", identity_id, payload.pop("expected_revision", None), actor_id) as edit_db:
+            if set(payload) - {"display_name", "class_name", "status", "subjects", "comment"}:
+                raise HTTPException(status_code=400, detail="Unsupported person fields were supplied")
+            try:
+                identity = edit_db.update_admin_identity(identity_id, payload, actor_id)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            if not identity:
+                raise HTTPException(status_code=404, detail="Person was not found")
+            return {"revision": edit_db.get_identity(identity_id)["revision"], "id": str(identity["id"])}
 
     @router.post("/memberships/transfer")
     def transfer_membership(payload: MembershipTransferPayload, x_school_admin_session: str | None = Header(default=None)):
         database, actor_id = require_school_admin(x_school_admin_session)
         require_editor_schema(database)
-        try:
-            return database.update_student_memberships(payload.identity_id, payload.from_group_id,
-                payload.to_group_id, actor_id, payload.reason)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        with directory_edit(database, "identities", payload.identity_id, payload.expected_revision, actor_id) as edit_db:
+            try:
+                result = edit_db.update_student_memberships(payload.identity_id, payload.from_group_id,
+                    payload.to_group_id, actor_id, payload.reason)
+                return {**result, "revision": edit_db.get_identity(payload.identity_id)["revision"]}
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
 
     @router.post("/teacher-assignments")
     def edit_assignment(payload: TeacherAssignmentPayload, x_school_admin_session: str | None = Header(default=None)):
@@ -253,36 +281,37 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
         require_editor_schema(database)
         if payload.grade_level and not grade_assignment_schema_ready(database):
             raise HTTPException(status_code=409, detail="Grade-wide teacher assignments require migration 036")
-        try:
-            if payload.assignment_id:
-                if payload.active and payload.group_id and not payload.grade_level:
-                    dimensions = {name: getattr(payload, name) for name in ("base_class_name", "subject_subgroup", "classroom_course_id", "exam_track") if name in payload.model_fields_set}
-                    item = database.replace_teacher_assignment(payload.assignment_id, payload.teacher_identity_id,
-                        payload.group_id, payload.subject, actor_id, **dimensions)
-                elif payload.active and payload.grade_level and not payload.group_id:
+        with directory_edit(database, "identities", payload.teacher_identity_id, payload.expected_revision, actor_id) as edit_db:
+            try:
+                if payload.assignment_id:
+                    if payload.active and payload.group_id and not payload.grade_level:
+                        dimensions = {name: getattr(payload, name) for name in ("base_class_name", "subject_subgroup", "classroom_course_id", "exam_track") if name in payload.model_fields_set}
+                        item = edit_db.replace_teacher_assignment(payload.assignment_id, payload.teacher_identity_id,
+                            payload.group_id, payload.subject, actor_id, **dimensions)
+                    elif payload.active and payload.grade_level and not payload.group_id:
+                        dimensions = {name: getattr(payload, name) for name in ("exam_track", "classroom_course_id") if name in payload.model_fields_set}
+                        item = edit_db.replace_teacher_grade_assignment(payload.assignment_id, payload.teacher_identity_id,
+                            payload.grade_level, payload.subject, actor_id, **dimensions)
+                    elif not payload.active and not payload.group_id and not payload.grade_level:
+                        item = edit_db.deactivate_teacher_assignment(payload.assignment_id, payload.teacher_identity_id, actor_id)
+                    else:
+                        raise ValueError("Assignment update requires assignment_id with either a canonical group or active=false")
+                    if not item:
+                        raise HTTPException(status_code=404, detail="Teacher assignment was not found")
+                    return {"revision": edit_db.get_identity(payload.teacher_identity_id)["revision"], "id": str(item["id"]), "active": bool(item["active"])}
+                if bool(payload.group_id) == bool(payload.grade_level):
+                    raise ValueError("Provide exactly one of group_id or grade_level")
+                if payload.grade_level:
                     dimensions = {name: getattr(payload, name) for name in ("exam_track", "classroom_course_id") if name in payload.model_fields_set}
-                    item = database.replace_teacher_grade_assignment(payload.assignment_id, payload.teacher_identity_id,
-                        payload.grade_level, payload.subject, actor_id, **dimensions)
-                elif not payload.active and not payload.group_id and not payload.grade_level:
-                    item = database.deactivate_teacher_assignment(payload.assignment_id, payload.teacher_identity_id, actor_id)
-                else:
-                    raise ValueError("Assignment update requires assignment_id with either a canonical group or active=false")
-                if not item:
-                    raise HTTPException(status_code=404, detail="Teacher assignment was not found")
-                return {"id": str(item["id"]), "active": bool(item["active"])}
-            if bool(payload.group_id) == bool(payload.grade_level):
-                raise ValueError("Provide exactly one of group_id or grade_level")
-            if payload.grade_level:
-                dimensions = {name: getattr(payload, name) for name in ("exam_track", "classroom_course_id") if name in payload.model_fields_set}
-                items = database.set_teacher_grade_assignments(payload.teacher_identity_id, payload.grade_level,
-                    payload.subject, payload.active, actor_id, **dimensions)
-                return {"items": [{"id": str(item["id"]), "group_id": None, "grade_level": item["grade_level"]} for item in items]}
-            item = assign_teacher(database, payload.teacher_identity_id, payload.group_id, payload.subject,
-                payload.active, actor_id, base_class_name=payload.base_class_name,
-                subject_subgroup=payload.subject_subgroup, classroom_course_id=payload.classroom_course_id,
-                exam_track=payload.exam_track)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"id": str(item["id"]), "active": bool(item["active"])}
+                    items = edit_db.set_teacher_grade_assignments(payload.teacher_identity_id, payload.grade_level,
+                        payload.subject, payload.active, actor_id, **dimensions)
+                    return {"revision": edit_db.get_identity(payload.teacher_identity_id)["revision"], "items": [{"id": str(item["id"]), "group_id": None, "grade_level": item["grade_level"]} for item in items]}
+                item = assign_teacher(edit_db, payload.teacher_identity_id, payload.group_id, payload.subject,
+                    payload.active, actor_id, base_class_name=payload.base_class_name,
+                    subject_subgroup=payload.subject_subgroup, classroom_course_id=payload.classroom_course_id,
+                    exam_track=payload.exam_track)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return {"revision": edit_db.get_identity(payload.teacher_identity_id)["revision"], "id": str(item["id"]), "active": bool(item["active"])}
 
     return router

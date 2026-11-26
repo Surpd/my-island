@@ -1,0 +1,148 @@
+name: Architecture integration
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  PYTHONUTF8: '1'
+  PYTHON_DOTENV_DISABLED: '1'
+jobs:
+  backend:
+    if: github.head_ref == 'codex/architecture-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: python -m unittest discover -s backend/tests -v
+  frontend:
+    if: github.head_ref == 'codex/architecture-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node --test components/*.test.mjs e2e/*.test.mjs tests/*.test.mjs
+      - run: npx --no-install tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+        env:
+          VITE_API_BASE_URL: http://127.0.0.1:8011
+  browser:
+    if: github.head_ref == 'codex/architecture-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+        env:
+          MY_ISLAND_E2E_VERIFY_DIAGNOSTICS: '1'
+  postgres:
+    if: github.head_ref == 'codex/architecture-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: my_island_migration_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['127.0.0.1:55432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FIXTURE_DSN: postgresql://postgres@127.0.0.1:55432/my_island_migration_test
+      MY_ISLAND_RELEASE_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:55432/my_island_release_check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - name: Reconstruct the previous schema and migrate synthetic school rows
+        shell: bash
+        run: |
+          psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon;
+          CREATE ROLE authenticated;
+          CREATE ROLE service_role BYPASSRLS;
+          CREATE SCHEMA extensions;
+          CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
+          SQL
+          for migration in backend/migrations/*.sql; do
+            case "$migration" in
+              */044_*) continue ;; # Supabase cron/net are external to this fixture.
+              */045_*)
+                # Apply the schema prefix. The remaining one-off backfill requires an exact production roster.
+                { sed '/^-- The user explicitly identified/,$d' "$migration"; echo 'COMMIT;'; } |
+                  psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1
+                continue ;;
+              */016_*)
+                # On a fresh bootstrap 013 already created the trigger that 016 replaces.
+                psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1 -c 'DROP TRIGGER school_source_mappings_protect_manual ON school_source_mappings'
+                ;;
+              */054_*)
+                psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1 -f backend/tests/fixtures/architecture_before_migrations.sql
+                ;;
+            esac
+            psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1 -f backend/tests/fixtures/architecture_after_migrations.sql
+          psql "$FIXTURE_DSN" -q -v ON_ERROR_STOP=1 -c 'CREATE DATABASE my_island_release_check'
+          pg_dump --schema-only "$FIXTURE_DSN" | psql "$MY_ISLAND_RELEASE_TEST_DATABASE_URL" -q -v ON_ERROR_STOP=1
+      - name: Verify real transactions, journals and role boundaries
+        run: >-
+          python -m unittest backend.tests.test_publication_partial_postgres
+          backend.tests.test_journal_import_postgres backend.tests.test_journal_current_period_postgres
+          backend.tests.test_codex_diagnostic_budget_postgres -v
+  school-browser:
+    if: github.head_ref == 'codex/architecture-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Verify retired routes and edits in the synthetic school profile
+        env:
+          MY_ISLAND_CONSOLIDATION_E2E: '1'
+        shell: bash
+        run: |
+          python scripts/schedule-regression/local_harness.py --seed-only
+          python scripts/schedule-regression/local_harness.py --reuse > "$RUNNER_TEMP/my-island-school-api.log" 2>&1 &
+          api_pid=$!
+          node scripts/schedule-regression/frontend.mjs > "$RUNNER_TEMP/my-island-school-web.log" 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true' EXIT
+          curl --silent --fail --retry 30 --retry-connrefused --retry-delay 2 http://127.0.0.1:8041/health >/dev/null
+          curl --silent --fail --retry 30 --retry-connrefused --retry-delay 2 http://localhost:3041/ >/dev/null
+          npx --no-install playwright test -c scripts/schedule-regression/playwright.config.mjs

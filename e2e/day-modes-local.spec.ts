@@ -8,6 +8,10 @@ test('weekday modes remain saved after reopening the constructor draft', async (
   await page.getByRole('button', { name: /Пустая школьная неделя/ }).click();
   const createdDraft = await (await createdDraftResponse).json();
   await expect(page.locator('.constructor-grid-wrap')).toBeVisible();
+  const weekdayTabs = page.locator('.constructor-day-tabs button');
+  await expect(weekdayTabs).toHaveText(['Пн', 'Вт', 'Ср', 'Чт', 'Пт']);
+  await expect(page.getByRole('button', { name: 'Понедельник', exact: true })).toHaveText('Пн');
+  await expect(page.getByRole('button', { name: 'Пятница', exact: true })).toHaveText('Пт');
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: '.local-test/day-modes-day-1280.png', fullPage: true });
   await expect(page.locator('.constructor-head .constructor-day-mode-button[aria-label^="7 класс,"]')).toHaveCount(1);

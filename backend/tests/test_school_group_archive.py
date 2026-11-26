@@ -72,6 +72,7 @@ class SchoolGroupArchiveTests(unittest.TestCase):
             database.initialize()
             group = database.create_group("History OGE", "exam_track", subject="История")
             with database.connection() as connection:
+                connection.execute("DROP TRIGGER directory_groups_revision")
                 connection.execute("ALTER TABLE groups DROP COLUMN archived_at")
                 connection.execute("INSERT INTO schedule_entries(entry_key, lesson_date, start_time, subject, source_hash, resolved_audience) VALUES ('h1','2026-10-01','09:00','История','hash-1',?)", (json.dumps({"canonical_group_ids": [str(group["id"])]}),))
                 connection.execute("INSERT INTO schedule_entries(entry_key, lesson_date, start_time, subject, source_hash, resolved_audience) VALUES ('h2','2026-10-08','09:00','История','hash-2',?)", (json.dumps({"canonical_group_ids": [str(group["id"])]}),))
@@ -103,15 +104,17 @@ class SchoolGroupArchiveTests(unittest.TestCase):
                 self.assertEqual(preview.status_code, 200)
                 self.assertTrue(preview.json()["archive_ready"])
                 self.assertEqual(preview.json()["counts"]["active_memberships"], 1)
-                denied = client.post(f"/api/admin/school/groups/{group['id']}/archive", json={}, headers={"X-School-Admin-Session": "session"})
+                revision = database.get_group(group["id"])["revision"]
+                denied = client.post(f"/api/admin/school/groups/{group['id']}/archive", json={"expected_revision": revision}, headers={"X-School-Admin-Session": "session"})
                 self.assertEqual(denied.status_code, 409)
-                archived = client.post(f"/api/admin/school/groups/{group['id']}/archive", json={"confirm_used": True}, headers={"X-School-Admin-Session": "session"})
+                archived = client.post(f"/api/admin/school/groups/{group['id']}/archive", json={"confirm_used": True, "expected_revision": revision}, headers={"X-School-Admin-Session": "session"})
                 self.assertEqual(archived.status_code, 200, archived.text)
                 self.assertEqual(database.list_groups_admin_summary(), [])
                 self.assertIsNotNone(database.list_groups_admin_summary(include_archived=True)[0]["archived_at"])
-                restored = client.post(f"/api/admin/school/groups/{group['id']}/restore", headers={"X-School-Admin-Session": "session"})
+                restored = client.post(f"/api/admin/school/groups/{group['id']}/restore", json={"expected_revision": database.get_group(group["id"])["revision"]}, headers={"X-School-Admin-Session": "session"})
                 self.assertEqual(restored.status_code, 200, restored.text)
                 with database.connection() as connection:
+                    connection.execute("DROP TRIGGER directory_groups_revision")
                     connection.execute("ALTER TABLE groups DROP COLUMN archived_at")
                 pending = client.get(f"/api/admin/school/groups/{group['id']}/archive-preview", headers={"X-School-Admin-Session": "session"})
                 self.assertEqual(pending.status_code, 200)

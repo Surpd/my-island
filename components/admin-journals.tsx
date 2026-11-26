@@ -88,15 +88,10 @@ function isAuxiliaryTab(source: JournalSource): boolean {
     || /^(?:I{1,3}\s*·\s*)?как работать$/iu.test(source.sheet_title.trim());
 }
 
-function isDeferredTab(source: JournalSource): boolean {
-  return source.grade === 7 && source.term_number === 2
-    && /^(?:II\s*·\s*)?(?:математика|физика)(?:\s*\/\s*(?:физика|математика))?$/iu.test(subjectName(source));
-}
-
 function journalSubjectGroups(sources: JournalSource[]) {
   const groups = new Map<string, { subject: string; periods: JournalSource[] }>();
   for (const source of sources) {
-    if (isAuxiliaryTab(source) || isDeferredTab(source)) continue;
+    if (isAuxiliaryTab(source)) continue;
     const key = subjectKey(source);
     const group = groups.get(key) || { subject: subjectName(source), periods: [] };
     group.periods.push(source);
@@ -345,7 +340,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     const map = new Map<string, { id: string; title: string; grade: number; spreadsheetId: string; subjects: JournalSource[]; refreshing: boolean }>();
     for (const source of sources) {
       const mode = sourceMode(source, sourceModes);
-      if (mode === 'excluded' || isAuxiliaryTab(source) || isDeferredTab(source)) continue;
+      if (mode === 'excluded' || isAuxiliaryTab(source)) continue;
       const key = source.spreadsheet_id;
       const book = map.get(key) || { id: key, title: source.spreadsheet_title, grade: source.grade, spreadsheetId: key, subjects: [], refreshing: false };
       book.subjects.push(source);
@@ -378,8 +373,9 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
   const latestSync = visibleSources.reduce<string | undefined>((latest, source) =>
     source.last_synced_at && (!latest || source.last_synced_at > latest) ? source.last_synced_at : latest, undefined);
   const automaticSources = visibleSources.filter(source => sourceMode(source, sourceModes) === 'auto'
-    && (source.grade <= 9 ? source.term_number === 2 : source.period_status === 'current'));
-  const detailSubjects = useMemo(() => detail ? journalSubjectGroups(sources.filter((source) => source.grade === detail.source.grade && source.spreadsheet_id === detail.source.spreadsheet_id && source.academic_year === detail.source.academic_year && sourceMode(source, sourceModes) !== 'excluded')) : [], [sources, sourceModes, detail]);
+    && source.period_status === 'current');
+  const detailExcluded = detail ? sourceMode(detail.source, sourceModes) === 'excluded' : false;
+  const detailSubjects = useMemo(() => detail ? journalSubjectGroups(sources.filter((source) => source.grade === detail.source.grade && source.spreadsheet_id === detail.source.spreadsheet_id && source.academic_year === detail.source.academic_year && (String(source.id) === String(detail.source.id) || sourceMode(source, sourceModes) !== 'excluded'))) : [], [sources, sourceModes, detail]);
   const matchingBookEntry = books.find((book) => book.spreadsheetId === matchingBook);
   const crossGradeCandidate = candidateScope === 'school' && candidateGrade(candidateSelection) !== null && candidateGrade(candidateSelection) !== (matchingBookEntry?.grade || selectedGrade);
   const periodSources = useMemo(() => detail ? detailSubjects.find(group => subjectKey(group.periods[0]) === subjectKey(detail.source))?.periods || [] : [], [detailSubjects, detail]);
@@ -646,11 +642,13 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
     setBusy(`source-refresh:${source.id}`); setActionError('');
     try {
       await api('/api/admin/journals/source-refresh', { method: 'POST', body: JSON.stringify({ source_id: source.id }) });
+    } catch (error) {
+      setActionError(errorText(error));
+    } finally {
       await loadSources();
       if (String(selectedId) === String(source.id)) await loadDetail(source.id, groupMarker, selectedTerm ?? undefined);
+      setBusy('');
     }
-    catch (error) { setActionError(errorText(error)); }
-    finally { setBusy(''); }
   }
 
   async function previewMatch(sourceName: string, replaceExisting = false) {
@@ -769,7 +767,6 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
           {journalPeriodNameWithNumber(selectedGrade, term)}
         </button>)}
       </div>
-      {selectedGrade === 7 && catalogPeriod === 2 ? <p className="admin-help-text">Подключение математики и физики за II триместр отложено.</p> : null}
       {!readOnly && updatesOpen ? <section id="journal-updates-panel" className="admin-panel journal-updates-panel">
         <div className="journal-updates-heading">
           <h2>Обновления и источники</h2>
@@ -800,7 +797,7 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
             <RefreshCw size={15} /> {book.refreshing ? 'Обновляется' : 'Обновить выбранный период'}
           </button>
           {book.subjects.some(source => source.term_number === catalogPeriod
-            && (source.grade <= 9 ? source.term_number === 2 : source.period_status === 'current')
+            && source.period_status === 'current'
             && sourceMode(source, sourceModes) !== 'auto') ? <button type="button" className="admin-button admin-button--quiet"
               disabled={Boolean(busy || batchRuns) || !schedulerConfigured}
               onClick={() => void setAutomation(book.spreadsheetId, book.grade, catalogPeriod)}>
@@ -809,16 +806,19 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
         </div>)}
         {gradeJournalSources.length ? <details className="journal-tab-settings">
           <summary>Режимы синхронизации и отключённые вкладки</summary>
+          <p className="admin-help-text">Автоматические вкладки обновляются по расписанию. Ручные обновляются по команде администратора. Отключённые сохраняют импортированные данные. Выберите для них ручной или автоматический режим, чтобы возобновить обновления.</p>
           {gradeJournalSources.map(source => {
             const mode = sourceMode(source, sourceModes);
             return <div className="journal-tab-setting-row" key={source.id}>
-              <span><strong>{source.sheet_title}</strong><small>{isDeferredTab(source) ? 'Подключение отложено' : mode === 'excluded' ? 'Отключена в My Island' : source.last_error || source.classification_reason ||
+              <span><strong>{source.sheet_title}</strong><small>{mode === 'excluded' ? 'Отключена в My Island' : source.last_error || source.classification_reason ||
                 (source.last_synced_at ? dateText(source.last_synced_at) : 'Ещё не обновлялась')}</small></span>
               <a href={journalGoogleUrl(source)} className="admin-link" target="_blank" rel="noreferrer">Открыть в Google</a>
-              {!isDeferredTab(source) && <select aria-label={'Режим синхронизации: ' + source.sheet_title} value={mode} disabled={Boolean(busy || batchRuns)}
+              {mode === 'excluded' && source.last_synced_at ? <button type="button" className="admin-link"
+                onClick={() => void loadDetail(source.id)}>Сохранённые оценки</button> : null}
+              <select aria-label={'Режим синхронизации: ' + source.sheet_title} value={mode} disabled={Boolean(busy || batchRuns)}
                 onChange={event => void setSourceMode(source, event.target.value as 'auto' | 'manual' | 'excluded')}>
                 <option value="auto">Автоматически</option><option value="manual">Только вручную</option><option value="excluded">Отключена</option>
-              </select>}
+              </select>
             </div>;
           })}
         </details> : null}
@@ -895,18 +895,17 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
                 <tbody>{journalSubjectGroups(book.subjects).map(({ subject, periods }) => {
                   const active = periods.find(item => item.term_number === catalogPeriod);
                   const source = active || periods[0];
-                  const deferred = !active && isDeferredTab({ ...source, term_number: catalogPeriod });
                   const failed = active && sourceHasError(active);
                   if (onlyErrors && !failed) return null;
                   return <tr key={subject} className={failed ? 'journal-catalog-row-error' : undefined}>
-                    <th scope="row">{readOnly || deferred ? subject : <button type="button" className="journal-open-subject" onClick={() => {
+                    <th scope="row">{readOnly ? subject : <button type="button" className="journal-open-subject" onClick={() => {
                       setActionError(''); void loadDetail(source.id, '', catalogPeriod);
                     }}>{subject}</button>}</th>
                     <td>{active ? active.roster_student_count ?? '—' : '—'}</td>
                     <td>{active ? active.assessment_count ?? '—' : '—'}</td>
                     <td>{failed ? <span className="journal-row-status is-error"><AlertTriangle size={16} /><span><strong>Не обновился</strong>{active?.last_synced_at ? <small>Последнее успешное · {dateText(active.last_synced_at)}</small> : null}</span></span>
                       : active ? <span className={active.last_synced_at ? 'journal-row-status is-ready' : 'journal-row-status'}>{active.active_run_id ? 'Обновляется…' : active.last_synced_at ? dateText(active.last_synced_at) : 'Ещё не обновлялся'}</span>
-                      : deferred ? 'Подключение отложено' : 'Нет журнала за период'}</td>
+                      : 'Нет журнала за период'}</td>
                     {!readOnly ? <td className="journal-catalog-menu-cell">{active && <JournalSourceMenu source={active} busy={Boolean(busy || batchRuns || active.active_run_id)}
                       onRefresh={() => void refreshSource(active)} onDisable={() => void setSourceMode(active, 'excluded')} />}</td> : null}
                   </tr>;
@@ -929,8 +928,8 @@ export function AdminJournals({ api, apiOrigin, readOnly = false }: { api: ApiRe
           <a className="admin-button admin-button--quiet" href={journalGoogleUrl(detail.source)} target="_blank" rel="noreferrer">
             <ExternalLink size={16} /> Открыть вкладку в Google
           </a>
-          <JournalSourceMenu source={detail.source} detail busy={Boolean(busy || selectedSource?.active_run_id)}
-            onRefresh={() => void refreshSource(detail.source)} onDisable={() => void setSourceMode(detail.source, 'excluded')} />
+          {detailExcluded ? <span>Вкладка отключена</span> : <JournalSourceMenu source={detail.source} detail busy={Boolean(busy || selectedSource?.active_run_id)}
+            onRefresh={() => void refreshSource(detail.source)} onDisable={() => void setSourceMode(detail.source, 'excluded')} />}
         </div>}
       </section>
       <div className="journal-group-tabs" role="tablist" aria-label="Учебный период">{visibleDetailPeriods.map((term) => { const source = periodSources.find((item) => item.term_number === term); return <button key={term} role="tab" aria-selected={selectedTerm === term} className={selectedTerm === term ? 'is-active' : ''} onClick={() => { setSelectedTerm(term); if (source) void loadDetail(source.id); }}>{journalPeriodNameWithNumber(detail.source.grade, term)}{source?.period_status === 'current' ? ' · текущий' : ''}</button>; })}</div>

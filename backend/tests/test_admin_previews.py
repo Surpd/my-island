@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.database import Database
 from backend.handlers.api import _preview_data_source, create_router
+from backend.services.canonical_schedule import import_canonical_artifact, materialize_effective_week
 
 
 class AdminPreviewRoutesTests(unittest.TestCase):
@@ -62,6 +63,38 @@ class AdminPreviewRoutesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn(str(target["id"]), {item["identity_id"] for item in response.json()["items"]})
         self.assertEqual(response.json()["classes"], [])
+
+    def test_admin_teacher_load_is_available_over_http_and_is_role_protected(self):
+        teacher = self.database.create_identity("teacher", "Analytics Teacher", actor_user_id=self.admin_id)
+        group = self.database.create_group("9-analytics", "instructional", display_name="9A Mathematics", actor_user_id=self.admin_id)
+        version_id = "http-teacher-load"
+        artifact = {
+            "schema_version": "canonical-schedule-bootstrap-v1", "version_id": version_id,
+            "status": "unresolved", "authoritative": False,
+            "source_snapshot": {"id": "http-teacher-load-snapshot", "fingerprint": "http-teacher-load-fingerprint"},
+            "summary": {"blocks": 1}, "blocks": {
+                "http-load|0|09:00": {"weekday": 0, "slot": {"start": "09:00", "end": "09:45"},
+                    "grade_scope": "9", "status": "resolved", "mode": "SINGLE",
+                    "assignments": [{"activity": "Математика", "role": "primary",
+                        "audience": {"type": "canonical_groups", "canonical_group_ids": [str(group["id"])]},
+                        "teacher_ids": [str(teacher["id"])], "source_cells": ["A1"]}]}
+            },
+        }
+        import_canonical_artifact(self.database, artifact)
+        materialize_effective_week(self.database, version_id, "2026-09-07")
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            response = self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["teachers"][0]["observed_scheduled_minutes"], 45)
+        self.assertIn(self.client.get("/api/admin/analytics/teachers?start_day=2026-09-07", headers={"X-Dev-Auth": "student:1"}).status_code, {401, 403})
+
+    def test_teacher_workload_requires_active_canonical_backend(self):
+        path = "/api/admin/analytics/teachers?start_day=2026-09-07"
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "disabled"}):
+            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 503)
+        with patch.dict("os.environ", {"SCHEDULE_BACKEND": "canonical"}):
+            self.assertEqual(self.client.get(path + "&end_day=2027-09-08", headers=self.headers).status_code, 400)
 
     def test_preview_people_directory_search_is_unicode_case_insensitive(self):
         target = self.database.create_identity("student", "ТЕСТовый ученик", actor_user_id=self.admin_id)

@@ -52,7 +52,7 @@ class JournalPeriodPolicyTests(unittest.TestCase):
 
     def test_scoped_third_period_is_rejected_before_google_read(self):
         with patch("backend.services.google_sync_service._client") as client:
-            with self.assertRaisesRegex(ValueError, "доступны только 1–2"):
+            with self.assertRaisesRegex(ValueError, "недоступный учебный период"):
                 refresh_grade_journal(self.database, object(), 11, spreadsheet_id="grade-eleven-book",
                                       term_number=3, dry_run=True)
             client.assert_not_called()

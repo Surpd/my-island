@@ -10,6 +10,7 @@ import os
 import unittest
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 
 from backend.database import Database
@@ -55,11 +56,16 @@ class JournalImportPostgresTests(unittest.TestCase):
         "users",
         "classroom_courses",
         "memberships",
+        "membership_overrides",
+        "teacher_assignments",
+        "teacher_subjects",
+        "homeroom_assignments",
         "journal_sources",
         "journal_assessments",
         "journal_students",
         "journal_results",
         "journal_result_history",
+        "journal_cell_events",
         "journal_student_summaries",
         "journal_summary_history",
         "journal_sync_runs",
@@ -122,6 +128,13 @@ class JournalImportPostgresTests(unittest.TestCase):
                         f'ALTER TABLE "{cls.schema}"."{table}" ALTER COLUMN "{column}" '
                         f"SET DEFAULT nextval('{sequence_ref}'::regclass)"
                     )
+            # LIKE does not copy triggers. Run the real revision migration with
+            # its schema-qualified functions, trigger targets and writes scoped
+            # to this disposable schema, independent of public trigger state.
+            revisions = (Path(__file__).resolve().parents[1] / "migrations/054_directory_revisions.sql").read_text(encoding="utf8")
+            revisions = revisions.replace("public.", f'"{cls.schema}".').replace(
+                "pg_catalog, public", f'pg_catalog, "{cls.schema}"')
+            cls.admin_connection.execute(revisions)
             # Matching-specific schema is created only inside this disposable test
             # schema, so tests remain compatible with production until its migration.
             cls.admin_connection.execute(
@@ -176,7 +189,7 @@ class JournalImportPostgresTests(unittest.TestCase):
     def setUp(self):
         self.database = IsolatedPostgresDatabase(DATABASE_URL, self.schema)
         with self.database.connection() as connection:
-            connection.execute("TRUNCATE audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_term_settings, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
+            connection.execute("TRUNCATE journal_cell_events, audit_log, school_source_mappings, school_sources, journal_team_members, journal_group_mappings, journal_sync_runs, journal_term_settings, journal_summary_history, journal_student_summaries, journal_result_history, journal_results, journal_students, journal_assessments, journal_sources, memberships, groups, identities, users RESTART IDENTITY CASCADE")
             connection.execute(
                 "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', %s, '9-А', 'active')",
                 ("Иванов Иван",),
@@ -185,6 +198,26 @@ class JournalImportPostgresTests(unittest.TestCase):
                 "INSERT INTO identities(kind, display_name, class_name, status) VALUES ('student', %s, '9-А', 'active')",
                 ("Петрова Анна",),
             )
+
+    def test_filtered_overview_matches_imported_source_matrix(self):
+        from backend.services.journal_analytics import journal_analytics, journal_overview
+
+        for values, name, tab in (
+                ([["Дата", "01.09"], ["Работа", "Work"], ["Вес", 1], ["Оценка", 5],
+                  ["Fixture Row", 0], ["Fixture Empty", ""]], "Subject A", 501),
+                ([["Дата", "02.09"], ["Работа", "Work"], ["Вес", 1], ["Оценка", 5],
+                  ["Fixture Row", 4]], "Subject B", 502)):
+            sync_journal_values(self.database, values, spreadsheet_id="synthetic-overview",
+                                spreadsheet_title="Synthetic", grade=9, subject=name, sheet_title=name, sheet_id=tab)
+        summary = journal_overview(self.database, grade=9, subject="Subject A")
+        self.assertEqual(summary["source_count"], 1)
+        item = summary["items"][0]
+        detail = journal_analytics(self.database.journal_detail(item["id"]), None, None)
+        self.assertEqual(item["numeric_results"], 1)
+        self.assertEqual(item["eligible_cells"], 2)
+        self.assertEqual(item["numeric_coverage"], 0.5)
+        for key, value in detail["totals"].items():
+            self.assertEqual(item[key], value)
 
     def _rows(self, query, params=()):
         with self.database.connection() as connection:
@@ -331,11 +364,15 @@ class JournalImportPostgresTests(unittest.TestCase):
         self.assertTrue(self._rows("SELECT 1 FROM school_sources WHERE source_type = 'journal' AND configuration ? 'grade'"))
         self.assertTrue(self._rows("SELECT 1 FROM journal_assessments WHERE jsonb_typeof(raw_source) = 'object' LIMIT 1"))
 
+        initial_events = self._rows("SELECT change_kind FROM journal_cell_events")
+        self.assertEqual(len(initial_events), first["results"])
+        self.assertTrue(all(row["change_kind"] == "added" for row in initial_events))
         repeated = sync_journal_values(
             self.database, self.VALUES, spreadsheet_id="synthetic-journal",
             spreadsheet_title="Synthetic journal", grade=9, subject="Математика",
             sheet_title="Математика", sheet_id=904,
         )
+        self.assertEqual(self._rows("SELECT change_kind FROM journal_cell_events"), initial_events)
         self.assertEqual(repeated["results"], 6)
         self.assertEqual(len(self._rows("SELECT id FROM journal_results WHERE is_current IS TRUE")), 6)
         self.assertFalse(self._rows("SELECT id FROM journal_result_history"))

@@ -37,6 +37,8 @@ test('capture masked rev45 diagnostics, lesson context, and mobile confirmation'
   const lessons = fixture.payload.lessons as Array<Record<string, unknown> & { id: string }>;
   const draft = { id: fixture.id, name: fixture.name, revision: fixture.revision, payload: fixture.payload };
   await mkdir(artifactDirectory, { recursive: true });
+  const clientErrors: string[] = [];
+  page.on('pageerror', error => clientErrors.push(error.message));
 
   await page.route(`${apiRoot}/api/admin/**`, async (route) => {
     const pathName = new URL(route.request().url()).pathname;
@@ -52,6 +54,20 @@ test('capture masked rev45 diagnostics, lesson context, and mobile confirmation'
       return route.fulfill({ json: { lessons: Object.fromEntries(lessonIds.map((lessonId: string) => [lessonId, { status: 'unknown', student_ids: [], reason: 'Ученические назначения отключены для визуального снимка.' }])) } });
     }
     if (pathName.endsWith(`/school/${fixture.id}`)) return route.fulfill({ json: draft });
+    if (pathName.endsWith('/publication/preview')) {
+      expect(route.request().postDataJSON()).toMatchObject({ expected_revision: fixture.revision });
+      return route.fulfill({ json: {
+        preview_token: 'archive-review-fixture',
+        can_publish: false,
+        publication_available: false,
+        head_revision: 0,
+        blockers: [],
+        deferred: [],
+        diagnostics: [],
+        source_kind: 'template',
+        diff: { added: 0, changed: 0, removed: 0, before_blocks: 0, after_blocks: 0 },
+      } });
+    }
     if (pathName.endsWith('/resolution/preview')) {
       const body = route.request().postDataJSON();
       return route.fulfill({ json: { revision: fixture.revision, preview_token: 'screenshot-only-token', lesson_ids: body.lesson_ids, lessons: lessons.filter((lesson) => body.lesson_ids.includes(lesson.id)), rooms: [], room_limitation: 'Снимок для интерфейса; помещение не проверяется.', exceptions: {}, audiences: {}, roster: { affected_lessons: [] } } });
@@ -87,4 +103,5 @@ test('capture masked rev45 diagnostics, lesson context, and mobile confirmation'
   await expect(confirm).toBeEnabled();
   await page.screenshot({ path: artifact('rev45-sanitized-practice-confirm-mobile.png'), fullPage: false });
   expect(lessons).toHaveLength(386);
+  expect(clientErrors).toEqual([]);
 });

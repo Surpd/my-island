@@ -133,13 +133,6 @@ def subject_period_from_title(title: str) -> tuple[str, int | None]:
     return (subject or title.strip()), term
 
 
-def deferred_grade7_second_period_subject(title: str, period_override: int | None = None) -> bool:
-    subject, explicit_period = subject_period_from_title(title)
-    period = explicit_period if explicit_period is not None else period_override
-    normalized = _normalized(subject).replace(" / ", "/")
-    return period == 2 and bool(re.search(r"\b(?:математика|физика)\b", normalized))
-
-
 def _date(value: object, school_year_start: int) -> str | None:
     if value is None:
         return None
@@ -225,6 +218,10 @@ def _section_label(value: object) -> bool:
                 or re.fullmatch(r"(?:[5-9]|1[01])\s*[-–]?\s*[а-яa-z]+|[abc]|[А-ЯЁ]{3,}", str(value or "").strip()))
 
 
+class DuplicateJournalStudentRows(ValueError):
+    pass
+
+
 def parse_journal_values(
     values: Sequence[Sequence[object]], *, grade: int, subject: str, sheet_title: str,
     school_year_start: int = 2026, sheet_id: int | str | None = None, period_number: int | None = None,
@@ -244,6 +241,19 @@ def parse_journal_values(
                         if (_header_kind(_cell(row, 0)) == "date" or _date(_cell(row, 0), school_year_start) is not None)
                         and index + 1 < len(values)
                         and _normalized(_cell(values[index + 1], 0)) == "ученик"]
+    # The senior journal can append exercise statistics below the gradebook.
+    # It repeats the roster under a title and a metric in column B.
+    auxiliary_starts.extend(
+        index for index, row in enumerate(values[:-2])
+        if _normalized(_cell(row, 1)).startswith("статистика ")
+        and not _normalized(_cell(row, 0))
+        and not any(_normalized(cell) for cell in row[2:])
+        and not _normalized(_cell(values[index + 1], 0))
+        and "средний балл" in _normalized(_cell(values[index + 1], 1))
+        and not any(_normalized(cell) for cell in values[index + 1][2:])
+        and not _normalized(_cell(values[index + 2], 0))
+        and sum(bool(_normalized(cell)) for cell in values[index + 2][1:]) >= 2
+    )
     width = max((len(row) for row in values), default=0)
     assessments: list[dict[str, Any]] = []
     students_by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -341,8 +351,14 @@ def parse_journal_values(
                 continue
             student_rows.append((row_index, name, current_marker))
 
+        seen_students: dict[str, int] = {}
         for row_index, name, student_marker in student_rows:
             student_key = f"{_normalized(name)}|{student_marker}"
+            if student_key in seen_students:
+                raise DuplicateJournalStudentRows(
+                    f"Строки {seen_students[student_key]} и {row_index + 1} совпадают в одном разделе журнала."
+                )
+            seen_students[student_key] = row_index + 1
             students_by_key.setdefault((student_marker, student_key), {
                 "student_name": name, "student_key": student_key, "group_marker": student_marker,
                 "entry_kind": "team" if (re.match(r"^(?:команда|team)\b", _normalized(name)) or
@@ -495,14 +511,13 @@ def sync_journal_values(
     sheet_id: int | str | None = None, expected_term: int | None = None,
 ) -> dict[str, int]:
     canonical_subject, explicit_term = subject_period_from_title(sheet_title)
-    if grade == 7 and deferred_grade7_second_period_subject(canonical_subject, expected_term or explicit_term):
-        raise ValueError("Импорт математики и физики 7 класса за II период временно отложен.")
     parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title,
                                   sheet_id=sheet_id, period_number=expected_term or explicit_term)
     school_year_start = 2026
     school_year = f"{school_year_start}/{str(school_year_start + 1)[-2:]}"
     source = {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "grade": grade,
               "subject": canonical_subject, "sheet_title": sheet_title, "sheet_id": sheet_id,
-              "academic_year": school_year, "term_number": explicit_term, "expected_term": expected_term,
+              "academic_year": school_year, "term_number": explicit_term if explicit_term is not None else expected_term,
+              "expected_term": expected_term,
               "source_hash": parsed["source_hash"]}
     return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"], parsed["students"], parsed["summaries"])

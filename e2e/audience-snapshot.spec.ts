@@ -1,3 +1,4 @@
+import { personRevision } from './directory-fixture';
 import { expect } from '@playwright/test';
 import { test } from './helpers/experiment-test';
 
@@ -38,13 +39,13 @@ test('available-slot roster stays factual until recalculation is confirmed, then
   for (const identityId of [firstStudentId, secondStudentId]) {
     const response = await page.request.post(`${API}/api/admin/memberships`, {
       headers: ADMIN,
-      data: { group_id: classId, identity_id: identityId, member_role: 'student' },
+      data: { expected_revision: await personRevision(page, identityId), group_id: classId, identity_id: identityId, member_role: 'student' },
     });
     expect(response.ok()).toBe(true);
   }
   const subgroupMembership = await page.request.post(`${API}/api/admin/memberships`, {
     headers: ADMIN,
-    data: { group_id: subgroupId, identity_id: firstStudentId, member_role: 'student' },
+    data: { expected_revision: await personRevision(page, firstStudentId), group_id: subgroupId, identity_id: firstStudentId, member_role: 'student' },
   });
   expect(subgroupMembership.ok()).toBe(true);
 
@@ -123,7 +124,9 @@ test('available-slot roster stays factual until recalculation is confirmed, then
   await recalculation.getByRole('button', { name: 'Показать изменения' }).click();
   await recalculation.getByRole('button', { name: 'Подтвердить проверенные составы' }).click();
   await expect(recalculation).not.toBeVisible();
-  await expect(page.getByRole('button', { name: 'Сохранить черновик', exact: true })).toBeDisabled();
+  const saveControls = page.getByRole('button', { name: 'Сохранить черновик', exact: true });
+  await expect(saveControls).toHaveCount(2);
+  for (const control of await saveControls.all()) await expect(control).toBeDisabled();
 
   const readSavedRoster = async () => {
     const response = await page.request.get(`${API}/api/admin/schedule/experiments/${draftId}`, { headers: ADMIN });

@@ -1,6 +1,7 @@
 /* oxlint-disable */
 'use client';
 
+import { ArchitectureCheck } from '../../components/architecture-check';
 import { selectSchoolAdminSession } from '../../components/admin-session';
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import dynamic from 'next/dynamic';
@@ -233,7 +234,7 @@ async function schoolApi<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${schoolPath}`, { ...init, headers, credentials: 'omit' });
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
-    const error = new Error(String(body.detail || `Запрос к школьной базе завершился ошибкой (${response.status}).`)) as ApiError;
+    const error = new Error(String((typeof body.detail === 'object' && body.detail !== null ? (body.detail as Record<string, unknown>).message : body.detail) || `Запрос к школьной базе завершился ошибкой (${response.status}).`)) as ApiError;
     error.status = response.status;
     throw error;
   }
@@ -468,13 +469,17 @@ function ResponsiveSchedule({ request = api, diagnostic = false }: { request?: A
 
 function AppContent({ path, navigate, diagnostic = false }: { path: string; navigate: (href: string) => void; diagnostic?: boolean }) {
   const request = diagnostic ? diagnosticApi : api;
+  if (isLocalBuild && !diagnostic && localDevAuth() && path === '/admin/architecture-check'
+      && runtimeEnv.VITE_ARCHITECTURE_CHECK === 'true') {
+    return <ArchitectureCheck request={api} />;
+  }
   const directoryRequest = diagnostic ? diagnosticApi : schoolMode ? schoolApi : api;
   const directorySchoolMode = diagnostic || schoolMode;
   if (diagnostic && path === '/admin/schedule/published') return <ResponsiveSchedule request={request} diagnostic />;
 
   if (path === '/admin/preview') return <MiniappPreview key={`${routeQuery().get('identity_id') || ''}:${routeQuery().get('kind') || ''}`} api={request} sourceLabel={dataSourceLabel} initialIdentity={diagnostic ? '' : routeQuery().get('identity_id') || ''} initialKind={routeQuery().get('kind') || 'student'} initialDay={routeQuery().get('day') || ''} localAdmin={!diagnostic && Boolean(localDevAuth())} />;
-  if (path === '/admin/teachers') return <TeacherDirectoryAdmin connectionLabel={dataSourceLabel} api={directoryRequest} schoolMode={directorySchoolMode} navigate={navigate} />;
-  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin connectionLabel={dataSourceLabel} api={directoryRequest} section="groups" navigate={navigate} schoolMode={directorySchoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
+  if (path === '/admin/teachers') return <TeacherDirectoryAdmin live={!diagnostic} connectionLabel={dataSourceLabel} api={directoryRequest} schoolMode={directorySchoolMode} navigate={navigate} />;
+  if (path === '/admin/people' || path === '/admin/people/groups') return <SchoolDirectoryAdmin live={!diagnostic} connectionLabel={dataSourceLabel} api={directoryRequest} section="groups" navigate={navigate} schoolMode={directorySchoolMode} initialGroupId={routeQuery().get('group_id') || undefined} />;
   if (path === '/admin/schedule/published') return <MobilePublishedSchedule api={request} initialWeekStart={routeQuery().get('week_start') || undefined} />;
   if (path === '/admin/schedule/constructor') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
   if (path === '/admin/schedule') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;

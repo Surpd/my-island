@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import os
 import re
@@ -42,7 +43,29 @@ if isolated_consolidation_enabled():
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     log_startup_readiness(logging.getLogger("uvicorn.error"))
-    yield
+    from backend.services.published_week_sheets import deliver_one, enabled
+    from backend.services.schedule_sheet_publishing import export_client
+    stop = asyncio.Event()
+    async def deliver_loop():
+        while not stop.is_set():
+            try:
+                worked = await asyncio.to_thread(deliver_one, database, lambda: export_client(database, settings))
+            except Exception:
+                logging.getLogger("uvicorn.error").warning("Weekly Sheets queue unavailable")
+                worked = False
+            if not worked:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=15)
+                except TimeoutError:
+                    pass
+    task = (asyncio.create_task(deliver_loop()) if enabled() and not settings.local_test_mode
+            and not school_preview_mode and os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1" else None)
+    try:
+        yield
+    finally:
+        stop.set()
+        if task:
+            await task
 
 
 app = FastAPI(title="My Island API", version="0.1.0", lifespan=app_lifespan)

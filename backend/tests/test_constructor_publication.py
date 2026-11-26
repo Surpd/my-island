@@ -237,6 +237,58 @@ class ConstructorPublicationTests(unittest.TestCase):
         draft["revision"] = result["draft_revision"]
         return result
 
+    def test_recovery_context_is_bound_to_current_school_admin(self):
+        from backend.handlers.constructor_publication_api import create_constructor_publication_router
+        from fastapi import HTTPException
+
+        def require_admin(token):
+            if token not in {"admin-one", "admin-two"}:
+                raise HTTPException(401)
+            return token
+
+        app = FastAPI()
+        app.include_router(create_constructor_publication_router(lambda: (self.database, self.database), require_admin))
+        client = TestClient(app)
+        root = "/api/admin/schedule/constructor"
+        one = {"X-School-Admin-Session": "admin-one"}
+        two = {"X-School-Admin-Session": "admin-two"}
+        with patch.dict(os.environ, {"MY_ISLAND_CONSOLIDATED_SCHEDULE": "1"}):
+            context = root + "/publication/recovery-context"
+            self.assertEqual(client.get(context).status_code, 401)
+            response = client.get(context, headers=one)
+            self.assertEqual(response.headers["cache-control"], "private, no-store")
+            owner = response.json()["owner"]
+            self.assertNotEqual(owner, client.get(context, headers=two).json()["owner"])
+            draft = self.draft()
+            args = {"scope_kind": "template", "expected_revision": draft["revision"]}
+            preview = preview_publication(self.database, draft["id"], **args)
+            body = {**args, "confirmed": True, "preview_token": preview["preview_token"],
+                    "recovery_owner": owner, "operation_id": "browser-pending"}
+            path = root + "/" + draft["id"] + "/publication/publish"
+            self.assertEqual(client.post(path, headers=two, json=body).status_code, 403)
+            self.assertEqual(list_publications(self.database)["items"], [])
+            result = client.post(path, headers=one, json=body)
+            self.assertEqual(result.status_code, 200, result.text)
+            receipt = root + "/publication/receipts/browser-pending"
+            self.assertEqual(client.get(receipt, headers=two).status_code, 404)
+            self.assertEqual(client.get(receipt, headers=one).json(), result.json())
+
+    def test_receipt_survives_lost_response_and_rejects_key_reuse(self):
+        from backend.services.constructor_publication import publication_receipt
+        draft = self.draft()
+        args = dict(scope_kind="template", expected_revision=draft["revision"])
+        preview = preview_publication(self.database, draft["id"], **args)
+        command = dict(**args, preview_token=preview["preview_token"], confirmed=True,
+                       actor_user_id="admin-one", operation_id="repeatable")
+        result = publish_publication(self.database, draft["id"], **command)
+        self.assertEqual(publish_publication(self.database, draft["id"], **command), result)
+        self.assertEqual(publication_receipt(self.database, "repeatable", "admin-one"), result)
+        self.assertIsNone(publication_receipt(self.database, "repeatable", "admin-two"))
+        for changes in ({"actor_user_id": "admin-two"}, {"expected_revision": 2}):
+            with self.assertRaises(PublicationConflict):
+                publish_publication(self.database, draft["id"], **(command | changes))
+        self.assertEqual(len(list_publications(self.database)["items"]), 1)
+
     def test_preview_has_no_writes_and_roundtrip_template_week_runtime(self):
         draft = self.draft()
         with self.database.connection() as conn:
@@ -311,6 +363,52 @@ class ConstructorPublicationTests(unittest.TestCase):
         ):
             self.assertEqual(projection["status"], "not_published")
             self.assertEqual(projection["items"], [])
+
+    def test_selected_edition_is_shared_and_broken_pointer_never_falls_back(self):
+        monday = "2026-12-28"
+        sunday = "2027-01-03"
+        empty = canonical.resolve_published_week(self.database, sunday)
+        self.assertEqual((empty.metadata["week_start"], empty.metadata["origin"]), (monday, "missing"))
+        draft = self.draft([self.lesson(), self.lesson(id="unresolved", day=1, teacherId="missing")])
+        self.publish(draft)
+        self.assertEqual(canonical.resolve_published_week(self.database, sunday).metadata["origin"], "template_only")
+        weekly = self.publish(draft, "week", week_start=monday)
+        def read_all():
+            return (canonical.student_campus_projection(self.database, self.student["id"], monday, sunday),
+                    canonical.project_teacher_range(self.database, self.teacher["id"], monday, sunday),
+                    canonical.published_week_view(self.database, monday))
+        student, teacher, admin = read_all()
+        edition = admin["publication"]
+        self.assertEqual(student["publications"], [edition])
+        self.assertEqual(teacher["publication"], edition)
+        self.assertEqual((edition["origin"], edition["coverage"], edition["revision"]), ("manual_week", "partial", 1))
+        self.assertEqual(edition["publication_id"], weekly["publication_id"])
+        self.assertEqual(edition["effective_week_id"], weekly["published_id"])
+        self.assertEqual(edition["base_version_id"], weekly["version_id"])
+        for column in ("version_id", "published_id"):
+            with self.subTest(column=column):
+                with self.database.connection() as conn:
+                    self.database.execute(conn, f"UPDATE schedule_publication_heads SET {column}=? WHERE scope_key=?",
+                                          ("missing", "week:" + monday))
+                student, teacher, admin = read_all()
+                self.assertEqual(admin["publication"]["origin"], "broken_head")
+                self.assertEqual(student["publications"], [admin["publication"]])
+                self.assertEqual(teacher["publication"], admin["publication"])
+                self.assertTrue(all(r["items"] == [] and r["status"] == "broken_publication" for r in (student, teacher, admin)))
+                with self.database.connection() as conn:
+                    self.database.execute(conn, f"UPDATE schedule_publication_heads SET {column}=? WHERE scope_key=?",
+                                          (weekly[column], "week:" + monday))
+
+    def test_newer_unapproved_materialization_cannot_shadow_approved_history(self):
+        for version, status, observed in (("old", "approved_baseline", "2026-11-01"), ("new", "draft", "2026-11-02")):
+            canonical.import_canonical_artifact(self.database, {"version_id": version,
+                "source_snapshot": {"id": version, "fingerprint": version}, "blocks": self.artifact_blocks_for_draft()}, status=status)
+            canonical.materialize_effective_week(self.database, version, "2026-11-02", overlay_observed_at=observed)
+        week = canonical.published_week_view(self.database, "2026-11-02")
+        self.assertTrue(week["published"])
+        self.assertEqual(week["publication"]["origin"], "approved_materialization")
+        self.assertEqual(week["publication"]["base_version_id"], "old")
+        self.assertIsNone(week["publication"]["publication_id"])
 
     def test_overview_uses_historical_runtime_week_after_new_template(self):
         def imported(version):
@@ -1486,6 +1584,21 @@ class ConstructorPublicationTests(unittest.TestCase):
             self.assertTrue(all(r["state"] == "UNRESOLVED" or r["activity"] == "Math" for r in rows))
         self.assertEqual(canonical.project_teacher(self.database, self.teacher["id"], "2026-10-26")["items"][0]["activity"], "Math")
 
+    def test_operational_day_keeps_partial_publication_and_dated_deferred_record(self):
+        from datetime import date
+        from backend.services.operational_day import operational_day
+        draft = self.draft([self.lesson(), self.lesson(id="waiting", teacherId="missing", day=1)])
+        self.publish(draft)
+        week = self.publish(draft, "week", week_start="2026-10-26")
+        monday = operational_day(self.database, date(2026, 10, 26), "Europe/Moscow")
+        tuesday = operational_day(self.database, date(2026, 10, 27), "Europe/Moscow")
+        self.assertEqual(monday["publication"]["publication_id"], week["publication_id"])
+        self.assertEqual(tuesday["publication"]["coverage"], "partial")
+        self.assertEqual(monday["scheduled_count"], 1)
+        self.assertEqual(tuesday["scheduled_count"], 0)
+        self.assertEqual(tuesday["alerts"][0]["lesson_id"], "waiting")
+        self.assertIn("record=", tuesday["alerts"][0]["href"])
+
     def test_stale_saved_roster_is_withheld_from_student_schedule(self):
         from backend.services.schedule_experiments import save_experiment
         scoped = self.lesson(id="scoped", subject="Scoped", audience={"kind": "groups", "group_ids": [str(self.math["id"])]})
@@ -1715,8 +1828,10 @@ class ConstructorPublicationTests(unittest.TestCase):
         with self.assertRaises(PublicationConflict):
             preview_restore(self.database, first["publication_id"], expected_head_revision=1)
         preview = preview_restore(self.database, first["publication_id"], expected_head_revision=2)
-        restored = restore_publication(self.database, first["publication_id"], expected_head_revision=2,
-                                       preview_token=preview["preview_token"], confirmed=True)
+        command = dict(expected_head_revision=2, preview_token=preview["preview_token"],
+                       confirmed=True, operation_id="restore-once")
+        restored = restore_publication(self.database, first["publication_id"], **command)
+        self.assertEqual(restore_publication(self.database, first["publication_id"], **command), restored)
         self.assertNotEqual(restored["published_id"], first["published_id"])
         self.assertEqual(next(iter(canonical.read_canonical_template(self.database)["blocks"].values()))["assignments"][0]["activity"], "Math")
         self.assertIsNotNone(canonical.read_canonical_template(self.database, second["published_id"]))

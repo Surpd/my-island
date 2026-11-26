@@ -33,14 +33,20 @@ test.beforeEach(async ({ page, baseURL }) => {
 for (const route of ['/admin?role=admin#/admin/schedule', '/admin/schedule?role=admin']) {
   test(`legacy URL opens only ScheduleConstructor: ${route}`, async ({ page }) => {
     const writes: string[] = [];
+    const retiredReads: string[] = [];
     page.on('request', request => {
+      const path = new URL(request.url()).pathname;
+      if (request.url().startsWith(API) && /^\/api\/admin\/schedule\/(publications|draft|import-to-draft)(\/|$)/.test(path)) {
+        retiredReads.push(path);
+      }
       if (['PUT', 'PATCH', 'DELETE'].includes(request.method()) && request.url().startsWith(API)) writes.push(request.url());
     });
     await page.goto(route);
     await expect(page.locator('.constructor')).toBeVisible();
     await expect(page.getByText('Старый редактор расписания', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Импорт из Google Sheets', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('История версий', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'История версий', exact: true })).toHaveCount(0);
+    expect(retiredReads).toEqual([]);
     expect(page.url()).toContain('/admin/schedule/constructor');
     expect(page.url()).toContain('role=admin');
     expect(writes).toEqual([]);
@@ -50,13 +56,29 @@ for (const route of ['/admin?role=admin#/admin/schedule', '/admin/schedule?role=
 test('opens an editable copy of the main template in the constructor', async ({ page }) => {
   await page.goto('/admin/schedule?role=admin');
   await expect(page.locator('.constructor-start')).toBeVisible();
-  const createResponse = page.waitForResponse(response =>
-    response.url().endsWith('/api/admin/schedule/experiments')
-      && response.request().method() === 'POST',
-  );
-  await page.getByRole('button', { name: /На основе действующего расписания/ }).click();
-  expect((await createResponse).status()).toBe(200);
-  await expect(page).toHaveURL(/\/admin\/schedule\/constructor\?role=admin$/);
+  if (consolidation) {
+    const mainTemplate = page.getByRole('region', { name: 'Основной шаблон школы' });
+    await mainTemplate.getByLabel('Действия с основным шаблоном').click();
+    const copied = page.waitForResponse(response => response.request().method() === 'POST'
+      && /^\/api\/admin\/schedule\/experiments\/school\/[^/]+\/duplicate$/.test(new URL(response.url()).pathname));
+    await mainTemplate.getByRole('button', { name: 'Создать копию', exact: true }).click();
+    const response = await copied;
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const copy = await response.json();
+    expect(copy.id).toBeTruthy();
+    expect(copy.name).toBeTruthy();
+    const draft = page.getByRole('article').filter({ has: page.getByRole('heading', { name: copy.name, exact: true }) });
+    await draft.getByRole('button', { name: 'Открыть', exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/schedule\/constructor/);
+  } else {
+    const createResponse = page.waitForResponse(response =>
+      response.url().endsWith('/api/admin/schedule/experiments')
+        && response.request().method() === 'POST',
+    );
+    await page.getByRole('button', { name: /На основе действующего расписания/ }).click();
+    expect((await createResponse).status()).toBe(200);
+    await expect(page).toHaveURL(/\/admin\/schedule\/constructor\?role=admin$/);
+  }
   await expect(page.locator('.constructor-grid-wrap')).toBeVisible();
   await expect.poll(() => page.locator('.constructor-card').count()).toBeGreaterThan(0);
 });
@@ -110,7 +132,7 @@ test('school save keeps the explicitly confirmed cross-subject group without rew
   await expect(editor.getByRole('heading', { name: 'Русский язык', exact: true })).toBeVisible();
   await editor.getByRole('button', { name: 'Оставить эту группу', exact: true }).click();
   const response = page.waitForResponse(item => item.request().method() === 'PUT' && new URL(item.url()).pathname === savePath);
-  await editor.getByRole('button', { name: 'Сохранить правку', exact: true }).click();
+  await editor.getByRole('button', { name: 'Сохранить черновик', exact: true }).click();
   const saved = await response;
   expect(saved.ok(), await saved.text()).toBeTruthy();
   expect(saved.request().postDataJSON().editor_audience_changes).toEqual([lessonId]);

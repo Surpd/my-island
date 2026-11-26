@@ -17,7 +17,7 @@ app = FastAPI()
 app.include_router(create_router(database))
 api = TestClient(app)
 header = {"X-Dev-Auth": "admin:1"}
-title = "II · Математика"
+title = "II · Биология"
 rows = [["Дата", "Итог", "25.11"], ["Задание", "", "Проверочная"], ["Вес", "", 2],
         ["Категория (У/О/П)", "", "О"], ["Тестовый ученик", 4, 4], ["Другой участник", 5, 5]]
 for day in range(1, 13):
@@ -29,7 +29,7 @@ tabs = {
     title: rows,
     "II · История": [["Дата", "", "01.12"], ["Задание", "", "Доклад"], ["Вес", "", 2],
                      ["Категория (У/О/П)", "", "У"], ["Тестовый ученик", "", 5]],
-    "II · Физика": [["Дата", "", "02.12"], ["Задание", "", "Наблюдение"], ["Вес", "", 1],
+    "II · Геология": [["Дата", "", "02.12"], ["Задание", "", "Наблюдение"], ["Вес", "", 1],
                     ["Категория (У/О/П)", "", "У"], ["Тестовый ученик", "", ""]],
 }
 google.spreadsheet.return_value = {"sheets": [{"properties": {"sheetId": n, "title": t}} for n, t in enumerate(tabs, 12)]}
@@ -42,7 +42,7 @@ with patch("backend.services.google_sync_service._client", return_value=(google,
         plan = check.json()
         response = api.post("/api/admin/journals/connect", headers=header, json={**payload,
             "preflight_token": plan["preflight_token"], "selected_sheet_ids": [tab["sheet_id"] for tab in plan["tabs"]]})
-        assert response.status_code == 200 and response.json()["status"] == "success"
+        assert response.status_code == 200 and response.json()["status"] == "success", response.text
 with database.connection() as connection:
     identity = connection.execute("SELECT id FROM identities WHERE origin='local_e2e' AND source_ref='local-e2e:student'").fetchone()
 for source in database.journal_status():

@@ -247,7 +247,7 @@ class JournalSyncResilienceTests(unittest.TestCase):
         with patch("backend.handlers.api.get_settings", return_value=settings), patch.object(
             self.database, "journal_status",
             return_value=[{"spreadsheet_id": "book-cron", "grade": 9, "academic_year": "2026/27",
-                           "term_number": 2, "period_status": "archived", "last_synced_at": "2026-11-01",
+                           "term_number": 2, "period_status": "current", "last_synced_at": "2026-11-01",
                            "classification": None, "excluded_from_journals": False, "auto_sync_enabled": True}],
         ), patch("backend.handlers.api.refresh_grade_journal", return_value={"status": "success", "tabs": [{"status": "success"}]}) as refresh:
             response = client.post("/api/admin/journals/cron", headers={"X-Journal-Cron-Secret": "cron-secret"})
@@ -263,7 +263,7 @@ class JournalSyncResilienceTests(unittest.TestCase):
         self.assertEqual(run["counts"], {"completed_tabs": 1, "total_tabs": 1, "succeeded": 1, "failed": 0,
                                          "skipped": 0, "excluded": 0, "not_imported": 0})
 
-    def test_refresh_all_plan_uses_operational_second_trimester_and_current_semester(self):
+    def test_refresh_all_plan_uses_configured_current_trimester_and_semester(self):
         rows = [
             {"spreadsheet_id": "book-6", "grade": 6, "academic_year": "2026/27", "term_number": 2,
              "period_status": "archived", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
@@ -273,21 +273,26 @@ class JournalSyncResilienceTests(unittest.TestCase):
              "period_status": "current", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
             {"spreadsheet_id": "book-11", "grade": 11, "academic_year": "2026/27", "term_number": 1,
              "period_status": "archived", "last_synced_at": "2026-09-01", "classification": None, "excluded_from_journals": False},
-            {"spreadsheet_id": "book-7", "grade": 7, "academic_year": "2026/27", "term_number": 2,
+            {"spreadsheet_id": "book-7", "grade": 7, "academic_year": "2026/27", "term_number": 3,
              "period_status": "archived", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": True},
+            {"spreadsheet_id": "book-7", "grade": 7, "academic_year": "2026/27", "term_number": 3,
+             "period_status": "current", "last_synced_at": "2026-11-01", "classification": None,
+             "excluded_from_journals": False, "auto_sync_enabled": True},
         ]
 
         jobs, skipped = _connected_current_journal_refresh_plan(rows)
 
         self.assertEqual(jobs, [
-            {"spreadsheet_id": "book-6", "grade": 6, "term_number": 2},
+            {"spreadsheet_id": "book-6", "grade": 6, "term_number": 1},
+            {"spreadsheet_id": "book-7", "grade": 7, "term_number": 3},
             {"spreadsheet_id": "book-10", "grade": 10, "term_number": 2},
         ])
-        self.assertEqual({item["spreadsheet_id"] for item in skipped}, {"book-7", "book-11"})
-        rows[0]["auto_sync_enabled"] = False
+        self.assertEqual({item["spreadsheet_id"] for item in skipped}, {"book-11"})
+        rows[0]["auto_sync_enabled"] = True
         rows[2]["auto_sync_enabled"] = True
         auto_jobs, _ = _connected_current_journal_refresh_plan(rows, require_auto=True)
-        self.assertEqual(auto_jobs, [{"spreadsheet_id": "book-10", "grade": 10, "term_number": 2}])
+        self.assertEqual(auto_jobs, [{"spreadsheet_id": "book-7", "grade": 7, "term_number": 3},
+                                     {"spreadsheet_id": "book-10", "grade": 10, "term_number": 2}])
 
     def test_auto_sync_scope_is_optional_and_forwarded_without_changing_legacy_contract(self):
         user_id = self._create_admin()
@@ -343,7 +348,7 @@ class JournalSyncResilienceTests(unittest.TestCase):
         headers = {"X-Dev-Auth": f"browser:{browser_token}"}
         rows = [
             {"spreadsheet_id": "book-6", "grade": 6, "academic_year": "2026/27", "term_number": 2,
-             "period_status": "archived", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
+             "period_status": "current", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
             {"spreadsheet_id": "book-9", "grade": 9, "academic_year": "2026/27", "term_number": 2,
              "period_status": "current", "last_synced_at": "2026-11-01", "classification": None, "excluded_from_journals": False},
             {"spreadsheet_id": "book-10", "grade": 10, "academic_year": "2026/27", "term_number": 1,

@@ -8,7 +8,7 @@ const sources = [
   { ...source, id: 99004, subject: 'Физика ', sheet_title: 'II · Физика', term_number: 2, period_status: 'archived' },
   { ...source, id: 99005, subject: 'II · Как работать', sheet_title: 'II · Как работать', status: 'error' },
   { ...source, id: 99006, grade: 11, spreadsheet_id: 'synthetic-11', subject: 'Русский язык', sheet_title: 'Русский язык' },
-  { ...source, id: 99007, subject: 'Математика', sheet_title: 'II · Математика', term_number: 2, period_status: 'current' },
+  { ...source, id: 99007, subject: 'Математика', sheet_title: 'II · Математика', term_number: 2, period_status: 'current', last_synced_at: '2026-11-26T08:01:00Z' },
   { ...source, id: 99008, grade: 8, spreadsheet_id: 'synthetic-8', sheet_title: 'II · Математика', term_number: 2, period_status: 'current' },
 ];
 
@@ -268,6 +268,8 @@ test('journal selectors keep existing navigation and matching actions', async ({
     .selectOption('7');
   await page.getByRole('combobox', { name: 'Предмет' }).selectOption('Физика');
   await expect(page.locator('.journal-detail-title')).toContainText('Физика');
+  await expect(page.locator('.modern-journal')).toBeVisible();
+  await page.getByRole('tab', { name: /^III триместр/ }).click();
   await expect(page.getByText('Журнал за выбранный триместр ещё не создан.')).toBeVisible();
   await page.getByRole('tab', { name: /^I триместр/ }).click();
   await expect(page.locator('.modern-journal--archive')).toBeVisible();
@@ -405,4 +407,32 @@ test('II import is gated on fresh preflight of the exact class and book', async 
   await expect(editor).toHaveCount(0);
   expect(previewCalls).toBe(3);
   expect(commits).toBe(1);
+});
+
+test('an administrator can archive a source, view its saved marks and enable it again', async ({ page }) => {
+  const modes: string[] = [];
+  await page.route('**/api/admin/journals/source-settings', async route => {
+    const body = route.request().postDataJSON();
+    expect(body.source_id).toBe(99007);
+    modes.push(body.mode);
+    await route.fulfill({ json: { status: 'success' } });
+  });
+  await page.getByRole('button', { name: 'Все журналы' }).click();
+  await page.getByRole('tab', { name: /7 класс/ }).click();
+  await page.getByText('Обновления и источники', { exact: true }).first().click();
+  await page.getByText('Режимы синхронизации и отключённые вкладки', { exact: true }).click();
+  const mode = page.getByLabel('Режим синхронизации: II · Математика', { exact: true });
+  await mode.selectOption('auto');
+  await expect(mode).toHaveValue('auto');
+  await mode.selectOption('excluded');
+  await expect(mode).toHaveValue('excluded');
+  await page.getByRole('button', { name: 'Сохранённые оценки' }).click();
+  await expect(page.locator('.modern-journal')).toBeVisible();
+  await expect(page.getByText('Вкладка отключена', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Обновить вкладку' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Все журналы' }).click();
+  if (!(await mode.isVisible())) await page.getByText('Режимы синхронизации и отключённые вкладки', { exact: true }).click();
+  await mode.selectOption('manual');
+  await expect(mode).toHaveValue('manual');
+  expect(modes).toEqual(['auto', 'excluded', 'manual']);
 });

@@ -1,6 +1,8 @@
 /* oxlint-disable typescript/no-explicit-any, react/react-compiler, react-hooks/exhaustive-deps, jsx-a11y/prefer-tag-over-role, jsx-a11y/control-has-associated-label, jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 'use client';
 
+import { useLiveRevision } from './use-live-revision';
+import { SHORT_WEEKDAYS } from './schedule-weekdays';
 import {
   Fragment,
   useEffect,
@@ -211,6 +213,7 @@ function editorActivityType(lesson: Lesson): Lesson['activityType'] {
   return lesson.kind === 'event' ? 'event' : 'lesson';
 }
 type Draft = {
+  viewer_id?: string;
   id: string;
   name: string;
   revision: number;
@@ -221,7 +224,7 @@ type Draft = {
   payload: Payload;
 };
 type LocalDraftRecovery = { id: string; revision: number; name: string; payload: Payload; base?: Draft | null };
-const recoveryKey = (workspace: string, id: string) => `my-island-schedule-recovery:${workspace}:${id}`;
+const recoveryKey = (workspace: string, id: string, actor: string) => `my-island-schedule-recovery:${workspace}:${actor}:${id}`;
 function scheduleDraftLink() {
   const hash = window.location.hash;
   const hashQuery = hash.startsWith('#/admin/') && hash.includes('?') ? hash.slice(hash.indexOf('?') + 1) : '';
@@ -844,6 +847,8 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  type LessonChange = { actor_id?: string; changed_at: string; changed_fields: { lesson_id: string; operation: string; fields: string[] }[] };
+  const [lessonChanges, setLessonChanges] = useState<LessonChange[]>([]);
   const [versionConflict, setVersionConflict] = useState<{ base: Draft | null; server: Draft; local: Draft; conflicts: ScheduleMergeConflict[] } | null>(null);
   const [conflictActionBusy, setConflictActionBusy] = useState(false);
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'local' | 'server'>>({});
@@ -891,12 +896,31 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
   const [labReturn, setLabReturn] = useState<LaboratoryBlueprint>();
   const [laboratoriesOpen, setLaboratoriesOpen] = useState(false);
   const revision = useRef(0);
+  const viewer = useRef('');
+  const [accessLost, setAccessLost] = useState(false);
   const [typeChange, setTypeChange] = useState<{ id: string; from: EditorKind; to: SelectableKind } | null>(null);
   const offlineBeforeToggle = useRef(new Map<string, Lesson>());
   const baseDraftRef = useRef<Draft | null>(null);
   const schedulePath = (suffix = '') => workspace === 'school'
     ? `/api/admin/schedule/experiments/school${suffix}`
     : `/api/admin/schedule/experiments${suffix}`;
+  const conflictDraftId = versionConflict?.server.id;
+  const conflictRevision = versionConflict?.server.revision;
+  const conflictBase = versionConflict?.base?.revision ?? 0;
+  useEffect(() => {
+    setLessonChanges([]);
+    if (!conflictDraftId || diagnostic) return;
+    const controller = new AbortController();
+    void api<{ items: LessonChange[] }>(schedulePath(`/${encodeURIComponent(conflictDraftId)}?lesson_changes_since=${conflictBase}`),
+      { signal: controller.signal }).then(({ items }) => { if (!controller.signal.aborted) setLessonChanges(items); }).catch(() => {});
+    return () => controller.abort();
+  }, [api, workspace, conflictDraftId, conflictRevision, conflictBase, diagnostic]);
+  const conflictAuthor = (change: ScheduleMergeConflict) => {
+    if (!change.lessonId) return null;
+    const entry = lessonChanges.find((row) => row.changed_fields.some((item) => item.lesson_id === change.lessonId &&
+      (item.operation !== 'edited' || item.fields.includes(change.field.split('.')[0]))));
+    return entry ? <small>{entry.actor_id ? `Администратор ${entry.actor_id}` : 'Системное изменение'} · {new Date(entry.changed_at).toLocaleString('ru-RU')}</small> : null;
+  };
   const editActivity = (item?: ScheduleActivity, requestedType: 'club' | 'elective' = 'club') => {
     setActivityEditor({ item, name: item?.name || '', type: item?.type === 'elective' ? 'elective' : requestedType,
       aliases: (item?.aliases || []).join(', '), teacher_ids: item?.teacher_ids || [], room: item?.room || '', eligible_grades: item?.eligible_grades || [] });
@@ -1060,9 +1084,10 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
       );
       if (request !== draftOpenRequest.current) return false;
       if (comparisonOnly && !value.payload?.school_source?.term2_preparation?.comparison?.items.length) return false;
+      viewer.current = value.viewer_id || '';
       let recovered: LocalDraftRecovery | null = null;
       try {
-        const stored = diagnostic ? null : window.localStorage.getItem(recoveryKey(workspace, id));
+        const stored = diagnostic || !viewer.current ? null : window.localStorage.getItem(recoveryKey(workspace, id, viewer.current));
         if (stored) {
           const parsed = JSON.parse(stored) as LocalDraftRecovery;
           if (parsed.id === id && parsed.payload && Array.isArray(parsed.payload.lessons)) recovered = parsed;
@@ -1266,6 +1291,40 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     setFuture((items) => items.slice(0, -1));
     setDirty(true);
   };
+  useLiveRevision({
+    enabled: Boolean(draft?.id) && !diagnostic && !accessLost,
+    path: schedulePath(`/${encodeURIComponent(draft?.id || '')}?revision_only=true`),
+    api,
+    refresh: async (marker, signal) => {
+      if (viewer.current && viewer.current !== marker.actor) { setAccessLost(true); setDraft(null); return; }
+      viewer.current = marker.actor;
+      const current = draftRef.current;
+      if (!current || current.id !== draft?.id || marker.revision === revision.current) return;
+      // Buffered inspector fields are applied by their existing blur/save handlers.
+      if (savingRef.current || versionConflict || attendanceReasons.current.size
+        || document.activeElement?.matches('input, textarea, [contenteditable=true]')) return false;
+      const server = await api<Draft>(schedulePath(`/${encodeURIComponent(current.id)}`), { signal });
+      if (signal.aborted || savingRef.current || draftRef.current !== current) return false;
+      if (server.viewer_id && server.viewer_id !== marker.actor) {
+        setDirty(false); setDraft(null); setAccessLost(true); return;
+      }
+      const base = baseDraftRef.current;
+      const merged = dirty ? mergeScheduleDrafts(base || unknownConflictBase(server), current, server) : null;
+      if (merged?.conflicts.length) {
+        setConflictChoices({}); setVersionConflict({ base, local: current, server, conflicts: merged.conflicts });
+        setStatus('Другой администратор изменил тот же урок. Выберите версию в окне конфликта.');
+        return;
+      }
+      const next = merged ? { ...server, name: merged.draft.name, payload: merged.draft.payload } : server;
+      revision.current = server.revision; baseDraftRef.current = server;
+      setDraft(next); setDirty(!sameDraftContent(next, server));
+      setHistory([]); setFuture([]);
+      setStatus('Получена новая версия черновика.');
+    },
+    missing: () => setStatus('Черновик удалён другим администратором. Введённые изменения остались в этой вкладке.'),
+    revoke: () => { setDirty(false); setDraft(null); setAccessLost(true); },
+  });
+
   const save = async () => {
     if (diagnostic) return !dirty;
     const current = draftRef.current;
@@ -1307,7 +1366,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
       if (changeVersion.current === savedVersion) {
         explicitAudienceEditIds.current.delete(current.id);
         setDirty(false);
-        try { window.localStorage.removeItem(recoveryKey(workspace, current.id)); } catch { /* Keep the in-memory save result. */ }
+        try { window.localStorage.removeItem(recoveryKey(workspace, current.id, viewer.current)); } catch { /* Keep the in-memory save result. */ }
       }
     };
     const tryMergeSave = async (base: Draft | null, local: Draft, server: Draft, retry: number): Promise<{ saved?: Draft; server: Draft; conflicts: ScheduleMergeConflict[]; racedAgain?: boolean }> => {
@@ -1372,7 +1431,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
             setDraft(server);
             setDirty(false);
             setSaveFailed(false);
-            try { window.localStorage.removeItem(recoveryKey(workspace, current.id)); } catch { /* Server content is authoritative and matches this draft. */ }
+            try { window.localStorage.removeItem(recoveryKey(workspace, current.id, viewer.current)); } catch { /* Server content is authoritative and matches this draft. */ }
             setStatus('Черновик уже содержит эти изменения. Версия синхронизирована.');
             return true;
           }
@@ -1450,7 +1509,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     setHistory([]);
     setFuture([]);
     setVersionConflict(null);
-    try { window.localStorage.removeItem(recoveryKey(workspace, server.id)); } catch { /* The user explicitly chose the server version. */ }
+    try { window.localStorage.removeItem(recoveryKey(workspace, server.id, viewer.current)); } catch { /* The user explicitly chose the server version. */ }
     setStatus(`Загружена серверная версия черновика, ревизия ${server.revision}.`);
   };
   const saveLocalConflictCopy = async () => {
@@ -1519,7 +1578,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
       setHistory([]);
       setFuture([]);
       setVersionConflict(null);
-      try { window.localStorage.removeItem(recoveryKey(workspace, resolved.id)); } catch { /* Server confirmed the resolved content. */ }
+      try { window.localStorage.removeItem(recoveryKey(workspace, resolved.id, viewer.current)); } catch { /* Server confirmed the resolved content. */ }
       setStatus('Выбранные изменения сохранены в черновике.');
       void refreshDrafts().catch(() => undefined);
     } catch (error) {
@@ -1544,9 +1603,9 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
     }
   };
   useEffect(() => {
-    if (diagnostic || !draft || !dirty) return;
+    if (diagnostic || !draft || !dirty || !viewer.current) return;
     const recovery: LocalDraftRecovery = { id: draft.id, revision: revision.current, name: draft.name, payload: draft.payload, base: baseDraftRef.current };
-    try { window.localStorage.setItem(recoveryKey(workspace, draft.id), JSON.stringify(recovery)); } catch { /* The in-memory draft and unload guard remain active. */ }
+    try { window.localStorage.setItem(recoveryKey(workspace, draft.id, viewer.current), JSON.stringify(recovery)); } catch { /* The in-memory draft and unload guard remain active. */ }
   }, [draft, dirty, workspace, diagnostic]);
   useEffect(() => {
     const before = (event: BeforeUnloadEvent) => {
@@ -2974,6 +3033,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
         <button className={workspace === 'school' ? 'active' : ''} disabled={directoryAccess !== 'school'} onClick={() => { workspaceRef.current = 'school'; setWorkspace('school'); setGroups(directoryByWorkspace.current.school.groups); setTeachers(directoryByWorkspace.current.school.teachers); setStudents(directoryByWorkspace.current.school.students); setKnownRooms(directoryByWorkspace.current.school.rooms); setDrafts(schoolDrafts); setDraft(null); }}>Школа <small>Школьный справочник</small></button>
       </nav>
   ) : null;
+  if (accessLost) return <p role="alert">Доступ администратора изменился. Обновите страницу для нового входа.</p>;
   return (
     <div
       className={`constructor constructor-ux ${draft ? 'has-draft' : ''} ${fullScreen ? 'is-fullscreen' : ''} ${termComparison ? 'has-term-comparison' : ''}`}
@@ -3188,7 +3248,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
             <div className="constructor-conflict-diff">
               <strong>Выберите, какой вариант оставить</strong>
               {versionConflicts.map((change) => <article key={change.key}>
-                <b>{conflictTitle(change)}</b>
+                <b>{conflictTitle(change)}</b>{conflictAuthor(change)}
                 <span>Ваш вариант: {conflictValueLabel(change, 'local')}</span>
                 <span>Другой вариант: {conflictValueLabel(change, 'server')}</span>
                 <label><select aria-label={`Вариант для ${conflictTitle(change)}`} value={conflictChoices[change.key] || 'local'} onChange={(event) => setConflictChoices((current) => ({ ...current, [change.key]: event.target.value as 'local' | 'server' }))}><option value="local">Оставить мой вариант</option><option value="server">Оставить другой вариант</option></select></label>
@@ -3271,7 +3331,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               <div className="constructor-day-tabs">
                 {payload.days.map((value) => (
                   <button key={value} aria-label={DAYS[value]} title={DAYS[value]} className={day === value ? 'active' : ''} onClick={() => { setDay(value); setAnchor(null); setFocus(null); setSelectedId(''); }}>
-                    {DAYS[value].slice(0, 2)}
+                    {SHORT_WEEKDAYS[value]}
                   </button>
                 ))}
               </div>
@@ -3290,7 +3350,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
               {dayModesOpen ? <section id="constructor-day-modes-matrix" className="constructor-day-modes-matrix" role="dialog" aria-label="Режимы дней по параллелям">
                 <header><div><strong>Режимы дней</strong><small>Одна настройка для всей параллели</small></div><button type="button" aria-label="Закрыть матрицу режимов" onClick={() => { setDayModesOpen(false); setDayModeEditor(null); }}><X size={15} /></button></header>
                 <div className="constructor-day-modes-table-wrap"><table>
-                  <thead><tr><th scope="col">Класс</th>{[0, 1, 2, 3, 4].map((weekday) => <th key={weekday} scope="col">{['Пн', 'Вт', 'Ср', 'Чт', 'Пт'][weekday]}</th>)}</tr></thead>
+                  <thead><tr><th scope="col">Класс</th>{[0, 1, 2, 3, 4].map((weekday) => <th key={weekday} scope="col">{SHORT_WEEKDAYS[weekday]}</th>)}</tr></thead>
                   <tbody>{['5', '6', '7', '8', '9', '10', '11'].map((grade) => <tr key={grade}>
                     <th scope="row">{grade} класс</th>
                     {[0, 1, 2, 3, 4].map((weekday) => {
@@ -3484,7 +3544,7 @@ export function ScheduleConstructor({ api, diagnostic = false }: { api: Api; dia
                         setQuery('');
                       }}
                     >
-                      {DAYS[item.day]?.slice(0, 2)} · {item.subject} ·{' '}
+                      {SHORT_WEEKDAYS[item.day]} · {item.subject} ·{' '}
                       {groups.find((g) => g.id === item.classId)?.name}
                     </button>
                   ))
