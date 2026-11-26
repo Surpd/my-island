@@ -27,3 +27,11 @@ correct account. Do not deploy, restart, migrate, or probe the forbidden target.
 
 Production frontend builds must receive an explicit `VITE_API_BASE_URL`. Never
 restore a hard-coded production API fallback.
+
+## Documentation and local artifacts
+
+- Update the relevant living document instead of creating a Markdown report for each task. Summarize ordinary changes and verification in the PR.
+- Keep temporary screenshots, logs, exports and test results in ignored local storage or CI artifacts. Use synthetic data for any evidence uploaded to GitHub.
+- Keep student and staff personal data, grades, keys, tokens and database copies out of Git, including committed screenshots and fixtures.
+- After a task, resolve uncommitted and unique work, then remove obsolete worktrees and branches with the required approval.
+- Keep verified recovery copies and their keys in protected storage. Create additional copies only for a specific recovery need.

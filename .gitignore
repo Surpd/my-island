@@ -9,7 +9,6 @@ dist/
 !.env.example
 data/
 .local-test/
-artifacts/schedule-export/
 # Local source captures and generated school-data audits; keep out of Git.
 backend/.current_full_v2_cell_meta.json
 backend/.current_full_v2_input.json
@@ -20,14 +19,13 @@ backend/.full_v2_unenriched.json
 docs/schedule-captures/
 docs/SCHEDULE_CANONICAL_V*.json
 docs/STUDENT_MEMBERSHIP_*
-my-island-*.tar
-backend/__pycache__/
-backend/**/__pycache__/
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 site-scaffold/
-.local-test/
 
 # Release/build workspaces and private verification output.
 .release-worktree/
@@ -36,8 +34,12 @@ artifacts/
 test-results/
 playwright-report/
 .playwright-mcp/
-debug.log
+blob-report/
+coverage/
 schedule-studio-*.png
+docs/reports/
+docs/evidence/
+docs/review-artifacts/
 docs/SCHOOL_DIRECTORY_UNIFICATION_AUDIT_*.json
 docs/SCHOOL_DIRECTORY_UNIFICATION_DIAGNOSTICS_*.json
 
@@ -46,10 +48,14 @@ docs/SCHOOL_DIRECTORY_UNIFICATION_DIAGNOSTICS_*.json
 .site-*/
 *.log
 *.tar
+*.tar.gz
+*.tgz
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal

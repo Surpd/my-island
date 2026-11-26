@@ -1,8 +1,9 @@
-name: Architecture audit references
+name: Documentation links
 on:
   pull_request:
     paths:
-      - 'docs/reports/architecture-audit-2026-11-25/**'
+      - '**/*.md'
+      - 'docs/**'
       - '.github/workflows/architecture-audit.yml'
 permissions:
   contents: read
@@ -11,20 +12,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check relative links in the audit, plan and screenshot gallery
+      - name: Check relative Markdown links
         run: |
           python - <<'PY'
-          import pathlib, re, urllib.parse
-          root = pathlib.Path("docs/reports/architecture-audit-2026-11-25")
+          import pathlib
+          import re
+          import subprocess
+          import urllib.parse
+
+          root = pathlib.Path.cwd()
+          tracked = {
+              pathlib.Path(name)
+              for name in subprocess.check_output(
+                  ["git", "ls-files", "-z"], text=True, encoding="utf-8"
+              ).split("\0") if name
+          }
+          directories = {parent for path in tracked for parent in path.parents}
           missing = []
-          for path in sorted([*root.glob("*.md"), *root.glob("*.html")]):
-              pattern = r'\]\(([^)]+)\)' if path.suffix == ".md" else r'(?:href|src)="([^"]+)"'
-              for target in re.findall(pattern, path.read_text(encoding="utf-8")):
-                  url = urllib.parse.urlsplit(target)
+          for path in sorted(tracked):
+              if path.suffix != ".md":
+                  continue
+              content = re.sub(r"(?ms)^(?:`{3,}|~{3,}).*?^(?:`{3,}|~{3,})[ \t]*$", "",
+                               path.read_text(encoding="utf-8"))
+              for target in re.findall(r"\]\((?:<([^>]+)>|([^\s)]+))", content):
+                  url = urllib.parse.urlsplit(next(part for part in target if part))
                   if url.scheme or url.netloc or not url.path:
                       continue
-                  if not (path.parent / urllib.parse.unquote(url.path)).is_file():
-                      missing.append(f"{path}: {target}")
+                  candidate = (root / path.parent / urllib.parse.unquote(url.path)).resolve()
+                  if (not candidate.is_relative_to(root)
+                      or candidate.relative_to(root) not in tracked | directories):
+                      missing.append(f"{path}: {url.path}")
           if missing:
               raise SystemExit("\n".join(missing))
           PY

@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 const frontend = 'http://localhost:3041';
 const backend = 'http://127.0.0.1:8041';
 const dataDir = '.local-test/consolidation';
-const reportDir = 'docs/reports/schedule-ux';
+const reportDir = dataDir + '/results/schedule-ux';
 const auth = JSON.parse(await readFile(dataDir + '/auth.json', 'utf8'));
 const manifest = JSON.parse(await readFile(dataDir + '/fixture.json', 'utf8'));
 const fixture = manifest.issue_navigation;
