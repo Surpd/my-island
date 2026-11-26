@@ -268,6 +268,8 @@ test('journal selectors keep existing navigation and matching actions', async ({
     .selectOption('7');
   await page.getByRole('combobox', { name: 'Предмет' }).selectOption('Физика');
   await expect(page.locator('.journal-detail-title')).toContainText('Физика');
+  await expect(page.locator('.modern-journal')).toBeVisible();
+  await page.getByRole('tab', { name: /^III триместр/ }).click();
   await expect(page.getByText('Журнал за выбранный триместр ещё не создан.')).toBeVisible();
   await page.getByRole('tab', { name: /^I триместр/ }).click();
   await expect(page.locator('.modern-journal--archive')).toBeVisible();
