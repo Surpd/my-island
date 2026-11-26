@@ -4188,7 +4188,7 @@ class Database:
                         ' '.join(str(item.get('title') or '').casefold().replace('ё', 'е').split()),
                         numeric_key(item.get('weight')), numeric_key(item.get('max_score')))
 
-            def stored_score_vector(row: dict[str, Any]) -> dict[str, Any]:
+            def stored_score_vector(row: dict[str, Any], *, omit_empty: bool = False) -> dict[str, Any]:
                 raw = row.get("raw_source")
                 if isinstance(raw, str):
                     try:
@@ -4199,7 +4199,8 @@ class Database:
                 if not isinstance(vector, list):
                     vector = existing_result_vectors.get(row.get("id"))
                 try:
-                    return {str(key): value for key, value in vector} if isinstance(vector, list) else {}
+                    return ({str(key): value for key, value in vector if not omit_empty or value not in (None, "")}
+                            if isinstance(vector, list) else {})
                 except (TypeError, ValueError):
                     return {}
 
@@ -4252,9 +4253,10 @@ class Database:
                 candidates = [row for row in existing_assessments if row["id"] not in claimed]
                 same_metadata_rows = [row for row in existing_assessments if row["metadata_signature"] == assessment_metadata(item)]
                 if len(same_metadata_rows) > 1:
-                    old_vectors = [stored_score_vector(row) for row in same_metadata_rows]
+                    # Legacy snapshots reconstruct vectors from nonempty result rows.
+                    old_vectors = [stored_score_vector(row, omit_empty=True) for row in same_metadata_rows]
                     shared_old_vector = old_vectors[0] if old_vectors else {}
-                    incoming_vector = stored_score_vector(item)
+                    incoming_vector = stored_score_vector(item, omit_empty=True)
                     if shared_old_vector and all(vector == shared_old_vector for vector in old_vectors[1:]) and incoming_vector != shared_old_vector:
                         raise ValueError("Неоднозначное сопоставление одинаковых колонок журнала: предыдущие оценки сохранены")
                 ranked = [(match_evidence(row, item), row) for row in candidates]

@@ -13,7 +13,7 @@ from backend.services.google_classroom_sync import sync_classroom_course
 from backend.services.google_live import GoogleLiveClient, GoogleLiveError, GoogleTokenStore, load_google_client
 from backend.services.google_oauth import google_config
 from backend.services.journal_group_labels import JournalGroupLabelConflict
-from backend.services.journal_import import (classify_journal_values, deferred_grade7_second_period_subject,
+from backend.services.journal_import import (DuplicateJournalStudentRows, classify_journal_values, deferred_grade7_second_period_subject,
                                              parse_journal_values, subject_period_from_title, sync_journal_values)
 from backend.services.journal_source_settings import load_source_settings, select_sync_tabs
 from backend.services.teacher_directory import SHEET_NAME, sync_teacher_directory
@@ -425,7 +425,7 @@ def _refresh_grade_journal_locked(database: Database, settings: Settings, grade:
 
 def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tabs, *, term_number, dry_run, run_id,
                              selected_sheet_ids, preflight_token, trigger_kind="manual"):
-    """Plan selected tabs with one Google read each, then write only if all pass."""
+    """Plan selected tabs with one Google read each before writing their snapshots."""
     year = "2026/27"
     scope = database.journal_import_scope(target_id, grade, year)
     sources = scope["sources"]
@@ -521,7 +521,8 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
             prepared.append((row, label, parsed))
         except Exception as error:
             diagnostic = _journal_error_diagnostic(error)
-            row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"])
+            row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"],
+                       error_details=diagnostic["details"])
 
     def metadata_identity(tabs):
         return sorted((str(tab["sheetId"]), str(tab["title"])) for tab in tabs
@@ -554,7 +555,11 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
                 prepared = [entry for entry in prepared if entry[0]["sheet_id"] in chosen]
     elif not dry_run and not prepared and not rows:
         message = "Нет подключённых предметных вкладок. Сначала выберите их при подключении."
-    blocked = bool(message) or not prepared or (not dry_run and any(row["status"] == "error" for row in rows))
+    # A newly selected import keeps its all-pass preflight. An already
+    # connected workbook can refresh each healthy tab independently.
+    blocked = bool(message) or not prepared or (
+        is_selection and not dry_run and any(row["status"] == "error" for row in rows)
+    )
     own_run = None
     if not dry_run and not blocked and is_selection:
         own_run = database.start_journal_sync(target_id, grade, None, "manual", book_lock_held=True)
@@ -573,7 +578,8 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
             except Exception as error:
                 diagnostic = _journal_error_diagnostic(error)
                 row.pop("counts", None)
-                row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"])
+                row.update(status="error", error_code=diagnostic["code"], error=diagnostic["message"],
+                           error_details=diagnostic["details"])
             if run_id is not None:
                 try:
                     database.update_journal_sync_progress(run_id, {
@@ -589,7 +595,7 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
             if row.get("connected") and row.get("status") == "error":
                 label, _ = subject_period_from_title(row["subject"])
                 database.record_journal_failure(
-                    target_id, label, row["error"], code=row.get("error_code"),
+                    target_id, label, row["error"], code=row.get("error_code"), details=row.get("error_details"),
                     grade=grade, spreadsheet_title=title, sheet_title=row["subject"],
                     sheet_id=row["sheet_id"],
                 )
@@ -614,6 +620,9 @@ def _refresh_scoped_journal(database, client, grade, target_id, title, valid_tab
 def _journal_error_diagnostic(error: Exception) -> dict[str, str]:
     """Return admin-safe diagnostics; never copy request URLs, tokens, or roster rows to logs."""
     from backend.services.google_live import GoogleApiError
+    if isinstance(error, DuplicateJournalStudentRows):
+        return {"code": "duplicate_roster_row", "message": "В журнале повторяются строки ученика.",
+                "details": str(error)}
     if isinstance(error, JournalGroupLabelConflict):
         return {"code": "journal_group_label_conflict", "message": str(error), "details": "Прежние оценки и связи сохранены."}
     if isinstance(error, ValueError):

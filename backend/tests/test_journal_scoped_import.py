@@ -245,6 +245,42 @@ class ScopedImportTests(unittest.TestCase):
         self.assertEqual(failed["assessments"], before["assessments"])
         self.assertEqual(failed["source"]["id"], source["id"])
 
+    def test_connected_scheduled_refresh_writes_healthy_tabs_around_preflight_error(self):
+        for sheet_id, title in enumerate(("Алгебра", "Русский язык", "История"), start=1):
+            self.source(sheet_id, title)
+        previous = self.db.journal_detail(next(row["id"] for row in self.rows() if row["sheet_id"] == "2"))
+        self.db.set_journal_auto_sync(BOOK, True, grade=6, term_number=1)
+        self.tabs((1, "Алгебра"), (2, "Русский язык"), (3, "История"))
+        self.google.sheet_values.side_effect = lambda _, address, **kwargs: (
+            [*FIRST, ["Fixture Only", "р"]] if "Русский язык" in address else [*FIRST[:-1], ["Fixture Only", 5]]
+        )
+        result = self.refresh(term_number=1, trigger_kind="scheduled")
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual([tab["status"] for tab in result["tabs"]], ["success", "error", "success"])
+        self.assertEqual((result["successful_tabs"], result["failed_tabs"]), (2, 1))
+        failed = self.db.journal_detail(previous["source"]["id"])
+        self.assertEqual(failed["source"]["last_error_code"], "duplicate_roster_row")
+        self.assertIn("5 и 6", failed["source"]["last_error_details"])
+        self.assertEqual(failed["assessments"], previous["assessments"])
+
+    def test_legacy_duplicate_columns_ignore_blank_cells_but_reject_changed_marks(self):
+        values = [["Дата", "01.09", "01.09"], ["Работа", "Контрольная", "Контрольная"],
+                  ["Вес", 1, 1], ["Оценка", 5, 5], ["Fixture One", 0, 0],
+                  ["Fixture Two", "р", "р"], ["Fixture Three", "", ""]]
+        self.source(1, "Алгебра", values)
+        source_id = self.rows()[0]["id"]
+        with self.db.connection() as conn:
+            self.db.execute(conn, "UPDATE journal_assessments SET raw_source=json_remove(raw_source, '$.score_vector') WHERE source_id=?", (source_id,))
+        before = self.db.journal_detail(source_id)
+        self.source(1, "Алгебра", values)
+        refreshed = self.db.journal_detail(source_id)
+        self.assertEqual([a["id"] for a in refreshed["assessments"]], [a["id"] for a in before["assessments"]])
+        self.assertFalse(any(row["change_kind"] != "added" for row in self.db.journal_cell_activity(source_id)["items"]))
+        changed = [*values[:4], ["Fixture One", 1, 0], *values[5:]]
+        with self.assertRaisesRegex(ValueError, "Неоднозначное сопоставление"):
+            self.source(1, "Алгебра", changed)
+        self.assertEqual(self.db.journal_detail(source_id), refreshed)
+
     def test_partial_choice_refreshes_only_connected_tabs_and_keeps_omitted_existing_source(self):
         self.source(1, "I · История")
         self.source(6, "II · История: архивный курс", SECOND)

@@ -2,10 +2,25 @@ from __future__ import annotations
 
 import unittest
 
-from backend.services.journal_import import classify_journal_values, parse_journal_values
+from backend.services.journal_import import DuplicateJournalStudentRows, classify_journal_values, parse_journal_values
 
 
 class JournalImportParserTests(unittest.TestCase):
+    def test_trailing_statistics_never_become_gradebook_rows(self):
+        grades = [["Дата", "01.09", "01.09"], ["Задание", "Диктант", "Тест"],
+                  ["Вес", 1, 2], ["Оценка", 5, 5], ["Fixture One", 0, "р"],
+                  ["Fixture Two", 5, ""]]
+        stats = [[], ["", 'СТАТИСТИКА "БУДНЕЙ"'],
+                 ["", "Название тренажера / средний балл из 5"], ["", "Тема 1", "Тема 2"],
+                 ["Fixture One", "пройдено", 5], ["Fixture Two", 4, ""]]
+        options = dict(grade=11, subject="Русский язык", sheet_title="Русский язык", period_number=1)
+        parsed = parse_journal_values([*grades, *stats], **options)
+        expected = parse_journal_values(grades, **options)
+        for key in ("students", "assessments", "results", "summaries"):
+            self.assertEqual(parsed[key], expected[key])
+        with self.assertRaisesRegex(DuplicateJournalStudentRows, r"(?i)строки 5 и 7"):
+            parse_journal_values([*grades, ["Fixture One", "р", 1]], **options)
+
     def test_modern_second_period_sheet_uses_c_to_ah_and_typed_ai_to_ao_summaries(self):
         width = 41  # A:AO
         row = lambda: [None] * width

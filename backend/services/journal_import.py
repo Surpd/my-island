@@ -225,6 +225,10 @@ def _section_label(value: object) -> bool:
                 or re.fullmatch(r"(?:[5-9]|1[01])\s*[-–]?\s*[а-яa-z]+|[abc]|[А-ЯЁ]{3,}", str(value or "").strip()))
 
 
+class DuplicateJournalStudentRows(ValueError):
+    pass
+
+
 def parse_journal_values(
     values: Sequence[Sequence[object]], *, grade: int, subject: str, sheet_title: str,
     school_year_start: int = 2026, sheet_id: int | str | None = None, period_number: int | None = None,
@@ -244,6 +248,19 @@ def parse_journal_values(
                         if (_header_kind(_cell(row, 0)) == "date" or _date(_cell(row, 0), school_year_start) is not None)
                         and index + 1 < len(values)
                         and _normalized(_cell(values[index + 1], 0)) == "ученик"]
+    # The senior journal can append exercise statistics below the gradebook.
+    # It repeats the roster under a title and a metric in column B.
+    auxiliary_starts.extend(
+        index for index, row in enumerate(values[:-2])
+        if _normalized(_cell(row, 1)).startswith("статистика ")
+        and not _normalized(_cell(row, 0))
+        and not any(_normalized(cell) for cell in row[2:])
+        and not _normalized(_cell(values[index + 1], 0))
+        and "средний балл" in _normalized(_cell(values[index + 1], 1))
+        and not any(_normalized(cell) for cell in values[index + 1][2:])
+        and not _normalized(_cell(values[index + 2], 0))
+        and sum(bool(_normalized(cell)) for cell in values[index + 2][1:]) >= 2
+    )
     width = max((len(row) for row in values), default=0)
     assessments: list[dict[str, Any]] = []
     students_by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -341,8 +358,14 @@ def parse_journal_values(
                 continue
             student_rows.append((row_index, name, current_marker))
 
+        seen_students: dict[str, int] = {}
         for row_index, name, student_marker in student_rows:
             student_key = f"{_normalized(name)}|{student_marker}"
+            if student_key in seen_students:
+                raise DuplicateJournalStudentRows(
+                    f"Строки {seen_students[student_key]} и {row_index + 1} совпадают в одном разделе журнала."
+                )
+            seen_students[student_key] = row_index + 1
             students_by_key.setdefault((student_marker, student_key), {
                 "student_name": name, "student_key": student_key, "group_marker": student_marker,
                 "entry_kind": "team" if (re.match(r"^(?:команда|team)\b", _normalized(name)) or
