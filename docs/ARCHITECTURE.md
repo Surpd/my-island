@@ -8,7 +8,7 @@ Telegram Mini App authentication is server-side. `initData` is checked with the 
 
 Runtime configuration is centralized in `backend/config.py`; browser code reads only the public `VITE_API_BASE_URL` value from the build environment. `DATABASE_URL` selects the Postgres/Supabase connection for the same repository methods; when it is present, startup does not mutate schema and migrations remain an explicit operator action. Supabase Auth is not used: Data API roles `anon` and `authenticated` have no table grants or policies. The backend verifies Telegram `initData`, uses a privileged server-side database connection, and scopes personal queries through its internal user-to-identity mapping.
 
-Google boundaries are split into OAuth URL preparation, deterministic Sheets matrix normalization, and background snapshot replacement. The intended account is `antischool.island@gmail.com`; a normal OAuth web application client is required, not a service account. Classroom reads use courses, student coursework, and student-submissions read scopes. Current 2026/27 journals use their own normalized sources/assessments/results domain and never write back to Google.
+Google boundaries are split into OAuth URL preparation, deterministic Sheets matrix normalization, and background snapshot replacement. The intended account is `antischool.island@gmail.com`; a normal OAuth web application client is required, not a service account. The exact requested scopes, conditional Sheets write grant and credential handling are documented in [Integrations](INTEGRATIONS.md). Current 2026/27 journals use their own normalized sources/assessments/results domain and never write back to Google.
 
 ## Identity approval
 
@@ -22,7 +22,7 @@ Journal roster is deliberately outside that approval sequence. `journal_students
 
 Journal source markers are mapped independently across `base_class_name`, `subject_subgroup`, `classroom_course_id`, and `exam_track`. An optional `group_id` is only an explicit internal app link; it must not be used to encode all of those dimensions in one group name. The confirmed Grade 9 Mathematics structure is three canonical instructional groups: `A`, `B`, and `C`. Old `9-1`/`9-2`/`9-3` markers are bounded source aliases only, never runtime group identifiers. Base classes, Classroom courses, and exam tracks remain separate dimensions and are linked only by explicit evidence.
 
-Schedule architecture is defined in `SCHEDULE_ARCHITECTURE.md`. The approved
+The published schedule and its runtime contract are documented in [Schedule](SCHEDULE.md). The approved
 canonical template is the semantic source of truth; raw ingestion retains
 values, formatting, merges, notes, provenance and structural fingerprints.
 Legacy Schedule Integration v1 is a migration-only compatibility boundary and
@@ -38,9 +38,8 @@ Initial bootstrap may use Groq for ambiguous semantic units, but Groq is behind 
 
 Schedule entries can carry an extensible `audience_rule` and resolved-audience diagnostics. Rules support canonical cohorts, union/intersection, exclusion/complement, and explicit exceptions, so a residual lesson does not require a fake permanent group.
 
-## Integrations
+## Released runtime and operational boundaries
 
-- Google Sheets: server-side read boundary and deterministic parser are ready; the first local grant is still required before live reads.
-- Google Classroom: course/courseWork/studentSubmission reads use the same OAuth token and no service-account impersonation.
-- Supabase/Postgres: migrations `001`–`016` are the schema contract. Migrations `010`–`012` add explicit school-group dimensions/provenance, archive legacy schedule runtime, and reconcile Grade 9 Math to A/B/C. Migrations `013`–`016` add School Directory staging/review, temporal constraints, relationship validation, versioned/immutable manual source mappings, FK indexes, and composable schedule audiences. RLS plus revoked `anon`/`authenticated` grants form a deny-by-default Data API boundary, while application authorization and cross-student isolation are enforced in the backend repository layer.
-- Render: `render.yaml` is the API Blueprint. Schema migrations remain an explicit operator step before deploying code that uses them.
+- PostgreSQL migrations [001–058](../backend/migrations) are the applied schema history for Sites 140. Migrations 054–058 added directory revisions, publication receipts, optional weekly Sheets delivery, journal cell events and per-user widget layouts. See [deployment and recovery](DEPLOYMENT.md).
+- [Directory revisions](DIRECTORY_REVISIONS.md) and [live admin editing](ADMIN_LIVE_EDITING.md) cover compare-and-swap semantics, transactional history and protection of open forms. [Personal workspace](PERSONAL_WORKSPACE.md) documents the released versioned layout API. Placement and editing in the UI are follow-up work.
+- [Class workload](CLASS_LOAD_ANALYTICS.md) and [teacher workload](TEACHER_LOAD_ANALYTICS.md) use published weeks. [Mini App operations](MINIAPP_OPERATIONS.md) covers authorized preview and local school read-only access. [Journals](JOURNALS.md) defines period selection, import, matching and visibility.

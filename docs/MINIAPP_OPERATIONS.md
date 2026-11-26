@@ -42,7 +42,7 @@ $unitFiles=@(rg --files components e2e -g '*.test.mjs')
 node --test @unitFiles
 ```
 
-Production-сборка требует явный `VITE_API_BASE_URL`. Frontend публикуется через GPT Sites, backend — через Render. Перед внешним действием сверять все поля `.project-identity.json`; Git push не публикует frontend. Эта интеграция не требует новой миграции.
+Production-сборка требует явный `VITE_API_BASE_URL`. Frontend публикуется через GPT Sites, backend — через Render. Перед внешним действием сверять все поля `.project-identity.json`; Git push не публикует frontend.
 
 Для обезличенной проверки реального источника после сверки принадлежности проекта:
 
@@ -50,4 +50,4 @@ Production-сборка требует явный `VITE_API_BASE_URL`. Frontend 
 python -m backend.scripts.school_integration_smoke --week-start 2026-09-21
 ```
 
-Команда читает реальные профили, группы, нормализованные журналы и canonical-проекции, выводит только счётчики и статусы. Она не заменяет проверку авторизации и интерфейса. Production-релиз и физическая проверка Telegram BackButton/safe areas остаются отдельными этапами; порядок выпуска описан в `SCHOOL_INTEGRATION_RELEASE.md`.
+Команда читает реальные профили, группы, нормализованные журналы и canonical-проекции, выводит только счётчики и статусы. Она не заменяет проверку авторизации и интерфейса. Production-релиз и физическая проверка Telegram BackButton/safe areas остаются отдельными этапами; порядок выпуска описан в `DEPLOYMENT.md`.

@@ -5,7 +5,7 @@ on:
     paths:
       - 'backend/services/canonical_schedule.py'
       - 'backend/tests/test_canonical_schedule.py'
-      - 'docs/SCHEDULE_TEACHER_RANGE_CONTRACT.md'
+      - 'docs/SCHEDULE.md'
       - '.github/workflows/teacher-range.yml'
 
 permissions:

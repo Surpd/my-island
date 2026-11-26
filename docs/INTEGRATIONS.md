@@ -1,40 +1,21 @@
-# Integration contract
+# Интеграции
 
-## Google OAuth
+Точные идентификаторы школьных книг, OAuth-клиента, аккаунта и хостинга хранит [манифест My Island](../.project-identity.json). Перед подключением или внешним действием сверяйте назначение и разрешённый объём доступа.
 
-The technical account is `antischool.island@gmail.com`. A local read-only smoke runner performs one consent, callback/code exchange, account verification, token persistence under ignored `data/`, and Sheets/Classroom reads. Normal runs reuse the stored refresh token; `--reauthorize` is the explicit escape hatch. It does not write Google or database data.
+## Telegram
 
-Create a Google Cloud OAuth client of type **Web application** when ready. Configure this exact local redirect URI:
+Backend проверяет подписанный `initData` с серверным `TELEGRAM_BOT_TOKEN` и выдаёт данные по роли и привязке личности. Браузерная админка использует собственную сессию после одноразового Telegram-кода. Правила ролевого предпросмотра и закрытия его сессии описаны в [Mini App Operations](MINIAPP_OPERATIONS.md).
 
-`http://localhost:8000/api/integrations/google/callback`
+## Google Sheets и Classroom
 
-The first read-only consent request should use only:
+Штатный Google OAuth использует клиент **Web application** школьного аккаунта из манифеста. `openid` и `email` подтверждают аккаунт. Запрашиваются Sheets read, Classroom courses, student submissions и coursework materials read. Операции экспорта расписания требуют явного Sheets write grant. Точный список формирует [google_contract.py](../backend/services/google_contract.py). Ролевые запросы читают подготовленные данные. Сетевые операции Google выполняются в отдельных путях импорта, предпросмотра источника и доставки.
 
-- `https://www.googleapis.com/auth/spreadsheets.readonly` for schedule and current 2026/27 journal spreadsheets;
-- `https://www.googleapis.com/auth/classroom.courses.readonly`;
-- `https://www.googleapis.com/auth/classroom.coursework.students.readonly`;
-- `https://www.googleapis.com/auth/classroom.student-submissions.students.readonly`.
+[Журналы](JOURNALS.md) импортируют и валидируют снимки до записи в БД и никогда не записывают оценки в Google. [Расписание](SCHEDULE.md) имеет отдельный экспорт. Ручной экспорт и настраиваемая доставка опубликованной недели пишут только в утверждённое назначение. Для проверки записи используйте отдельную тестовую книгу. У справочника отдельный реестр источников и неизменяемые снимки. При расхождении запись должна пройти детерминированную проверку и ручное разрешение спорных данных.
 
-The Classroom scopes are for the teacher account’s courses, coursework and student submissions. `openid` and `email` are included only to verify the authorized technical account. Do not replace this with a service account. Run `python -m backend.scripts.google_oauth_smoke` for a fresh consent flow, or add `--reuse` to use the ignored local refresh token. Google calls remain outside Student/Teacher request handlers; schedule, Classroom, and journal importers normalize a complete snapshot before transactional database replacement. No Google writes are implemented.
+## Настройка и переподключение
 
-Current journal sync uses the separate 2026/27 grade spreadsheets recorded in the project context. Grade 9 Mathematics is normalized into `journal_sources`, `journal_assessments`, `journal_students`, and `journal_results`; the roster is usable even when `identity_id` is null. Its confirmed canonical instructional groups are A/B/C. Legacy `9-1`/`9-2`/`9-3` source markers normalize to A/B/C in the bounded compatibility path; base class, Classroom course, and exam track remain separate optional mapping fields.
+- Локально зарегистрируйте `http://localhost:8000/api/integrations/google/callback`. `python -m backend.scripts.google_oauth_smoke` проверяет согласие, аккаунт и чтение. Используйте параметр `--reuse` для сохранённого токена или `--reauthorize` для явного обновления согласия.
+- Для продакшена callback в Google Cloud должен точно совпадать с `GOOGLE_OAUTH_REDIRECT_URI` подтверждённого Render API. Предполагаемый адрес по манифесту — `https://my-island-api.onrender.com/api/integrations/google/callback`. Перед использованием проверьте его по конфигурации. Проверьте `GOOGLE_OAUTH_ALLOWED_EMAIL`, миграцию 032 и секрет `GOOGLE_OAUTH_TOKEN_ENCRYPTION_KEY`. При первоначальной настройке сгенерируйте Fernet key в закрытой среде. Храните стабильный ключ в Render и защищённом наборе восстановления.
+- Подключение из настроек админки проверяет одноразовый state, аккаунт, Sheets scope и доступ к заданной книге до замены токена. Backend шифрует токен в PostgreSQL. Внешний runtime fallback — `GOOGLE_OAUTH_REFRESH_TOKEN` или закрытый локальный `data/google-oauth-token.json`. Токены не выдаются клиенту.
 
-School Directory sources use the shared `school_sources` registry and immutable snapshots/records. Bootstrap stages candidates with source coordinates/evidence before canonical apply. Incremental sync is fingerprint/diff-first; unchanged records bypass semantic work, and conflicting or structurally uncertain records remain unresolved. Groq is the intended semantic provider, with the model selected by configuration after a representative benchmark. Neither Groq nor a Google adapter may create canonical people/groups directly.
-
-## Runtime env checklist
-
-Fill now for local Telegram verification: `DEV_AUTH_ENABLED=true` is safe only with `APP_ENV=development`; `TELEGRAM_BOT_TOKEN` is needed for signed Telegram `initData` tests and stays server-only.
-
-Fill for real Postgres after the migration is approved/applied: `DATABASE_URL`, copied from Supabase’s Connect dialog. The backend uses it server-side via psycopg and does not run migrations on startup.
-
-Hosted deployment also requires correct `CORS_ORIGINS`, `BACKEND_PUBLIC_URL`, and `FRONTEND_PUBLIC_URL`. Apply database migrations before rolling out backend code that queries the new schema.
-
-### Admin self-service Google reconnect
-
-The admin Settings page can start a Google OAuth reconnect. For a hosted deployment, configure these one-time prerequisites before enabling it:
-
-- Add `https://<BACKEND_PUBLIC_URL-host>/api/integrations/google/callback` to the OAuth client's authorized redirect URIs and set the exact same value as `GOOGLE_OAUTH_REDIRECT_URI` in Render.
-- Generate one Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store it as the Render secret `GOOGLE_OAUTH_TOKEN_ENCRYPTION_KEY`. Keep this key stable: it is required to decrypt the token stored in Postgres.
-- Set `GOOGLE_OAUTH_ALLOWED_EMAIL` to the exact school Google account and apply migration `032_google_oauth_self_service.sql`.
-
-The callback validates the one-time state, expected account, Sheets read scope, and access to the configured spreadsheet before replacing the stored credential. It stores the complete token response encrypted in Postgres; refresh tokens never pass through frontend JavaScript or appear in API responses. Existing environment/file tokens remain a fallback until a DB credential is saved. Google OAuth Testing mode still applies Google's token-expiry policy; this flow makes renewal self-service but cannot bypass Google's publishing/verification requirements.
+Статус OAuth publishing и verification нужно подтвердить в Google Cloud проекта. Перевод External приложения из Testing в In production и верификация чувствительных scope — отдельные шаги. У Testing действуют ограничения аудитории и срока токена. Для проверки перед выпуском сверяйте контакты, публичную политику обработки данных, callback, возможность подтверждения доменов и все запрашиваемые scope, включая условный Sheets write. Для демонстрации используйте тестовые данные. [Требования Google к OAuth-приложениям](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview).

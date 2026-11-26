@@ -59,3 +59,9 @@ UI/UX Pro Max: плотность, иерархия, focus и контраст. 
 не применяются к рабочей платформе. Frontend Design: осмысленный характер,
 единая типографика, минимум декоративных элементов. Vercel Web Interface Guidelines:
 семантика, подписи полей, клавиатура, reduced motion и адаптивные границы.
+
+## Дизайнерские материалы
+
+[PR №51](https://github.com/Surpd/my-island/pull/51) и ветка `codex/visual-directions` содержат эталон конструктора, направления A/Б и результаты их сравнения. [Редактируемая доска](design/visual-audit.fig) содержит структуру интерфейсов, палитру и встроенные эталонные кадры.
+
+Исходные визуальные материалы сохранены в проверенном дереве релиза. Для новых материалов используйте синтетические данные. [Визуальный разбор](https://github.com/Surpd/my-island/blob/9a1845171cfa87d5eb13db00fd449ad2eb4a0e68/docs/reports/architecture-audit-2026-11-25/visual.md) · [Вариант экспорта с закреплёнными классами](https://github.com/Surpd/my-island/tree/9a1845171cfa87d5eb13db00fd449ad2eb4a0e68/docs/reports/school-sheet-export/class-layout) · [Конструктор на широком экране и телефоне](https://github.com/Surpd/my-island/tree/9a1845171cfa87d5eb13db00fd449ad2eb4a0e68/docs/reports/schedule-ux) · [Альтернативы отображения журнала](https://github.com/Surpd/my-island/tree/9a1845171cfa87d5eb13db00fd449ad2eb4a0e68/docs/reports/admin-journal-readability).
