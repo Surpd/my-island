@@ -518,22 +518,16 @@ def _connected_current_journal_refresh_plan(rows: list[dict[str, Any]], *, requi
             and not row.get("excluded_from_journals")
             and (not require_auto or row.get("auto_sync_enabled"))
         )]
-        if grade <= 9:
-            # II trimester is the explicitly approved operational scope even
-            # while older UI state still marks those assigned tabs archived.
-            eligible = [row for row in connected if int(row["term_number"]) == 2
-                        and row.get("period_status") in {"current", "archived"}]
-            term_number = 2
-        else:
-            eligible = [row for row in connected if row.get("period_status") == "current"]
-            terms = {int(row["term_number"]) for row in eligible}
-            if len(terms) > 1:
-                skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "ambiguous_current_period"})
-                continue
-            term_number = next(iter(terms)) if terms else None
-            if term_number is not None and term_number not in (1, 2):
-                skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "unsupported_current_period"})
-                continue
+        from backend.services.journal_periods import valid_journal_period
+        eligible = [row for row in connected if row.get("period_status") == "current"]
+        terms = {int(row["term_number"]) for row in eligible}
+        if len(terms) > 1:
+            skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "ambiguous_current_period"})
+            continue
+        term_number = next(iter(terms)) if terms else None
+        if term_number is not None and not valid_journal_period(grade, term_number):
+            skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "unsupported_current_period"})
+            continue
         if not eligible or term_number is None:
             skipped.append({"spreadsheet_id": spreadsheet_id, "grade": grade, "reason": "no_connected_current_sources"})
             continue

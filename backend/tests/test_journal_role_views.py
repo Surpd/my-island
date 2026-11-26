@@ -350,12 +350,13 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertTrue(admin_detail["source"]["excluded_from_journals"])
         self.assertTrue(admin_detail["assessments"])
 
-    def test_deferred_grade7_second_period_math_is_preserved_but_hidden_from_role_views(self):
+    def test_excluded_journal_is_preserved_and_reappears_after_manual_enable(self):
         deferred_source = self.source_ids[1]
         with self.database.connection() as connection:
             self.database.execute(connection, """UPDATE journal_sources
                 SET grade = 7, subject = 'Математика', term_number = 2
                 WHERE id = ?""", (deferred_source,))
+        self.database.set_journal_source_mode(deferred_source, "excluded")
 
         student_items = self.client.get(
             "/api/student/journals", headers={"X-Dev-Auth": "student-auth"}
@@ -375,6 +376,10 @@ class JournalRoleViewTests(unittest.TestCase):
         self.assertEqual(admin_detail["source"]["term_number"], 2)
         self.assertEqual(admin_detail["source"]["subject"], "Математика")
         self.assertTrue(admin_detail["assessments"])
+        self.database.set_journal_source_mode(deferred_source, "manual")
+        revived = self.client.get("/api/student/journals", headers={"X-Dev-Auth": "student-auth"}).json()["items"]
+        self.assertIn(deferred_source, {item["source"]["source_id"] for item in revived})
+        self.assertEqual(self.database.journal_detail(deferred_source)["assessments"], admin_detail["assessments"])
 
     def test_unmapped_all_marker_falls_back_only_to_assigned_canonical_class(self):
         with self.database.connection() as connection:

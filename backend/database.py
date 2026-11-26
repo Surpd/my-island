@@ -4107,13 +4107,15 @@ class Database:
                 raise ValueError("Период не соответствует системе обучения этого класса.")
             self._lock_journal_period(connection, (source["spreadsheet_id"], source["grade"], source["academic_year"]))
             if source.get("sheet_id") is not None:
-                source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
+                source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at, excluded_from_journals FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id = ?", (source["spreadsheet_id"], str(source["sheet_id"]))).fetchone()
                 if not source_row:
                     # Upgrade pre-stable-ID sources in place, retaining their
                     # student mappings, assessment IDs and grade history.
-                    source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
+                    source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at, excluded_from_journals FROM journal_sources WHERE spreadsheet_id = ? AND sheet_id IS NULL AND sheet_title = ?", (source['spreadsheet_id'], source['sheet_title'])).fetchone()
             else:
-                source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
+                source_row = self.execute(connection, "SELECT id, grade, academic_year, term_number, period_status, last_synced_at, excluded_from_journals FROM journal_sources WHERE spreadsheet_id = ? AND sheet_title = ?", (source["spreadsheet_id"], source["sheet_title"])).fetchone()
+            if source_row and source_row["excluded_from_journals"]:
+                raise ValueError("Вкладка отключена в My Island. Включите её в настройках синхронизации.")
             expected_term = source.get("expected_term")
             if expected_term is not None:
                 if source.get("term_number") != expected_term:
@@ -4554,9 +4556,6 @@ class Database:
                        AND mapped_group.canonical IS TRUE AND mapped_group.archived_at IS NULL
                      JOIN journal_sources js ON js.id = gm.source_id AND js.period_status = 'current'
                        AND js.excluded_from_journals IS FALSE AND js.classification IS NULL
-                       AND NOT (js.grade = 7 AND js.term_number = 2
-                         AND (js.subject LIKE '%Математик%' OR js.subject LIKE '%математик%'
-                           OR js.subject LIKE '%Физик%' OR js.subject LIKE '%физик%'))
                      JOIN journal_assessments ja ON ja.source_id = js.id AND ja.active IS TRUE
                        AND ja.group_marker IN (gm.group_marker, 'all')
                      JOIN journal_students js2 ON js2.source_id = js.id AND js2.group_marker = gm.group_marker
@@ -4618,9 +4617,6 @@ class Database:
                  FROM users u
                  JOIN journal_sources js ON js.id = ?
                    AND js.excluded_from_journals IS FALSE AND js.classification IS NULL
-                   AND NOT (js.grade = 7 AND js.term_number = 2
-                     AND (js.subject LIKE '%Математик%' OR js.subject LIKE '%математик%'
-                       OR js.subject LIKE '%Физик%' OR js.subject LIKE '%физик%'))
                 WHERE u.id = ? AND u.identity_id IS NOT NULL AND (
                   EXISTS (
                     SELECT 1 FROM journal_group_mappings gm
@@ -5452,9 +5448,6 @@ class Database:
                     AND canonical_identity.kind = 'student' AND canonical_identity.status = 'active'
                 JOIN journal_sources source ON source.id = student.source_id
                     AND source.excluded_from_journals IS FALSE AND source.classification IS NULL
-                    AND NOT (source.grade = 7 AND source.term_number = 2
-                      AND (source.subject LIKE '%Математик%' OR source.subject LIKE '%математик%'
-                        OR source.subject LIKE '%Физик%' OR source.subject LIKE '%физик%'))
                 WHERE student.identity_id = ? AND student.active IS TRUE AND TRIM(student.group_marker) <> ''
                     AND student.entry_kind = 'individual' AND student.match_status = 'linked'
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number, source.id""",
@@ -5510,9 +5503,6 @@ class Database:
                 FROM journal_group_mappings mapping
                 JOIN journal_sources source ON source.id = mapping.source_id
                     AND source.excluded_from_journals IS FALSE AND source.classification IS NULL
-                    AND NOT (source.grade = 7 AND source.term_number = 2
-                      AND (source.subject LIKE '%Математик%' OR source.subject LIKE '%математик%'
-                        OR source.subject LIKE '%Физик%' OR source.subject LIKE '%физик%'))
                 ORDER BY source.grade, source.subject, source.academic_year, source.term_number,
                     source.id, mapping.group_marker""").fetchall()
             candidates = [dict(row) for row in candidates]
@@ -5523,9 +5513,6 @@ class Database:
                     NULL AS exam_track
                 FROM journal_sources source
                 WHERE source.excluded_from_journals IS FALSE AND source.classification IS NULL
-                  AND NOT (source.grade = 7 AND source.term_number = 2
-                    AND (source.subject LIKE '%Математик%' OR source.subject LIKE '%математик%'
-                      OR source.subject LIKE '%Физик%' OR source.subject LIKE '%физик%'))
                   AND NOT EXISTS (SELECT 1 FROM journal_group_mappings mapping
                     WHERE mapping.source_id = source.id AND mapping.group_marker = 'all')
                   AND EXISTS (SELECT 1 FROM journal_students marker_student

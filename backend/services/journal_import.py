@@ -133,13 +133,6 @@ def subject_period_from_title(title: str) -> tuple[str, int | None]:
     return (subject or title.strip()), term
 
 
-def deferred_grade7_second_period_subject(title: str, period_override: int | None = None) -> bool:
-    subject, explicit_period = subject_period_from_title(title)
-    period = explicit_period if explicit_period is not None else period_override
-    normalized = _normalized(subject).replace(" / ", "/")
-    return period == 2 and bool(re.search(r"\b(?:математика|физика)\b", normalized))
-
-
 def _date(value: object, school_year_start: int) -> str | None:
     if value is None:
         return None
@@ -518,14 +511,13 @@ def sync_journal_values(
     sheet_id: int | str | None = None, expected_term: int | None = None,
 ) -> dict[str, int]:
     canonical_subject, explicit_term = subject_period_from_title(sheet_title)
-    if grade == 7 and deferred_grade7_second_period_subject(canonical_subject, expected_term or explicit_term):
-        raise ValueError("Импорт математики и физики 7 класса за II период временно отложен.")
     parsed = parse_journal_values(values, grade=grade, subject=canonical_subject, sheet_title=sheet_title,
                                   sheet_id=sheet_id, period_number=expected_term or explicit_term)
     school_year_start = 2026
     school_year = f"{school_year_start}/{str(school_year_start + 1)[-2:]}"
     source = {"spreadsheet_id": spreadsheet_id, "spreadsheet_title": spreadsheet_title, "grade": grade,
               "subject": canonical_subject, "sheet_title": sheet_title, "sheet_id": sheet_id,
-              "academic_year": school_year, "term_number": explicit_term, "expected_term": expected_term,
+              "academic_year": school_year, "term_number": explicit_term if explicit_term is not None else expected_term,
+              "expected_term": expected_term,
               "source_hash": parsed["source_hash"]}
     return database.save_journal_snapshot(source, parsed["assessments"], parsed["results"], parsed["students"], parsed["summaries"])

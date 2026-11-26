@@ -263,6 +263,22 @@ class ScopedImportTests(unittest.TestCase):
         self.assertIn("5 и 6", failed["source"]["last_error_details"])
         self.assertEqual(failed["assessments"], previous["assessments"])
 
+    def test_connected_refresh_reports_a_missing_tab_without_hiding_other_results(self):
+        self.source(1, "Алгебра")
+        self.source(2, "История")
+        missing_id = next(row["id"] for row in self.rows() if row["sheet_id"] == "2")
+        previous = self.db.journal_detail(missing_id)
+        self.tabs((1, "Алгебра"))
+        self.google.sheet_values.side_effect = None
+        self.google.sheet_values.return_value = FIRST
+        result = self.refresh(term_number=1)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual((result["successful_tabs"], result["failed_tabs"]), (1, 1))
+        self.assertEqual(result["tabs"][1]["error_code"], "sheet_missing")
+        failed = self.db.journal_detail(missing_id)
+        self.assertEqual(failed["source"]["last_error_code"], "sheet_missing")
+        self.assertEqual(failed["assessments"], previous["assessments"])
+
     def test_legacy_duplicate_columns_ignore_blank_cells_but_reject_changed_marks(self):
         values = [["Дата", "01.09", "01.09"], ["Работа", "Контрольная", "Контрольная"],
                   ["Вес", 1, 1], ["Оценка", 5, 5], ["Fixture One", 0, 0],
