@@ -14,7 +14,6 @@ function secondAdminFixture(): { token: string; id: string } {
     'assert PROFILE == "e2e" and DB_PATH.is_file() and MARKER.read_text() == MARKER_CONTENT',
     'database = Database(path=DB_PATH)',
     'actor = database.get_or_create_user(990010, "admin")',
-    'database.ensure_bootstrap_roles(990010, ("admin",))',
     'code, _ = database.create_admin_login_challenge(actor["id"])',
     'token, _ = database.consume_admin_login_challenge(code)',
     'print(json.dumps({"token": token, "id": str(actor["id"])}))',
