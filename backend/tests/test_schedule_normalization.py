@@ -255,8 +255,6 @@ class ScheduleNormalizationApiTests(unittest.TestCase):
             database = Database(Path(directory) / "normalization.db")
             database.initialize()
             actor = database.get_or_create_user(778811, "admin")
-            with database.connection() as connection:
-                database.execute(connection, "INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test')", (actor["id"],))
             challenge, _ = database.create_admin_login_challenge(actor["id"])
             token, _ = database.consume_admin_login_challenge(challenge)
             token = token[0] if isinstance(token, tuple) else token

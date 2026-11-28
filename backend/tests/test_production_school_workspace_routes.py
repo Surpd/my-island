@@ -17,8 +17,8 @@ class ProductionDatabaseStub(Database):
     def get_admin_browser_session(self, token):
         return {"telegram_user_id": 123, "user_id": "admin-uuid"} if token == "valid" else None
 
-    def get_user_by_id(self, user_id):
-        return {"id": user_id} if user_id == "admin-uuid" else None
+    def get_access_subject(self, *, user_id=None, telegram_id=None):
+        return {"id": user_id, "roles": ["admin"]} if user_id == "admin-uuid" else None
 
     def user_has_role(self, user_id, role):
         return user_id == "admin-uuid" and role == "admin"

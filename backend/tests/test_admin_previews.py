@@ -284,21 +284,20 @@ class AdminPreviewRoutesTests(unittest.TestCase):
             admin_selection = self.client.post("/api/auth/session", headers={"X-Telegram-Init-Data": signed_init_data(88003)}, json={"role": "admin"})
         self.assertEqual(admin_selection.status_code, 200, admin_selection.text)
         actor = self.database.find_user(88003)
-        self.assertEqual(self.database.list_user_roles(actor["id"]), ["student"])
+        self.assertEqual(self.database.list_user_roles(actor["id"]), [])
         self.assertNotIn("admin", admin_selection.json()["user"]["roles"])
 
         with patch.dict("os.environ", test_auth_env):
             teacher_selection = self.client.post("/api/auth/session", headers={"X-Telegram-Init-Data": signed_init_data(88004)}, json={"role": "teacher"})
         self.assertEqual(teacher_selection.status_code, 200, teacher_selection.text)
         teacher_actor = self.database.find_user(88004)
-        self.assertEqual(self.database.list_user_roles(teacher_actor["id"]), ["student"])
+        self.assertEqual(self.database.list_user_roles(teacher_actor["id"]), [])
         self.assertNotIn("teacher", teacher_selection.json()["user"]["roles"])
 
         with patch.dict("os.environ", test_auth_env):
             claim = self.client.post("/api/identity/claim", headers={"X-Telegram-Init-Data": signed_init_data(88005)}, json={"identity_id": str(target["id"]), "role": "admin"})
-        self.assertEqual(claim.status_code, 400)
-        claim_actor = self.database.find_user(88005)
-        self.assertEqual(self.database.list_user_roles(claim_actor["id"]), ["student"])
+        self.assertEqual(claim.status_code, 410)
+        self.assertIsNone(self.database.find_user(88005))
 
 
 if __name__ == "__main__":

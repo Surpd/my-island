@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.encoders import jsonable_encoder
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StrictBool, field_validator
 from datetime import date, datetime, timedelta, timezone
 import json
@@ -27,8 +28,8 @@ from backend.database import Database
 from backend.services.school_preview_workspace import SchoolPreviewDatabase
 from backend.services.journal_analytics import journal_analytics, journal_overview
 from backend.services.personal_workspace import LayoutUpdate, read_layout, save_layout
-from backend.services.auth import AuthError, resolve_auth
-from backend.services.identity import claim_identity, review_identity_claim
+from backend.services.auth import AuthError, live_telegram_subject, resolve_auth
+from backend.services.account_access import AccessError, access_snapshot, bootstrap_manager, change_account, review_claim as resolve_access_claim
 from backend.services.admin import (
     add_membership, assign_homeroom, assign_teacher, create_group, create_identity,
     publish_information,
@@ -70,7 +71,7 @@ from backend.services.student_membership_reconciliation import run_live_dry_run,
 from backend.services.student_membership_apply import StudentMembershipApplyBlocked, apply_reviewed_plan, _readback
 from backend.services.student_membership_manual_resolutions import load_manual_resolutions
 from backend.services.student_membership_reconciliation import fetch_authoritative_sources, load_production_snapshot
-from backend.services.telegram_admin_bot import handle_admin_code_update
+from backend.services.telegram_admin_bot import handle_telegram_update, notify_registration_result
 
 logger = logging.getLogger(__name__)
 _APPROVED_SCHOOL_PROJECT = "kmrcbewmxeqqxfauiwyy"
@@ -101,9 +102,18 @@ class SessionPayload(BaseModel):
     role: str = "student"
 
 
-class ClaimPayload(BaseModel):
-    identity_id: str
-    role: str = "student"
+class AccessReviewPayload(BaseModel):
+    decision: Literal["approve", "reject"]
+    identity_id: str | None = None
+    replace_user_id: str | None = None
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class AccessAccountPayload(BaseModel):
+    action: Literal["link", "revoke", "restore", "grant_admin", "remove_admin"]
+    identity_id: str | None = None
+    replace_user_id: str | None = None
+    expected_identity_id: str | None = None
 
 
 def _student_grade(profile: dict | None) -> str:
@@ -115,6 +125,7 @@ def _student_grade(profile: dict | None) -> str:
 
 class ReviewPayload(BaseModel):
     status: str
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class IdentityPayload(BaseModel):
@@ -301,7 +312,7 @@ class JournalTeamMembersPayload(BaseModel):
 
 
 class BrowserCodePayload(BaseModel):
-    code: str
+    code: str = Field(max_length=256)
 
 
 class ReconciliationReviewPayload(BaseModel):
@@ -548,7 +559,7 @@ def create_router(database: Database) -> APIRouter:
 
     def authenticate(init_data: str | None, dev_auth: str | None, telegram_header: str | None = None, browser_session: str | None = None):
         browser_token = browser_session or (dev_auth.removeprefix("browser:") if dev_auth and dev_auth.startswith("browser:") else None)
-        if browser_token:
+        if browser_token and not (telegram_header or init_data):
             session = database.get_admin_browser_session(browser_token)
             if not session:
                 raise HTTPException(status_code=401, detail="Admin browser session is invalid or expired")
@@ -560,14 +571,26 @@ def create_router(database: Database) -> APIRouter:
 
     def authenticated_user(telegram_user: dict):
         if telegram_user.get("browser_session"):
-            return database.get_user_by_id(telegram_user["user_id"])
-        return database.find_user(telegram_user["id"])
+            return database.get_access_subject(user_id=telegram_user["user_id"])
+        return live_telegram_subject(database, telegram_user)
 
     def require_role(telegram_user: dict, role: str):
         user = authenticated_user(telegram_user)
-        if not user or not database.user_has_role(user["id"], role):
+        if not user or role not in user["roles"]:
             raise HTTPException(status_code=403, detail=f"{role.capitalize()} role required")
         return user
+
+    def access_call(operation, *args, **kwargs):
+        try:
+            return operation(database, *args, **kwargs)
+        except AccessError as error:
+            raise HTTPException(status_code=error.status, detail=str(error)) from error
+
+    def notify_claim(background: BackgroundTasks, claim: dict) -> None:
+        settings = get_settings()
+        if settings.telegram_bot_token:
+            background.add_task(notify_registration_result, settings.telegram_bot_token,
+                                claim["telegram_user_id"], claim["status"], claim["reason"], settings.frontend_public_url)
 
     def canonical_backend_enabled() -> bool:
         return get_settings().schedule_backend == "canonical"
@@ -697,7 +720,10 @@ def create_router(database: Database) -> APIRouter:
     def create_admin_browser_challenge(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         actor = require_role(telegram_user, "admin")
-        code, expires_at = database.create_admin_login_challenge(actor["id"])
+        challenge = database.create_admin_login_challenge(actor["id"])
+        if challenge is None:
+            raise HTTPException(status_code=429, detail="Попробуйте запросить код через минуту.")
+        code, expires_at = challenge
         database.record_audit_event("admin_auth.challenge_created", "admin_browser_session", {"expires_at": expires_at}, actor["id"])
         return {"code": code, "expires_at": expires_at, "single_use": True}
 
@@ -760,24 +786,27 @@ def create_router(database: Database) -> APIRouter:
     async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None, alias="X-Telegram-Bot-Api-Secret-Token")):
         settings = get_settings()
         if not settings.telegram_webhook_secret or not x_telegram_bot_api_secret_token or not hmac.compare_digest(
-            x_telegram_bot_api_secret_token, settings.telegram_webhook_secret
+            x_telegram_bot_api_secret_token.encode("utf-8"), settings.telegram_webhook_secret.encode("utf-8")
         ):
             raise HTTPException(status_code=403, detail="Telegram webhook is not authorized")
         try:
             update = await request.json()
         except Exception as error:
             raise HTTPException(status_code=400, detail="Telegram update must be valid JSON") from error
-        handle_admin_code_update(database, update, settings.telegram_bot_token)
+        await run_in_threadpool(handle_telegram_update, database, update, settings.telegram_bot_token, settings.frontend_public_url)
         return {"ok": True}
 
     @router.post("/admin/auth/exchange")
-    def exchange_admin_browser_code(payload: BrowserCodePayload, response: Response):
+    def exchange_admin_browser_code(payload: BrowserCodePayload, response: Response, request: Request):
+        login_db = Database(database_url=database.database_url) if isinstance(database, SchoolPreviewDatabase) else database
+        if not login_db.rate_limit_admin_exchange(request.client.host if request.client else "unknown"):
+            raise HTTPException(status_code=429, detail="Слишком много попыток. Попробуйте через минуту.")
         consumed = database.consume_admin_login_challenge(payload.code.strip())
         if not consumed:
             raise HTTPException(status_code=401, detail="Admin login code is invalid, expired, or already used")
         session_token, user_id = consumed
-        user = database.get_user_by_id(user_id)
-        if not user or not database.user_has_role(user_id, "admin"):
+        user = database.get_access_subject(user_id=user_id)
+        if not user or "admin" not in user["roles"] or not database.get_admin_browser_session(session_token):
             database.revoke_admin_browser_session(session_token)
             raise HTTPException(status_code=403, detail="Admin role required")
         settings = get_settings()
@@ -801,7 +830,7 @@ def create_router(database: Database) -> APIRouter:
         database.record_audit_event("admin_auth.login", "admin_browser_session", {"transport": "browser"}, user_id)
         return {
             "state": "approved",
-            "user": {"id": user["id"], "role": "admin", "roles": database.list_user_roles(user["id"]), "identity_id": user["identity_id"]},
+            "user": {"id": user["id"], "role": "admin", "roles": user["roles"], "identity_id": user["identity_id"]},
             # The HttpOnly cookie remains the primary transport. This browser-origin
             # fallback is needed for hosted sites that block
             # cross-site cookies; the frontend keeps it in sessionStorage only.
@@ -812,7 +841,7 @@ def create_router(database: Database) -> APIRouter:
     def admin_browser_session(x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), my_island_admin_session: str | None = Cookie(default=None)):
         telegram_user = authenticate(None, x_dev_auth, telegram_header=x_telegram_init_data, browser_session=my_island_admin_session)
         user = require_role(telegram_user, "admin")
-        return {"state": "approved", "mode": "browser" if my_island_admin_session or telegram_user.get("browser_session") else "telegram", "user": {"id": user["id"], "role": "admin", "roles": database.list_user_roles(user["id"]), "identity_id": user["identity_id"]}}
+        return {"state": "approved", "mode": "browser" if my_island_admin_session or telegram_user.get("browser_session") else "telegram", "user": {"id": user["id"], "role": "admin", "roles": user["roles"], "identity_id": user["identity_id"]}}
 
     @router.post("/admin/auth/logout")
     def admin_browser_logout(response: Response, x_dev_auth: str | None = Header(default=None), my_island_admin_session: str | None = Cookie(default=None)):
@@ -828,7 +857,7 @@ def create_router(database: Database) -> APIRouter:
     def student_subject(telegram_user: dict, preview_id: str | None):
         actor = authenticated_user(telegram_user)
         if preview_id:
-            if not actor or not database.user_has_role(actor["id"], "admin"):
+            if not actor or "admin" not in actor["roles"]:
                 raise HTTPException(status_code=403, detail="Admin role required for student preview")
             preview = database.get_active_student_preview(preview_id, actor["id"])
             if not preview:
@@ -842,13 +871,13 @@ def create_router(database: Database) -> APIRouter:
             if not target or not canonical or canonical["status"] != "active" or target["kind"] != "student":
                 raise HTTPException(status_code=403, detail="Student preview is invalid or expired")
             return target
-        if not actor or not actor["identity_id"] or not database.user_has_role(actor["id"], "student"):
+        if not actor or not actor["identity_id"] or "student" not in actor["roles"]:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
         return actor
 
     def preview_subject(telegram_user: dict, preview_id: str | None, role: str):
         actor = authenticated_user(telegram_user)
-        if not actor or not database.user_has_role(actor["id"], "admin"):
+        if not actor or "admin" not in actor["roles"]:
             raise HTTPException(status_code=403, detail="Admin role required for preview")
         preview = database.get_active_student_preview(preview_id, actor["id"]) if preview_id else None
         identity_id = preview["target_identity_id"] if preview else None
@@ -862,39 +891,41 @@ def create_router(database: Database) -> APIRouter:
         return database.list_teacher_groups(user["id"])
 
     @router.post("/auth/session")
-    def session(payload: SessionPayload, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+    def session(payload: SessionPayload, request: Request, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(payload.init_data, x_dev_auth, x_telegram_init_data)
         selected_role = payload.role if payload.role in {"student", "teacher", "admin"} else "student"
         if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"}:
             selected_role = telegram_user["role"]
-        # Public role selection is only a selector among roles already held.
-        # New Telegram principals always start as students; privileged roles
-        # are granted only by bootstrap or the explicit admin role manager.
-        initial_role = telegram_user["role"] if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"} else "student"
-        try:
-            user = database.get_or_create_user(telegram_user["id"], initial_role)
-        except ValueError as error:
-            if isinstance(database, SchoolPreviewDatabase):
-                raise HTTPException(status_code=403, detail="An existing school account is required") from error
-            raise
         settings = get_settings()
-        bootstrap_roles = ("teacher", "admin") if telegram_user["id"] in settings.telegram_bootstrap_user_ids else ()
-        user = database.ensure_bootstrap_roles(telegram_user["id"], bootstrap_roles) or user
-        roles = database.list_user_roles(user["id"])
+        if not telegram_user.get("browser_session") and not isinstance(database, SchoolPreviewDatabase):
+            if settings.telegram_bootstrap_user_ids or settings.local_test_mode:
+                bootstrap_manager(database, settings.telegram_bootstrap_user_ids, local_test=settings.local_test_mode)
+            if not telegram_user.get("dev"):
+                database.register_telegram_contact(telegram_user)
+        user = authenticated_user(telegram_user)
+        if not user:
+            raise HTTPException(status_code=403, detail="An existing school account is required")
+        roles = user["roles"]
         if selected_role not in roles:
-            selected_role = "teacher" if "teacher" in roles else ("admin" if "admin" in roles else roles[0] if roles else user["role"])
-        state = "approved" if "admin" in roles or user["identity_id"] else "needs_identity"
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": state, "user": {"id": user["id"], "role": selected_role, "primary_role": selected_role, "roles": roles, "identity_id": user["identity_id"]}}
+            selected_role = user["role"] or "student"
+        if user["access_revoked_at"] is not None:
+            state = "revoked"
+        elif user.get("stale_telegram"):
+            state = "reopen_telegram"
+        elif roles:
+            state = "approved"
+        else:
+            state = "needs_identity"
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": state,
+                "bot_username": settings.telegram_bot_username or getattr(request.app.state, "telegram_bot_username", None),
+                "user": {"id": user["id"], "role": selected_role, "primary_role": selected_role,
+                         "roles": roles, "identity_id": user["identity_id"] if roles else None}}
 
     @router.post("/identity/claim")
-    def create_identity_claim(payload: ClaimPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        initial_role = telegram_user["role"] if telegram_user.get("dev") and telegram_user.get("role") in {"admin", "teacher"} else "student"
-        user = database.get_or_create_user(telegram_user["id"], initial_role)
-        if payload.role not in {"student", "teacher"}:
-            raise HTTPException(status_code=400, detail="Only student or teacher identities can be claimed")
-        claim = claim_identity(database, user["id"], payload.identity_id, payload.role)
-        return {"id": claim["id"], "status": claim["status"]}
+    def create_identity_claim(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        authenticate(init_data, x_dev_auth, x_telegram_init_data)
+        # Collect applicant-supplied details in Telegram without probing the roster.
+        raise HTTPException(status_code=410, detail="Пожалуйста, подайте заявку через школьного Telegram-бота.")
 
     @router.get("/student/today")
     def student_today(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
@@ -906,16 +937,16 @@ def create_router(database: Database) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=400, detail="day must be ISO date") from error
         if not canonical_backend_enabled():
-            return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "schedule": [], "day_block": None, "schedule_issues": [], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
+            return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "canonical_backend_disabled", "schedule": [], "day_block": None, "schedule_issues": [], "homework": [dict(row) for row in database.list_classroom_coursework_for_user(f"identity:{user['identity_id']}")], "announcements": [dict(row) for row in database.list_active_announcements(f"identity:{user['identity_id']}", "student")]}
         projection = student_campus_projection(database, user["identity_id"], requested_day)
         schedule = [item for item in projection.get("items", []) if item.get("date") == requested_day]
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "schedule": schedule, "day_block": None, "schedule_issues": projection.get("issues", []), "homework": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])], "announcements": [dict(row) for row in database.list_active_announcements(user["id"], "student")]}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": projection.get("status"), "schedule": schedule, "day_block": None, "schedule_issues": projection.get("issues", []), "homework": [dict(row) for row in database.list_classroom_coursework_for_user(f"identity:{user['identity_id']}")], "announcements": [dict(row) for row in database.list_active_announcements(f"identity:{user['identity_id']}", "student")]}
 
     @router.get("/student/grades")
     def student_grades(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_official_grades_for_user(user["id"])]}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(row) for row in database.list_official_grades_for_user(f"identity:{user['identity_id']}")]}
 
     @router.get("/student/journals")
     def student_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
@@ -935,8 +966,8 @@ def create_router(database: Database) -> APIRouter:
         return {
             "mode": "dev" if telegram_user.get("dev") else "telegram",
             "state": "approved",
-            "items": [dict(row) for row in database.list_classroom_coursework_for_user(user["id"])],
-            "submissions": [dict(row) for row in database.list_classroom_submissions_for_user(user["id"])],
+            "items": [dict(row) for row in database.list_classroom_coursework_for_user(f"identity:{user['identity_id']}")],
+            "submissions": [dict(row) for row in database.list_classroom_submissions_for_user(f"identity:{user['identity_id']}")],
         }
 
     @router.get("/student/schedule")
@@ -958,20 +989,19 @@ def create_router(database: Database) -> APIRouter:
     def student_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_student_preview_id: str | None = Header(default=None, alias="X-Student-Preview-Id"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = student_subject(telegram_user, x_preview_id or x_student_preview_id)
-        if str(user["id"]).startswith("identity:"):
+        if x_preview_id or x_student_preview_id:
             person = database.get_people_library_person(user["identity_id"])
             if not person:
                 raise HTTPException(status_code=404, detail="Student identity was not found")
             return {"mode": "preview", "state": "approved", "user": {"id": str(person["id"]), "identity_id": str(person["id"]), "role": "student", "display_name": person["display_name"], "class_name": person.get("class_name")}, "groups": [{"id": str(item["id"]), "name": item.get("display_name") or item.get("name")} for item in person.get("groups", [])]}
-        profile = database.get_student_profile(user["id"])
+        profile = database.get_student_profile(f"identity:{user['identity_id']}")
         if not profile:
             raise HTTPException(status_code=403, detail="Identity approval required before personal data access")
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "user": dict(profile["user"]), "groups": [dict(group) for group in profile["groups"]]}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "user": {**dict(profile["user"]), "id": user["id"], "telegram_user_id": user["telegram_user_id"]}, "groups": [dict(group) for group in profile["groups"]]}
 
     @router.get("/admin/claims")
     def pending_claims(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        user = database.find_user(telegram_user["id"])
         require_role(telegram_user, "admin")
         return {"items": [dict(item) for item in database.list_pending_claims()]}
 
@@ -2783,35 +2813,49 @@ def create_router(database: Database) -> APIRouter:
         require_role(telegram_user, "admin")
         raise HTTPException(status_code=409, detail="Legacy schedule scopes are retired; canonical audiences are approved with the canonical template")
 
+    @router.get("/admin/access")
+    def admin_access(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        return access_call(access_snapshot, actor["id"])
+
+    @router.post("/admin/access/claims/{claim_id}")
+    def admin_access_review(claim_id: str, payload: AccessReviewPayload, background: BackgroundTasks, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        claim = access_call(resolve_access_claim, actor["id"], claim_id, payload.decision,
+                            identity_id=payload.identity_id, reason=payload.reason, replace_user_id=payload.replace_user_id)
+        notify_claim(background, claim)
+        return {"ok": True}
+
+    @router.post("/admin/access/accounts/{user_id}")
+    def admin_access_change(user_id: str, payload: AccessAccountPayload, background: BackgroundTasks, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if payload.action == "link" and "expected_identity_id" not in payload.model_fields_set:
+            raise HTTPException(status_code=400, detail="Обновите список и подтвердите текущую привязку.")
+        claim = access_call(change_account, actor["id"], user_id, payload.action, identity_id=payload.identity_id,
+                            replace_user_id=payload.replace_user_id, expected_identity_id=payload.expected_identity_id,
+                            check_expected="expected_identity_id" in payload.model_fields_set)
+        if claim:
+            notify_claim(background, claim)
+        return {"ok": True}
+
     @router.post("/admin/claims/{claim_id}/review")
-    def review_claim(claim_id: str, payload: ReviewPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        reviewer = require_role(telegram_user, "admin")
-        try:
-            claim = review_identity_claim(database, claim_id, reviewer["id"], payload.status)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        if not claim:
-            raise HTTPException(status_code=404, detail="Claim not found")
+    def review_claim(claim_id: str, payload: ReviewPayload, background: BackgroundTasks, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        if payload.status not in {"approved", "rejected"}:
+            raise HTTPException(status_code=400, detail="Некорректное решение по заявке.")
+        decision = "approve" if payload.status == "approved" else "reject"
+        claim = access_call(resolve_access_claim, actor["id"], claim_id, decision, reason=payload.reason)
+        notify_claim(background, claim)
         return {"id": claim["id"], "status": claim["status"]}
 
     @router.post("/admin/users/{user_id}/roles")
     def update_user_roles(user_id: str, payload: RolesPayload, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data")):
-        actor = authenticate(init_data, x_dev_auth, x_telegram_init_data)
-        reviewer = require_role(actor, "admin")
-        allowed = {"student", "teacher", "admin"}
-        roles = sorted(set(payload.roles), key=lambda role: (role != "teacher", role != "admin", role))
-        if not roles or any(role not in allowed for role in roles):
-            raise HTTPException(status_code=400, detail="At least one valid role is required")
-        target = database.get_user_by_id(user_id)
-        if not target:
-            raise HTTPException(status_code=404, detail="User not found")
-        if database.user_has_role(target["id"], "admin") and "admin" not in roles and database.count_users_with_role("admin") <= 1:
-            raise HTTPException(status_code=400, detail="The last admin role cannot be removed")
-        primary_role = payload.primary_role if payload.primary_role in roles else ("teacher" if "teacher" in roles else roles[0])
-        updated = database.set_user_roles(target["id"], roles, primary_role)
-        database.record_audit_event("user_roles.updated", "user", {"target_user_id": str(target["id"]), "roles": updated}, reviewer["id"])
-        return {"user_id": target["id"], "roles": updated, "primary_role": primary_role}
+        actor = require_role(authenticate(init_data, x_dev_auth, x_telegram_init_data), "admin")
+        action = "grant_admin" if "admin" in payload.roles else "remove_admin"
+        access_call(change_account, actor["id"], user_id, action, expected_roles=set(payload.roles))
+        user = database.get_access_subject(user_id=user_id)
+        roles = database.list_user_roles(user_id)
+        return {"user_id": user_id, "roles": roles, "primary_role": user["role"]}
 
     def require_generic_preview_scope() -> None:
         settings = get_settings()
@@ -2944,7 +2988,7 @@ def create_router(database: Database) -> APIRouter:
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         if not user["identity_id"]:
             return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "not_configured", "items": []}
-        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(item) for item in database.list_teacher_courses(user["id"])]}
+        return {"mode": "dev" if telegram_user.get("dev") else "telegram", "state": "approved", "items": [dict(item) for item in database.list_teacher_courses(f"identity:{user['identity_id']}")]}
 
     @router.get("/teacher/home")
     def teacher_home(day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
@@ -2961,8 +3005,8 @@ def create_router(database: Database) -> APIRouter:
             return {
                 "state": "canonical_backend_disabled",
                 "schedule": [],
-                "groups": database.list_teacher_groups(user["id"]),
-                "information": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")],
+                "groups": database.list_teacher_groups(f"identity:{user['identity_id']}"),
+                "information": [dict(row) for row in database.list_active_announcements(f"identity:{user['identity_id']}", "teacher")],
             }
         schedule_projection = project_teacher_range(database, user["identity_id"], requested_day)
         if x_preview_id:
@@ -2972,15 +3016,15 @@ def create_router(database: Database) -> APIRouter:
             "state": schedule_projection.get("status"),
             "schedule": schedule_projection.get("items", []),
             "schedule_issues": schedule_projection.get("issues", []),
-            "groups": database.list_teacher_groups(user["id"]),
-            "information": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")],
+            "groups": database.list_teacher_groups(f"identity:{user['identity_id']}"),
+            "information": [dict(row) for row in database.list_active_announcements(f"identity:{user['identity_id']}", "teacher")],
         }
 
     @router.get("/teacher/groups")
     def teacher_groups(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
-        return {"items": preview_teacher_groups(user) if x_preview_id else (database.list_teacher_groups(user["id"]) if user["identity_id"] else [])}
+        return {"items": preview_teacher_groups(user) if x_preview_id else (database.list_teacher_groups(f"identity:{user['identity_id']}") if user["identity_id"] else [])}
 
     @router.get("/teacher/profile")
     def teacher_profile(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
@@ -2988,7 +3032,7 @@ def create_router(database: Database) -> APIRouter:
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         if x_preview_id:
             return {"state": "approved", "user": {"identity_id": str(user["identity_id"]), "display_name": user["display_name"], "class_name": user["class_name"]}, "groups": preview_teacher_groups(user)}
-        profile = database.get_teacher_profile(user["id"])
+        profile = database.get_teacher_profile(user["id"], expected_identity_id=user["identity_id"])
         if not profile:
             return {"state": "not_configured", "user": None, "groups": []}
         return {"state": "approved", **profile}
@@ -2997,16 +3041,16 @@ def create_router(database: Database) -> APIRouter:
     def teacher_journals(init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
-        items = database.teacher_journal_sources(user["id"]) if user["identity_id"] else []
+        items = database.teacher_journal_sources(f"identity:{user['identity_id']}") if user["identity_id"] else []
         return {"state": "approved", "items": items}
 
     @router.get("/teacher/groups/{group_id}")
     def teacher_group(group_id: str, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
-        if not database.teacher_can_access_group(user["id"], group_id):
+        if not database.teacher_can_access_group(f"identity:{user['identity_id']}", group_id):
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this group")
-        journal = journal_view(database.list_group_journal(group_id, teacher_user_id=user['id']))
+        journal = journal_view(database.list_group_journal(group_id, teacher_user_id=f"identity:{user['identity_id']}"))
         grade_histories = journal.pop("students")
         students = database.list_group_students(group_id)
         if not students:
@@ -3027,7 +3071,7 @@ def create_router(database: Database) -> APIRouter:
         telegram_user = authenticate(init_data, x_dev_auth, x_telegram_init_data)
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         marker = group_marker.strip()
-        detail = database.teacher_journal_detail(user["id"], source_id, marker)
+        detail = database.teacher_journal_detail(f"identity:{user['identity_id']}", source_id, marker)
         if not detail:
             raise HTTPException(status_code=403, detail="Teacher is not assigned to this journal subgroup")
         return detail
@@ -3038,7 +3082,7 @@ def create_router(database: Database) -> APIRouter:
         user = preview_subject(telegram_user, x_preview_id, "teacher") if x_preview_id else require_role(telegram_user, "teacher")
         if x_preview_id:
             return {"items": []}
-        return {"items": [dict(row) for row in database.list_active_announcements(user["id"], "teacher")]}
+        return {"items": [dict(row) for row in database.list_active_announcements(f"identity:{user['identity_id']}", "teacher")]}
 
     @router.get("/teacher/schedule")
     def teacher_schedule(start_day: str, end_day: str | None = None, init_data: str | None = None, x_dev_auth: str | None = Header(default=None), x_telegram_init_data: str | None = Header(default=None, alias="X-Telegram-Init-Data"), x_preview_id: str | None = Header(default=None, alias="X-Preview-Id")):

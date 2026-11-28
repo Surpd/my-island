@@ -44,6 +44,9 @@ class JournalRoleViewTests(unittest.TestCase):
                 "INSERT INTO users(telegram_user_id, role, identity_id) VALUES (?, ?, ?) RETURNING id",
                 (710000 + len(self.users), role, identity_id)).fetchone()
             self.database.execute(connection, "INSERT INTO user_roles(user_id, role) VALUES (?, ?)", (user["id"], role))
+            if identity_id is not None:
+                self.database.execute(connection, "INSERT INTO account_identity_links(user_id, identity_id, source) VALUES (?, ?, 'test')",
+                                      (user["id"], identity_id))
         self.users[key] = user["id"]
         return user["id"]
 

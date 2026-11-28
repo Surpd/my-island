@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS users (
   telegram_user_id INTEGER UNIQUE,
   role TEXT NOT NULL CHECK (role IN ('student', 'teacher', 'admin')),
   identity_id INTEGER UNIQUE,
+  telegram_username TEXT,
+  telegram_first_name TEXT,
+  telegram_last_name TEXT,
+  last_active_at TEXT,
+  access_revoked_at TEXT,
+  telegram_auth_after INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS admin_widget_layouts (
@@ -74,12 +80,15 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE TABLE IF NOT EXISTS identity_claims (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),
-  identity_id INTEGER NOT NULL REFERENCES identities(id),
+  identity_id INTEGER REFERENCES identities(id),
   requested_role TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'identity_conflict')),
   reviewed_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  reviewed_at TEXT
+  reviewed_at TEXT,
+  submitted_name TEXT,
+  submitted_class_name TEXT,
+  review_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -410,6 +419,33 @@ CREATE TABLE IF NOT EXISTS account_identity_links (
   confirmed_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS access_control (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  manager_user_id INTEGER REFERENCES users(id) ON DELETE RESTRICT
+);
+INSERT OR IGNORE INTO access_control(id) VALUES (1);
+CREATE TABLE IF NOT EXISTS telegram_registration_drafts (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  step TEXT NOT NULL,
+  requested_role TEXT CHECK (requested_role IN ('student','teacher')),
+  class_name TEXT,
+  display_name TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS telegram_processed_updates (
+  update_id INTEGER PRIMARY KEY,
+  telegram_user_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS telegram_processed_updates_user_idx ON telegram_processed_updates(telegram_user_id, created_at);
+CREATE INDEX IF NOT EXISTS telegram_processed_updates_age_idx ON telegram_processed_updates(created_at);
+CREATE TABLE IF NOT EXISTS access_login_attempts (
+  client_key TEXT NOT NULL,
+  minute_bucket INTEGER NOT NULL,
+  attempts INTEGER NOT NULL,
+  PRIMARY KEY (client_key, minute_bucket)
+);
+CREATE INDEX IF NOT EXISTS access_login_attempts_age_idx ON access_login_attempts(minute_bucket);
 CREATE TABLE IF NOT EXISTS student_preview_sessions (
   id TEXT PRIMARY KEY,
   actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1081,16 +1117,40 @@ class Database:
                 columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
                 if "admin_note" not in columns:
                     connection.execute(f"ALTER TABLE {table} ADD COLUMN admin_note TEXT")
-            connection.execute(
-                "INSERT OR IGNORE INTO user_roles(user_id, role, source) SELECT id, role, 'legacy_user_role' FROM users"
-            )
-            connection.execute(
-                "INSERT OR IGNORE INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_at) SELECT id, identity_id, 'confirmed', 'legacy_backfill', 'users.identity_id', created_at FROM users WHERE identity_id IS NOT NULL"
-            )
+            self._upgrade_sqlite_access(connection)
             from backend.services.directory_revisions import initialize_sqlite
             initialize_sqlite(connection)
         from backend.services.schedule_activities import seed_activities
         seed_activities(self)
+
+    def _upgrade_sqlite_access(self, connection: Any) -> None:
+        columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(users)")}
+        if "access_revoked_at" not in columns:
+            for name, definition in {
+                "telegram_username": "TEXT", "telegram_first_name": "TEXT", "telegram_last_name": "TEXT",
+                "last_active_at": "TEXT", "access_revoked_at": "TEXT", "telegram_auth_after": "INTEGER",
+            }.items():
+                connection.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+            connection.execute("""UPDATE users SET identity_id=NULL WHERE identity_id IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM account_identity_links l WHERE l.user_id=users.id
+                    AND l.identity_id=users.identity_id AND l.status='confirmed')""")
+            connection.execute("""UPDATE users SET identity_id=(SELECT identity_id FROM account_identity_links l WHERE l.user_id=users.id)
+                WHERE EXISTS (SELECT 1 FROM account_identity_links l WHERE l.user_id=users.id AND l.status='confirmed')""")
+        claim_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(identity_claims)")}
+        if claim_columns["identity_id"]["notnull"]:
+            connection.execute("ALTER TABLE identity_claims RENAME TO legacy_identity_claims")
+            start = SCHEMA.index("CREATE TABLE IF NOT EXISTS identity_claims")
+            end = SCHEMA.index("CREATE TABLE IF NOT EXISTS groups", start)
+            connection.execute(SCHEMA[start:end].strip())
+            fields = "id,user_id,identity_id,requested_role,status,reviewed_by,created_at,reviewed_at"
+            connection.execute(f"INSERT INTO identity_claims({fields}) SELECT {fields} FROM legacy_identity_claims")
+            connection.execute("DROP TABLE legacy_identity_claims")
+        connection.execute("""UPDATE identity_claims SET status='identity_conflict', reviewed_at=CURRENT_TIMESTAMP,
+              review_reason='Позднее была подана другая заявка.'
+            WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (
+              PARTITION BY user_id ORDER BY created_at DESC, id DESC) AS position
+              FROM identity_claims WHERE status='pending') WHERE position>1)""")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS identity_claims_one_pending_per_user ON identity_claims(user_id) WHERE status='pending'")
 
     def _upgrade_sqlite_teacher_assignment_targets(self, connection: Any) -> None:
         columns = {row[1]: row for row in connection.execute("PRAGMA table_info(teacher_assignments)").fetchall()}
@@ -1233,19 +1293,45 @@ class Database:
     def _token_hash(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def create_admin_login_challenge(self, actor_user_id: Any, ttl_seconds: int = 300) -> tuple[str, str]:
+    def rate_limit_admin_exchange(self, client: str) -> bool:
+        bucket = int(time.time()) // 60
+        with self.connection() as connection:
+            self.execute(connection, "DELETE FROM access_login_attempts WHERE minute_bucket < ?", (bucket - 5,))
+            row = self.execute(connection, """
+                INSERT INTO access_login_attempts(client_key, minute_bucket, attempts) VALUES (?, ?, 1)
+                ON CONFLICT(client_key, minute_bucket) DO UPDATE SET attempts=access_login_attempts.attempts + 1
+                WHERE access_login_attempts.attempts < 15 RETURNING attempts
+            """, (self._token_hash(client), bucket)).fetchone()
+            return row is not None
+
+    def create_admin_login_challenge(self, actor_user_id: Any, ttl_seconds: int = 300) -> tuple[str, str] | None:
+        from backend.services.account_access import active_admin, lock_access
         token = secrets.token_urlsafe(32)
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
         with self.connection() as connection:
+            lock_access(self, connection)
+            if not active_admin(self, connection, actor_user_id):
+                return None
+            cutoff = now - timedelta(minutes=1)
+            recent = self.execute(connection, """
+                SELECT COUNT(*) AS total FROM admin_login_challenges WHERE actor_user_id=? AND created_at>?
+            """, (actor_user_id, cutoff if self.database_url else cutoff.strftime("%Y-%m-%d %H:%M:%S"))).fetchone()
+            if recent["total"] >= 5:
+                return None
             self.execute(connection, "INSERT INTO admin_login_challenges(token_hash, actor_user_id, expires_at) VALUES (?, ?, ?)", (self._token_hash(token), actor_user_id, expires_at))
         return token, expires_at
 
     def consume_admin_login_challenge(self, token: str, ttl_seconds: int = 86400 * 7) -> tuple[str, Any] | None:
+        from backend.services.account_access import active_admin, lock_access
         now = datetime.now(timezone.utc)
+        token_hash = self._token_hash(token)
         with self.connection() as connection:
-            row = self.execute(connection, "SELECT * FROM admin_login_challenges WHERE token_hash = ? AND consumed_at IS NULL", (self._token_hash(token),)).fetchone()
-            if not row:
+            if not self.execute(connection, "SELECT 1 FROM admin_login_challenges WHERE token_hash=? AND consumed_at IS NULL", (token_hash,)).fetchone():
+                return None
+            lock_access(self, connection)
+            row = self.execute(connection, "SELECT * FROM admin_login_challenges WHERE token_hash=? AND consumed_at IS NULL", (token_hash,)).fetchone()
+            if not row or not active_admin(self, connection, row["actor_user_id"]):
                 return None
             try:
                 expires_at = datetime.fromisoformat(str(row["expires_at"]))
@@ -1253,7 +1339,7 @@ class Database:
                 return None
             if expires_at <= now:
                 return None
-            self.execute(connection, "UPDATE admin_login_challenges SET consumed_at = ? WHERE id = ?", (now.isoformat(), row["id"]))
+            self.execute(connection, "UPDATE admin_login_challenges SET consumed_at=? WHERE id=?", (now.isoformat(), row["id"]))
             session_token = secrets.token_urlsafe(48)
             session_expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
             self.execute(connection, "INSERT INTO admin_browser_sessions(token_hash, user_id, expires_at) VALUES (?, ?, ?)", (self._token_hash(session_token), row["actor_user_id"], session_expires))
@@ -1262,7 +1348,7 @@ class Database:
     def get_admin_browser_session(self, token: str, *, touch: bool = True) -> Any | None:
         now = datetime.now(timezone.utc)
         with self.connection() as connection:
-            row = self.execute(connection, "SELECT s.*, u.telegram_user_id, u.role, u.identity_id FROM admin_browser_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL", (self._token_hash(token),)).fetchone()
+            row = self.execute(connection, "SELECT s.*, u.telegram_user_id, u.role, u.identity_id FROM admin_browser_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL AND u.access_revoked_at IS NULL AND EXISTS (SELECT 1 FROM user_roles r WHERE r.user_id=u.id AND r.role='admin')", (self._token_hash(token),)).fetchone()
             if not row:
                 return None
             try:
@@ -1364,47 +1450,49 @@ class Database:
 
     def get_or_create_user(self, telegram_user_id: int | None, role: str) -> Any:
         with self.connection() as connection:
-            if telegram_user_id is not None:
-                row = self.execute(connection, "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,)).fetchone()
-                if row:
-                    return row
-            inserted = self.execute(connection, "INSERT INTO users(telegram_user_id, role) VALUES (?, ?) RETURNING id", (telegram_user_id, role)).fetchone()
-            return self.execute(connection, "SELECT * FROM users WHERE id = ?", (inserted["id"],)).fetchone()
+            inserted = self.execute(connection, """
+                INSERT INTO users(telegram_user_id, role) VALUES (?, ?)
+                ON CONFLICT(telegram_user_id) DO NOTHING RETURNING id
+            """, (telegram_user_id, role)).fetchone()
+            if not inserted:
+                return self.execute(connection, "SELECT * FROM users WHERE telegram_user_id=?", (telegram_user_id,)).fetchone()
+            self.execute(connection, "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'registration')", (inserted["id"], role))
+            return self.execute(connection, "SELECT * FROM users WHERE id=?", (inserted["id"],)).fetchone()
 
-    def ensure_bootstrap_roles(self, telegram_user_id: int, roles: tuple[str, ...]) -> Any | None:
-        if not roles:
-            return self.find_user(telegram_user_id)
+    def register_telegram_contact(self, telegram: dict) -> None:
+        from backend.services.account_access import record_telegram_contact
         with self.connection() as connection:
-            user = self.execute(connection, "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,)).fetchone()
-            if not user:
-                return None
-            placeholders = ",".join("?" for _ in roles)
-            self.execute(connection, f"DELETE FROM user_roles WHERE user_id = ? AND role NOT IN ({placeholders})", (user["id"], *roles))
-            for role in roles:
-                self.execute(
-                    connection,
-                    "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'telegram_bootstrap') ON CONFLICT(user_id, role) DO NOTHING",
-                    (user["id"], role),
-                )
-            primary_role = "teacher" if "teacher" in roles else roles[0]
-            self.execute(connection, "UPDATE users SET role = ? WHERE id = ?", (primary_role, user["id"]))
-            return self.execute(connection, "SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+            record_telegram_contact(self, connection, telegram)
+
+    def get_access_subject(self, *, user_id: Any = None, telegram_id: int | None = None) -> dict | None:
+        with self.connection() as connection:
+            filter_column, value = ("u.id", user_id) if user_id is not None else ("u.telegram_user_id", telegram_id)
+            rows = self.execute(connection, f"""
+                SELECT u.id, u.telegram_user_id, u.access_revoked_at, u.telegram_auth_after,
+                       i.id AS identity_id, i.kind, r.role AS granted_role
+                FROM users u
+                LEFT JOIN account_identity_links l ON l.user_id=u.id AND l.status='confirmed' AND l.identity_id=u.identity_id
+                LEFT JOIN identities i ON i.id=l.identity_id AND i.status='active'
+                LEFT JOIN user_roles r ON r.user_id=u.id
+                WHERE {filter_column}=? ORDER BY r.role
+            """, (value,)).fetchall()
+        if not rows:
+            return None
+        account = {key: rows[0][key] for key in ("id", "telegram_user_id", "access_revoked_at", "telegram_auth_after", "identity_id", "kind")}
+        roles = [str(row["granted_role"]) for row in rows if row["granted_role"] and
+                 (row["granted_role"] == "admin" or row["granted_role"] == row["kind"])]
+        account["roles"] = roles if account["access_revoked_at"] is None else []
+        account["role"] = account["kind"] if account["kind"] in account["roles"] else "admin" if "admin" in account["roles"] else None
+        return account
 
     def list_user_roles(self, user_id: Any) -> list[str]:
         with self.connection() as connection:
             rows = self.execute(connection, "SELECT role FROM user_roles WHERE user_id = ? ORDER BY role", (user_id,)).fetchall()
-            if rows:
-                return [str(row["role"]) for row in rows]
-            row = self.execute(connection, "SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
-            return [str(row["role"])] if row else []
+            return [str(row["role"]) for row in rows]
 
     def user_has_role(self, user_id: Any, role: str) -> bool:
-        return role in self.list_user_roles(user_id)
-
-    def count_users_with_role(self, role: str) -> int:
-        with self.connection() as connection:
-            row = self.execute(connection, "SELECT COUNT(*) AS count FROM user_roles WHERE role = ?", (role,)).fetchone()
-            return int(row["count"]) if row else 0
+        user = self.get_access_subject(user_id=user_id)
+        return bool(user and role in user["roles"])
 
     def set_user_roles(self, user_id: Any, roles: list[str], primary_role: str) -> list[str]:
         with self.connection() as connection:
@@ -1426,6 +1514,11 @@ class Database:
         import json
         import uuid
         preview_id = str(uuid.uuid4())
+        if self.database_url:
+            def utc_timestamp(value):
+                timestamp = datetime.fromisoformat(value)
+                return timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=timezone.utc)
+            created_at, expires_at = utc_timestamp(created_at), utc_timestamp(expires_at)
         with self.connection() as connection:
             self.execute(
                 connection,
@@ -1535,39 +1628,9 @@ class Database:
             ).fetchone()
             return self.execute(connection, "SELECT * FROM identity_claims WHERE id = ?", (inserted["id"],)).fetchone()
 
-    def review_claim(self, claim_id: Any, reviewer_id: Any, status: str) -> Any | None:
-        with self.connection() as connection:
-            claim = self.execute(connection, "SELECT * FROM identity_claims WHERE id = ?", (claim_id,)).fetchone()
-            if not claim:
-                return None
-            if status == "approved":
-                conflict = self.execute(connection,
-                    "SELECT id FROM users WHERE identity_id = ? AND id != ?", (claim["identity_id"], claim["user_id"])
-                ).fetchone()
-                if conflict:
-                    status = "identity_conflict"
-                else:
-                    self.execute(connection, "UPDATE users SET identity_id = ?, role = ? WHERE id = ?", (claim["identity_id"], claim["requested_role"], claim["user_id"]))
-                    self.execute(
-                        connection,
-                        """INSERT INTO account_identity_links(user_id, identity_id, status, source, source_ref, confirmed_by, confirmed_at)
-                           VALUES (?, ?, 'confirmed', 'identity_claim', ?, ?, CURRENT_TIMESTAMP)
-                           ON CONFLICT(user_id) DO UPDATE SET identity_id = excluded.identity_id, status = 'confirmed', source = excluded.source,
-                             source_ref = excluded.source_ref, confirmed_by = excluded.confirmed_by, confirmed_at = excluded.confirmed_at""",
-                        (claim["user_id"], claim["identity_id"], str(claim_id), reviewer_id),
-                    )
-                    self.execute(
-                        connection,
-                        "INSERT INTO user_roles(user_id, role, source) VALUES (?, ?, 'identity_claim') ON CONFLICT(user_id, role) DO NOTHING",
-                        (claim["user_id"], claim["requested_role"]),
-                    )
-            self.execute(connection, "UPDATE identity_claims SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?", (status, reviewer_id, claim_id))
-            self.execute(connection, "INSERT INTO audit_log(actor_user_id, action, entity_type, entity_id) VALUES (?, ?, ?, ?)", (reviewer_id, f"identity_claim.{status}", "identity_claim", claim_id))
-            return self.execute(connection, "SELECT * FROM identity_claims WHERE id = ?", (claim_id,)).fetchone()
-
     def list_pending_claims(self) -> list[sqlite3.Row]:
         with self.connection() as connection:
-            return self.execute(connection, "SELECT c.*, i.display_name, i.class_name FROM identity_claims c JOIN identities i ON i.id = c.identity_id WHERE c.status = 'pending' ORDER BY c.created_at").fetchall()
+            return self.execute(connection, "SELECT c.*, i.display_name, i.class_name FROM identity_claims c LEFT JOIN identities i ON i.id = c.identity_id WHERE c.status = 'pending' ORDER BY c.created_at").fetchall()
 
     def list_schedule_entries(self, lesson_date: str) -> list[sqlite3.Row]:
         with self.connection() as connection:
@@ -4065,18 +4128,19 @@ class Database:
                 result["protected_cases"] = int(summary.get("PROTECTED", 0) or 0)
             return result
 
-    def get_teacher_profile(self, user_id: Any) -> dict[str, Any] | None:
+    def get_teacher_profile(self, user_id: Any, *, expected_identity_id: Any | None = None) -> dict[str, Any] | None:
         with self.connection() as connection:
             user = self.execute(
                 connection,
-                """SELECT u.id, u.identity_id, i.display_name, i.class_name
+                f"""SELECT u.id, u.identity_id, i.display_name, i.class_name
                      FROM users u JOIN identities i ON i.id = u.identity_id
-                    WHERE u.id = ? AND i.kind = 'teacher'""",
-                (user_id,),
+                    WHERE u.id = ? AND i.kind = 'teacher'
+                      {"AND i.id = ?" if expected_identity_id is not None else ""}""",
+                (user_id, expected_identity_id) if expected_identity_id is not None else (user_id,),
             ).fetchone()
             if not user:
                 return None
-        return {"user": dict(user), "groups": self.list_teacher_groups(user_id)}
+        return {"user": dict(user), "groups": self.list_teacher_groups(f"identity:{user['identity_id']}" if expected_identity_id is not None else user_id)}
 
     def save_journal_snapshot(self, source: dict[str, Any], assessments: list[dict[str, Any]], results: list[dict[str, Any]], students: list[dict[str, Any]] | None = None, summaries: list[dict[str, Any]] | None = None) -> dict[str, int]:
         key = f"{source['spreadsheet_id']}:{source.get('sheet_id') or source['sheet_title']}"

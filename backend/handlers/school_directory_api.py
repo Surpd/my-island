@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import Request, APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from backend.config import get_settings
@@ -102,8 +102,10 @@ def create_school_directory_router(local_database: Database | None = None) -> AP
             raise HTTPException(status_code=409, detail="School editor schema is pending migrations 034, 035 and 054")
 
     @router.post("/auth/exchange")
-    def exchange_code(payload: SchoolCodePayload):
+    def exchange_code(payload: SchoolCodePayload, request: Request):
         database = school_database()
+        if not database.rate_limit_admin_exchange(request.client.host if request.client else "unknown"):
+            raise HTTPException(status_code=429, detail="Слишком много попыток. Попробуйте через минуту.")
         if not payload.code.strip():
             raise HTTPException(status_code=400, detail="Administrator code is required")
         consumed = database.consume_admin_login_challenge(payload.code.strip())

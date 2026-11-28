@@ -53,6 +53,8 @@ type LoadState =
   | 'loading'
   | 'approved'
   | 'needs_identity'
+  | 'revoked'
+  | 'reopen_telegram'
   | 'telegram_sdk_missing'
   | 'telegram_init_data_empty'
   | 'telegram_rejected'
@@ -169,6 +171,7 @@ type Profile = {
   groups: Group[];
 };
 type Session = {
+  bot_username?: string | null;
   mode: string;
   state: string;
   user: {
@@ -1811,16 +1814,22 @@ function TeacherApp({
 function PendingState({
   state,
   onRetry,
+  botUsername,
 }: {
+  botUsername?: string | null;
   state: Exclude<LoadState, 'loading' | 'approved'>;
   onRetry: () => void;
 }) {
   const copy =
     state === 'needs_identity'
       ? [
-          'Доступ ещё не подтверждён',
-          'Личность должна быть подтверждена администратором школы. До этого персональные данные закрыты.',
+          'Подключитесь к Острову',
+          'Откройте школьного бота и отправьте заявку. После подтверждения администратором вы сможете войти.',
         ]
+      : state === 'revoked'
+        ? ['Доступ приостановлен', 'Обратитесь к администратору школы, чтобы восстановить доступ.']
+      : state === 'reopen_telegram'
+        ? ['Откройте Остров заново', 'Закройте приложение и откройте его снова через школьного бота в Telegram.']
       : state === 'telegram_sdk_missing'
         ? [
             'Нужен запуск из Telegram',
@@ -1847,6 +1856,7 @@ function PendingState({
         <p className="eyebrow">Мой Остров</p>
         <h1>{copy[0]}</h1>
         <p>{copy[1]}</p>
+        {(state === 'needs_identity' || state === 'reopen_telegram') && botUsername && /^[A-Za-z0-9_]{5,32}$/.test(botUsername.replace(/^@/, '')) ? <a className="primary-button" href={`https://t.me/${botUsername.replace(/^@/, '')}`} target="_blank" rel="noreferrer">Открыть школьного бота</a> : null}
         <button className="primary-button" onClick={onRetry}>
           Повторить <RefreshCw size={17} />
         </button>
@@ -1919,7 +1929,7 @@ export default function Home() {
           const next = await api<Session>('/api/auth/session', { method: 'POST', body: JSON.stringify({ role: desiredRole, init_data: telegram.value || null }) });
           if (!current()) return;
           setSession(next);
-          if (next.state !== 'approved') { setState('needs_identity'); return; }
+          if (next.state !== 'approved') { setState(next.state === 'revoked' ? 'revoked' : next.state === 'reopen_telegram' ? 'reopen_telegram' : 'needs_identity'); return; }
           role = next.user.role as CampusRole;
         }
         if (role === 'admin') { if (current()) setState('approved'); return; }
@@ -1983,7 +1993,7 @@ export default function Home() {
   };
 
   if (state === 'loading' || (embedded && !config)) return <main className="status-screen status-screen--island"><div className="loading-orb"><LoaderCircle className="spin" size={28} /><span>Открываем остров…</span></div></main>;
-  if (state !== 'approved') return <>{roleControl ? <div className="campus-error-actions">{roleControl}</div> : null}{errorMessage ? <div className="campus-source-warning" role="alert">{errorMessage}</div> : null}<PendingState state={state} onRetry={refresh} /></>;
+  if (state !== 'approved') return <>{roleControl ? <div className="campus-error-actions">{roleControl}</div> : null}{errorMessage ? <div className="campus-source-warning" role="alert">{errorMessage}</div> : null}<PendingState state={state} onRetry={refresh} botUsername={session?.bot_username} /></>;
   if (actualRole === 'admin' && session?.user.roles?.includes('admin')) {
     return <ModernAdmin embeddedSession={session.user} onRoleChange={switchRole} />;
   }

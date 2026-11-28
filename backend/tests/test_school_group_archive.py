@@ -86,8 +86,6 @@ class SchoolGroupArchiveTests(unittest.TestCase):
             database = Database(Path(directory) / "archive-api.db")
             database.initialize()
             admin = database.get_or_create_user(4491201, "admin")
-            with database.connection() as connection:
-                connection.execute("INSERT INTO user_roles(user_id, role, source) VALUES (?, 'admin', 'test')", (admin["id"],))
             group = database.create_group("English 7", "study", subject="Английский")
             student = database.create_identity("student", "Ученик API")
             with database.connection() as connection:

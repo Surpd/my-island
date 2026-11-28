@@ -114,8 +114,6 @@ class SchoolDirectoryApiAuthTests(unittest.TestCase):
             database = Database(Path(directory) / "test.db")
             database.initialize()
             admin = database.get_or_create_user(991003, "admin")
-            with database.connection() as connection:
-                database.execute(connection, "INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test')", (admin["id"],))
             code, _ = database.create_admin_login_challenge(admin["id"])
             token, _ = database.consume_admin_login_challenge(code)
             app = FastAPI()

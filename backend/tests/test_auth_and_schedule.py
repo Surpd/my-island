@@ -14,7 +14,8 @@ from backend.config import Settings
 from backend.services.auth import AuthError, resolve_auth, verify_telegram_init_data
 from backend.services.google_live import GoogleLiveClient, GoogleTokenStore, load_google_client, refresh_token
 from backend.services.google_classroom_sync import sync_classroom_course
-from backend.services.identity import claim_identity, review_identity_claim
+from backend.services.account_access import AccessError, bootstrap_manager, review_claim
+from backend.services.identity import claim_identity
 from backend.services.google_sheets import parse_school_schedule_values, sheet_values_to_rows
 from backend.services.google_oauth import build_google_authorization_url
 from backend.services.schedule_import import sync_schedule, sync_schedule_with_stats
@@ -133,13 +134,12 @@ class AuthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(os.path.join(directory, "test.db"))
             database.initialize()
-            admin = database.get_or_create_user(700, "student")
-            database.ensure_bootstrap_roles(700, ("teacher", "admin"))
+            admin = database.get_or_create_user(700, "teacher")
+            self.assertEqual(bootstrap_manager(database, (700,)), admin["id"])
             self.assertEqual(set(database.list_user_roles(admin["id"])), {"teacher", "admin"})
             with database.connection() as connection:
                 identity = connection.execute("INSERT INTO identities(kind, display_name, class_name) VALUES ('student', 'Preview Student', '9-Д') RETURNING id").fetchone()[0]
                 student = connection.execute("INSERT INTO users(telegram_user_id, role, identity_id) VALUES (701, 'student', ?) RETURNING id", (identity,)).fetchone()[0]
-            database.ensure_bootstrap_roles(701, ("student",))
             self.assertEqual(database.get_user_by_id(f"identity:{identity}")["id"], student)
             preview = database.create_student_preview(admin["id"], student, "2099-01-01 10:00:00", "2099-01-01 11:00:00")
             self.assertIsNotNone(database.get_active_student_preview(preview["id"], admin["id"]))
@@ -388,7 +388,9 @@ class ClassroomSyncTests(unittest.TestCase):
                 admin = connection.execute("INSERT INTO users(telegram_user_id, role) VALUES (303, 'admin') RETURNING id").fetchone()[0]
             claim = claim_identity(database, first_user, identity_id, "student")
             self.assertEqual(claim["status"], "pending")
-            self.assertEqual(review_identity_claim(database, claim["id"], admin, "approved")["status"], "approved")
+            with database.connection() as connection:
+                database.execute(connection, "INSERT INTO user_roles(user_id, role) VALUES (?, 'admin')", (admin,))
+            self.assertEqual(review_claim(database, admin, claim["id"], "approve")["status"], "approved")
             with database.connection() as connection:
                 link = connection.execute(
                     "SELECT status, source FROM account_identity_links WHERE user_id = ?",
@@ -396,7 +398,9 @@ class ClassroomSyncTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(tuple(link), ("confirmed", "identity_claim"))
             conflict_claim = claim_identity(database, second_user, identity_id, "student")
-            self.assertEqual(review_identity_claim(database, conflict_claim["id"], admin, "approved")["status"], "identity_conflict")
+            with self.assertRaises(AccessError) as conflict:
+                review_claim(database, admin, conflict_claim["id"], "approve")
+            self.assertEqual(conflict.exception.status, 409)
 
     def test_teacher_profile_uses_canonical_person_and_assignments(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -43,6 +43,15 @@ if isolated_consolidation_enabled():
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     log_startup_readiness(logging.getLogger("uvicorn.error"))
+    if not school_preview_mode and os.getenv("MY_ISLAND_SCHOOL_WORKSPACE") != "1":
+        from backend.services.account_access import bootstrap_manager
+        manager = await asyncio.to_thread(bootstrap_manager, database, settings.telegram_bootstrap_user_ids,
+                                          local_test=settings.local_test_mode)
+        if manager is None and settings.app_env == "production":
+            logging.getLogger("uvicorn.error").error("Access management bootstrap did not identify the original administrator")
+    if settings.app_env == "production" and not settings.telegram_bot_username:
+        from backend.services.telegram_admin_bot import resolve_bot_username
+        _app.state.telegram_bot_username = await asyncio.to_thread(resolve_bot_username, settings.telegram_bot_token)
     from backend.services.published_week_sheets import deliver_one, enabled
     from backend.services.schedule_sheet_publishing import export_client
     stop = asyncio.Event()

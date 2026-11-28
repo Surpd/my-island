@@ -32,7 +32,12 @@ class TeacherColorSessionTests(unittest.TestCase):
             browser = sign_in(admin["id"])
             school = sign_in(admin["id"])
             expired = sign_in(admin["id"], ttl_seconds=0)
-            nonadmin = sign_in(student["id"])
+            self.assertIsNone(db.create_admin_login_challenge(student["id"]))
+            # A leftover session can exist after an older release issued it.
+            nonadmin = "legacy-unprivileged-session"
+            with db.connection() as connection:
+                db.execute(connection, "INSERT INTO admin_browser_sessions(token_hash,user_id,expires_at) VALUES (?,?,?)",
+                           (db._token_hash(nonadmin), student["id"], "2099-01-01T00:00:00+00:00"))
             app = FastAPI()
             app.include_router(create_school_teacher_ui_colors_router(lambda: db, lambda token: require_consolidated_admin(db, token)))
             path = "/api/admin/school/teacher-ui-colors"

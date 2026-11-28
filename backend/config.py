@@ -21,8 +21,8 @@ def _parse_telegram_user_ids(value: str) -> tuple[int, ...]:
             user_id = int(raw)
         except ValueError as error:
             raise ValueError("TELEGRAM_BOOTSTRAP_USER_IDS must contain comma-separated numeric Telegram user ids") from error
-        if user_id <= 0:
-            raise ValueError("TELEGRAM_BOOTSTRAP_USER_IDS must contain positive Telegram user ids")
+        if not 0 < user_id < 2**52:
+            raise ValueError("TELEGRAM_BOOTSTRAP_USER_IDS must contain valid Telegram user ids")
         ids.append(user_id)
     return tuple(dict.fromkeys(ids))
 
@@ -45,6 +45,7 @@ class Settings:
     google_oauth_refresh_token: str | None
     telegram_bootstrap_user_ids: tuple[int, ...] = ()
     telegram_webhook_secret: str = ""
+    telegram_bot_username: str = ""
     google_oauth_token_encryption_key: str = ""
     google_oauth_allowed_email: str = "antischool.island@gmail.com"
     journal_cron_secret: str = ""
@@ -64,6 +65,7 @@ class Settings:
             dev_auth_enabled=os.getenv("DEV_AUTH_ENABLED", "false").lower() == "true",
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
             telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", ""),
+            telegram_bot_username=os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@"),
             database_url=os.getenv("DATABASE_URL") or None,
             database_path=os.getenv("DATABASE_PATH", "data/my-island.db"),
             cors_origins=cors_origins,

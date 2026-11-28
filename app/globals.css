@@ -4064,3 +4064,23 @@ button.schedule-counter:hover { transform: translateY(-1px); border-color: #b8d4
 .constructor-creation-tabs { flex-wrap: wrap; }
 .constructor-audience-recalculation label { display: grid; gap: 6px; min-width: 0; }
 .constructor-audience-recalculation select { max-width: 100%; }
+
+.access-tabs { display: flex; gap: 4px; border-bottom: 1px solid #d9e3dd; overflow-x: auto; }
+.access-tabs button { padding: 12px 16px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #475b50; cursor: pointer; white-space: nowrap; }
+.access-tabs button.is-active { border-bottom-color: #277456; color: #174b38; font-weight: 700; }
+.access-filters { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.access-filters label { display: grid; gap: 5px; flex: 1 1 180px; font-size: 13px; }
+.access-filters input, .access-filters select, .access-detail select, .access-detail textarea { width: 100%; min-height: 40px; padding: 8px; border: 1px solid #c8d8ce; border-radius: 7px; background: white; color: #183b2d; }
+.access-detail .school-field { max-width: 560px; margin: 14px 0; }
+.access-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+
+.access-confirm { position: fixed; inset: 0; margin: auto; height: fit-content; max-width: calc(100vw - 40px); }
+.status-card-login > .primary-button + .primary-button { margin-top: 10px; }
+
+.access-table-scroll { overflow-x: auto; }
+.access-table { width: 100%; min-width: 500px; }
+.access-table tbody th { text-align: left; }
+.access-table tbody td small { margin-top: 4px; }
+.access-account-name { border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; padding: 6px 0; }
+.access-account-name:hover { text-decoration: underline; }
+.access-table-scroll:focus-visible, .access-account-name:focus-visible { outline: 2px solid #277456; outline-offset: 2px; }
