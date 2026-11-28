@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  ArrowDownLeft, ArrowUpRight, ChevronRight, CircleAlert, Clock3, ExternalLink,
-  FolderOpen, LoaderCircle, MapPin, Users, Video,
+  ArrowLeft, ArrowUpRight, ChevronRight, CircleAlert, Clock3, ExternalLink,
+  FolderOpen, LoaderCircle, MapPin, Settings2, Users, Video,
 } from 'lucide-react'
 import './interior.css'
 
@@ -11,6 +11,37 @@ const weekdays = [
   ['Пн', '23', 'Понедельник'], ['Вт', '24', 'Вторник'], ['Ср', '25', 'Среда'],
   ['Чт', '26', 'Четверг'], ['Пт', '27', 'Пятница'], ['Сб', '28', 'Суббота'], ['Вс', '29', 'Воскресенье'],
 ]
+
+const studentStages = {
+  junior: {
+    cohort: '5Б', range: '5–6 классы', math: 'Математика',
+    lab: 'Природоведение', consult: 'Математика', russianTopic: 'Имя существительное',
+    mathTopic: 'Действия с дробями', labTopic: 'Наблюдение за испарением воды',
+    labHomework: 'Запишите результаты наблюдения и сравните уровень воды до опыта и после него.',
+    notebook: 'Построение углов', journalLab: 'Наблюдение за погодой',
+    journalMath: ['Контрольная по дробям', 'Сравнение дробей', 'Деление с остатком', 'Числовая прямая', 'Задачи на делимость'],
+    journalLabTest: 'Вода в трёх состояниях', earlierLab: 'Измерение температуры',
+  },
+  middle: { cohort: '8Б', range: '8–9 классы', math: 'Алгебра', lab: 'Физика' },
+  senior: {
+    cohort: '10А', range: '10–11 классы', math: 'Алгебра и начала анализа',
+    lab: 'Физика', consult: 'Геометрия', russianTopic: 'Сложносочинённое предложение',
+    mathTopic: 'Тригонометрические уравнения', labTopic: 'Исследование движения тела',
+    labHomework: 'Постройте график скорости по результатам измерений и найдите ускорение.',
+    notebook: 'Прямые и плоскости в пространстве', journalLab: 'Равноускоренное движение',
+    journalMath: ['Тригонометрические уравнения', 'Формулы приведения', 'Знаки функций по четвертям', 'Радианная мера угла', 'Единичная окружность'],
+    journalLabTest: 'Перемещение и скорость', earlierLab: 'Равномерное движение',
+  },
+  graduate: {
+    cohort: '11А', range: '10–11 классы', math: 'Алгебра и начала анализа',
+    lab: 'Физика', consult: 'Геометрия', russianTopic: 'Знаки препинания в сложном предложении',
+    mathTopic: 'Производная и исследование функций', labTopic: 'Изучение дифракции света',
+    labHomework: 'Запишите результаты измерений и объясните, как изменилась дифракционная картина.',
+    notebook: 'Объём многогранников', journalLab: 'Волновые свойства света',
+    journalMath: ['Производная функции', 'Правила дифференцирования', 'Критические точки', 'График функции', 'Касательная к графику'],
+    journalLabTest: 'Интерференция света', earlierLab: 'Электромагнитные волны',
+  },
+}
 
 const studentWeek = [
   [['09:00', '09:45', 'Русский язык', '214', 'Анна Белова', '8Б', 'Урок']],
@@ -42,6 +73,16 @@ const teacherWeek = [
   [['13:00', '14:00', 'Ярмарка проектов', 'Актовый зал', '', '8–9 классы', 'Школьное событие']],
   [], [],
 ]
+
+function getStudentWeek(study) {
+  if (study === studentStages.middle) return studentWeek
+  return studentWeek.map((day) => day.map(([start, end, title, room, person, group, kind, delivery]) => [
+    start, end,
+    { Алгебра: study.math, Физика: study.lab, Геометрия: study.consult }[title] ?? title,
+    room, person, group.replace('8Б', study.cohort).replace('8–9 классы', study.range),
+    study === studentStages.junior && kind === 'Лабораторная' ? 'Практикум' : kind, delivery,
+  ]))
+}
 
 const homeworkItems = [
   { external_coursework_id: 'hw-1', title: 'Системы линейных уравнений', course_title: 'Алгебра', due_at: '2026-11-24T18:00:00+03:00', description: 'Решите задачи 152–154. В первом примере запишите оба способа решения: подстановкой и сложением.' },
@@ -98,6 +139,18 @@ function joinHomework(items, submissions) {
 
 const homework = joinHomework(homeworkItems, homeworkSubmissions)
 
+function getHomework(study) {
+  if (study === studentStages.middle) return homework
+  const topics = [
+    { name: study.mathTopic, subject: study.math, body: 'Решите задачи 152–154. Запишите ход решения и проверьте ответы.' },
+    { name: study.labTopic, subject: study.lab, body: study.labHomework },
+    {},
+    { name: study.russianTopic, body: 'Выпишите пять примеров из текста и объясните расстановку знаков препинания.' },
+    { name: study.notebook, subject: study.consult, body: 'Решите задачи 101 и 104. Приложите чертежи к каждому решению.' },
+  ]
+  return homework.map((item, index) => ({ ...item, ...topics[index] }))
+}
+
 const submissionText = {
   NEW: 'Не начато', CREATED: 'В работе', RECLAIMED_BY_STUDENT: 'Отозвано',
   TURNED_IN: 'Сдано', RETURNED: 'Возвращено',
@@ -130,13 +183,13 @@ function Empty({ icon: Icon = FolderOpen, title, children }) {
 
 function Detail({ title, subtitle, children, onBack }) {
   const heading = useRef(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     heading.current?.focus({ preventScroll: true })
   }, [title])
 
-  return <section className="ci-detail">
+  return <section className="ci-detail" key={title}>
     <button className="ci-back" type="button" onClick={onBack}>
-      <ArrowDownLeft size={17} aria-hidden="true" /> Назад к списку
+      <ArrowLeft size={17} aria-hidden="true" /> Назад
     </button>
     <h3 tabIndex={-1} ref={heading}>{title}</h3>
     {subtitle && <p className="ci-meta">{subtitle}</p>}
@@ -159,10 +212,10 @@ function onlineMeetingUrl(value) {
   }
 }
 
-function Schedule({ role, detail, open, back }) {
+function Schedule({ role, study, detail, open, back }) {
   const [mode, setMode] = useState('day')
   const [day, setDay] = useState(1)
-  const week = role === 'teacher' ? teacherWeek : studentWeek
+  const week = role === 'teacher' ? teacherWeek : getStudentWeek(study)
   const next = role === 'teacher' ? 3 : 2
 
   if (detail) {
@@ -192,7 +245,7 @@ function Schedule({ role, detail, open, back }) {
         const [start, end, title, room, person, group, kind, delivery] = event
         const mark = index === 1 ? position === 1 ? 'По расписанию сейчас' : position === next ? 'Следующее занятие' : '' : ''
         const meta = [kind === 'Урок' || kind === title ? '' : kind, group, person].filter(value => typeof value === 'string').filter(Boolean).join(' · ')
-        return <button type="button" key={start} className="ci-event" onClick={() => open({ event, index })}>
+        return <button type="button" key={start} className="ci-event" data-live={index === 1 && position === 1 ? 'now' : undefined} onClick={() => open({ event, index })}>
           <span className="ci-time"><strong>{start}</strong><small>{end}</small></span>
           <span className="ci-row-copy">
             {mark && <span className="ci-mark">{mark}</span>}
@@ -216,7 +269,7 @@ function Schedule({ role, detail, open, back }) {
   </>
 }
 
-function Homework({ detail, open, back }) {
+function Homework({ study, detail, open, back }) {
   const [filter, setFilter] = useState('open')
   if (detail) {
     return <Detail title={detail.name} subtitle={detail.subject} onBack={back}>
@@ -233,11 +286,11 @@ function Homework({ detail, open, back }) {
         : <p className="ci-meta">Ссылка задания недоступна в демо.</p>}
     </Detail>
   }
-  const list = homework.filter((item) =>
+  const list = getHomework(study).filter((item) =>
     filter === 'done' ? item.completed : filter === 'late' ? item.overdue : !item.completed)
   return <>
     <Tabs items={[[ 'open', 'К сдаче' ], [ 'late', 'Просрочено' ], [ 'done', 'Сдано' ]]} selected={filter} onChange={setFilter} label="Статус заданий" />
-    {list.length ? <div className="ci-list">{list.map((item) => <Row key={item.id} title={item.name}
+    {list.length ? <div className="ci-list ci-homework">{list.map((item) => <Row key={item.id} title={item.name}
       end={<span className={item.overdue ? 'ci-mark ci-alert' : 'ci-mark'}>{item.overdue ? 'Просрочено' : item.late ? 'Сдано после срока' : submissionText[item.state] || 'Статус неизвестен'}</span>}
       onClick={() => open(item)}>{item.subject} · {item.due}</Row>)}</div> : <Empty title="В этом разделе пока нет заданий" />}
   </>
@@ -274,6 +327,21 @@ const subjects = [
   ], past: [{ title: 'Изложение', date: '12 октября', value: '4', weight: '2' }] },
 ]
 
+function getSubjects(study) {
+  if (study === studentStages.middle) return subjects
+  const [algebra, physics, russian] = subjects
+  return [
+    { ...algebra, name: study.math, work: algebra.work.map((record, index) => ({
+      ...record, title: study.journalMath[index] ?? record.title,
+    })) },
+    { ...physics, name: study.lab, work: [
+      { ...physics.work[0], title: study.journalLab },
+      { ...physics.work[1], title: study.journalLabTest },
+    ], past: [{ ...physics.past[0], title: study.earlierLab }] },
+    russian,
+  ]
+}
+
 const groups = [
   { id: '8b', name: '8Б · математика', people: [
     { id: 'a', name: student, result: '16' }, { id: 'l', name: 'Лев Громов', result: '19' },
@@ -298,7 +366,7 @@ function formatResult(record) {
   return [result, status].filter(Boolean).join(' · ') || 'Нет результата'
 }
 
-function Grades({ detail, open, back }) {
+function Grades({ study, detail, open, back }) {
   const [period, setPeriod] = useState('current')
   const [onlyDebt, setOnlyDebt] = useState(false)
   if (detail?.record) {
@@ -329,7 +397,8 @@ function Grades({ detail, open, back }) {
       </Row>)}</div>
     </Detail>
   }
-  const list = onlyDebt && period === 'current' ? subjects.filter((subject) => subject.work.some((record) => record.retakeAssigned)) : subjects
+  const available = getSubjects(study)
+  const list = onlyDebt && period === 'current' ? available.filter((subject) => subject.work.some((record) => record.retakeAssigned)) : available
   return <>
     <Tabs items={[[ 'current', 'II триместр' ], [ 'archive', 'Архив · I триместр' ]]} selected={period} onChange={setPeriod} label="Период оценок" />
     {period === 'current' && <label className="ci-check"><input type="checkbox" checked={onlyDebt} onChange={(event) => setOnlyDebt(event.target.checked)} /> С задолженностями</label>}
@@ -369,8 +438,11 @@ function Groups({ detail, open, back }) {
       onClick={() => open({ group, person: entry })} />)}</div>
   </Detail>
 
-  const recorded = group.tasks.reduce((total, record) => total + group.people.filter((entry) => groupScore(group, record, entry) !== '').length, 0)
+  const incomplete = group.tasks.map((record) => ({
+    record, missing: group.people.filter((entry) => groupScore(group, record, entry) === '').length,
+  })).filter(({ missing }) => missing > 0)
   const expected = group.tasks.length * group.people.length
+  const missingTotal = incomplete.reduce((total, entry) => total + entry.missing, 0)
   return <Detail title={group.name} subtitle="II триместр · 2026/27" onBack={back}>
     <Tabs items={[[ 'journal', 'Журнал' ], [ 'roster', 'Состав' ], [ 'analytics', 'Аналитика' ]]} selected={tab} onChange={setTab} label="Раздел группы" />
     {tab === 'journal' && <div className="ci-list">{group.tasks.map((record) => <Row key={record.id} title={record.name}
@@ -380,13 +452,14 @@ function Groups({ detail, open, back }) {
       <dl className="ci-facts">
         <div><dt>Учеников</dt><dd>{group.people.length}</dd></div>
         <div><dt>Работ</dt><dd>{group.tasks.length}</dd></div>
-        <div><dt>Заполнено результатов</dt><dd>{recorded} из {expected}</dd></div>
-        <div><dt>Без результата</dt><dd>{expected - recorded}</dd></div>
+        <div><dt>Заполнено результатов</dt><dd>{expected - missingTotal} из {expected}</dd></div>
+        <div><dt>Без результата</dt><dd>{missingTotal}</dd></div>
       </dl>
       <h4>Где отсутствуют результаты</h4>
-      <div className="ci-list">{group.tasks.filter((record) => group.people.some((entry) => groupScore(group, record, entry) === '')).map((record) =>
-        <Row key={record.id} title={record.name} end={`Без результата: ${group.people.filter((entry) => groupScore(group, record, entry) === '').length}`}
+      {incomplete.length ? <div className="ci-list">{incomplete.map(({ record, missing }) =>
+        <Row key={record.id} title={record.name} end={`Без результата: ${missing}`}
           onClick={() => open({ group, task: record })}>{record.date}</Row>)}</div>
+        : <Empty title="Все результаты заполнены" />}
     </>}
   </Detail>
 }
@@ -402,29 +475,45 @@ function Courses({ detail, open, back }) {
   return <div className="ci-list">{groups.map((group) => <Row key={group.id} title={group.name} onClick={() => open(group)}>Связанный курс Classroom</Row>)}</div>
 }
 
-function News({ role, detail, open, back }) {
+function News({ role, study, detail, open, back }) {
   if (detail) return <Detail title={detail.title} subtitle={`${detail.type} · ${detail.day}`} onBack={back}><p>{detail.text}</p></Detail>
-  return <div className="ci-list">{announcements.filter((item) => item.role === 'all' || item.role === role).map((item, index) =>
-    <Row key={item.id} title={item.title} end={index === 0 && <span className="ci-mark">Недавнее</span>} onClick={() => open(item)}>{item.type} · {item.day}</Row>)}</div>
+  const studentNews = role === 'student' && study !== studentStages.middle
+  const items = announcements.filter((item) => item.role === 'all' || item.role === role).map((item) => {
+    if (!studentNews) return item
+    if (item.id === 'fair') return { ...item, text: item.text.replace('8–9 классов', study.range.replace('классы', 'классов')) }
+    if (item.id === 'assembly') return {
+      ...item,
+      title: `${study.lab}: занятие в кабинете 207`,
+      text: `Занятие класса ${study.cohort} пройдёт в кабинете 207. Начало в 10:55.`,
+    }
+    return item
+  })
+  return <div className="ci-list ci-news">{items.map((item) =>
+    <Row key={item.id} title={item.title} end={item.day} onClick={() => open(item)}>{item.type}</Row>)}</div>
 }
 
-function Profile({ role, homeroom, onRoleChange }) {
+function Profile({ role, study, homeroom, onRoleChange, onSettings }) {
   const isTeacher = role === 'teacher'
   return <div>
     <div className="ci-profile">
       <span className="ci-initials" aria-hidden="true">{isTeacher ? 'МЛ' : 'АВ'}</span>
-      <div><h3>{isTeacher ? teacher : student}</h3><div className="ci-meta">{isTeacher ? 'Преподаватель математики' : 'Ученица · 8Б'}</div></div>
+      <div><h3>{isTeacher ? teacher : student}</h3><div className="ci-meta">{isTeacher ? 'Преподаватель математики' : `Ученица · ${study.cohort}`}</div></div>
     </div>
     <dl className="ci-facts">
       <div><dt>Статус аккаунта</dt><dd>Активен</dd></div>
-      <div><dt>{isTeacher ? 'Классы' : 'Класс'}</dt><dd>{isTeacher ? '8А, 8Б, 9А' : '8Б'}</dd></div>
+      <div><dt>{isTeacher ? 'Классы' : 'Класс'}</dt><dd>{isTeacher ? '8А, 8Б, 9А' : study.cohort}</dd></div>
       <div><dt>Учебные группы</dt><dd>{isTeacher ? '8А, 8Б и 9А · математика' : 'Математика · информатика, группа 2'}</dd></div>
       {isTeacher && homeroom && <div><dt>Классное руководство</dt><dd>8Б</dd></div>}
       <div><dt>Доступные роли в демо</dt><dd>Ученик · Учитель</dd></div>
     </dl>
-    <button type="button" className="ci-action" onClick={() => onRoleChange?.(isTeacher ? 'student' : 'teacher')}>
-      {isTeacher ? 'Открыть Campus ученика' : 'Открыть Campus учителя'} <ArrowUpRight size={16} aria-hidden="true" />
-    </button>
+    <div className="ci-actions">
+      {onSettings && <button type="button" className="ci-action" onClick={onSettings}>
+        <Settings2 size={16} aria-hidden="true" /> Настройки
+      </button>}
+      <button type="button" className="ci-action" onClick={() => onRoleChange?.(isTeacher ? 'student' : 'teacher')}>
+        {isTeacher ? 'Открыть Campus ученика' : 'Открыть Campus учителя'} <ArrowUpRight size={16} aria-hidden="true" />
+      </button>
+    </div>
   </div>
 }
 
@@ -443,30 +532,54 @@ function Homeroom({ enabled, detail, open, back }) {
   </>
 }
 
-function LocationContent({ role, location, onRoleChange, homeroom, registerBack }) {
+function LocationContent({ role, stage, location, onRoleChange, onSettings, homeroom, registerBack }) {
   const [stack, setStack] = useState([])
-  const detail = stack.at(-1)
-  const open = (entry) => setStack((previous) => [...previous, entry])
-  const back = () => setStack((previous) => previous.slice(0, -1))
+  const root = useRef(null)
+  const restoreView = useRef(null)
+  const detail = stack.at(-1)?.detail
+  const study = studentStages[stage] ?? studentStages.middle
+  const open = (entry) => {
+    const scroll = root.current?.closest('.room-scroll')
+    const active = document.activeElement
+    const buttons = Array.from(root.current?.querySelectorAll('button') ?? [])
+    const view = { detail: entry, scrollTop: scroll?.scrollTop ?? 0, buttonIndex: buttons.indexOf(active) }
+    setStack((previous) => [...previous, view])
+  }
+  const back = useCallback(() => {
+    restoreView.current = stack.at(-1)
+    setStack((previous) => previous.slice(0, -1))
+  }, [stack])
   const hasDetail = stack.length > 0
+
+  useLayoutEffect(() => {
+    const scroll = root.current?.closest('.room-scroll')
+    const previous = restoreView.current
+    if (scroll) scroll.scrollTop = previous?.scrollTop ?? 0
+    if (previous?.buttonIndex >= 0) {
+      root.current?.querySelectorAll('button')[previous.buttonIndex]?.focus({ preventScroll: true })
+    }
+    restoreView.current = null
+  }, [stack])
 
   useEffect(() => {
     if (!hasDetail || !registerBack) return undefined
     registerBack(back)
     return () => registerBack(null)
-  }, [hasDetail, registerBack])
+  }, [back, hasDetail, registerBack])
 
-  const view = { detail, open, back }
-  if (location === 'schedule') return <Schedule role={role} {...view} />
-  if (location === 'work') return role === 'teacher' ? <Groups {...view} /> : <Homework {...view} />
-  if (location === 'results') return role === 'teacher' ? <Courses {...view} /> : <Grades {...view} />
-  if (location === 'news') return <News role={role} {...view} />
-  if (location === 'homeroom') return <Homeroom enabled={role === 'teacher' && homeroom} {...view} />
-  if (location === 'profile') return <Profile role={role} homeroom={homeroom} onRoleChange={onRoleChange} />
-  return null
+  const view = { study, detail, open, back }
+  const panels = {
+    schedule: <Schedule role={role} {...view} />,
+    work: role === 'teacher' ? <Groups {...view} /> : <Homework {...view} />,
+    results: role === 'teacher' ? <Courses {...view} /> : <Grades {...view} />,
+    news: <News role={role} {...view} />,
+    homeroom: <Homeroom enabled={role === 'teacher' && homeroom} {...view} />,
+    profile: <Profile role={role} study={study} homeroom={homeroom} onRoleChange={onRoleChange} onSettings={onSettings} />,
+  }
+  return <div ref={root} data-panel={location}>{panels[location]}</div>
 }
 
-export default function Interior({ role, location, onRoleChange, homeroom = false, dataState = 'ready', onRetry, registerBack }) {
+export default function Interior({ role, stage = 'middle', location, onRoleChange, onSettings, homeroom = false, dataState = 'ready', onRetry, registerBack }) {
   if (dataState === 'loading') return <output className="ci-interior"><Empty icon={LoaderCircle} title="Загружаем данные" /></output>
   if (location === 'schedule' && dataState === 'unpublished') return <output className="ci-interior"><Empty icon={Clock3} title="Неделя не опубликована">Занятия появятся после публикации расписания.</Empty></output>
   if (dataState === 'empty') return <output className="ci-interior"><Empty title="Данных пока нет">Здесь появятся данные школы, когда они будут доступны.</Empty></output>
@@ -474,5 +587,5 @@ export default function Interior({ role, location, onRoleChange, homeroom = fals
     <div role="alert"><Empty icon={CircleAlert} title="Не удалось загрузить данные">Попробуйте запросить их ещё раз.</Empty></div>
     {onRetry && <button className="ci-action" type="button" onClick={onRetry}>Повторить загрузку</button>}
   </div>
-  return <div className="ci-interior"><LocationContent key={`${role}-${location}`} {...{ role, location, onRoleChange, homeroom, registerBack }} /></div>
+  return <div className="ci-interior"><LocationContent key={`${role}-${stage}-${location}`} {...{ role, stage, location, onRoleChange, onSettings, homeroom, registerBack }} /></div>
 }
