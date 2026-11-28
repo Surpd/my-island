@@ -1,0 +1,160 @@
+@import './fonts/fonts.css';
+* { box-sizing:border-box }
+html { scrollbar-gutter:stable; background:#eeefe7 }
+body { margin:0; font:16px/1.45 "Segoe UI",Arial,sans-serif }
+button,select,input { font:inherit }
+button { cursor:pointer; color:inherit }
+button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible { outline:3px solid var(--accent); outline-offset:3px }
+button { -webkit-tap-highlight-color:transparent }
+button svg, label svg, footer svg { flex:none }
+.campus {
+  --paper:#f4f4ec; --surface:#fcfcf5; --ink:#172f37; --muted:#526566; --accent:#146c6e;
+  --line:#c6d1c8; --tint:#dcebe3; --deep:#123f49; --light:#fbf9e9; --punct:#ffbd74;
+  --display:"Spectral Campus",Georgia,serif; --measure:1216px;
+  min-height:100dvh; color:var(--ink); background:var(--paper); padding:0 clamp(16px,4.5vw,76px);
+  color-scheme:light; accent-color:var(--accent); scrollbar-color:var(--muted) var(--paper)
+}
+.campus[data-theme=press] {
+  --paper:#fff2c8; --surface:#fff8df; --ink:#172e60; --muted:#4e5775; --accent:#ad301c;
+  --line:#b7ac83; --tint:#f5e1b1; --deep:#293e79; --punct:#ffdd71; --display:"Oswald Campus","Arial Narrow",sans-serif
+}
+.campus[data-theme=orbit] {
+  --paper:#101c2a; --surface:#192b3a; --ink:#f3f2e9; --muted:#b9c9d1; --accent:#ffcc7c;
+  --line:#3e505d; --tint:#304454; --deep:#233d4b; --light:#f4efdf; --punct:#f6c274;
+  --display:"Spectral Campus",Georgia,serif; color-scheme:dark
+}
+::selection { background:#fed291;color:#102f36 }
+.mast, .layout, footer { max-width:var(--measure); margin-inline:auto }
+.mast { display:flex; align-items:center; justify-content:space-between; min-height:83px; border-bottom:1px solid var(--line); gap:15px }
+.wordmark { display:flex; align-items:center; gap:9px; font:700 26px/1 "Spectral Campus",Georgia,serif; letter-spacing:-.045em; white-space:nowrap }
+.wordmark svg { color:var(--accent) }
+.switches,.picker,.icon,.map-key,.map-key span,.map-key button,.dateline,.lesson-time,.lesson-meta,.notice,.room-head,.room-head span,.util-head,footer,footer span,.dir-link,.travel-back { display:flex; align-items:center }
+.switches { gap:8px }
+.picker { position:relative; height:44px; padding:0 9px; gap:6px; color:var(--ink) }
+.picker select { position:relative; margin-inline:-27px -23px; padding:0 22px 0 28px; height:100%; appearance:none; cursor:pointer; border:0; background:transparent; color:inherit; font-weight:600; font-size:.87rem }
+.picker option { background:var(--surface); color:var(--ink) }
+.picker svg { pointer-events:none }
+.icon,.room-head button,.map-key button,.travel-back { border:0; background:transparent; justify-content:center; min-height:44px; min-width:44px; gap:7px }
+.icon:hover,.picker:hover,.map-key button:hover,.room-head button:hover { background:var(--tint) }
+.layout { display:grid; grid-template-columns:minmax(270px,.77fr) minmax(400px,1.23fr); grid-template-rows:auto 1fr; column-gap:clamp(34px,6.8vw,102px); padding-block:clamp(24px,4vw,58px) 25px; align-items:start }
+.intro { grid-area:1/1; align-self:end; padding-top:clamp(8px,2.8vw,46px) }
+.dateline { gap:10px; font-size:.87rem; color:var(--muted); font-variant-numeric:tabular-nums }
+.dateline span+span { padding-left:10px; border-left:1px solid var(--line) }
+h1,h2,p { margin:0 }
+h1 { font:600 clamp(3.4rem,6.1vw,6rem)/.99 var(--display); letter-spacing:-.055em; margin:.27em 0 .19em; max-width:10ch; text-wrap:balance }
+.persona { font-size:1.02rem; color:var(--muted) }
+.map-block { grid-area:1/2/3/3; min-width:0; align-self:center }
+.stage { position:relative; container-type:inline-size; width:100%; aspect-ratio:1; isolation:isolate; overflow:hidden; background:var(--deep); border-radius:2px }
+.camera,.markers { position:absolute; inset:0 }
+.camera { transform-origin:0 0; transition:transform .58s cubic-bezier(.24,.72,.2,1); pointer-events:none }
+@supports (transition-timing-function:linear(0,1)) {
+  .camera { transition-timing-function:linear(0,.035 5%,.13 12%,.39 25%,.64 40%,.84 58%,.96 78%,1) }
+}
+.camera img { display:block; width:100%; height:100%; user-select:none }
+.markers { transition:opacity .13s; pointer-events:none }
+.markers.departing { opacity:0 }
+.marker { --anchor:50%; width:max-content; position:absolute; translate:calc(0% - var(--anchor)) 0; border:0; background:none; min-height:44px; display:grid; align-items:center; padding:0; pointer-events:auto }
+.markers[inert] .marker { pointer-events:none }
+.building-area { position:absolute; left:var(--anchor); bottom:65%; translate:-50% 0; width:15cqw; height:13cqw }
+.marker::before { content:""; position:absolute; left:var(--anchor); top:1px; height:13px; border-left:2px solid #fff9df; filter:drop-shadow(0 1px 2px #000) }
+.marker::after { content:""; position:absolute; left:calc(var(--anchor) - 3px); top:0; width:6px; height:6px; border-radius:50%; background:#fff9df }
+[data-theme=orbit][data-role=student] .marker-news { --anchor:20% }
+[data-role=teacher] .marker-news { --anchor:32% }
+.marker-tag { z-index:1; display:flex; align-items:center; gap:5px; background:var(--surface); color:var(--ink); border:1px solid var(--ink); border-radius:3px; padding:4px 8px; font-size:.78rem; font-weight:700; line-height:1.15; box-shadow:0 2px 6px #091a2630 }
+.marker:hover .marker-tag,.marker:focus-visible .marker-tag { background:var(--deep); color:var(--light) }
+.marker:focus-visible { outline:3px solid white; outline-offset:2px }
+.signal { width:8px; height:8px; border:1px solid var(--ink); border-radius:50%; background:#eba14a }
+.map-key { min-height:56px; gap:12px; justify-content:space-between; border-bottom:1px solid var(--line); font-size:.83rem }
+.map-key span,.map-key button { gap:7px }
+.map-key span { color:var(--muted) }
+.map-key button { font-weight:650; padding:0 4px }
+.daybook { grid-area:2/1; width:100%; max-width:380px; padding-top:clamp(18px,3.2vw,43px) }
+.lesson { display:block; width:100%; border:0; text-align:left; background:var(--deep); color:var(--light); padding:18px 22px 19px; border-radius:3px }
+.lesson-time { gap:9px; color:var(--punct); font-size:.82rem; font-weight:600 }
+.lesson-name { display:flex; align-items:center; justify-content:space-between; gap:8px; font:600 2.3rem/1.23 var(--display); margin:5px 0 }
+.lesson-meta { font-size:.9rem; gap:9px; font-variant-numeric:tabular-nums }
+.lesson-meta i { height:3px; width:3px; background:currentColor; border-radius:50% }
+.daybook h2 { font:600 1.43rem/1.2 var(--display); margin:27px 0 8px; letter-spacing:-.025em }
+.notice { width:100%; text-align:left; border:0; border-bottom:1px solid var(--line); background:transparent; padding:12px 0; gap:12px }
+.notice span:nth-child(2),.dir-link span { display:grid; gap:2px; flex:1 }
+.notice strong,.dir-link strong { font-size:.94rem; font-weight:640 }
+.notice small,.dir-link small { color:var(--muted); font-size:.81rem }
+.notice-icon { display:grid; place-items:center; width:32px; min-height:36px; color:var(--accent) }
+.notice:hover,.dir-link:hover { background:var(--tint) }
+footer { display:flex; justify-content:space-between; gap:8px; padding:12px 0 22px; color:var(--muted); font-size:.77rem }
+footer span { gap:6px }
+.travel-back { position:absolute; top:10px; left:10px; background:var(--surface); color:var(--ink); border-radius:3px; padding:0 12px }
+dialog { color:var(--ink); background:var(--surface); border:1px solid var(--line); padding:0; box-shadow:0 16px 65px #081e3140 }
+dialog::backdrop { background:rgb(7 17 26 / .25) }
+html:has(dialog[open]) { overflow:hidden }
+.room { position:fixed; inset:auto auto auto max(4.5vw,calc(50% - 608px)); top:50%; transform:translateY(-50%); width:min(440px,43vw); max-height:85dvh; margin:0; overflow:hidden; border-radius:6px }
+.room[open]{ display:flex; flex-direction:column }
+.room-head { padding:4px 10px; border-bottom:1px solid var(--line); justify-content:space-between; gap:6px }
+.room-head span { gap:7px; font-size:.85rem; color:var(--muted) }
+.room-head button { display:grid; place-items:center; color:var(--ink) }
+.room-scroll { overflow:auto; overscroll-behavior:contain; padding:20px clamp(16px,2.1vw,28px) 30px }
+.room-scroll>h2,.utility h2 { font:600 clamp(1.8rem,3vw,2.4rem)/1.12 var(--display); letter-spacing:-.035em; margin-bottom:17px }
+.utility { width:min(390px,calc(100% - 26px)); border-radius:6px; padding:16px 22px 22px; max-height:85dvh; overscroll-behavior:contain }
+.util-head { justify-content:space-between; gap:10px; margin-bottom:8px }
+.utility h2 { font-size:1.55rem; margin:0 }
+.dir-link { width:100%; min-height:58px; gap:12px; text-align:left; background:transparent; border:0; border-top:1px solid var(--line); padding:7px 3px }
+.field { display:grid; gap:8px; padding:10px 0; font-weight:600 }
+.field select { height:44px; color:var(--ink); background:var(--paper); border:1px solid var(--line); padding:0 10px; border-radius:3px }
+.check { display:flex; align-items:center; gap:10px; min-height:44px }
+[data-theme=press] h1 { color:var(--accent); font-weight:700; line-height:.99; letter-spacing:-.035em }
+[data-theme=press] .marker-tag { border-radius:0; color:var(--deep); border-color:var(--deep); box-shadow:2px 2px 0 var(--deep) }
+[data-theme=press] .lesson { border-radius:0; border-block:4px double var(--paper) }
+[data-theme=press] .stage { outline:1px solid var(--ink); outline-offset:-1px }
+[data-theme=orbit] .marker-tag { border:1px solid #e9b971; background:#15283b; color:#ffe3b2; border-radius:15px }
+[data-theme=orbit] .lesson { border:1px solid var(--line); background:var(--surface) }
+[data-theme=orbit] h1 { font-weight:600; font-style:normal }
+[data-theme=orbit] .stage { border-radius:12px }
+[data-theme=press] .camera { transition-duration:.46s }
+[data-theme=orbit] .camera { transition-duration:.66s }
+[data-theme=press] .ci-tabs button,[data-theme=press] .ci-days button { border-radius:0 }
+[data-theme=orbit] .ci-time { color:var(--punct) }
+@media(min-width:781px){
+  [data-theme=press] .layout { grid-template-columns:minmax(400px,1.23fr) minmax(270px,.77fr) }
+  [data-theme=press] .map-block { grid-column:1 }
+  [data-theme=press] .intro,[data-theme=press] .daybook { grid-column:2 }
+  [data-theme=press] .room { left:auto; right:max(4.5vw,calc(50% - 608px)) }
+}
+@media(max-width:780px){
+  html {scrollbar-gutter:auto}
+  .campus {padding-inline:18px}
+  .campus[data-travel] {min-height:calc(100dvh + 320px)}
+  .mast {min-height:63px; flex-wrap:wrap; padding-block:8px; gap:3px}
+  .wordmark {font-size:23px}
+  .switches {gap:0}
+  .layout {max-width:570px; display:flex; flex-direction:column; gap:0; padding:19px 0 10px}
+  .intro {width:100%; align-self:auto; padding:0 0 17px}
+  h1 {max-width:none; font-size:clamp(2.2rem,1.25rem + 5.4vw,3.6rem); margin:4px 0; line-height:1.05}
+  .persona,.dateline {font-size:.83rem}
+  .map-block,.daybook {width:100%;max-width:none}
+  .daybook {padding-top:17px}
+  .daybook h2 {margin-top:20px}
+  .map-key {min-height:45px}
+  .lesson {padding:14px 18px}
+  .lesson-name {font-size:1.85rem}
+  .room {inset:auto 0 0; transform:none; width:min(100%,600px); max-width:100%; margin:0 auto; max-height:66dvh; border-radius:14px 14px 0 0; padding-bottom:env(safe-area-inset-bottom)}
+  .room-scroll {padding:14px 18px 22px}
+  .marker-tag {padding:3px 5px; font-size:.71rem; gap:3px}
+  .marker-tag svg {width:12px}
+  .room-head {min-height:47px}
+}
+@media(max-width:520px){
+  .mast {display:grid;grid-template-columns:1fr auto;row-gap:0;padding:8px 0 0}
+  .wordmark {grid-column:1;grid-row:1;min-height:35px}
+  .switches {display:contents}
+  .picker:has(#concept) {grid-column:1;grid-row:2; justify-self:start; margin-left:-9px}
+  .picker:has(#role) {grid-column:2;grid-row:2;justify-self:end; margin-right:-9px}
+  #settings {grid-column:2;grid-row:1;justify-self:end;min-height:36px}
+  .layout {padding-top:13px}
+  .stage {margin-inline:-6px;width:calc(100% + 12px)}
+  .marker-news { --anchor:32% }
+  footer {font-size:.72rem}
+}
+@media(prefers-reduced-motion:reduce){
+  .camera {transition:none;transform:none!important}
+  .markers {transition:none}
+}
