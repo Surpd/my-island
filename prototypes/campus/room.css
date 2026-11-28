@@ -1,0 +1,78 @@
+.room {
+  --sheet-top-gap: 8px;
+  --sheet-height: calc(var(--viewport-height) - var(--safe-top) - var(--sheet-top-gap));
+  bottom: var(--host-offset);
+  max-height: var(--sheet-height);
+}
+.room[data-expanded="true"] {
+  height: var(--sheet-height);
+}
+.room[data-expanded="false"] {
+  max-height: min(var(--sheet-height), max(14rem, calc(var(--sheet-height) * .49)));
+}
+.room-head {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) max-content 44px 44px;
+  align-items: center;
+  gap: 0;
+  min-height: 54px;
+  padding-block: 4px;
+  padding-inline: max(3px, var(--safe-left)) max(3px, var(--safe-right));
+}
+.room-head h2 {
+  margin: 0 4px;
+  overflow-wrap: anywhere;
+  font: 600 clamp(1.17rem, 4.6vw, 1.52rem)/1.12 var(--display);
+  letter-spacing: -.02em;
+}
+.room-head button {
+  color: var(--accent);
+}
+.room-head .sheet-toggle {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: auto;
+  min-width: 44px;
+  gap: 2px;
+  padding-inline: 3px;
+}
+.room-head .sheet-toggle span { font-size: .75rem; line-height: 1.05; }
+.room-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px max(16px, var(--safe-right)) calc(18px + var(--safe-bottom)) max(16px, var(--safe-left));
+  overflow-anchor: none;
+}
+.utility {
+  bottom: var(--host-offset);
+  max-height: calc(var(--viewport-height) - var(--safe-top) - 8px);
+  padding-bottom: calc(18px + var(--safe-bottom));
+}
+.room-head :focus-visible,
+.utility :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+[data-text="large"] .room-head h2 {
+  font-size: clamp(1.32rem, 5.15vw, 1.69rem);
+}
+[data-compact] .room-scroll { padding-top: 7px; }
+[data-compact] .room-head { min-height: 48px; padding-block: 1px; }
+[data-compact] .ci-days { margin-top: .3rem; }
+[data-compact] .ci-schedule-day h3 { margin-block: .5rem .25rem; }
+
+@media (min-width: 750px) {
+  .room {
+    --sheet-top-gap: calc(14px + max(22px, var(--safe-bottom)));
+    bottom: calc(var(--host-offset) + max(22px, var(--safe-bottom)));
+  }
+  .utility {
+    bottom: calc(var(--host-offset) + max(22px, var(--safe-bottom)));
+    max-height: calc(var(--viewport-height) - var(--safe-top) - max(22px, var(--safe-bottom)) - 14px);
+  }
+  .room-scroll,
+  .utility {
+    padding-bottom: 18px;
+  }
+}

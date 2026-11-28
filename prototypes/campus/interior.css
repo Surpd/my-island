@@ -181,11 +181,10 @@
 @keyframes ci-detail-enter {
   from { opacity: .42; transform: translateX(8px); }
 }
-.ci-detail > .ci-meta { margin-top: .42rem; }
+.ci-detail > .ci-meta { margin-block-end: .55rem; }
+.ci-detail > :first-child { margin-block-start: 0; }
 .ci-detail > p:not(.ci-meta) { margin-top: 1rem; max-width: 62ch; }
-.ci-detail > .ci-tabs { margin-top: 1rem; }
-.ci-action,
-.ci-back {
+.ci-action {
   display: inline-flex;
   align-items: center;
   gap: .45rem;
@@ -197,15 +196,6 @@
   text-decoration: none;
 }
 .ci-interior .ci-action { margin-top: .92rem; font-size: .86rem; font-weight: 670; }
-.ci-interior .ci-back {
-  margin: -.2rem 0 .57rem;
-  padding-inline: .3rem .55rem;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: .85rem;
-  font-weight: 650;
-}
 .ci-facts {
   margin-top: 1rem;
   border-block: 1px solid var(--line);
@@ -254,7 +244,7 @@
 .ci-interior .ci-actions .ci-action { margin: 0; }
 
 @media (hover: hover) {
-  .ci-interior :where(.ci-row-button, .ci-event, .ci-back, .ci-tabs button, .ci-days button):hover {
+  .ci-interior :where(.ci-row-button, .ci-event, .ci-tabs button, .ci-days button):hover {
     background: var(--tint);
   }
   .ci-action:hover { border-color: var(--accent); }

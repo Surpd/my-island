@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  ArrowLeft, ArrowUpRight, ChevronRight, CircleAlert, Clock3, ExternalLink,
-  FolderOpen, LoaderCircle, MapPin, Settings2, Users, Video,
+  ArrowUpRight, ChevronRight, CircleAlert, Clock3, ExternalLink,
+  FolderOpen, LoaderCircle, MapPin, Users, Video,
 } from 'lucide-react'
 import './interior.css'
 
@@ -181,17 +180,13 @@ function Empty({ icon: Icon = FolderOpen, title, children }) {
   return <span className="ci-empty"><Icon size={25} aria-hidden="true" /><span><strong>{title}</strong>{children && <span className="ci-meta">{children}</span>}</span></span>
 }
 
-function Detail({ title, subtitle, children, onBack }) {
-  const heading = useRef(null)
-  useLayoutEffect(() => {
-    heading.current?.focus({ preventScroll: true })
-  }, [title])
+export function getInteriorTitle(detail) {
+  return detail?.event?.[2] ?? detail?.record?.title ?? detail?.task?.name ?? detail?.person?.name
+    ?? detail?.group?.name ?? detail?.subject?.name ?? detail?.title ?? detail?.name
+}
 
-  return <section className="ci-detail" key={title}>
-    <button className="ci-back" type="button" onClick={onBack}>
-      <ArrowLeft size={17} aria-hidden="true" /> Назад
-    </button>
-    <h3 tabIndex={-1} ref={heading}>{title}</h3>
+function Detail({ subtitle, children }) {
+  return <section className="ci-detail">
     {subtitle && <p className="ci-meta">{subtitle}</p>}
     {children}
   </section>
@@ -212,16 +207,15 @@ function onlineMeetingUrl(value) {
   }
 }
 
-function Schedule({ role, study, detail, open, back }) {
-  const [mode, setMode] = useState('day')
-  const [day, setDay] = useState(1)
+function Schedule({ role, study, detail, open, choices, setChoice }) {
+  const { mode = 'day', day = 1 } = choices
   const week = role === 'teacher' ? teacherWeek : getStudentWeek(study)
   const next = role === 'teacher' ? 3 : 2
 
   if (detail) {
-    const [start, end, title, room, person, group, kind, delivery] = detail.event
+    const [start, end, , room, person, group, kind, delivery] = detail.event
     const meetingUrl = onlineMeetingUrl(delivery?.url)
-    return <Detail title={title} subtitle={kind} onBack={back}>
+    return <Detail subtitle={kind}>
       <dl className="ci-facts">
         <div><dt>Дата</dt><dd>{weekdays[detail.index][1]} ноября</dd></div>
         <div><dt>Время</dt><dd>{start}–{end}</dd></div>
@@ -261,18 +255,18 @@ function Schedule({ role, study, detail, open, back }) {
   </section>
 
   return <>
-    <div className="ci-toolbar"><span className="ci-meta">23–29 ноября 2026</span><Tabs items={[[ 'day', 'День' ], [ 'week', 'Неделя' ]]} selected={mode} onChange={setMode} label="Вид расписания" /></div>
+    <div className="ci-toolbar"><span className="ci-meta">23–29 ноября 2026</span><Tabs items={[[ 'day', 'День' ], [ 'week', 'Неделя' ]]} selected={mode} onChange={value => setChoice('mode',value)} label="Вид расписания" /></div>
     {mode === 'day' && <fieldset className="ci-days" aria-label="День недели">
-      {weekdays.map(([short, date, full], index) => <button type="button" key={date} aria-label={`${full}, ${date} ноября`} aria-pressed={day === index} onClick={() => setDay(index)}><span>{short}</span><strong>{date}</strong></button>)}
+      {weekdays.map(([short, date, full], index) => <button type="button" key={date} aria-label={`${full}, ${date} ноября`} aria-pressed={day === index} onClick={() => setChoice('day',index)}><span>{short}</span><strong>{date}</strong></button>)}
     </fieldset>}
     {mode === 'day' ? renderDay(day) : weekdays.map((_, index) => renderDay(index))}
   </>
 }
 
-function Homework({ study, detail, open, back }) {
-  const [filter, setFilter] = useState('open')
+function Homework({ study, detail, open, choices, setChoice }) {
+  const { filter = 'open' } = choices
   if (detail) {
-    return <Detail title={detail.name} subtitle={detail.subject} onBack={back}>
+    return <Detail subtitle={detail.subject}>
       <dl className="ci-facts">
         <div><dt>Срок сдачи</dt><dd>{detail.due}</dd></div>
         <div><dt>Сдача</dt><dd>{submissionText[detail.state] || 'Статус неизвестен'}</dd></div>
@@ -289,7 +283,7 @@ function Homework({ study, detail, open, back }) {
   const list = getHomework(study).filter((item) =>
     filter === 'done' ? item.completed : filter === 'late' ? item.overdue : !item.completed)
   return <>
-    <Tabs items={[[ 'open', 'К сдаче' ], [ 'late', 'Просрочено' ], [ 'done', 'Сдано' ]]} selected={filter} onChange={setFilter} label="Статус заданий" />
+    <Tabs items={[[ 'open', 'К сдаче' ], [ 'late', 'Просрочено' ], [ 'done', 'Сдано' ]]} selected={filter} onChange={value => setChoice('filter',value)} label="Статус заданий" />
     {list.length ? <div className="ci-list ci-homework">{list.map((item) => <Row key={item.id} title={item.name}
       end={<span className={item.overdue ? 'ci-mark ci-alert' : 'ci-mark'}>{item.overdue ? 'Просрочено' : item.late ? 'Сдано после срока' : submissionText[item.state] || 'Статус неизвестен'}</span>}
       onClick={() => open(item)}>{item.subject} · {item.due}</Row>)}</div> : <Empty title="В этом разделе пока нет заданий" />}
@@ -366,12 +360,11 @@ function formatResult(record) {
   return [result, status].filter(Boolean).join(' · ') || 'Нет результата'
 }
 
-function Grades({ study, detail, open, back }) {
-  const [period, setPeriod] = useState('current')
-  const [onlyDebt, setOnlyDebt] = useState(false)
+function Grades({ study, detail, open, choices, setChoice }) {
+  const { period = 'current', onlyDebt = false } = choices
   if (detail?.record) {
     const { subject, record } = detail
-    return <Detail title={record.title} subtitle={subject.name} onBack={back}>
+    return <Detail subtitle={subject.name}>
       <dl className="ci-facts">
         <div><dt>Результат</dt><dd>{formatResult(record)}</dd></div>
         <div><dt>Дата работы</dt><dd>{record.date}</dd></div>
@@ -384,7 +377,7 @@ function Grades({ study, detail, open, back }) {
   if (detail?.subject) {
     const { subject } = detail
     const records = period === 'current' ? subject.work : subject.past
-    return <Detail title={subject.name} subtitle={period === 'current' ? 'II триместр · 2026/27' : 'I триместр · 2026/27'} onBack={back}>
+    return <Detail subtitle={period === 'current' ? 'II триместр · 2026/27' : 'I триместр · 2026/27'}>
       <dl className="ci-facts">
         {subject.summaries[period].map((summary) => <div key={summary.summary_type}>
           <dt>{summary.label}</dt><dd>{summary.numeric_value ?? summary.text_value}</dd>
@@ -400,8 +393,8 @@ function Grades({ study, detail, open, back }) {
   const available = getSubjects(study)
   const list = onlyDebt && period === 'current' ? available.filter((subject) => subject.work.some((record) => record.retakeAssigned)) : available
   return <>
-    <Tabs items={[[ 'current', 'II триместр' ], [ 'archive', 'Архив · I триместр' ]]} selected={period} onChange={setPeriod} label="Период оценок" />
-    {period === 'current' && <label className="ci-check"><input type="checkbox" checked={onlyDebt} onChange={(event) => setOnlyDebt(event.target.checked)} /> С задолженностями</label>}
+    <Tabs items={[[ 'current', 'II триместр' ], [ 'archive', 'Архив · I триместр' ]]} selected={period} onChange={value => setChoice('period',value)} label="Период оценок" />
+    {period === 'current' && <label className="ci-check"><input type="checkbox" checked={onlyDebt} onChange={event => setChoice('onlyDebt',event.target.checked)} /> С задолженностями</label>}
     <div className="ci-list">{list.map((subject) => {
       const debt = subject.work.filter((record) => record.retakeAssigned).length
       return <Row key={subject.id} title={subject.name} end={<span className="ci-score">{subject.summaries[period].find((summary) => summary.summary_type === 'term_grade')?.numeric_value ?? '—'}</span>} onClick={() => open({ subject })}>
@@ -415,8 +408,7 @@ function groupScore(group, task, person) {
   return (task.scores ? task.scores[group.people.indexOf(person)] : person.result) ?? ''
 }
 
-function Groups({ detail, open, back }) {
-  const [tab, setTab] = useState('journal')
+function Groups({ detail, open, choices, setChoice }) {
   if (!detail) {
     return <div className="ci-list">{groups.map((group) => <Row key={group.id} title={group.name} onClick={() => open({ group })}>
       {group.people.length} ученика · {group.tasks.length === 1 ? '1 работа' : `${group.tasks.length} работы`} в журнале
@@ -424,13 +416,14 @@ function Groups({ detail, open, back }) {
   }
 
   const { group, person, task } = detail
-  if (person) return <Detail title={person.name} subtitle={group.name} onBack={back}>
+  const tab = choices[group.id] ?? 'journal'
+  if (person) return <Detail subtitle={group.name}>
     <h4>Индивидуальные результаты</h4>
     <div className="ci-list">{group.tasks.map((record) => <Row key={record.id} title={record.name}
       end={formatResult({ value: groupScore(group, record, person), max: record.max })}>{record.date} · вес {record.weight}</Row>)}</div>
   </Detail>
 
-  if (task) return <Detail title={task.name} subtitle={`${group.name} · ${task.date}`} onBack={back}>
+  if (task) return <Detail subtitle={`${group.name} · ${task.date}`}>
     <dl className="ci-facts"><div><dt>Максимум</dt><dd>{task.max}</dd></div><div><dt>Вес</dt><dd>{task.weight}</dd></div></dl>
     <h4>Результаты по работе</h4>
     <div className="ci-list">{group.people.map((entry) => <Row key={entry.id} title={entry.name}
@@ -443,8 +436,8 @@ function Groups({ detail, open, back }) {
   })).filter(({ missing }) => missing > 0)
   const expected = group.tasks.length * group.people.length
   const missingTotal = incomplete.reduce((total, entry) => total + entry.missing, 0)
-  return <Detail title={group.name} subtitle="II триместр · 2026/27" onBack={back}>
-    <Tabs items={[[ 'journal', 'Журнал' ], [ 'roster', 'Состав' ], [ 'analytics', 'Аналитика' ]]} selected={tab} onChange={setTab} label="Раздел группы" />
+  return <Detail subtitle="II триместр · 2026/27">
+    <Tabs items={[[ 'journal', 'Журнал' ], [ 'roster', 'Состав' ], [ 'analytics', 'Аналитика' ]]} selected={tab} onChange={value => setChoice(group.id,value)} label="Раздел группы" />
     {tab === 'journal' && <div className="ci-list">{group.tasks.map((record) => <Row key={record.id} title={record.name}
       end={`до ${record.max}`} onClick={() => open({ group, task: record })}>{record.date} · вес {record.weight}</Row>)}</div>}
     {tab === 'roster' && <div className="ci-list">{group.people.map((entry) => <Row key={entry.id} title={entry.name} onClick={() => open({ group, person: entry })}>Индивидуальные результаты</Row>)}</div>}
@@ -464,8 +457,8 @@ function Groups({ detail, open, back }) {
   </Detail>
 }
 
-function Courses({ detail, open, back }) {
-  if (detail) return <Detail title={detail.name} subtitle="Google Classroom" onBack={back}>
+function Courses({ detail, open }) {
+  if (detail) return <Detail subtitle="Google Classroom">
     <dl className="ci-facts"><div><dt>Связанная группа</dt><dd>{detail.name}</dd></div></dl>
     <h4>Связанные работы</h4>
     <div className="ci-list">{detail.tasks.map((task) => <Row key={task.id} title={task.name}>{task.date}</Row>)}</div>
@@ -475,8 +468,8 @@ function Courses({ detail, open, back }) {
   return <div className="ci-list">{groups.map((group) => <Row key={group.id} title={group.name} onClick={() => open(group)}>Связанный курс Classroom</Row>)}</div>
 }
 
-function News({ role, study, detail, open, back }) {
-  if (detail) return <Detail title={detail.title} subtitle={`${detail.type} · ${detail.day}`} onBack={back}><p>{detail.text}</p></Detail>
+function News({ role, study, detail, open }) {
+  if (detail) return <Detail subtitle={`${detail.type} · ${detail.day}`}><p>{detail.text}</p></Detail>
   const studentNews = role === 'student' && study !== studentStages.middle
   const items = announcements.filter((item) => item.role === 'all' || item.role === role).map((item) => {
     if (!studentNews) return item
@@ -492,7 +485,7 @@ function News({ role, study, detail, open, back }) {
     <Row key={item.id} title={item.title} end={item.day} onClick={() => open(item)}>{item.type}</Row>)}</div>
 }
 
-function Profile({ role, study, homeroom, onRoleChange, onSettings }) {
+function Profile({ role, study, homeroom, onRoleChange }) {
   const isTeacher = role === 'teacher'
   return <div>
     <div className="ci-profile">
@@ -507,9 +500,6 @@ function Profile({ role, study, homeroom, onRoleChange, onSettings }) {
       <div><dt>Доступные роли в демо</dt><dd>Ученик · Учитель</dd></div>
     </dl>
     <div className="ci-actions">
-      {onSettings && <button type="button" className="ci-action" onClick={onSettings}>
-        <Settings2 size={16} aria-hidden="true" /> Настройки
-      </button>}
       <button type="button" className="ci-action" onClick={() => onRoleChange?.(isTeacher ? 'student' : 'teacher')}>
         {isTeacher ? 'Открыть Campus ученика' : 'Открыть Campus учителя'} <ArrowUpRight size={16} aria-hidden="true" />
       </button>
@@ -517,10 +507,10 @@ function Profile({ role, study, homeroom, onRoleChange, onSettings }) {
   </div>
 }
 
-function Homeroom({ enabled, detail, open, back }) {
+function Homeroom({ enabled, detail, open }) {
   const group = groups[0]
   if (!enabled) return <Empty icon={Users} title="Назначенного класса нет" />
-  if (detail) return <Detail title={detail.name} subtitle="8Б" onBack={back}>
+  if (detail) return <Detail subtitle="8Б">
     <dl className="ci-facts"><div><dt>Класс</dt><dd>8Б</dd></div><div><dt>Учебная группа</dt><dd>Математика</dd></div></dl>
   </Detail>
   return <>
@@ -532,54 +522,21 @@ function Homeroom({ enabled, detail, open, back }) {
   </>
 }
 
-function LocationContent({ role, stage, location, onRoleChange, onSettings, homeroom, registerBack }) {
-  const [stack, setStack] = useState([])
-  const root = useRef(null)
-  const restoreView = useRef(null)
-  const detail = stack.at(-1)?.detail
+function LocationContent({ role, stage, location, onRoleChange, homeroom, detail, open, choices, setChoice }) {
   const study = studentStages[stage] ?? studentStages.middle
-  const open = (entry) => {
-    const scroll = root.current?.closest('.room-scroll')
-    const active = document.activeElement
-    const buttons = Array.from(root.current?.querySelectorAll('button') ?? [])
-    const view = { detail: entry, scrollTop: scroll?.scrollTop ?? 0, buttonIndex: buttons.indexOf(active) }
-    setStack((previous) => [...previous, view])
-  }
-  const back = useCallback(() => {
-    restoreView.current = stack.at(-1)
-    setStack((previous) => previous.slice(0, -1))
-  }, [stack])
-  const hasDetail = stack.length > 0
-
-  useLayoutEffect(() => {
-    const scroll = root.current?.closest('.room-scroll')
-    const previous = restoreView.current
-    if (scroll) scroll.scrollTop = previous?.scrollTop ?? 0
-    if (previous?.buttonIndex >= 0) {
-      root.current?.querySelectorAll('button')[previous.buttonIndex]?.focus({ preventScroll: true })
-    }
-    restoreView.current = null
-  }, [stack])
-
-  useEffect(() => {
-    if (!hasDetail || !registerBack) return undefined
-    registerBack(back)
-    return () => registerBack(null)
-  }, [back, hasDetail, registerBack])
-
-  const view = { study, detail, open, back }
+  const view = { study, detail, open, choices, setChoice }
   const panels = {
     schedule: <Schedule role={role} {...view} />,
     work: role === 'teacher' ? <Groups {...view} /> : <Homework {...view} />,
     results: role === 'teacher' ? <Courses {...view} /> : <Grades {...view} />,
     news: <News role={role} {...view} />,
     homeroom: <Homeroom enabled={role === 'teacher' && homeroom} {...view} />,
-    profile: <Profile role={role} study={study} homeroom={homeroom} onRoleChange={onRoleChange} onSettings={onSettings} />,
+    profile: <Profile role={role} study={study} homeroom={homeroom} onRoleChange={onRoleChange} />,
   }
-  return <div ref={root} data-panel={location}>{panels[location]}</div>
+  return <div data-panel={location}>{panels[location]}</div>
 }
 
-export default function Interior({ role, stage = 'middle', location, onRoleChange, onSettings, homeroom = false, dataState = 'ready', onRetry, registerBack }) {
+export default function Interior({ role, stage = 'middle', location, onRoleChange, homeroom = false, dataState = 'ready', onRetry, detail, open, choices, setChoice }) {
   if (dataState === 'loading') return <output className="ci-interior"><Empty icon={LoaderCircle} title="Загружаем данные" /></output>
   if (location === 'schedule' && dataState === 'unpublished') return <output className="ci-interior"><Empty icon={Clock3} title="Неделя не опубликована">Занятия появятся после публикации расписания.</Empty></output>
   if (dataState === 'empty') return <output className="ci-interior"><Empty title="Данных пока нет">Здесь появятся данные школы, когда они будут доступны.</Empty></output>
@@ -587,5 +544,5 @@ export default function Interior({ role, stage = 'middle', location, onRoleChang
     <div role="alert"><Empty icon={CircleAlert} title="Не удалось загрузить данные">Попробуйте запросить их ещё раз.</Empty></div>
     {onRetry && <button className="ci-action" type="button" onClick={onRetry}>Повторить загрузку</button>}
   </div>
-  return <div className="ci-interior"><LocationContent key={`${role}-${stage}-${location}`} {...{ role, stage, location, onRoleChange, onSettings, homeroom, registerBack }} /></div>
+  return <div className="ci-interior"><LocationContent key={`${role}-${stage}-${location}`} {...{ role, stage, location, onRoleChange, homeroom, detail, open, choices, setChoice }} /></div>
 }

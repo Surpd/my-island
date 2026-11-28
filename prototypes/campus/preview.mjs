@@ -43,7 +43,7 @@ for (const file of output) {
     // Vite may use './name' in HTML/CSS and just 'name' beside import.meta.url.
     contents = contents.replaceAll('./' + generated, original).replaceAll(generated, original)
   }
-  await writeFile(join(destination, aliases.get(file.fileName) || file.fileName), contents)
+  await writeFile(join(destination, aliases.get(file.fileName) || file.fileName), contents.replace(/\r+\n/g, '\n'))
 }
 const licensePaths = ['fonts/spectral-OFL.txt', 'fonts/oswald-OFL.txt',
   '../../node_modules/react/LICENSE', '../../node_modules/react-dom/LICENSE', '../../node_modules/lucide-react/LICENSE']
