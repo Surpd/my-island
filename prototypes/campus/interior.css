@@ -1,0 +1,295 @@
+.ci-interior {
+  color: var(--ink);
+  font-size: .97rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.ci-interior :where(h3, h4, p, dl) { margin: 0; }
+.ci-interior :where(h3, h4) {
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: -.025em;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+.ci-interior h3 { font-size: 1.55rem; }
+.ci-interior h4 { margin-block: 1.2rem .45rem; font-size: 1.24rem; }
+.ci-interior :where(button, a, input):focus-visible {
+  position: relative;
+  z-index: 1;
+}
+.ci-interior button { color: inherit; }
+.ci-interior svg { flex: none; }
+.ci-interior fieldset { min-width: 0; margin-inline: 0; padding: 0; border: 0; }
+.ci-meta { display: block; color: var(--muted); font-size: .82rem; line-height: 1.35; }
+
+.ci-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .3rem .8rem;
+}
+.ci-toolbar > .ci-meta {
+  color: var(--accent);
+  font: 600 .88rem/1.2 var(--condensed, "Oswald Campus", sans-serif);
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+.ci-interior .ci-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  margin-block: 0;
+  border-bottom: 1px solid var(--accent);
+}
+.ci-tabs button,
+.ci-days button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.ci-tabs button {
+  flex: 1 1 auto;
+  padding: .38rem .65rem;
+  color: var(--accent);
+  font: 600 .89rem/1.2 var(--condensed, "Oswald Campus", sans-serif);
+  letter-spacing: .02em;
+}
+.ci-tabs button[aria-pressed="true"] {
+  background: var(--tint);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.ci-interior .ci-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  margin-block: .7rem 0;
+  border-block: 1px solid var(--line);
+}
+.ci-days button {
+  min-width: 0;
+  padding: .3rem 0;
+  font-variant-numeric: tabular-nums;
+}
+.ci-interior .ci-days button:focus-visible { outline-offset: -3px; }
+.ci-days button[aria-pressed="true"] {
+  background: var(--tint);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.ci-days span, .ci-days strong { display: block; }
+.ci-days span { color: var(--muted); font-size: .72rem; line-height: 1.15; }
+.ci-days strong { margin-top: 2px; font-size: .92rem; line-height: 1.12; }
+.ci-days [aria-pressed="true"] :is(span, strong) { color: var(--accent); }
+
+.ci-schedule-day + .ci-schedule-day { margin-top: 1.5rem; }
+.ci-schedule-day h3 { margin-block: .9rem .45rem; font-size: 1.42rem; }
+.ci-agenda, .ci-list { border-top: 1px solid var(--accent); }
+.ci-tabs + .ci-list { margin-top: .35rem; border-top: 0; }
+.ci-event,
+.ci-row {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  width: 100%;
+  min-height: 52px;
+  padding: .63rem .18rem;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: start;
+}
+.ci-event {
+  align-items: stretch;
+  padding-inline-start: .52rem;
+  border-inline-start: 3px solid transparent;
+}
+.ci-event > svg { align-self: center; }
+.ci-event[data-live="now"] {
+  border-inline-start-color: var(--signal);
+  background: var(--tint);
+}
+.ci-event > svg, .ci-row > svg { color: var(--accent); }
+.ci-row-copy { flex: 1; min-width: 0; }
+.ci-row-copy > strong { display: block; line-height: 1.25; font-weight: 680; }
+.ci-row-copy > .ci-meta { margin-top: .19rem; }
+.ci-time {
+  display: block;
+  flex: none;
+  width: 3.6rem;
+  padding-inline-end: .35rem;
+  border-inline-end: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.13;
+}
+.ci-time strong {
+  color: var(--accent);
+  font: 600 1.13rem/1.1 var(--condensed, "Oswald Campus", sans-serif);
+  white-space: nowrap;
+}
+.ci-time small { display: block; margin-top: .23rem; color: var(--muted); font-size: .76rem; }
+.ci-place { display: flex; align-items: center; gap: .25rem; }
+.ci-place svg { color: var(--accent); }
+.ci-mark {
+  display: inline-block;
+  margin-bottom: .22rem;
+  color: var(--accent);
+  font: 600 .72rem/1.24 var(--condensed, "Oswald Campus", sans-serif);
+  letter-spacing: .055em;
+  text-transform: uppercase;
+}
+[data-live="now"] .ci-mark, .ci-alert { color: var(--signal); }
+.ci-end {
+  max-width: 36%;
+  text-align: end;
+  color: var(--muted);
+  font-size: .81rem;
+  line-height: 1.32;
+  font-variant-numeric: tabular-nums;
+}
+.ci-results .ci-end {
+  flex: 0 0 min(34%, 7rem);
+  padding-inline-start: .4rem;
+  border-inline-start: 1px solid var(--line);
+  color: var(--accent);
+  font-weight: 650;
+}
+.ci-score {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2rem;
+  min-height: 1.9rem;
+  font: 600 1.25rem/1 var(--condensed, "Oswald Campus", sans-serif);
+}
+.ci-roster .ci-row { min-height: 46px; padding-block: .42rem; }
+.ci-news .ci-row { min-height: 66px; }
+.ci-news .ci-end { white-space: nowrap; }
+.ci-empty {
+  display: flex;
+  gap: .72rem;
+  align-items: flex-start;
+  padding: .82rem .64rem;
+  border-block: 1px solid var(--line);
+}
+.ci-empty strong { display: block; font-family: var(--display); font-size: 1.1rem; }
+.ci-empty svg { color: var(--accent); }
+.ci-empty .ci-meta { margin-top: .15rem; }
+.ci-empty[data-tone="error"] { border-top-color: var(--signal); }
+.ci-empty[data-tone="error"] svg { color: var(--signal); }
+
+.ci-detail { animation: ci-detail-enter .2s ease-out both; }
+@keyframes ci-detail-enter {
+  from { opacity: .55; transform: translateX(5px); }
+}
+.ci-detail > .ci-meta:first-child {
+  margin-block-end: .65rem;
+  color: var(--accent);
+  font-weight: 650;
+}
+.ci-detail > :first-child { margin-block-start: 0; }
+.ci-detail > p:not(:first-child) { margin-top: 1rem; max-width: 62ch; }
+.ci-interior .ci-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  min-height: 44px;
+  margin-top: .82rem;
+  padding: .4rem .66rem;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: .88rem;
+  font-weight: 675;
+}
+.ci-facts {
+  margin-top: 1rem;
+  border-top: 1px solid var(--accent);
+}
+.ci-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.15fr);
+  gap: .6rem;
+  padding: .55rem .18rem;
+  border-bottom: 1px solid var(--line);
+}
+.ci-facts dt { color: var(--muted); font-size: .84rem; }
+.ci-facts dd { margin: 0; font-weight: 650; font-size: .92rem; }
+.ci-check {
+  display: inline-flex;
+  align-items: center;
+  gap: .55rem;
+  min-height: 44px;
+  margin-block: .22rem;
+  cursor: pointer;
+  font-size: .88rem;
+}
+.ci-check input { width: 1.15rem; height: 1.15rem; margin: 0; flex: none; }
+.ci-profile {
+  display: flex;
+  gap: .78rem;
+  align-items: center;
+  padding-block: .15rem .35rem;
+}
+.ci-profile h3 { font-size: clamp(1.28rem, 1.15rem + 1.5vw, 1.8rem); }
+.ci-initials {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.9rem;
+  aspect-ratio: 1;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font: 600 1.23rem/1 var(--condensed, "Oswald Campus", sans-serif);
+  letter-spacing: .025em;
+}
+.ci-actions { display: flex; flex-wrap: wrap; gap: .45rem .58rem; margin-top: .82rem; }
+.ci-interior .ci-actions .ci-action { margin: 0; }
+.ci-preview-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-block-start: .35rem;
+  color: var(--accent);
+  font-size: .84rem;
+  text-underline-offset: .18em;
+}
+
+@media (hover: hover) {
+  .ci-interior :is(.ci-row-button, .ci-event, .ci-action, .ci-tabs button, .ci-days button):hover {
+    background: var(--tint);
+  }
+}
+.ci-interior :is(.ci-row-button, .ci-event, .ci-action, .ci-days button):active {
+  background: var(--tint);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ci-tabs button:active { background: var(--tint); }
+.ci-interior :is(button, input):disabled { cursor: default; opacity: .55; }
+
+@media (max-width: 341px) {
+  .ci-interior .ci-days {
+    margin-inline: calc(-1 * max(0px, 16px - var(--safe-left))) calc(-1 * max(0px, 16px - var(--safe-right)));
+  }
+}
+
+@media (max-width: 375px) {
+  .ci-event, .ci-row { gap: .4rem; }
+  .ci-time { width: 3.2rem; }
+  .ci-homework .ci-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+  .ci-homework .ci-end {
+    grid-column: 1;
+    max-width: none;
+    text-align: start;
+  }
+  .ci-homework .ci-row > svg { grid-column: 2; grid-row: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ci-detail { animation: none; }
+}
+[data-motion="reduce"] .ci-detail { animation: none; }
