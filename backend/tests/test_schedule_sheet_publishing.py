@@ -546,8 +546,6 @@ class SchedulePublishingTests(unittest.TestCase):
 
     def test_http_requires_admin_and_explicit_confirmation(self):
         admin = self.db.get_or_create_user(778823, "admin")
-        with self.db.connection() as connection:
-            connection.execute("INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','test')", (admin["id"],))
         challenge, _ = self.db.create_admin_login_challenge(admin["id"])
         token, _ = self.db.consume_admin_login_challenge(challenge)
         app = FastAPI()

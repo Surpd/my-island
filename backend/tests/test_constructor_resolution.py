@@ -331,8 +331,8 @@ class ConstructorResolutionTests(unittest.TestCase):
             connection.execute("INSERT OR IGNORE INTO user_roles(user_id,role,source) VALUES (?,'student','test')", (student_user['id'],))
         admin_code, _ = self.database.create_admin_login_challenge(admin['id'])
         admin_token, _ = self.database.consume_admin_login_challenge(admin_code)
-        student_code, _ = self.database.create_admin_login_challenge(student_user['id'])
-        student_token, _ = self.database.consume_admin_login_challenge(student_code)
+        self.assertIsNone(self.database.create_admin_login_challenge(student_user['id']))
+        student_token = 'unissued-student-session'
 
         draft = self.draft()
         draft = save_experiment(self.database, draft['id'], expected_revision=1, payload=draft['payload'])
@@ -344,7 +344,7 @@ class ConstructorResolutionTests(unittest.TestCase):
         base = f"/api/admin/schedule/experiments/{draft['id']}/audiences/"
         body = {'expected_revision': draft['revision'], 'scope': 'template'}
         self.assertEqual(client.post(base+'preview', json=body).status_code, 401)
-        self.assertEqual(client.post(base+'preview', headers={'X-Dev-Auth': f'browser:{student_token}'}, json=body).status_code, 403)
+        self.assertEqual(client.post(base+'preview', headers={'X-Dev-Auth': f'browser:{student_token}'}, json=body).status_code, 401)
         headers = {'X-Dev-Auth': f'browser:{admin_token}'}
         preview = client.post(base+'preview', headers=headers, json=body)
         self.assertEqual(preview.status_code, 200, preview.text)

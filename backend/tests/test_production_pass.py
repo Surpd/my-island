@@ -342,7 +342,8 @@ class AdminOperationsTests(unittest.TestCase):
                 official = connection.execute("SELECT active FROM memberships WHERE identity_id = ? AND source = 'official_import'", (identity["id"],)).fetchone()
             self.assertEqual(official["active"], 1)
             database.set_user_roles(user, ["teacher"], "teacher")
-            self.assertTrue(database.user_has_role(user, "teacher"))
+            self.assertEqual(database.list_user_roles(user), ["teacher"])
+            self.assertFalse(database.user_has_role(user, "teacher"))
             self.assertFalse(database.user_has_role(user, "admin"))
 
     def test_assignment_overrides_validate_identity_kind_group_type_and_reason(self):

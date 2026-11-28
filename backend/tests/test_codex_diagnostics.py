@@ -250,8 +250,6 @@ class CodexDiagnosticAuthTests(TestCase):
         response = self.http.get("/api/admin/auth/session", headers={"X-Dev-Auth": "browser:" + token})
         self.assertEqual(response.status_code, 401)
         actor = self.db.get_or_create_user(777001, "admin")
-        with self.db.connection() as connection:
-            self.db.execute(connection, "INSERT INTO user_roles(user_id,role,source) VALUES (?,'admin','synthetic')", (actor["id"],))
         code, _ = self.db.create_admin_login_challenge(actor["id"])
         normal = self.http.post("/api/admin/auth/exchange", json={"code": code})
         self.assertEqual(normal.status_code, 200, normal.text)

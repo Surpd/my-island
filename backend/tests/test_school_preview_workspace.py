@@ -158,7 +158,11 @@ class SchoolPreviewRoutesIntegrationTests(unittest.TestCase):
         self.student = self.source.create_identity("student", "Preview Student", "9-А", actor_user_id=self.admin_id)
         self.teacher = self.source.create_identity("teacher", "Preview Teacher", actor_user_id=self.admin_id)
         self.admin_token = self._login_token(self.admin_id)
-        self.nonadmin_token = self._login_token(self.nonadmin_id)
+        self.assertIsNone(self.source.create_admin_login_challenge(self.nonadmin_id))
+        self.nonadmin_token = "legacy-unprivileged-school-preview"
+        with self.source.connection() as connection:
+            self.source.execute(connection, "INSERT INTO admin_browser_sessions(token_hash,user_id,expires_at) VALUES (?,?,?)",
+                                (self.source._token_hash(self.nonadmin_token), self.nonadmin_id, "2099-01-01T00:00:00+00:00"))
         self.database = SchoolPreviewDatabase(APPROVED_URL, self.preview_path)
         self.app = FastAPI()
         self.app.include_router(create_router(self.database))

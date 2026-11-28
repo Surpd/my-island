@@ -1,0 +1,87 @@
+name: User access
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'app/**'
+      - 'components/**'
+      - 'e2e/access-registration.spec.ts'
+      - '.github/workflows/user-access.yml'
+
+permissions:
+  contents: read
+env:
+  PYTHON_DOTENV_DISABLED: '1'
+  PYTHONUTF8: '1'
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: my_island_access_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['127.0.0.1:55439:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt httpx==0.28.1
+      - run: python -m unittest backend.tests.test_account_access backend.tests.test_telegram_registration backend.tests.test_telegram_admin_bot backend.tests.test_admin_previews
+      - name: Verify migrations and access against PostgreSQL
+        env:
+          MY_ISLAND_ACCESS_TEST_DSN: postgresql://postgres@127.0.0.1:55439/my_island_access_test
+        shell: bash
+        run: |
+          psql "$MY_ISLAND_ACCESS_TEST_DSN" -q -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon;
+          CREATE ROLE authenticated;
+          CREATE ROLE service_role BYPASSRLS;
+          CREATE SCHEMA extensions;
+          CREATE EXTENSION pgcrypto WITH SCHEMA extensions;
+          SQL
+          for migration in backend/migrations/*.sql; do
+            case "$migration" in
+              */044_*) continue ;; # External Supabase cron/net providers
+              */045_*)
+                { sed '/^-- The user explicitly identified/,$d' "$migration"; echo 'COMMIT;'; } |
+                  psql "$MY_ISLAND_ACCESS_TEST_DSN" -q -v ON_ERROR_STOP=1
+                continue ;;
+              */016_*)
+                psql "$MY_ISLAND_ACCESS_TEST_DSN" -q -v ON_ERROR_STOP=1 -c 'DROP TRIGGER school_source_mappings_protect_manual ON school_source_mappings' ;;
+              */054_*)
+                psql "$MY_ISLAND_ACCESS_TEST_DSN" -q -v ON_ERROR_STOP=1 -f backend/tests/fixtures/architecture_before_migrations.sql ;;
+            esac
+            psql "$MY_ISLAND_ACCESS_TEST_DSN" -q -v ON_ERROR_STOP=1 -f "$migration"
+          done
+          psql "$MY_ISLAND_ACCESS_TEST_DSN" -q -v ON_ERROR_STOP=1 -f backend/tests/fixtures/architecture_after_migrations.sql
+          python -m unittest backend.tests.test_account_access
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m pip install -r backend/requirements.txt
+      - run: npm ci
+      - run: node --test components/*.test.mjs e2e/*.test.mjs tests/*.test.mjs
+      - run: npx --no-install tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
+        env:
+          VITE_API_BASE_URL: http://127.0.0.1:8011
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:e2e -- e2e/access-registration.spec.ts e2e/miniapp-preview.spec.ts

@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request
 
 from backend.config import get_settings
 from backend.database import Database
-from backend.services.auth import AuthError, resolve_auth
+from backend.services.auth import AuthError, live_telegram_subject, resolve_auth
 
 
 def isolated_consolidation_enabled() -> bool:
@@ -57,8 +57,8 @@ def require_consolidated_preview_admin(database: Database, token: str | None, re
         except (AuthError, ValueError, TypeError) as error:
             raise HTTPException(401, "School administrator session is invalid or expired") from error
         # Do not trust a signed payload's display role or caller-declared role.
-        user = database.find_user(principal["id"])
-        if not user or not database.user_has_role(user["id"], "admin"):
+        user = live_telegram_subject(database, principal)
+        if not user or "admin" not in user["roles"]:
             raise HTTPException(403, "Admin role required")
         return database, str(user["id"])
     raise HTTPException(401, "School administrator session is invalid or expired")

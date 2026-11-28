@@ -22,6 +22,7 @@ import {
   Menu,
   X,
 } from 'lucide-react';
+import { AccessAdmin } from '@/components/access-admin';
 import { SchoolDirectoryAdmin } from '@/components/school-directory-admin';
 import { TeacherDirectoryAdmin } from '@/components/teacher-directory-admin';
 import { AdminJournals } from '@/components/admin-journals';
@@ -368,7 +369,7 @@ function Sidebar({ path, navigate, onLogout, diagnostic = false }: { path: strin
 }
 
 function Header({ path, navigate }: { path: string; navigate: (href: string) => void }) {
-  const title = path === '/admin' ? 'Рабочий стол завуча' : (path === '/admin/system' ? 'Настройки' : nav.find((item) => path.startsWith(item.href) && item.href !== '/admin')?.label) || 'Панель администратора';
+  const title = path === '/admin/settings/access' ? 'Пользователи и доступ' : path === '/admin' ? 'Рабочий стол завуча' : (path === '/admin/system' ? 'Настройки' : nav.find((item) => path.startsWith(item.href) && item.href !== '/admin')?.label) || 'Панель администратора';
   return <header className="admin-console-header"><div><div className="admin-breadcrumb"><button onClick={() => navigate('/admin')}>Админ</button><ChevronRight size={13} /><span>{path === '/admin' ? 'Сегодня' : title}</span></div><h1>{title}</h1></div><div className="admin-console-header__meta"><span className="campus-session-avatar" aria-hidden="true">А</span><span>Администратор</span></div></header>;
 }
 
@@ -422,7 +423,7 @@ function Overview({ navigate, request = api }: { navigate: (href: string) => voi
   </div>;
 }
 
-function System({ request = api }: { request?: AdminApi }) {
+function System({ request = api, navigate, diagnostic = false }: { request?: AdminApi; navigate: (href: string) => void; diagnostic?: boolean }) {
   const [state, setState] = useState<{ loading: boolean; error?: unknown; data?: RecordValue }>({ loading: true });
   const load = () => {
     setState({ loading: true });
@@ -433,6 +434,7 @@ function System({ request = api }: { request?: AdminApi }) {
   if (state.error) return <ErrorState error={state.error} onRetry={load} />;
   const data = state.data || {};
   return <div className="admin-stack">
+    {!diagnostic && <section className="admin-panel"><div className="admin-panel__heading"><div><h2>Пользователи и доступ</h2><p>Заявки, аккаунты и администраторы.</p></div><button className="admin-button" onClick={() => navigate('/admin/settings/access')}>Открыть</button></div></section>}
     <div className="admin-page-actions"><button className="admin-button admin-button--quiet" onClick={load}><RefreshCw size={15} /> Обновить</button></div>
     <section className="admin-panel"><div className="admin-panel__heading"><h2>Backend и школьная база</h2><Status value={data.health?.schema_status} /></div>
       <dl className="admin-definition-list"><dt>Backend</dt><dd><Status value="healthy" /> доступен</dd><dt>Школьная база</dt><dd>{data.settings?.database_configured ? 'Подключена' : 'Локальный режим'}</dd></dl>
@@ -484,8 +486,9 @@ function AppContent({ path, navigate, diagnostic = false }: { path: string; navi
   if (path === '/admin/schedule/constructor') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
   if (path === '/admin/schedule') return <ResponsiveSchedule request={request} diagnostic={diagnostic} />;
   if (path === '/admin/journals') return <AdminJournals api={request} apiOrigin={API_BASE} readOnly={diagnostic} />;
-  if (path === '/admin/settings') return <System request={request} />;
-  if (path === '/admin/system') return <System request={request} />;
+  if (path === '/admin/settings/access' && !diagnostic) return <AccessAdmin api={request} initialIdentityId={routeQuery().get('identity_id') || undefined} />;
+  if (path === '/admin/settings') return <System request={request} navigate={navigate} diagnostic={diagnostic} />;
+  if (path === '/admin/system') return <System request={request} navigate={navigate} diagnostic={diagnostic} />;
   return <Overview navigate={navigate} request={request} />;
 }
 

@@ -17,7 +17,6 @@ class LiveDirectoryTests(unittest.TestCase):
         self.database = Database(Path(directory.name) / "live.db")
         self.database.initialize()
         self.admin = self.database.get_or_create_user(900130, "admin")["id"]
-        self.database.ensure_bootstrap_roles(900130, ("admin",))
         code, _ = self.database.create_admin_login_challenge(self.admin)
         self.token, _ = self.database.consume_admin_login_challenge(code)
         self.headers = {"X-Dev-Auth": f"browser:{self.token}"}
