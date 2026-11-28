@@ -10,7 +10,7 @@
 <a href="./review/harbour-schedule-expanded.png"><img src="./review/harbour-schedule-expanded.png" alt="Раскрытое расписание ученика" width="225"></a>
 <a href="./review/harbour-group-nested.png"><img src="./review/harbour-group-nested.png" alt="Состав группы 8Б в преподавательском кампусе" width="225"></a>
 
-[Ночной порт](./review/harbour-night.png) · [Крупный текст](./review/harbour-large-text.png) · [Посмотреть приближение и возврат при DPR 3](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/harbour-tour-dpr3.mp4)
+[Ночной порт](./review/harbour-night.png) · [Крупный текст](./review/harbour-large-text.png) · [Посмотреть приближение и возврат при DPR 3](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/tour.html)
 
 ## Локальная проверка
 

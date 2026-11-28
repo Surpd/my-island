@@ -46,7 +46,7 @@
 
 Скриншоты сняты в мобильном Chromium при 390 × 844 CSS px и DPR 3. Запись использует кадры 1170 × 2532 и полное движение. Её временная шкала основана на времени захвата кадров.
 
-[Дневной обзор](./review/harbour-mobile.png) · [Ночной обзор](./review/harbour-night.png) · [Раскрытое расписание](./review/harbour-schedule-expanded.png) · [Состав группы](./review/harbour-group-nested.png) · [Крупный текст](./review/harbour-large-text.png) · [Запись входа и возврата](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/harbour-tour-dpr3.mp4)
+[Дневной обзор](./review/harbour-mobile.png) · [Ночной обзор](./review/harbour-night.png) · [Раскрытое расписание](./review/harbour-schedule-expanded.png) · [Состав группы](./review/harbour-group-nested.png) · [Крупный текст](./review/harbour-large-text.png) · [Запись входа и возврата](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/tour.html)
 
 **Публичная сборка.** В чистом мобильном профиле проверен путь от страницы CDN до ночного порта 11 класса, раскрытого расписания, сворачивания панели и возврата на остров. На ширине 390 px при доступной высоте 640 px нижняя граница карточки была на 587-м пикселе. Запись для телефона подготовлена в H.264/MP4.
 
