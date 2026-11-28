@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ArrowLeft, ArrowUpRight, BookOpen, CalendarDays, ChevronRight, Maximize2, Minimize2, Compass, List, MoonStar, NotebookPen, Radio, Sailboat, Settings2, Sun, UserRound, Users, X } from 'lucide-react'
-import Interior, { getInteriorTitle } from './Interior'
+import { ArrowLeft, ArrowUpRight, BookOpen, CalendarDays, ChevronRight, Maximize2, Minimize2, List, MoonStar, NotebookPen, Radio, Sun, UserRound, Users, X } from 'lucide-react'
+import Interior, { getFollowingLessons, getInteriorTitle } from './Interior'
 import { useCameraPixels, useHarbourHost, usePreferences } from './harbour-state'
 import { IslandMap, maxTravelScale, useIslandScene } from './IslandMap.jsx'
 import { buildingGeometry, worlds } from './worlds.js'
 import './campus.css'
 import './room.css'
+import Preview, { cohorts, getPreview } from './Preview.jsx'
 
 const locations = [
   { id:'schedule', student:'Расписание', teacher:'Расписание', icon:CalendarDays },
@@ -17,19 +18,6 @@ const locations = [
   { id:'homeroom', student:'', teacher:'Мой класс', icon:Users },
 ]
 
-const cohorts = {
-  junior:{ grade:'5–6 классы', classroom:'5Б', subject:'Математика' },
-  middle:{ grade:'7–9 классы', classroom:'8Б', subject:'Алгебра' },
-  senior:{ grade:'10 класс', classroom:'10А', subject:'Алгебра и начала анализа' },
-  graduate:{ grade:'11 класс', classroom:'11А', subject:'Алгебра и начала анализа' },
-}
-const dataOptions = [
-  ['ready','Загружены'],
-  ['loading','Загрузка'],
-  ['empty','Пустой ответ'],
-  ['unpublished','Расписание не опубликовано'],
-  ['error','Ошибка'],
-]
 const home = { kind:'island', depth:0 }
 const getRoomRoute = route => route.kind === 'room' ? route : route.from?.kind === 'room' ? route.from : null
 const roomScope = (id,role,stage,homeroom) => role === 'teacher' ? role + ':' + (id !== 'homeroom' || homeroom) : role + ':' + stage
@@ -44,15 +32,14 @@ const getRoute = (role,stage,homeroom) => {
 }
 const saveRoute = (mode,route) => history[mode]({ ...history.state, campus:route },'')
 const longRooms = new Set(['schedule','work','results','homeroom'])
-function Preferences({ selected, change, dataState, setDataState, onClose, theme, systemReduce, lightingPending, lightingFailed }) {
-  const teacher = selected.role === 'teacher'
+function Preferences({ selected, change, onClose, theme, systemReduce, lightingPending, lightingFailed }) {
   const LightingIcon = theme === 'night' ? MoonStar : Sun
   return <>
     <div className="util-head"><h2 id="settings-name">Настройки</h2><button className="icon" aria-label="Закрыть настройки" onClick={onClose}><X size={20}/></button></div>
     <section className="preference-group" aria-labelledby="appearance-name">
-      <h3 id="appearance-name"><LightingIcon size={17}/> Вид гавани</h3>
+      <h3 id="appearance-name"><LightingIcon size={17} aria-hidden="true"/> Оформление</h3>
       <label className="field"><span>Освещение</span><select id="lighting" value={selected.lighting} onChange={e=>change('lighting',e.target.value)}>
-        <option value="auto">Автоматически</option><option value="day">День</option><option value="night">Ночь</option>
+        <option value="auto">Авто</option><option value="day">День</option><option value="night">Ночь</option>
       </select></label>
       <p className="field-note">{selected.lighting === 'auto' ? 'Ночь с 20:00 до 07:00 по местному времени.' : 'Выбранное освещение действует постоянно.'}</p>
       <output className="scene-status" htmlFor="lighting">{lightingFailed ? 'Не удалось загрузить выбранный вид гавани.' : lightingPending ? 'Загружаем карту…' : ''}</output>
@@ -60,33 +47,24 @@ function Preferences({ selected, change, dataState, setDataState, onClose, theme
       {systemReduce && <p className="field-note">Действует настройка движения устройства.</p>}
       <label className="check">Крупный текст<input type="checkbox" id="large-text" checked={selected.largeText} onChange={e=>change('largeText',e.target.checked)}/></label>
     </section>
-    <section className="preference-group" aria-labelledby="account-name">
-      <h3 id="account-name"><UserRound size={17}/> Доступ к кампусу</h3>
-      <div className="account-record"><strong>{teacher ? 'Мария Лебедева' : 'Александра Волкова'}</strong><span>Демо-аккаунт Telegram связан</span><span>Доступ активен</span></div>
-    </section>
-    <details className="preference-group demo-options" open>
-      <summary>Для демонстрации</summary>
-      <p className="field-note">Примерьте учебные роли на вымышленных данных.</p>
-      <label className="field"><span>Роль в демо</span><select id="role" value={selected.role} onChange={e=>change('role',e.target.value)}>
-        <option value="student">Ученик</option><option value="teacher">Учитель</option>
-      </select></label>
-      {!teacher && <label className="field"><span>Возрастной кампус</span><select id="age-group" value={selected.stage} onChange={e=>change('stage',e.target.value)}>
-        {Object.entries(cohorts).map(([id,cohort])=><option key={id} value={id}>{cohort.grade}</option>)}
-      </select></label>}
-      {teacher && <label className="check">Классное руководство<input type="checkbox" id="homeroom" checked={selected.homeroom} onChange={e=>change('homeroom',e.target.checked)}/></label>}
-
-      <label className="field" htmlFor="data-state">Данные в локациях<select id="data-state" value={dataState} onChange={e=>setDataState(e.target.value)}>{dataOptions.map(([value,name])=><option key={value} value={value}>{name}</option>)}</select></label>
-    </details>
   </>
 }
 
 function App() {
   const [selected,change] = usePreferences()
-  const { isNight,visible,systemReduce,viewport,compact,host } = useHarbourHost()
-  const { role, stage, homeroom } = selected
-  const reduceMotion = systemReduce || selected.reduceMotion
+  const harbour = useHarbourHost()
+  const [preview] = useState(getPreview)
+  const { isNight,viewport } = harbour
   const requestedTheme = selected.lighting === 'auto' ? (isNight ? 'night' : 'day') : selected.lighting
-  const [dataState,setDataState] = useState('ready')
+  if (preview.showForm) return <Preview scenario={preview.scenario} theme={requestedTheme} largeText={selected.largeText} viewport={viewport}/>
+  return <Campus preview={preview} selected={selected} change={change} harbour={harbour} requestedTheme={requestedTheme}/>
+}
+
+function Campus({ preview, selected, change, harbour, requestedTheme }) {
+  const { visible,systemReduce,viewport,compact,host } = harbour
+  const { role,stage,homeroom,state } = preview.scenario
+  const reduceMotion = systemReduce || selected.reduceMotion
+  const [dataState,setDataState] = useState(state)
   const [roomChoices,setRoomChoices] = useState({})
   const [route,setRoute] = useState(() => getRoute(role,stage,homeroom))
   const [arrived,setArrived] = useState('')
@@ -184,13 +162,7 @@ function App() {
     backing.current = true
     history.go(toIsland ? -route.depth : -1)
   },[])
-  const back = useCallback(() => {
-    const current = latest.current
-    const section = getRoomRoute(current)
-    const invalidWork = current.kind === 'settings' && current.depth > 1
-      && (!section || section.scope !== roomScope(section.id,role,stage,homeroom))
-    travelBack(invalidWork)
-  },[role,stage,homeroom,travelBack])
+  const back = useCallback(() => travelBack(),[travelBack])
   const leave = useCallback(() => travelBack(true),[travelBack])
 
   useEffect(() => {
@@ -311,10 +283,6 @@ function App() {
     resizeView.current = { key:route.key, desiredTop, appliedTop:null }
     setSheetSizes(previous => ({ ...previous, [currentRoom.rootKey]:!expanded }))
   }
-  const switchRole = next => {
-    change('role',next)
-    if (route.kind === 'room') leave()
-  }
   const openSite = id => {
     if (latest.current.kind === 'island' || latest.current.kind === 'directory') go({kind:'room',id})
   }
@@ -324,7 +292,7 @@ function App() {
   const openSettings = event => {
     event.currentTarget?.focus({preventScroll:true})
     const from = latest.current
-    if (from.kind !== 'settings') go({kind:'settings',from:from.kind === 'room' ? from : null})
+    if (from.kind === 'room' && from.id === 'profile') go({kind:'settings',from})
   }
   const cancel = e => { e.preventDefault(); back() }
   const offset = (source,target) => Math.max(100 - 100 * scale,Math.min(0,target - source * scale))
@@ -334,19 +302,7 @@ function App() {
     '--camera-scale':scale,
     '--native-size': sceneWorld.width / pixelRatio + 'px',
   }
-  const LightingIcon = theme === 'night' ? MoonStar : Sun
-
   return <div className="campus" data-theme={theme} data-lighting-pending={lightingPending || undefined} data-lighting-error={lightingFailed || undefined} data-role={role} data-world={worldId} data-motion={reduceMotion ? 'reduce' : 'full'} data-active={visible} data-compact={compact || undefined} data-text={selected.largeText ? 'large' : undefined} data-travel={activeId || undefined} style={viewport}>
-    <header className="mast">
-      <div className="home-identity">
-        <Sailboat size={27} strokeWidth={1.5} aria-hidden="true"/>
-        <div><h1>Северная гавань</h1>
-          <p className="persona">{isTeacher ? 'Учитель' : cohort.grade}<span aria-hidden="true"/><LightingIcon size={14}/>{theme === 'night' ? 'Ночь' : 'День'}</p>
-        </div>
-      </div>
-      <button id="settings" className="icon settings-button" aria-label="Настройки гавани" onClick={openSettings}><Settings2 size={20}/></button>
-    </header>
-
     <main className="layout">
       <section className="map-block" aria-label="Интерактивный остров">
         <div className="stage">
@@ -354,20 +310,26 @@ function App() {
           <IslandMap scene={scene} camera={camera} cameraStyle={cameraStyle} world={sceneWorld} worldId={sceneId}
             activeId={point && !reduceMotion ? activeId : undefined} disabled={!scene || sceneId !== worldId || !!activeId || returning}
             sites={sites.filter(site => sceneWorld.points[site.id])} role={role} onOpen={openSite}/>
-          <div className="chart-compass" aria-hidden="true"><Compass size={28} strokeWidth={1.15}/></div>
           {activeId && !arrived && <button className="travel-back" onClick={back}><ArrowLeft size={17}/> К острову</button>}
         </div>
       </section>
 
-      <aside className="daybook" aria-label="Текущий урок">
-        <div className="daybook-head"><p>Вторник, 24 ноября</p>
+      <aside className="daybook" aria-label="Учебный день">
+        <div className="daybook-head"><h1>Вторник, <span>24 ноября</span></h1>
           <button id="places" onClick={event => { event.currentTarget.focus({preventScroll:true}); go({kind:'directory'}) }}><List size={17} aria-hidden="true"/> Все места</button>
         </div>
         <button className="lesson" onClick={event => { event.currentTarget.focus({preventScroll:true}); openSite('schedule') }}>
-          <span className="lesson-time"><CalendarDays size={16}/> По расписанию сейчас</span>
-          <strong className="lesson-name">{isTeacher ? 'Алгебра' : cohort.subject}<ArrowUpRight size={21}/></strong>
+          <span className="lesson-time">Сейчас по расписанию</span>
+          <strong className="lesson-name">{isTeacher ? 'Алгебра' : cohort.subject}</strong>
           <span className="lesson-meta"><time>09:55–10:40</time><span>{isTeacher ? 'Группа 8Б' : 'Кабинет 305'}</span></span>
+          <ArrowUpRight className="lesson-arrow" size={24} aria-hidden="true"/>
         </button>
+        <section className="following" aria-labelledby="later-heading">
+          <h2 id="later-heading">Дальше сегодня</h2>
+          <ol>{getFollowingLessons(role,stage).map(({ time, subject, place }) =>
+            <li key={time}><time>{time}</time><strong>{subject}</strong><span>{place}</span></li>
+          )}</ol>
+        </section>
       </aside>
     </main>
 
@@ -376,13 +338,12 @@ function App() {
         <button id="back" onClick={back} aria-label="Назад" title="Назад"><ArrowLeft size={20}/></button>
         <h2 id="room-name" ref={roomHeading} tabIndex={-1}>{getInteriorTitle(currentRoom.detail) ?? (active.id === 'work' && !isTeacher ? 'Домашние задания' : active[role])}</h2>
         <button className="sheet-toggle" onClick={toggleSheet} aria-controls="room-content" aria-expanded={Boolean(expanded)} aria-label={expanded ? 'Свернуть раздел' : 'Развернуть раздел'} title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}>{expanded ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}<span aria-hidden="true">{expanded ? 'Свернуть' : 'Развернуть'}</span></button>
-        <button className="icon" onClick={openSettings} aria-label="Настройки" title="Настройки"><Settings2 size={18}/></button>
         <button className="icon room-close" onClick={leave} aria-label="Вернуться на остров" title="Вернуться на остров"><X size={19}/></button>
       </header>
         <div className="room-scroll" id="room-content" ref={scrollArea} onClickCapture={event => {
           event.target.closest('button')?.focus({preventScroll:true})
         }}>
-          <Interior key={active.id} role={role} stage={stage} location={active.id} homeroom={homeroom} onRoleChange={switchRole} dataState={dataState} onRetry={()=>setDataState('ready')} detail={currentRoom.detail} open={openDetail} choices={roomChoices[choiceKey] ?? {}} setChoice={setChoice}/>
+          <Interior key={active.id} role={role} stage={stage} location={active.id} homeroom={homeroom} onSettings={openSettings} previewHref={preview.toolsHref} dataState={dataState} onRetry={()=>setDataState('ready')} detail={currentRoom.detail} open={openDetail} choices={roomChoices[choiceKey] ?? {}} setChoice={setChoice}/>
         </div></>}
     </dialog>
     <dialog id="directory" className="utility" ref={directory} aria-labelledby="dir-name" onCancel={cancel}>
@@ -390,7 +351,7 @@ function App() {
       {sites.map(site=><button className="dir-link" key={site.id} onClick={()=>openSite(site.id)}><site.icon size={19}/><span><strong>{site[role]}</strong><small>{world.sites[site.id]}</small></span><ChevronRight size={16}/></button>)}
     </dialog>
     <dialog id="preferences" className="utility preferences" ref={preferences} aria-labelledby="settings-name" onCancel={cancel}>
-      <Preferences lightingPending={lightingPending} lightingFailed={lightingFailed} selected={selected} change={change} theme={theme} systemReduce={systemReduce} onClose={back} dataState={dataState} setDataState={setDataState}/>
+      <Preferences lightingPending={lightingPending} lightingFailed={lightingFailed} selected={selected} change={change} theme={theme} systemReduce={systemReduce} onClose={back}/>
     </dialog>
   </div>
 }

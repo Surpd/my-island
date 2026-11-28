@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 const preferencesKey = 'my-island.northern-harbour.preferences'
-const defaults = { lighting:'auto', stage:'middle', role:'student', reduceMotion:false, largeText:false, homeroom:true }
+const defaults = { lighting:'auto', reduceMotion:false, largeText:false }
 
 export function usePreferences() {
   const [preferences,setPreferences] = useState(() => {
@@ -10,11 +10,8 @@ export function usePreferences() {
       if (!saved) return defaults
       return {
         lighting:['auto','day','night'].includes(saved.lighting) ? saved.lighting : defaults.lighting,
-        stage:['junior','middle','senior','graduate'].includes(saved.stage) ? saved.stage : defaults.stage,
-        role:saved.role === 'teacher' ? 'teacher' : defaults.role,
         reduceMotion:saved.reduceMotion === true,
         largeText:saved.largeText === true,
-        homeroom:saved.homeroom !== false,
       }
     } catch { return defaults }
   })

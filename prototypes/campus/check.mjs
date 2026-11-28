@@ -12,9 +12,10 @@ const offline = new URL(base).protocol === 'file:'
 const shots = process.env.CAMPUS_SHOTS
 const worlds = ['junior', 'middle', 'senior', 'graduate']
 const viewports = process.env.CAMPUS_FOCUS_ONLY ? [] : [
-  [320, 640], [360, 640], [390, 844], [430, 932],
+  [320, 640], [360, 800], [390, 640], [390, 844], [430, 932], [390, 490],
   [320, 640, 490], [390, 844, 560],
 ]
+const fixtureControls = '#role, #age-group, #homeroom, #data-state'
 const routes = ['schedule', 'work', 'results', 'news', 'profile']
 const engine = process.env.CAMPUS_WEBKIT ? webkit : chromium
 const browser = await engine.launch(
@@ -55,25 +56,33 @@ async function assertOverviewLayout(page, label, compact) {
       }
     }
     return { top, bottom, compact: root.dataset.compact === 'true',
-      mast: measure('.mast'), intro: measure('.home-identity'), stage: measure('.stage'), daybook: measure('.daybook-head'),
+      mast: measure('.mast'), stage: measure('.stage'), places: measure('#places'),
       card: measure('.lesson'), subject: measure('.lesson-name'), lastLine: measure('.lesson-meta'),
+      time: measure('.lesson-meta time'), location: measure('.lesson-meta span'),
       horizontalOverflow: document.documentElement.scrollWidth - innerWidth }
   })
   assert.equal(layout.compact, compact, `${label} compact state`)
   assert.ok(layout.horizontalOverflow < 2, `${label} horizontal overflow`)
-  for (const name of ['mast', 'intro', 'stage', 'daybook', 'card', 'subject', ...(!compact ? ['lastLine'] : [])]) {
+  assert.equal(layout.mast, null, `${label} has no custom masthead`)
+  for (const name of ['stage', 'places', 'card', 'subject', 'lastLine', 'time', 'location']) {
     const block = layout[name]
     assert.ok(block && block.top >= layout.top - 1 && block.bottom <= layout.bottom + 1,
       `${label} / ${name} is fully visible ${JSON.stringify({ block, top: layout.top, bottom: layout.bottom })}`)
   }
-  assert.equal(layout.subject.textOutside, false, `${label} / subject has no clipping`)
+  for (const name of ['subject', 'time', 'location']) {
+    assert.equal(layout[name].textOutside, false, `${label} / ${name} has no clipping`)
+  }
   if (layout.lastLine) assert.ok(layout.lastLine.bottom <= layout.card.bottom + 1, `${label} / last line fits card`)
+  assert.ok(Math.abs(layout.stage.top - layout.top) <= 1,
+    `${label} / map starts at the usable top (${layout.stage.top} vs ${layout.top})`)
   assert.ok(layout.stage.bottom <= layout.card.top + 1, `${label} / stage and card are separate`)
 }
 
 async function evidence(page, file) {
   if (!shots) return
   await page.evaluate(() => document.fonts.ready)
+  await page.waitForFunction(() => document.getAnimations().every((animation) =>
+    animation.effect?.getTiming().iterations === Infinity || animation.playState !== 'running'))
   await page.screenshot({ path: join(shots, file + '.png'), scale: 'device' })
 }
 
@@ -84,6 +93,61 @@ async function waitOverview(page) {
     return camera && !campus.dataset.travel && !camera.querySelector('.markers[inert]') &&
       new DOMMatrixReadOnly(getComputedStyle(camera).transform).a < 1.01
   })
+}
+
+async function openPreferences(page) {
+  const preferences = page.locator('#preferences')
+  const profile = page.locator('#room')
+  await waitOverview(page)
+  await page.locator('.marker[data-location="profile"]').tap()
+  await profile.getByRole('button', { name: 'Настройки', exact: true }).tap()
+  await preferences.waitFor({ state: 'visible' })
+  assert.equal(await preferences.locator(fixtureControls).count(), 0, 'Account preferences exclude fixture controls')
+}
+
+async function closePreferences(page) {
+  const room = page.locator('#room')
+  await page.locator('#preferences').getByRole('button', { name: 'Закрыть настройки' }).tap()
+  await room.waitFor({ state: 'visible' })
+  await page.waitForFunction(() => document.activeElement?.id === 'profile-settings')
+  await room.getByRole('button', { name: 'Вернуться на остров' }).tap()
+  await room.waitFor({ state: 'hidden' })
+  await waitOverview(page)
+}
+
+async function selectFixture(page, world, role = 'student', state = 'ready', homeroom = true, viaProfile = false) {
+  const hostViewport = await page.evaluate(() => window.campusTestHost?.geometry())
+  if (viaProfile) {
+    await waitOverview(page)
+    await page.locator('.marker[data-location="profile"]').tap()
+    await page.locator('#preview-tools').tap()
+  } else {
+    const url = new URL(base)
+    url.searchParams.set('preview', '1')
+    await page.goto(url.href)
+  }
+  await page.locator('#role').selectOption(role)
+  if (role === 'student') await page.locator('#age-group').selectOption(world)
+  else await page.locator('#homeroom').setChecked(homeroom)
+  await page.locator('#data-state').selectOption(state)
+  await page.locator('#open-preview-campus').tap()
+  await page.waitForURL((url) => url.searchParams.get('campus') === '1')
+  if (hostViewport) await page.evaluate((viewport) => window.campusTestHost.viewport(...viewport), hostViewport)
+  await page.waitForFunction(([role, world]) => {
+    const root = document.querySelector('.campus')
+    return root?.dataset.role === role && root.dataset.world === world
+  }, [role, role === 'teacher' ? 'faculty' : world])
+  assert.equal(await page.locator(fixtureControls).count(), 0, 'Fixture controls stay outside the campus')
+}
+
+async function assertNormalMode(page) {
+  const campus = page.locator('.campus')
+  assert.equal(await campus.getAttribute('data-role'), 'student')
+  assert.equal(await campus.getAttribute('data-world'), 'middle')
+  assert.equal(await page.locator('#settings, .mast, ' + fixtureControls).count(), 0)
+  await openPreferences(page)
+  assert.equal(await page.locator('#preview-tools').count(), 0)
+  await closePreferences(page)
 }
 
 const middleSurface = {
@@ -169,9 +233,9 @@ async function verifyNightLoad() {
       if (!coldNight) {
         await page.waitForFunction(() => document.querySelector('.scene-image')?.dataset.loaded === 'true')
         initialGeometry = await page.locator('.building-hit[data-location="schedule"]').getAttribute('points')
-        await page.locator('#settings').tap()
+        await openPreferences(page)
         await page.locator('#lighting').selectOption('night')
-        await page.locator('#preferences').getByRole('button', { name: 'Закрыть настройки' }).tap()
+        await closePreferences(page)
       }
       await requested
       await page.waitForFunction(() => document.querySelector('.campus')?.hasAttribute('data-lighting-pending'))
@@ -252,13 +316,12 @@ async function verifyBrowserOverview() {
     const campus = page.locator('.campus')
     page.setDefaultTimeout(7000)
     const room = page.locator('#room')
-    const preferences = page.locator('#preferences')
     async function change(id, value) {
-      await page.locator('#settings').tap()
+      await openPreferences(page)
       const control = page.locator('#' + id)
       if (typeof value === 'boolean') await control.setChecked(value)
       else await control.selectOption(value)
-      await preferences.getByRole('button', { name: 'Закрыть настройки' }).tap()
+      await closePreferences(page)
     }
     async function waitScene(file) {
       await page.waitForFunction((name) => [...document.querySelectorAll('.scene-image')].some((image) =>
@@ -272,8 +335,9 @@ async function verifyBrowserOverview() {
     })
     await assertOverviewLayout(page, 'Browser 390×844', false)
     await evidence(page, 'harbour-mobile')
-    await change('age-group', 'graduate')
-    for (const [width, height] of [[320, 640], [360, 560], [390, 490], [430, 932], [390, 844]]) {
+    await assertNormalMode(page)
+    await selectFixture(page, 'graduate')
+    for (const [width, height] of [[320, 640], [360, 800], [390, 640], [390, 490], [430, 932], [390, 844]]) {
       await page.setViewportSize({ width, height })
       await page.waitForFunction((expected) =>
         (document.querySelector('.campus').dataset.compact === 'true') === expected, height < 510)
@@ -290,12 +354,21 @@ async function verifyBrowserOverview() {
     assert.equal(await room.locator('.room-scroll').evaluate((node) => node.scrollWidth - node.clientWidth), 0)
     await room.getByRole('button', { name: 'Вернуться на остров' }).tap()
     await room.waitFor({ state: 'hidden' })
+    await page.setViewportSize({ width: 390, height: 420 })
+    await page.locator('.lesson-meta').scrollIntoViewIfNeeded()
+    const enlarged = await page.locator('.lesson-meta').boundingBox()
+    assert.ok(enlarged && enlarged.y >= 0 && enlarged.y + enlarged.height <= 421,
+      'Large text keeps the class or room reachable in a short browser viewport')
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.evaluate(() => window.scrollTo(0, 0))
     await change('large-text', false)
     await change('lighting', 'night')
     await waitScene('graduate-night.webp')
     await evidence(page, 'harbour-night')
     await change('lighting', 'day')
-    await change('age-group', 'middle')
+    await selectFixture(page, 'middle', 'student', 'ready', true, true)
+    await page.goto(base)
+    await assertNormalMode(page)
     await waitScene('tide-student.webp')
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await verifyArtwork(page)
@@ -322,25 +395,28 @@ async function verifyBrowserOverview() {
     assert.ok(expand.height > initial.height + 48, `Expanded panel gains vertical working space (${initial.height} → ${expand.height})`)
     await evidence(page, 'harbour-schedule-expanded')
     const scroller = room.locator('.room-scroll')
-    await room.getByRole('button', { name: 'Суббота, 28 ноября' }).tap()
+    const saturday = room.getByRole('button', { name: 'Суббота, 28 ноября' })
+    await saturday.tap()
+    await saturday.and(room.locator('[aria-pressed="true"]')).waitFor()
     await room.getByRole('button', { name: 'Неделя', exact: true }).tap()
     const weekend = room.getByRole('heading', { name: 'Воскресенье, 29 ноября' })
     await assertWithinScroller(room, weekend, 'Expanded weekly final day')
     const position = await scroller.evaluate((node) => node.scrollTop)
     assert.ok(position > 0)
-    await room.getByRole('button', { name: 'Настройки', exact: true }).tap()
-    await preferences.waitFor({ state: 'visible' })
-    await preferences.getByRole('button', { name: 'Закрыть настройки' }).tap()
-    await room.waitFor({ state: 'visible' })
-    assert.equal(await room.getByRole('button', { name: 'Неделя', exact: true }).getAttribute('aria-pressed'), 'true')
-    await page.waitForFunction((value) => Math.abs(document.querySelector('.room-scroll').scrollTop - value) <= 2, position)
+    assert.equal(await room.getByRole('button', { name: 'Настройки', exact: true }).count(), 0)
     await room.getByRole('button', { name: 'Свернуть раздел' }).tap()
     assert.equal(await room.getAttribute('data-expanded'), 'false')
+    await room.getByRole('button', { name: 'Развернуть раздел' }).tap()
+    assert.equal(await room.getByRole('button', { name: 'Неделя', exact: true }).getAttribute('aria-pressed'), 'true')
+    await page.waitForFunction((value) => Math.abs(document.querySelector('.room-scroll').scrollTop - value) <= 2, position)
     await room.getByRole('button', { name: 'День', exact: true }).tap()
-    assert.equal(await room.getByRole('button', { name: 'Суббота, 28 ноября' }).getAttribute('aria-pressed'), 'true')
+    await saturday.and(room.locator('[aria-pressed="true"]')).waitFor()
     await page.goBack()
     await room.waitFor({ state: 'hidden' })
-    await change('role', 'teacher')
+    await selectFixture(page, 'teacher', 'teacher')
+    await openPreferences(page)
+    await evidence(page, 'harbour-settings')
+    await closePreferences(page)
     await page.locator('.marker[data-location="work"]').tap()
     await room.waitFor({ state: 'visible' })
     await room.getByRole('button', { name: /8Б · математика/ }).tap()
@@ -352,6 +428,12 @@ async function verifyBrowserOverview() {
     await room.getByRole('button', { name: 'Вернуться на остров' }).tap()
     await room.waitFor({ state: 'hidden' })
     assert.equal(await campus.getAttribute('data-role'), 'teacher')
+    const normal = new URL(base)
+    normal.searchParams.set('role', 'teacher')
+    normal.searchParams.set('stage', 'senior')
+    normal.searchParams.set('state', 'error')
+    await page.goto(normal.href)
+    await assertNormalMode(page)
     console.log('[Browser / no Telegram] full-card vertical bounds, no clipping, simulated viewport-height changes, expanded panel, last row, selection/scroll/settings/back, large text, nested close')
   } finally {
     await page.close()
@@ -385,6 +467,7 @@ async function verifySimulatedTelegram() {
     }
     window.campusTestHost = {
       get shown() { return state.shown },
+      geometry: () => [state.height, state.top, state.bottom, state.contentTop, state.contentBottom],
       press: () => state.callbacks.forEach((callback) => callback()),
       viewport(height, top = 0, bottom = 0, contentTop = 0, contentBottom = 0) {
         Object.assign(state, { height, top, bottom, contentTop, contentBottom })
@@ -449,29 +532,27 @@ async function verifySimulatedTelegram() {
       return {
         viewportOverflow: view.scrollWidth - view.clientWidth,
         panelOverflow: modal ? modal.scrollWidth - modal.clientWidth : 0,
+        scrollerOverflow: modal ? modal.querySelector('.room-scroll').scrollWidth - modal.querySelector('.room-scroll').clientWidth : 0,
       }
     })
-    assert.ok(dimensions.viewportOverflow < 2 && dimensions.panelOverflow < 2,
+    assert.ok(Object.values(dimensions).every((overflow) => overflow < 2),
       `${label} overflow ${JSON.stringify(dimensions)}`)
   }
   const cameraScale = () => page.locator('.camera').evaluate((element) =>
     new DOMMatrixReadOnly(getComputedStyle(element).transform).a)
-  const prefs = page.locator('dialog#preferences')
-  const openSettings = () => page.locator('#settings').tap()
-  const closeSettings = async () => {
-    await prefs.getByRole('button', { name: 'Закрыть настройки' }).tap()
-    await prefs.waitFor({ state: 'hidden' })
-  }
+  const openSettings = () => openPreferences(page)
+  const closeSettings = () => closePreferences(page)
   const expectCampus = (attributes) => page.waitForFunction((values) => {
     const island = document.querySelector('.campus')
     return Object.entries(values).every(([key, value]) => island?.dataset[key] === value)
   }, attributes)
-  const selectDemo = async (world, role, theme) => {
-    await openSettings()
-    await page.locator('#role').selectOption(role)
-    if (role === 'student') await page.locator('#age-group').selectOption(world)
-    if (theme) await page.locator('#lighting').selectOption(theme)
-    await closeSettings()
+  const selectDemo = async (world, role, theme, state = 'ready', homeroom = true) => {
+    if (theme && await page.locator('.campus').getAttribute('data-theme') !== theme) {
+      await openSettings()
+      await page.locator('#lighting').selectOption(theme)
+      await closeSettings()
+    }
+    await selectFixture(page, world, role, state, homeroom)
     await expectCampus({ world: role === 'student' ? world : 'faculty', role, ...(theme ? { theme } : {}) })
   }
   const assertContrast = async () => {
@@ -569,12 +650,14 @@ async function verifySimulatedTelegram() {
       const label = `${width}×${height}${compact ? ` / compact ${compact}` : ''} / ${world}`
       await selectDemo(world, role, 'day')
       await assertNoOverflow(label)
+      await assertOverviewLayout(page, label, (compact || height) < 510)
       await assertTargets(label, compact || height, top, bottom)
-      if (!compact && width === 390) {
+      if (width === 390 && height === 844 && !compact) {
         await assertScene('day')
         await selectDemo(world, role, 'night')
         await assertScene('night')
         await assertNoOverflow(`${label} / night`)
+        await assertOverviewLayout(page, `${label} / night`, false)
         await assertTargets(`${label} / night`, height, 0, 0)
         await selectDemo(world, role, 'day')
       }
@@ -612,10 +695,9 @@ async function verifySimulatedTelegram() {
   await page.evaluate(() => window.campusTestHost.viewport(700))
   await page.setViewportSize({ width: 390, height: 700 })
   await page.emulateMedia({ reducedMotion: 'no-preference' })
-  await selectDemo('middle', 'student', 'day')
+  await selectDemo('graduate', 'student', 'day')
   await openSettings()
   await page.locator('#lighting').selectOption('auto')
-  await page.locator('#age-group').selectOption('graduate')
   await page.locator('#large-text').check()
   await page.locator('#reduce-motion').check()
   await closeSettings()
@@ -796,14 +878,9 @@ async function verifySimulatedTelegram() {
   assert.equal(await room.getByRole('button', { name: 'Сдано', exact: true }).getAttribute('aria-pressed'), 'true')
   await close()
 
-  await selectDemo('teacher', 'teacher', 'day')
-  await openSettings()
-  await page.locator('#homeroom').uncheck()
-  await closeSettings()
+  await selectDemo('teacher', 'teacher', 'day', 'ready', false)
   assert.equal(await place('homeroom').count(), 0, 'Homeroom hidden for an unassigned teacher')
-  await openSettings()
-  await page.locator('#homeroom').check()
-  await closeSettings()
+  await selectDemo('teacher', 'teacher', 'day')
   await open('work')
   await room.getByRole('button', { name: /8Б · математика/ }).click()
   await room.getByRole('button', { name: 'Аналитика', exact: true }).click()
@@ -821,34 +898,25 @@ async function verifySimulatedTelegram() {
   await close()
   await selectDemo('middle', 'student', 'day')
 
-  await openSettings()
-  await page.locator('#data-state').selectOption('empty')
-  await closeSettings()
+  await selectDemo('middle', 'student', 'day', 'empty')
   await open('work')
   await room.getByText('Данных пока нет').waitFor()
   await close()
 
-  await openSettings()
-  await page.locator('#data-state').selectOption('error')
-  await closeSettings()
+  await selectDemo('middle', 'student', 'day', 'error')
   await open('work')
   await room.getByRole('alert').waitFor()
   await room.getByRole('button', { name: 'Повторить загрузку' }).click()
-  assert.equal(await room.getByRole('button', { name: 'Сдано', exact: true }).getAttribute('aria-pressed'), 'true')
   await room.getByRole('button', { name: 'К сдаче', exact: true }).click()
   await room.getByRole('button', { name: /Системы линейных уравнений/ }).waitFor()
   await close()
 
-  await openSettings()
-  await page.locator('#data-state').selectOption('loading')
-  await closeSettings()
+  await selectDemo('middle', 'student', 'day', 'loading')
   await open('work')
   await room.getByRole('status').getByText('Загружаем данные').waitFor()
   await close()
 
-  await openSettings()
-  await page.locator('#data-state').selectOption('unpublished')
-  await closeSettings()
+  await selectDemo('middle', 'student', 'day', 'unpublished')
   await open('schedule')
   await room.getByRole('status').getByText('Неделя не опубликована').waitFor()
   await close()

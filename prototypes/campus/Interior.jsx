@@ -1,5 +1,5 @@
 import {
-  ArrowUpRight, ChevronRight, CircleAlert, Clock3, ExternalLink,
+  ChevronRight, CircleAlert, Clock3, ExternalLink,
   FolderOpen, LoaderCircle, MapPin, Users, Video,
 } from 'lucide-react'
 import './interior.css'
@@ -81,6 +81,17 @@ function getStudentWeek(study) {
     room, person, group.replace('8Б', study.cohort).replace('8–9 классы', study.range),
     study === studentStages.junior && kind === 'Лабораторная' ? 'Практикум' : kind, delivery,
   ]))
+}
+
+export function getFollowingLessons(role, stage) {
+  const isTeacher = role === 'teacher'
+  const week = isTeacher ? teacherWeek : getStudentWeek(studentStages[stage] ?? studentStages.middle)
+  return week[1].slice(2).filter(([, , , , , , kind]) => kind !== 'Окно').slice(0, 3)
+    .map(([time, , subject, room, , group, , delivery]) => ({
+      time,
+      subject,
+      place: delivery?.mode === 'online' ? 'Онлайн' : isTeacher ? group.split(' · ')[0] : room,
+    }))
 }
 
 const homeworkItems = [
@@ -176,8 +187,8 @@ function Row({ title, children, end, onClick }) {
     : <div className="ci-row">{content}</div>
 }
 
-function Empty({ icon: Icon = FolderOpen, title, children }) {
-  return <span className="ci-empty"><Icon size={25} aria-hidden="true" /><span><strong>{title}</strong>{children && <span className="ci-meta">{children}</span>}</span></span>
+function Empty({ icon: Icon = FolderOpen, title, children, tone }) {
+  return <span className="ci-empty" data-tone={tone}><Icon size={25} aria-hidden="true" /><span><strong>{title}</strong>{children && <span className="ci-meta">{children}</span>}</span></span>
 }
 
 export function getInteriorTitle(detail) {
@@ -385,7 +396,7 @@ function Grades({ study, detail, open, choices, setChoice }) {
         {period === 'current' && <div><dt>Долги к пересдаче</dt><dd>{records.filter((record) => record.retakeAssigned).length}</dd></div>}
       </dl>
       <h4>Работы</h4>
-      <div className="ci-list">{records.map((record) => <Row key={record.title} title={record.title} end={formatResult(record)} onClick={() => open({ subject, record })}>
+      <div className="ci-list ci-results">{records.map((record) => <Row key={record.title} title={record.title} end={formatResult(record)} onClick={() => open({ subject, record })}>
         {[record.date, record.weight && `вес ${record.weight}`, record.retakeAssigned && 'назначена пересдача'].filter(Boolean).join(' · ')}
       </Row>)}</div>
     </Detail>
@@ -395,12 +406,12 @@ function Grades({ study, detail, open, choices, setChoice }) {
   return <>
     <Tabs items={[[ 'current', 'II триместр' ], [ 'archive', 'Архив · I триместр' ]]} selected={period} onChange={value => setChoice('period',value)} label="Период оценок" />
     {period === 'current' && <label className="ci-check"><input type="checkbox" checked={onlyDebt} onChange={event => setChoice('onlyDebt',event.target.checked)} /> С задолженностями</label>}
-    <div className="ci-list">{list.map((subject) => {
+    {list.length ? <div className="ci-list ci-results">{list.map((subject) => {
       const debt = subject.work.filter((record) => record.retakeAssigned).length
       return <Row key={subject.id} title={subject.name} end={<span className="ci-score">{subject.summaries[period].find((summary) => summary.summary_type === 'term_grade')?.numeric_value ?? '—'}</span>} onClick={() => open({ subject })}>
         {period === 'current' && debt ? `${debt} работа к пересдаче` : 'Оценка за период'}
       </Row>
-    })}</div>
+    })}</div> : <Empty title="Нет задолженностей к пересдаче" />}
   </>
 }
 
@@ -419,14 +430,14 @@ function Groups({ detail, open, choices, setChoice }) {
   const tab = choices[group.id] ?? 'journal'
   if (person) return <Detail subtitle={group.name}>
     <h4>Индивидуальные результаты</h4>
-    <div className="ci-list">{group.tasks.map((record) => <Row key={record.id} title={record.name}
+    <div className="ci-list ci-results">{group.tasks.map((record) => <Row key={record.id} title={record.name}
       end={formatResult({ value: groupScore(group, record, person), max: record.max })}>{record.date} · вес {record.weight}</Row>)}</div>
   </Detail>
 
   if (task) return <Detail subtitle={`${group.name} · ${task.date}`}>
     <dl className="ci-facts"><div><dt>Максимум</dt><dd>{task.max}</dd></div><div><dt>Вес</dt><dd>{task.weight}</dd></div></dl>
     <h4>Результаты по работе</h4>
-    <div className="ci-list">{group.people.map((entry) => <Row key={entry.id} title={entry.name}
+    <div className="ci-list ci-roster ci-results">{group.people.map((entry) => <Row key={entry.id} title={entry.name}
       end={formatResult({ value: groupScore(group, task, entry), max: task.max })}
       onClick={() => open({ group, person: entry })} />)}</div>
   </Detail>
@@ -438,9 +449,9 @@ function Groups({ detail, open, choices, setChoice }) {
   const missingTotal = incomplete.reduce((total, entry) => total + entry.missing, 0)
   return <Detail subtitle="II триместр · 2026/27">
     <Tabs items={[[ 'journal', 'Журнал' ], [ 'roster', 'Состав' ], [ 'analytics', 'Аналитика' ]]} selected={tab} onChange={value => setChoice(group.id,value)} label="Раздел группы" />
-    {tab === 'journal' && <div className="ci-list">{group.tasks.map((record) => <Row key={record.id} title={record.name}
+    {tab === 'journal' && <div className="ci-list ci-results">{group.tasks.map((record) => <Row key={record.id} title={record.name}
       end={`до ${record.max}`} onClick={() => open({ group, task: record })}>{record.date} · вес {record.weight}</Row>)}</div>}
-    {tab === 'roster' && <div className="ci-list">{group.people.map((entry) => <Row key={entry.id} title={entry.name} onClick={() => open({ group, person: entry })}>Индивидуальные результаты</Row>)}</div>}
+    {tab === 'roster' && <div className="ci-list ci-roster">{group.people.map((entry) => <Row key={entry.id} title={entry.name} onClick={() => open({ group, person: entry })}>Индивидуальные результаты</Row>)}</div>}
     {tab === 'analytics' && <>
       <dl className="ci-facts">
         <div><dt>Учеников</dt><dd>{group.people.length}</dd></div>
@@ -485,25 +496,25 @@ function News({ role, study, detail, open }) {
     <Row key={item.id} title={item.title} end={item.day} onClick={() => open(item)}>{item.type}</Row>)}</div>
 }
 
-function Profile({ role, study, homeroom, onRoleChange }) {
+function Profile({ role, study, homeroom, onSettings, previewHref }) {
   const isTeacher = role === 'teacher'
   return <div>
     <div className="ci-profile">
       <span className="ci-initials" aria-hidden="true">{isTeacher ? 'МЛ' : 'АВ'}</span>
       <div><h3>{isTeacher ? teacher : student}</h3><div className="ci-meta">{isTeacher ? 'Преподаватель математики' : `Ученица · ${study.cohort}`}</div></div>
     </div>
+    <div className="ci-actions">
+      <button type="button" id="profile-settings" className="ci-action" onClick={onSettings}>
+        Настройки <ChevronRight size={16} aria-hidden="true" />
+      </button>
+    </div>
     <dl className="ci-facts">
       <div><dt>Статус аккаунта</dt><dd>Активен</dd></div>
       <div><dt>{isTeacher ? 'Классы' : 'Класс'}</dt><dd>{isTeacher ? '8А, 8Б, 9А' : study.cohort}</dd></div>
       <div><dt>Учебные группы</dt><dd>{isTeacher ? '8А, 8Б и 9А · математика' : 'Математика · информатика, группа 2'}</dd></div>
       {isTeacher && homeroom && <div><dt>Классное руководство</dt><dd>8Б</dd></div>}
-      <div><dt>Доступные роли в демо</dt><dd>Ученик · Учитель</dd></div>
     </dl>
-    <div className="ci-actions">
-      <button type="button" className="ci-action" onClick={() => onRoleChange?.(isTeacher ? 'student' : 'teacher')}>
-        {isTeacher ? 'Открыть Campus ученика' : 'Открыть Campus учителя'} <ArrowUpRight size={16} aria-hidden="true" />
-      </button>
-    </div>
+    {previewHref && <a className="ci-preview-link" id="preview-tools" href={previewHref}>Параметры предпросмотра</a>}
   </div>
 }
 
@@ -514,15 +525,15 @@ function Homeroom({ enabled, detail, open }) {
     <dl className="ci-facts"><div><dt>Класс</dt><dd>8Б</dd></div><div><dt>Учебная группа</dt><dd>Математика</dd></div></dl>
   </Detail>
   return <>
-    <h3>8Б</h3><p className="ci-meta">Классный руководитель · {teacher}</p>
+    <p className="ci-meta">8Б · Классный руководитель — {teacher}</p>
     <h4>Ученики класса</h4>
-    <div className="ci-list">{group.people.map((person) => <Row key={person.id} title={person.name} onClick={() => open(person)} />)}</div>
+    <div className="ci-list ci-roster">{group.people.map((person) => <Row key={person.id} title={person.name} onClick={() => open(person)} />)}</div>
     <h4>Ближайшее событие класса</h4>
     <Row title="Ярмарка школьных проектов">27 ноября, 13:00 · Актовый зал</Row>
   </>
 }
 
-function LocationContent({ role, stage, location, onRoleChange, homeroom, detail, open, choices, setChoice }) {
+function LocationContent({ role, stage, location, onSettings, previewHref, homeroom, detail, open, choices, setChoice }) {
   const study = studentStages[stage] ?? studentStages.middle
   const view = { study, detail, open, choices, setChoice }
   const panels = {
@@ -531,18 +542,19 @@ function LocationContent({ role, stage, location, onRoleChange, homeroom, detail
     results: role === 'teacher' ? <Courses {...view} /> : <Grades {...view} />,
     news: <News role={role} {...view} />,
     homeroom: <Homeroom enabled={role === 'teacher' && homeroom} {...view} />,
-    profile: <Profile role={role} study={study} homeroom={homeroom} onRoleChange={onRoleChange} />,
+    profile: <Profile role={role} study={study} homeroom={homeroom} onSettings={onSettings} previewHref={previewHref} />,
   }
   return <div data-panel={location}>{panels[location]}</div>
 }
 
-export default function Interior({ role, stage = 'middle', location, onRoleChange, homeroom = false, dataState = 'ready', onRetry, detail, open, choices, setChoice }) {
+export default function Interior({ role, stage = 'middle', location, onSettings, previewHref, homeroom = false, dataState = 'ready', onRetry, detail, open, choices, setChoice }) {
+  if (location === 'profile') dataState = 'ready'
   if (dataState === 'loading') return <output className="ci-interior"><Empty icon={LoaderCircle} title="Загружаем данные" /></output>
   if (location === 'schedule' && dataState === 'unpublished') return <output className="ci-interior"><Empty icon={Clock3} title="Неделя не опубликована">Занятия появятся после публикации расписания.</Empty></output>
   if (dataState === 'empty') return <output className="ci-interior"><Empty title="Данных пока нет">Здесь появятся данные школы, когда они будут доступны.</Empty></output>
   if (dataState === 'error') return <div className="ci-interior">
-    <div role="alert"><Empty icon={CircleAlert} title="Не удалось загрузить данные">Попробуйте запросить их ещё раз.</Empty></div>
+    <div role="alert"><Empty icon={CircleAlert} tone="error" title="Не удалось загрузить данные">Попробуйте запросить их ещё раз.</Empty></div>
     {onRetry && <button className="ci-action" type="button" onClick={onRetry}>Повторить загрузку</button>}
   </div>
-  return <div className="ci-interior"><LocationContent key={`${role}-${stage}-${location}`} {...{ role, stage, location, onRoleChange, homeroom, detail, open, choices, setChoice }} /></div>
+  return <div className="ci-interior"><LocationContent key={`${role}-${stage}-${location}`} {...{ role, stage, location, onSettings, previewHref, homeroom, detail, open, choices, setChoice }} /></div>
 }

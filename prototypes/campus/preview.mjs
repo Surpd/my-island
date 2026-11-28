@@ -44,6 +44,11 @@ for (const file of output) {
     contents = contents.replaceAll('./' + generated, original).replaceAll(generated, original)
   }
   await writeFile(join(destination, aliases.get(file.fileName) || file.fileName), contents.replace(/\r+\n/g, '\n'))
+  if (file.fileName === 'index.html') {
+    const preview = contents.replace('<body>', '<body data-campus-entry="preview">')
+      .replace('<title>Северная гавань · My Island</title>', '<title>Предпросмотр кампуса · My Island</title>')
+    await writeFile(join(destination, 'preview.html'), preview.replace(/\r+\n/g, '\n'))
+  }
 }
 const licensePaths = ['fonts/spectral-OFL.txt', 'fonts/oswald-OFL.txt',
   '../../node_modules/react/LICENSE', '../../node_modules/react-dom/LICENSE', '../../node_modules/lucide-react/LICENSE']

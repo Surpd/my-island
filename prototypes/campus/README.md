@@ -1,20 +1,24 @@
 # Северная гавань · My Island
 
-**[Открыть интерактивный кампус с телефона](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/mobile/index.html)** · [Отчёт для ревью](./AUDIT.md) · [Автономная версия в ZIP](https://github.com/Surpd/my-island/raw/refs/heads/codex/campus-design-review/prototypes/campus/review/My-Island-Campus.zip)
+**[Открыть остров на телефоне](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/mobile/index.html)** · **[Открыть инструменты предпросмотра](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/mobile/preview.html)** · [Отчёт для ревью](./AUDIT.md)
 
-Если CDN покажет **One more step**, нажмите **Open the page**. Коснитесь крыши корпуса с часами, его подписи или карточки текущего урока. В расписании выберите день, откройте урок и вернитесь стрелкой. Кнопка «Свернуть» оставляет вид на остров, «Развернуть» возвращает рабочую высоту. Крестик возвращает на остров с любого уровня.
+Первая ссылка открывает остров ученицы 8Б. Коснитесь крыши, фасада или подписи корпуса с часами, чтобы увидеть расписание. Выберите урок и вернитесь стрелкой. Кнопки «Свернуть» и «Развернуть» меняют высоту раздела. Крестик возвращает на остров с любого уровня. Если CDN покажет **One more step**, нажмите **Open the page**.
 
-В шестерёнке доступны освещение, движение и крупный текст. В блоке «Для демонстрации» выберите учителя, откройте «Группы» и состав группы 8Б. Демонстрационные роли и назначения используют вымышленные данные. Школьный день в примерах зафиксирован на 24 ноября 2026 года, 10:10. Автоматическое освещение использует часы устройства. Ручной выбор сохраняется.
+В здании **Профиль → Настройки** доступны освещение, уменьшение движения и крупный текст. Автоматическая ночь наступает в 20:00 и заканчивается в 07:00 по часам устройства. Для демонстрационных уроков зафиксировано 10:10 вторника 24 ноября 2026 года.
 
-<a href="./review/harbour-mobile.png"><img src="./review/harbour-mobile.png" alt="Главный экран с полным временем и кабинетом под картой" width="225"></a>
-<a href="./review/harbour-schedule-expanded.png"><img src="./review/harbour-schedule-expanded.png" alt="Раскрытое расписание ученика" width="225"></a>
-<a href="./review/harbour-group-nested.png"><img src="./review/harbour-group-nested.png" alt="Состав группы 8Б в преподавательском кампусе" width="225"></a>
+Вторая ссылка открывает форму проверки. Выберите ступень или преподавателя, классное руководство и состояние данных. Нажмите **Открыть кампус**. Во время просмотра сценария внизу профиля есть ссылка обратно в инструменты.
 
-[Ночной порт](./review/harbour-night.png) · [Крупный текст](./review/harbour-large-text.png) · [Посмотреть приближение и возврат при DPR 3](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/tour.html)
+<a href="./review/harbour-mobile.png"><img src="./review/harbour-mobile.png" alt="Дневная гавань с расписанием под картой" width="170"></a>
+<a href="./review/harbour-night.png"><img src="./review/harbour-night.png" alt="Ночной остров" width="170"></a>
+<a href="./review/harbour-schedule-expanded.png"><img src="./review/harbour-schedule-expanded.png" alt="Расписание дня" width="170"></a>
+<a href="./review/harbour-group-nested.png"><img src="./review/harbour-group-nested.png" alt="Состав преподавательской группы" width="170"></a>
+<a href="./review/harbour-settings.png"><img src="./review/harbour-settings.png" alt="Личные настройки из профиля" width="170"></a>
+
+[Запись перехода от корпуса в расписание и обратно](https://raw.githack.com/Surpd/my-island/refs/heads/codex/campus-design-review/prototypes/campus/review/tour.html) · [Пример крупного текста](./review/harbour-large-text.png) · [Скачать автономную версию](https://github.com/Surpd/my-island/raw/refs/heads/codex/campus-design-review/prototypes/campus/review/My-Island-Campus.zip)
 
 ## Локальная проверка
 
-Команды выполняются из корня проекта после `npm ci`. Запустите Vite в первом терминале, откройте [локальное демо](http://127.0.0.1:4176), а проверки — во втором. Для другого сервера задайте `CAMPUS_URL`. Playwright использует установленные Chromium и WebKit.
+После `npm ci` запустите Vite из корня проекта. Обычный вход доступен на [локальной странице](http://127.0.0.1:4176), выбор сценария — на [странице предпросмотра](http://127.0.0.1:4176/?preview=1). Проверки запускаются во втором терминале с установленными браузерами Playwright. Адрес сервера можно передать в `CAMPUS_URL`.
 
 ```powershell
 node node_modules/vite/bin/vite.js --config prototypes/campus/vite.config.mjs
@@ -26,7 +30,7 @@ $env:CAMPUS_WEBKIT='1'
 node prototypes/campus/check.mjs
 ```
 
-Для ревью онлайн-сборка использует изображения и шрифты этой ветки. Автономный HTML содержит все ресурсы. Распакуйте ZIP и откройте HTML в браузере с JavaScript. Чтобы пересобрать оба варианта:
+Онлайн-сборка использует изображения и шрифты из каталога прототипа. Автономный HTML содержит все ресурсы. Распакуйте ZIP и откройте HTML в браузере с JavaScript. Параметр `?preview=1` открывает форму сценариев и в автономном файле.
 
 ```powershell
 node prototypes/campus/preview.mjs
